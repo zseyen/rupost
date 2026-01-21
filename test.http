@@ -1,0 +1,42 @@
+### Request 9b2a257f
+# @name req_1769333043_57
+POST http://127.0.0.1:64146/api/login
+content-type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "password123"
+}
+
+# @assert status == 200
+
+
+### Request 243a2dbd
+# @name req_1769333043_50
+GET http://127.0.0.1:64144/api/profile
+authorization: Bearer auth-token-456
+
+# @assert status == 200
+
+
+### Request 568617e1
+# @name req_1769333043_53
+GET http://127.0.0.1:64145/api/users/42
+authorization: Bearer secret-access-token-123
+
+# @assert status == 200
+
+
+### Request 433b6c8a
+# @name req_1769346028_52
+GET http://httpbin.org:80/get
+
+# @assert status == 200
+
+
+### Request ead007fc
+# @name req_1769346285_101
+GET http://httpbin.org:80/get
+
+# @assert status == 200
+

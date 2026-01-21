@@ -21,7 +21,7 @@ impl Client {
     }
 
     pub async fn execute(&self, request: Request) -> Result<Response> {
-        let url = reqwest::Url::parse(&request.url.to_string())?;
+        let url = reqwest::Url::parse_with_params(&request.url.to_string(), &request.query_params)?;
         let method = match request.method {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,

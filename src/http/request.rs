@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use reqwest::{
     Body,
     header::{HeaderMap as Headers, HeaderName},
@@ -12,6 +14,7 @@ pub struct Request {
     pub url: Url,
     pub headers: Headers,
     pub body: Option<Body>,
+    pub query_params: HashMap<String, String>,
 }
 
 impl Request {
@@ -21,6 +24,7 @@ impl Request {
             url: Url::parse(url)?,
             headers: Headers::new(),
             body: None,
+            query_params: HashMap::new(),
         })
     }
 
@@ -52,7 +56,7 @@ impl Request {
     }
 
     pub fn with_query(mut self, key: &str, value: &str) -> Self {
-        // self.url.query
+        self.query_params.insert(key.to_string(), value.to_string());
         self
     }
 

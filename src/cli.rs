@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use clap::{Parser, Subcommand};
-use rupost::http::{Client, Request, Response};
+use rupost::http::{Client, Request};
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
@@ -34,9 +34,9 @@ impl CliRunner {
         }
     }
 
-    fn run(&self, args: Vec<String>) -> Result<()> {
+    async fn run(&self, args: Vec<String>) -> Result<()> {
         let request = self.parse_args(args)?;
-        let response = self.client.execute(request)?;
+        let response = self.client.execute(request).await?;
         Ok(())
     }
 
@@ -63,7 +63,7 @@ impl CliRunner {
         let mut method = String::from("GET");
         let mut url = String::new();
         let mut headers = HashMap::new();
-        let mut body = String::new();
+        let mut data_parts = Vec::new(); // 改为 Vec 以支持多个 -d 参数
         let mut force_get = false;
 
         let mut args_iter = args.into_iter().peekable();
@@ -84,10 +84,10 @@ impl CliRunner {
                         }
                     }
                 }
-                // Data (body)
+                // Data (body or query)
                 "-d" | "--data" | "--data-raw" => {
                     if let Some(data) = args_iter.next() {
-                        body = data;
+                        data_parts.push(data);
                     }
                 }
                 // Force GET even with data
@@ -100,7 +100,7 @@ impl CliRunner {
                     if let Some((opt, val)) = s.split_once('=') {
                         match opt {
                             "-X" | "--request" => method = val.to_uppercase(),
-                            "-d" | "--data" | "--data-raw" => body = val.to_string(),
+                            "-d" | "--data" | "--data-raw" => data_parts.push(val.to_string()),
                             _ => {} // 忽略其他选项
                         }
                     }
@@ -115,20 +115,14 @@ impl CliRunner {
             }
         }
 
-        // 如果有 body 且没有强制 GET，默认使用 POST
-        if !body.is_empty() && method == "GET" && !force_get {
+        // 如果有 data 且没有强制 GET，默认使用 POST
+        if !data_parts.is_empty() && method == "GET" && !force_get {
             method = String::from("POST");
         }
 
         if url.is_empty() {
             return Err(anyhow::anyhow!("URL is required"));
         }
-
-        // TODO:  增加 logger 函数打日志
-        // println!("Parsed Method: {}", method);
-        // println!("Parsed URL: {}", url);
-        // println!("Headers: {:?}", headers);
-        // println!("Body: {}", body);
 
         // 构造 Request
         let mut request = Request::new(&method, &url)?;
@@ -138,8 +132,21 @@ impl CliRunner {
             request = request.with_header(&key, &value);
         }
 
-        // 添加 body
-        if !body.is_empty() {
+        // 处理 data: 如果使用 -G，作为 query 参数；否则作为 body
+        if force_get && !data_parts.is_empty() {
+            // -G 模式: 将 data 解析为 query 参数
+            for data in data_parts {
+                // 解析 key=value 格式，支持多个参数用 & 分隔
+                for pair in data.split('&') {
+                    if let Some((key, value)) = pair.split_once('=') {
+                        request = request.with_query(key, value);
+                    }
+                }
+            }
+        } else if !data_parts.is_empty() {
+            // 非 -G 模式: 作为 body
+            // 将多个 -d 参数用 & 连接
+            let body = data_parts.join("&");
             request = request.with_text(&body);
         }
 
@@ -260,9 +267,9 @@ impl CliRunner {
     }
 }
 
-pub fn run(args: Vec<String>) -> Result<()> {
+pub async fn run(args: Vec<String>) -> Result<()> {
     let runner = CliRunner::new();
-    runner.run(args)
+    runner.run(args).await
 }
 
 #[cfg(test)]
@@ -316,18 +323,46 @@ mod tests {
         ];
         runner.parse_curl(args2).unwrap();
 
-        // Test case: GET with -G flag even with data
+        // Test case: GET with -G flag even with data (作为 query 参数)
         let args3 = vec![
             "-G".to_string(),
             "-d".to_string(),
             "q=search".to_string(),
             "example.com".to_string(),
         ];
-        runner.parse_curl(args3).unwrap();
+        let request3 = runner.parse_curl(args3).unwrap();
+        assert_eq!(request3.query_params.len(), 1);
+        assert_eq!(request3.query_params.get("q"), Some(&"search".to_string()));
 
         // Test case: Simple GET
         let args4 = vec!["example.com".to_string()];
         runner.parse_curl(args4).unwrap();
+
+        // Test case: -G with multiple -d flags (多个 query 参数)
+        let args5 = vec![
+            "-G".to_string(),
+            "-d".to_string(),
+            "q=search".to_string(),
+            "-d".to_string(),
+            "page=1".to_string(),
+            "example.com".to_string(),
+        ];
+        let request5 = runner.parse_curl(args5).unwrap();
+        assert_eq!(request5.query_params.len(), 2);
+        assert_eq!(request5.query_params.get("q"), Some(&"search".to_string()));
+        assert_eq!(request5.query_params.get("page"), Some(&"1".to_string()));
+
+        // Test case: -G with combined data (q=search&page=1 in one -d)
+        let args6 = vec![
+            "-G".to_string(),
+            "-d".to_string(),
+            "q=search&page=1".to_string(),
+            "example.com".to_string(),
+        ];
+        let request6 = runner.parse_curl(args6).unwrap();
+        assert_eq!(request6.query_params.len(), 2);
+        assert_eq!(request6.query_params.get("q"), Some(&"search".to_string()));
+        assert_eq!(request6.query_params.get("page"), Some(&"1".to_string()));
     }
 
     #[test]

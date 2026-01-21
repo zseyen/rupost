@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use clap::{Parser, Subcommand};
-use reqwest::Request;
+use rupost::http::{Client, Request, Response};
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
@@ -22,22 +22,25 @@ pub enum Commands {
 }
 
 struct CliRunner {
+    client: Client,
     formatter: String,
 }
 
 impl CliRunner {
     fn new() -> Self {
         Self {
+            client: Client::new(),
             formatter: "curl".to_string(),
         }
     }
 
     fn run(&self, args: Vec<String>) -> Result<()> {
         let request = self.parse_args(args)?;
+        let response = self.client.execute(request)?;
         Ok(())
     }
 
-    fn parse_args(&self, args: Vec<String>) -> Result<()> {
+    fn parse_args(&self, args: Vec<String>) -> Result<Request> {
         let mut is_curl = false;
 
         let args = if args.first().map(|s| s == "curl").unwrap_or(false) {
@@ -56,7 +59,7 @@ impl CliRunner {
             self.parse_httpie(args)
         }
     }
-    fn parse_curl(&self, args: Vec<String>) -> Result<()> {
+    fn parse_curl(&self, args: Vec<String>) -> Result<Request> {
         let mut method = String::from("GET");
         let mut url = String::new();
         let mut headers = HashMap::new();
@@ -121,12 +124,26 @@ impl CliRunner {
             return Err(anyhow::anyhow!("URL is required"));
         }
 
-        println!("Parsed Method: {}", method);
-        println!("Parsed URL: {}", url);
-        println!("Headers: {:?}", headers);
-        println!("Body: {}", body);
+        // TODO:  增加 logger 函数打日志
+        // println!("Parsed Method: {}", method);
+        // println!("Parsed URL: {}", url);
+        // println!("Headers: {:?}", headers);
+        // println!("Body: {}", body);
 
-        Ok(())
+        // 构造 Request
+        let mut request = Request::new(&method, &url)?;
+
+        // 添加 headers
+        for (key, value) in headers {
+            request = request.with_header(&key, &value);
+        }
+
+        // 添加 body
+        if !body.is_empty() {
+            request = request.with_text(&body);
+        }
+
+        Ok(request)
     }
     /// 判断参数是否为键值对参数（headers, query, body）
     /// URL 格式不算键值对：http://, https://, :/, :port
@@ -161,7 +178,7 @@ impl CliRunner {
         arg.contains("==") || arg.contains(":=") || arg.contains('=') || arg.contains(':')
     }
 
-    fn parse_httpie(&self, args: Vec<String>) -> Result<()> {
+    fn parse_httpie(&self, args: Vec<String>) -> Result<Request> {
         let mut method = String::from("GET"); // Default method
         let mut url = String::new();
         let mut headers = HashMap::new();
@@ -220,13 +237,26 @@ impl CliRunner {
             return Err(anyhow::anyhow!("URL is required"));
         }
 
-        println!("Parsed Method: {}", method);
-        println!("Parsed URL: {}", url);
-        println!("Headers: {:?}", headers);
-        println!("Query Params: {:?}", query_params);
-        println!("Body: {:?}", body_parts);
+        // TODO:  增加 logger 函数打日志
+        // println!("Parsed Method: {}", method);
+        // println!("Parsed URL: {}", url);
+        // println!("Headers: {:?}", headers);
+        // println!("Query Params: {:?}", query_params);
+        // println!("Body: {:?}", body_parts);
 
-        Ok(())
+        let mut request = Request::new(&method, &url)?;
+        for (key, value) in headers {
+            request = request.with_header(&key, &value);
+        }
+        for (key, value) in query_params {
+            request = request.with_query(&key, &value);
+        }
+        // 添加 body
+        if !body_parts.is_empty() {
+            request = request.with_json(&body_parts)?;
+        }
+
+        Ok(request)
     }
 }
 

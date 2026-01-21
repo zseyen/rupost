@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 about = "A API test tool based on documents"
 
+[lib]
+name = "rupost"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0.100"
 clap = { version = "4.5.54", features = ["derive"] }

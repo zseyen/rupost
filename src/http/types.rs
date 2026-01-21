@@ -1,3 +1,4 @@
+use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Result, bail};
@@ -114,6 +115,80 @@ impl Url {
             query: url.query().unwrap_or_default().to_string(),
             fragment: url.fragment().unwrap_or_default().to_string(),
         })
+    }
+
+    /// 转换为完整的 URL 字符串
+    pub fn to_url_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for Url {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 构建基础 URL: scheme://host:port
+        write!(f, "{}://{}:{}", self.scheme, self.host, self.port)?;
+
+        // 添加 path
+        write!(f, "{}", self.path)?;
+
+        // 添加 query (如果存在)
+        if !self.query.is_empty() {
+            write!(f, "?{}", self.query)?;
+        }
+
+        // 添加 fragment (如果存在)
+        if !self.fragment.is_empty() {
+            write!(f, "#{}", self.fragment)?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct Status(u16);
+impl Status {
+    pub fn new(code: u16) -> Result<Self> {
+        if (100..600).contains(&code) {
+            Ok(Self(code))
+        } else {
+            Err(anyhow::anyhow!("Invalid HTTP status code: {}", code))
+        }
+    }
+
+    pub fn code(&self) -> u16 {
+        self.0
+    }
+
+    pub fn is_success(&self) -> bool {
+        (200..=299).contains(&self.0)
+    }
+
+    pub fn is_redirect(&self) -> bool {
+        (300..=399).contains(&self.0)
+    }
+
+    pub fn is_client_error(&self) -> bool {
+        (400..=499).contains(&self.0)
+    }
+
+    pub fn is_server_error(&self) -> bool {
+        (500..=599).contains(&self.0)
+    }
+    pub fn reason_phrase(&self) -> &'static str {
+        match self.0 {
+            200 => "OK",
+            201 => "Created",
+            204 => "No Content",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            405 => "Method Not Allowed",
+            500 => "Internal Server Error",
+            502 => "Bad Gateway",
+            503 => "Service Unavailable",
+            _ => "Unknown",
+        }
     }
 }
 

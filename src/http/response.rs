@@ -1,14 +1,12 @@
 use crate::http::types::Status;
 use anyhow::Result;
-use reqwest::Body;
 use reqwest::header::HeaderMap as Headers;
 use std::time::Duration;
 
 pub struct Response {
     pub status: Status,
     pub headers: Headers,
-    pub body: Body,
-    body_str: String,
+    pub body: String, // 直接使用 String，不需要 reqwest::Body
     pub duration: Duration,
 }
 
@@ -17,8 +15,7 @@ impl Response {
         Ok(Self {
             status: Status::new(status)?,
             headers,
-            body: Body::from(body.clone()),
-            body_str: body,
+            body, // 直接使用，无需 clone
             duration,
         })
     }
@@ -27,8 +24,7 @@ impl Response {
         Self {
             status: Status::new(500).unwrap(),
             headers: Headers::new(),
-            body: Body::from(message.clone()),
-            body_str: message,
+            body: message, // 直接使用，无需 clone
             duration: Duration::from_millis(0),
         }
     }
@@ -50,6 +46,6 @@ impl Response {
     }
 
     pub fn text(&self) -> Result<&str> {
-        Ok(&self.body_str)
+        Ok(&self.body)
     }
 }

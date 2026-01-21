@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use clap::{Parser, Subcommand};
-use rupost::http::{Client, Request};
+use rupost::http::{Client, Request, Response};
+use rupost::utils::{ResponseFormat, ResponseFormatter};
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
@@ -23,36 +24,41 @@ pub enum Commands {
 
 struct CliRunner {
     client: Client,
-    formatter: String,
+    formatter: ResponseFormatter,
 }
 
 impl CliRunner {
     fn new() -> Self {
         Self {
             client: Client::new(),
-            formatter: "curl".to_string(),
+            formatter: ResponseFormatter::new(ResponseFormat::Verbose),
         }
     }
 
     async fn run(&self, args: Vec<String>) -> Result<()> {
         let request = self.parse_args(args)?;
         let response = self.client.execute(request).await?;
+
+        self.format_response(response);
         Ok(())
     }
 
+    fn format_response(&self, response: Response) {
+        let output = self.formatter.format(&response).unwrap();
+        println!("{}", output);
+    }
     fn parse_args(&self, args: Vec<String>) -> Result<Request> {
-        let mut is_curl = false;
-
         let args = if args.first().map(|s| s == "curl").unwrap_or(false) {
-            is_curl = true;
             args[1..].to_vec()
         } else if args.first().map(|s| s == "http").unwrap_or(false) {
-            is_curl = false;
             args[1..].to_vec()
         } else {
             args
         };
-        is_curl = args.iter().any(|a| a.starts_with("-"));
+
+        // 根据参数特征判断是 curl 风格还是 httpie 风格
+        let is_curl = args.iter().any(|a| a.starts_with("-"));
+
         if is_curl {
             self.parse_curl(args)
         } else {

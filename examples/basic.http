@@ -1,0 +1,30 @@
+# Basic HTTP Requests Example
+
+# GET request
+# @name get-users
+GET https://httpbin.org/get
+
+###
+
+# POST request with JSON body
+# @name create-user
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+  "name": "Alice",
+  "email": "alice@example.com",
+  "age": 25
+}
+
+###
+
+# GET request with query parameters
+# @name search-users
+GET https://httpbin.org/get?name=Alice&status=active
+
+###
+
+# DELETE request
+# @name delete-user
+DELETE https://httpbin.org/delete

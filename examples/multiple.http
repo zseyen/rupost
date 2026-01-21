@@ -1,0 +1,70 @@
+# Multiple Requests Batch Execution Example
+
+### Request 1: Health Check
+# @name health-check
+GET https://httpbin.org/status/200
+
+###
+
+### Request 2: Get IP Information
+# @name get-ip
+GET https://httpbin.org/ip
+
+###
+
+### Request 3: Echo Headers
+# @name echo-headers
+GET https://httpbin.org/headers
+User-Agent: RuPost-Test/1.0
+X-Test-ID: batch-test-001
+
+###
+
+### Request 4: POST JSON Data
+# @name post-json
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+  "test": "batch execution",
+  "timestamp": "2026-01-21T23:00:00Z",
+  "data": [1, 2, 3, 4, 5]
+}
+
+###
+
+### Request 5: Delay Test
+# @name delay-test
+GET https://httpbin.org/delay/1
+
+###
+
+### Request 6: UUID Generation
+# @name uuid-test
+GET https://httpbin.org/uuid
+
+###
+
+### Request 7: Skip This Request
+# @skip This request is intentionally skipped for testing
+# @name skipped-request
+GET https://httpbin.org/status/500
+
+###
+
+### Request 8: Base64 Decode
+# @name base64-test
+GET https://httpbin.org/base64/SGVsbG8gV29ybGQh
+
+###
+
+### Request 9: Response Headers Test
+# @name response-headers
+GET https://httpbin.org/response-headers?X-Custom=CustomValue
+
+###
+
+### Request 10: JSON Response
+# @name json-response
+GET https://httpbin.org/json
+Accept: application/json

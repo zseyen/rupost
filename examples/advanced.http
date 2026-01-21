@@ -1,0 +1,122 @@
+# Advanced HTTP Requests Example
+
+### Authentication Example
+# @name login
+POST https://httpbin.org/post
+Content-Type: application/json
+User-Agent: RuPost/0.1.0
+Accept: application/json
+
+{
+  "username": "admin",
+  "password": "secret123"
+}
+
+###
+
+### Request with Multiple Headers
+# @name api-request-with-headers
+GET https://httpbin.org/headers
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+X-Request-ID: req-123-456
+X-API-Version: v1
+Accept: application/json
+Accept-Language: zh-CN,en-US
+
+###
+
+### PUT Request (Update Resource)
+# @name update-user
+PUT https://httpbin.org/put
+Content-Type: application/json
+Authorization: Bearer token123
+
+{
+  "id": 42,
+  "name": "Alice Updated",
+  "email": "alice.new@example.com",
+  "profile": {
+    "bio": "Software Engineer",
+    "location": "San Francisco"
+  },
+  "tags": ["developer", "rust", "api"]
+}
+
+###
+
+### PATCH Request (Partial Update)
+# @name partial-update
+PATCH https://httpbin.org/patch
+Content-Type: application/json
+
+{
+  "email": "newemail@example.com"
+}
+
+###
+
+### Request with Form Data
+# @name login-form
+POST https://httpbin.org/post
+Content-Type: application/x-www-form-urlencoded
+
+username=alice&password=secret123&remember=true
+
+###
+
+### Request with Plain Text Body
+# @name create-note
+POST https://httpbin.org/post
+Content-Type: text/plain
+
+This is a plain text note.
+It can span multiple lines.
+用户可以使用中文内容。
+
+###
+
+### Complex JSON with Nested Objects
+# @name create-order
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+  "orderId": "ORD-2026-0121-001",
+  "customer": {
+    "id": 123,
+    "name": "Alice Chen",
+    "email": "alice@example.com"
+  },
+  "items": [
+    {
+      "productId": "PROD-001",
+      "name": "Laptop",
+      "quantity": 1,
+      "price": 1299.99
+    },
+    {
+      "productId": "PROD-002",
+      "name": "Mouse",
+      "quantity": 2,
+      "price": 29.99
+    }
+  ],
+  "shipping": {
+    "address": "123 Main St",
+    "city": "San Francisco",
+    "zipCode": "94102",
+    "country": "USA"
+  },
+  "paymentMethod": "credit_card",
+  "total": 1359.97
+}
+
+###
+
+### Request with Custom Headers
+# @name custom-headers-demo
+GET https://httpbin.org/headers
+X-Custom-Header: custom-value
+X-Trace-ID: trace-abc-123
+X-Correlation-ID: corr-xyz-789
+X-Client-Version: 1.0.0

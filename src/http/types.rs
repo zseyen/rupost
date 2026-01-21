@@ -1,7 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{Result, bail};
+use crate::{Result, RupostError};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -16,9 +16,9 @@ pub enum Method {
 }
 
 impl FromStr for Method {
-    type Err = anyhow::Error;
+    type Err = RupostError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "GET" => Ok(Method::Get),
             "POST" => Ok(Method::Post),
@@ -27,7 +27,10 @@ impl FromStr for Method {
             "PATCH" => Ok(Method::Patch),
             "HEAD" => Ok(Method::Head),
             "OPTIONS" => Ok(Method::Options),
-            _ => bail!("Invalid HTTP method: {}", s),
+            _ => Err(RupostError::ParseError(format!(
+                "Invalid HTTP method: {}",
+                s
+            ))),
         }
     }
 }
@@ -91,8 +94,7 @@ impl Url {
             input.to_string()
         };
 
-        let url = url::Url::parse(&normalized)
-            .map_err(|e| anyhow::anyhow!("Failed to parse URL '{}': {}", s, e))?;
+        let url = url::Url::parse(&normalized)?;
 
         let default_port = match url.scheme() {
             "https" => 443,
@@ -151,7 +153,10 @@ impl Status {
         if (100..600).contains(&code) {
             Ok(Self(code))
         } else {
-            Err(anyhow::anyhow!("Invalid HTTP status code: {}", code))
+            Err(RupostError::ParseError(format!(
+                "Invalid HTTP status code: {}",
+                code
+            )))
         }
     }
 

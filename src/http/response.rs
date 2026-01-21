@@ -1,5 +1,5 @@
+use crate::Result;
 use crate::http::types::Status;
-use anyhow::Result;
 use reqwest::header::HeaderMap as Headers;
 use std::time::Duration;
 

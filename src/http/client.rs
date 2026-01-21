@@ -1,9 +1,9 @@
 use std::time::Duration;
 
+use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::types::Method;
-use anyhow::Result;
 
 #[derive(Clone)]
 pub struct Client {

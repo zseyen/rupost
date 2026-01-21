@@ -5,8 +5,8 @@ use reqwest::{
     header::{HeaderMap as Headers, HeaderName},
 };
 
+use crate::Result;
 use crate::http::types::{Method, Url};
-use anyhow::Result;
 use serde::Serialize;
 
 pub struct Request {

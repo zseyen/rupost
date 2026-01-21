@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use clap::{Parser, Subcommand};
 use rupost::http::{Client, Request, Response};
 use rupost::utils::{ResponseFormat, ResponseFormatter};
-
-pub type Result<T> = std::result::Result<T, anyhow::Error>;
+use rupost::{Result, RupostError};
+use tracing::{debug, error, info};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -36,7 +36,10 @@ impl CliRunner {
     }
 
     async fn run(&self, args: Vec<String>) -> Result<()> {
+        info!("Parsing command line arguments");
         let request = self.parse_args(args)?;
+
+        info!(url = %request.url, method = ?request.method, "Executing HTTP request");
         let response = self.client.execute(request).await?;
 
         self.format_response(response);
@@ -44,13 +47,17 @@ impl CliRunner {
     }
 
     fn format_response(&self, response: Response) {
-        let output = self.formatter.format(&response).unwrap();
-        println!("{}", output);
+        match self.formatter.format(&response) {
+            Ok(output) => println!("{}", output),
+            Err(e) => error!("Failed to format response: {}", e),
+        }
     }
     fn parse_args(&self, args: Vec<String>) -> Result<Request> {
         let args = if args.first().map(|s| s == "curl").unwrap_or(false) {
+            debug!("Detected curl-style command");
             args[1..].to_vec()
         } else if args.first().map(|s| s == "http").unwrap_or(false) {
+            debug!("Detected httpie-style command");
             args[1..].to_vec()
         } else {
             args
@@ -60,8 +67,10 @@ impl CliRunner {
         let is_curl = args.iter().any(|a| a.starts_with("-"));
 
         if is_curl {
+            debug!("Using curl parser");
             self.parse_curl(args)
         } else {
+            debug!("Using httpie parser");
             self.parse_httpie(args)
         }
     }
@@ -127,7 +136,7 @@ impl CliRunner {
         }
 
         if url.is_empty() {
-            return Err(anyhow::anyhow!("URL is required"));
+            return Err(RupostError::ParseError("URL is required".to_string()));
         }
 
         // 构造 Request
@@ -247,15 +256,11 @@ impl CliRunner {
         }
 
         if url.is_empty() {
-            return Err(anyhow::anyhow!("URL is required"));
+            return Err(RupostError::ParseError("URL is required".to_string()));
         }
 
-        // TODO:  增加 logger 函数打日志
-        // println!("Parsed Method: {}", method);
-        // println!("Parsed URL: {}", url);
-        // println!("Headers: {:?}", headers);
-        // println!("Query Params: {:?}", query_params);
-        // println!("Body: {:?}", body_parts);
+        debug!(method = %method, url = %url, "Parsed httpie arguments");
+        debug!(headers = ?headers, query_params = ?query_params, body_parts = ?body_parts);
 
         let mut request = Request::new(&method, &url)?;
         for (key, value) in headers {

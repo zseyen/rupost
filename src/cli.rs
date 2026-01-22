@@ -93,10 +93,10 @@ impl CliRunner {
                 }
                 // Header
                 "-H" | "--header" => {
-                    if let Some(header) = args_iter.next() {
-                        if let Some((key, value)) = header.split_once(':') {
-                            headers.insert(key.trim().to_string(), value.trim().to_string());
-                        }
+                    if let Some(header) = args_iter.next()
+                        && let Some((key, value)) = header.split_once(':')
+                    {
+                        headers.insert(key.trim().to_string(), value.trim().to_string());
                     }
                 }
                 // Data (body or query)
@@ -219,10 +219,10 @@ impl CliRunner {
         }
 
         // Step 2: 下一个非键值对参数即为 URL
-        if let Some(next) = args_iter.peek() {
-            if !Self::is_key_value_param(next) {
-                url = args_iter.next().unwrap();
-            }
+        if let Some(next) = args_iter.peek()
+            && !Self::is_key_value_param(next)
+        {
+            url = args_iter.next().unwrap();
         }
 
         // Step 3: 处理剩余的键值对参数

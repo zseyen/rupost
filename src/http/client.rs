@@ -10,6 +10,12 @@ pub struct Client {
     inner: reqwest::Client,
 }
 
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Client {
     pub fn new() -> Self {
         Self {

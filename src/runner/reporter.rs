@@ -89,6 +89,22 @@ impl TestReporter {
             println!("   {}: {}", "Error".red().bold(), error);
             println!();
         }
+
+        // 显示断言结果
+        if !result.assertions.is_empty() {
+            println!("   Assertions:");
+            for assertion in &result.assertions {
+                if assertion.passed {
+                    println!("     {} {}", "✓".green(), assertion.raw);
+                } else {
+                    println!("     {} {}", "✗".red(), assertion.raw);
+                    if let Some(msg) = &assertion.message {
+                        println!("       {}", msg.red());
+                    }
+                }
+            }
+            println!();
+        }
     }
 
     /// 打印测试开始
@@ -130,6 +146,26 @@ impl TestReporter {
                 summary.failed.to_string().red(),
                 summary.total
             );
+        }
+
+        // 显示断言统计
+        if summary.total_assertions > 0 {
+            if summary.failed_assertions == 0 {
+                println!(
+                    "  {}: {} passed, {} total",
+                    "Assertions".bold(),
+                    summary.passed_assertions.to_string().green(),
+                    summary.total_assertions
+                );
+            } else {
+                println!(
+                    "  {}: {} passed, {} failed, {} total",
+                    "Assertions".bold(),
+                    summary.passed_assertions.to_string().green(),
+                    summary.failed_assertions.to_string().red(),
+                    summary.total_assertions
+                );
+            }
         }
 
         println!(

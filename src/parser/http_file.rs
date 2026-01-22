@@ -249,6 +249,9 @@ impl HttpFileParser {
             metadata.skip = value;
         } else if let Some(timeout_str) = line.strip_prefix("@timeout") {
             metadata.timeout = Some(Self::parse_duration(timeout_str.trim(), line_number)?);
+        } else if let Some(assertion) = line.strip_prefix("@assert") {
+            // @assert 断言
+            metadata.assertions.push(assertion.trim().to_string());
         }
 
         Ok(())
@@ -414,5 +417,35 @@ GET http://example.com
             HttpFileParser::parse_duration("2m", 1).unwrap(),
             Duration::from_secs(120)
         );
+    }
+
+    #[test]
+    fn test_parse_assert_metadata() {
+        let content = "@assert status == 200\n@assert body.id > 0\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests[0].metadata.assertions.len(), 2);
+        assert_eq!(result.requests[0].metadata.assertions[0], "status == 200");
+        assert_eq!(result.requests[0].metadata.assertions[1], "body.id > 0");
+    }
+
+    #[test]
+    fn test_parse_multiple_metadata() {
+        let content = r#"
+@name Test Request
+@timeout 5s
+@assert status == 200
+@assert body.token exists
+POST http://example.com
+"#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.name,
+            Some("Test Request".to_string())
+        );
+        assert_eq!(
+            result.requests[0].metadata.timeout,
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(result.requests[0].metadata.assertions.len(), 2);
     }
 }

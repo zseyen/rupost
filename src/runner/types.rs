@@ -1,3 +1,4 @@
+use crate::assertion::AssertionResult;
 use crate::http::Response;
 use std::time::Duration;
 
@@ -33,6 +34,9 @@ pub struct TestResult {
 
     /// 是否被跳过
     pub skipped: bool,
+
+    /// 断言结果列表
+    pub assertions: Vec<AssertionResult>,
 }
 
 impl TestResult {
@@ -58,6 +62,7 @@ impl TestResult {
             error: None,
             response: Some(response),
             skipped: false,
+            assertions: Vec::new(),
         }
     }
 
@@ -80,6 +85,7 @@ impl TestResult {
             error: Some(error),
             response: None,
             skipped: false,
+            assertions: Vec::new(),
         }
     }
 
@@ -100,6 +106,7 @@ impl TestResult {
             error: None,
             response: None,
             skipped: true,
+            assertions: Vec::new(),
         }
     }
 }
@@ -112,6 +119,9 @@ pub struct TestSummary {
     pub failed: usize,
     pub skipped: usize,
     pub total_duration: Duration,
+    pub total_assertions: usize,
+    pub passed_assertions: usize,
+    pub failed_assertions: usize,
 }
 
 impl TestSummary {
@@ -120,12 +130,28 @@ impl TestSummary {
         let skipped = results.iter().filter(|r| r.skipped).count();
         let total_duration = results.iter().map(|r| r.duration).sum();
 
+        // 统计断言
+        let total_assertions = results.iter().map(|r| r.assertions.len()).sum();
+        let passed_assertions = results
+            .iter()
+            .flat_map(|r| &r.assertions)
+            .filter(|a| a.passed)
+            .count();
+        let failed_assertions = results
+            .iter()
+            .flat_map(|r| &r.assertions)
+            .filter(|a| !a.passed)
+            .count();
+
         Self {
             total: results.len(),
             passed,
             failed: results.len() - passed - skipped,
             skipped,
             total_duration,
+            total_assertions,
+            passed_assertions,
+            failed_assertions,
         }
     }
 }

@@ -1,0 +1,101 @@
+# 断言系统完整测试
+# 测试所有类型的断言功能
+
+### 测试 1: 状态码断言
+@name Basic Status Check
+@assert status == 200
+GET https://httpbin.org/status/200
+
+###
+
+### 测试 2: 多个断言
+@name Multiple Assertions Test
+@assert status == 200
+@assert headers.content-type contains "json"
+@assert body.slideshow exists
+@assert response.time < 5000
+GET https://httpbin.org/json
+
+###
+
+### 测试 3: Body 数字断言
+@name POST with Assertions
+@assert status == 200
+@assert body.json.number > 0
+@assert body.json.number < 1000
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{"number": 42, "text": "test"}
+
+###
+
+### 测试 4: Body 字符串断言
+@name String Assertion Test
+@assert status == 200
+@assert body.json.text == "hello"
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{"text": "hello"}
+
+###
+
+### 测试 5: Body null 检查
+@name Null Check Test
+@assert status == 200
+@assert body.json.value != null
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{"value": "not null"}
+
+###
+
+### 测试 6: 嵌套路径断言
+@name Nested Path Test
+@assert status == 200
+@assert body.json.user.name == "test"
+@assert body.json.user.id > 0
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{"user": {"name": "test", "id": 123}}
+
+###
+
+### 测试 7: exists 断言
+@name Exists Assertion Test
+@assert status == 200
+@assert body.json.token exists
+@assert body.json.data exists
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{"token": "abc123", "data": {"key": "value"}}
+
+###
+
+### 测试 8: Header 断言
+@name Header Assertion Test
+@assert status == 200
+@assert headers.server exists
+@assert headers.content-type contains "application/json"
+GET https://httpbin.org/headers
+
+###
+
+### 测试 9: 响应时间断言
+@name Response Time Test
+@assert status == 200
+@assert response.time < 3000
+@assert body.slideshow exists
+GET https://httpbin.org/json
+
+###
+
+### 测试 10: 失败的断言（预期失败）
+@name Failing Assertion Test
+@assert status == 404
+@assert body.message == "Not Found"
+GET https://httpbin.org/status/200

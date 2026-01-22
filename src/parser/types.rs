@@ -63,6 +63,9 @@ pub struct RequestMetadata {
 
     /// 请求超时时间（@timeout，可选）
     pub timeout: Option<Duration>,
+
+    /// 断言列表（@assert）
+    pub assertions: Vec<String>,
 }
 
 /// 整个文件的解析结果

@@ -27,11 +27,18 @@ async fn main() -> Result<()> {
 }
 
 async fn run_test(file_path: &str, verbose: bool) -> Result<()> {
-    use rupost::parser;
+    use rupost::parser::{HttpFileParser, MarkdownFileParser};
     use rupost::runner::{TestExecutor, TestReporter, TestSummary};
+    use std::path::Path;
 
-    // 1. 解析文件
-    let parsed_file = parser::parse_file(file_path)?;
+    // 1. 根据文件扩展名选择解析器
+    let path = Path::new(file_path);
+    let parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
+        MarkdownFileParser::parse_file(path)?
+    } else {
+        HttpFileParser::parse_file(path)?
+    };
+
     let total = parsed_file.requests.len();
 
     // 2. 创建报告器并打印开始信息

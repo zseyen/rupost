@@ -11,8 +11,13 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Some(Commands::Test { path, verbose }) => {
-            run_test(&path, verbose).await?;
+        Some(Commands::Test {
+            path,
+            env,
+            var,
+            verbose,
+        }) => {
+            run_test(&path, env.as_deref(), &var, verbose).await?;
         }
         None => {
             if cli.args.is_empty() {
@@ -26,39 +31,76 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_test(file_path: &str, verbose: bool) -> Result<()> {
+async fn run_test(
+    file_path: &str,
+    env_name: Option<&str>,
+    var_overrides: &[String],
+    verbose: bool,
+) -> Result<()> {
     use rupost::parser::{HttpFileParser, MarkdownFileParser};
     use rupost::runner::{TestExecutor, TestReporter, TestSummary};
+    use rupost::variable::{ConfigLoader, VariableContext, VariableResolver};
     use std::path::Path;
 
-    // 1. 根据文件扩展名选择解析器
+    // 1. 加载配置并构建变量上下文
+    let var_context = if env_name.is_some() || !var_overrides.is_empty() {
+        let config = ConfigLoader::find_and_load().unwrap_or_default();
+
+        // 解析 CLI 变量覆盖
+        let cli_vars: Vec<(String, String)> = var_overrides
+            .iter()
+            .filter_map(|s| ConfigLoader::parse_cli_var(s))
+            .collect();
+
+        ConfigLoader::build_context(&config, env_name, &cli_vars)
+    } else {
+        VariableContext::new()
+    };
+
+    // 2. 根据文件扩展名选择解析器
     let path = Path::new(file_path);
-    let parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
+    let mut parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
         MarkdownFileParser::parse_file(path)?
     } else {
         HttpFileParser::parse_file(path)?
     };
 
+    // 3. 应用变量替换
+    for request in &mut parsed_file.requests {
+        // 替换 URL
+        request.url = VariableResolver::resolve(&request.url, &var_context);
+
+        // 替换 Headers
+        for (_, value) in &mut request.headers {
+            *value = VariableResolver::resolve(value, &var_context);
+        }
+
+        // 替换 Body
+        if let Some(body) = &mut request.body {
+            *body = VariableResolver::resolve(body, &var_context);
+        }
+    }
+
     let total = parsed_file.requests.len();
 
-    // 2. 创建报告器并打印开始信息
+    // 4. 创建报告器并打印开始信息
     let reporter = TestReporter::new(verbose);
     reporter.print_header(file_path, total);
 
-    // 3. 执行所有请求
+    // 5. 执行所有请求
     let executor = TestExecutor::new();
     let results = executor.execute_all(parsed_file).await?;
 
-    // 4. 打印每个结果
+    // 6. 打印每个结果
     for result in &results {
         reporter.print_result(result);
     }
 
-    // 5. 打印摘要
+    // 7. 打印摘要
     let summary = TestSummary::from_results(&results);
     reporter.print_summary(&summary);
 
-    // 6. 设置退出码
+    // 8. 设置退出码
     if summary.failed > 0 {
         std::process::exit(1);
     }

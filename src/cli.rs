@@ -24,6 +24,14 @@ pub enum Commands {
         /// Path to the .http file
         path: String,
 
+        /// Environment name (e.g., dev, staging, prod)
+        #[arg(short, long)]
+        env: Option<String>,
+
+        /// Variable overrides (key=value)
+        #[arg(long, value_name = "KEY=VALUE")]
+        var: Vec<String>,
+
         /// Show detailed request/response information
         #[arg(short, long)]
         verbose: bool,

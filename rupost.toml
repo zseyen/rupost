@@ -1,0 +1,14 @@
+[environments.dev]
+base_url = "https://httpbin.org"
+api_key = "dev-api-key-123"
+token = "dev-token-abc"
+
+[environments.staging]
+base_url = "https://staging.httpbin.org"
+api_key = "${STAGING_API_KEY}"
+token = "${STAGING_TOKEN}"
+
+[environments.prod]
+base_url = "https://api.httpbin.org"
+api_key = "${PROD_API_KEY}"
+token = "${PROD_TOKEN}"

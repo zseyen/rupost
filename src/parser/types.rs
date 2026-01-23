@@ -52,6 +52,8 @@ impl ParsedRequest {
     }
 }
 
+use crate::variable::capture::VariableCapture;
+
 /// 请求元数据
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RequestMetadata {
@@ -66,6 +68,19 @@ pub struct RequestMetadata {
 
     /// 断言列表（@assert）
     pub assertions: Vec<String>,
+
+    /// 变量捕获列表（@capture）
+    pub captures: Vec<VariableCapture>,
+}
+
+/// 解析出的元数据指令（中间状态）
+#[derive(Debug, Clone, PartialEq)]
+pub enum Metadata {
+    Name(String),
+    Skip(bool),
+    Timeout(Duration),
+    Assert(String),
+    Capture { var_name: String, source: String },
 }
 
 /// 整个文件的解析结果

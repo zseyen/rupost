@@ -1,6 +1,6 @@
-use crate::parser::types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata};
+use crate::parser::metadata;
+use crate::parser::types::{ParseError, ParseResult, ParsedFile, ParsedRequest};
 use std::path::Path;
-use std::time::Duration;
 
 /// HTTP 文件解析器
 pub struct HttpFileParser;
@@ -96,8 +96,10 @@ impl HttpFileParser {
             }
 
             // 解析元数据
-            if Self::is_metadata(line) {
-                Self::parse_metadata_line(line, current_line, &mut request.metadata)?;
+            if line.starts_with('@') {
+                if let Some(metadata) = metadata::parse_metadata(line)? {
+                    metadata::apply_metadata(&metadata, &mut request.metadata);
+                }
                 line_index += 1;
                 current_line += 1;
                 continue;
@@ -217,80 +219,13 @@ impl HttpFileParser {
     fn is_comment(line: &str) -> bool {
         line.starts_with('#') || line.starts_with("//")
     }
-
-    /// 判断是否为元数据行
-    fn is_metadata(line: &str) -> bool {
-        line.starts_with('@')
-    }
-
-    /// 解析元数据行
-    fn parse_metadata_line(
-        line: &str,
-        line_number: usize,
-        metadata: &mut RequestMetadata,
-    ) -> ParseResult<()> {
-        let line = line.trim();
-
-        if let Some(name) = line.strip_prefix("@name") {
-            metadata.name = Some(name.trim().to_string());
-        } else if line.starts_with("@skip") {
-            // @skip 或 @skip true/false
-            let value = line
-                .strip_prefix("@skip")
-                .and_then(|s| {
-                    let trimmed = s.trim();
-                    if trimmed.is_empty() {
-                        Some(true)
-                    } else {
-                        trimmed.parse::<bool>().ok()
-                    }
-                })
-                .unwrap_or(true);
-            metadata.skip = value;
-        } else if let Some(timeout_str) = line.strip_prefix("@timeout") {
-            metadata.timeout = Some(Self::parse_duration(timeout_str.trim(), line_number)?);
-        } else if let Some(assertion) = line.strip_prefix("@assert") {
-            // @assert 断言
-            metadata.assertions.push(assertion.trim().to_string());
-        }
-
-        Ok(())
-    }
-
-    /// 解析时间字符串（支持 "5s", "1000ms", "2m"）
-    fn parse_duration(s: &str, line_number: usize) -> ParseResult<Duration> {
-        let s = s.trim();
-
-        if let Some(ms) = s.strip_suffix("ms") {
-            let millis: u64 = ms.parse().map_err(|_| ParseError::InvalidMetadata {
-                line: line_number,
-                message: format!("Invalid duration: {}", s),
-            })?;
-            Ok(Duration::from_millis(millis))
-        } else if let Some(sec) = s.strip_suffix('s') {
-            let secs: u64 = sec.parse().map_err(|_| ParseError::InvalidMetadata {
-                line: line_number,
-                message: format!("Invalid duration: {}", s),
-            })?;
-            Ok(Duration::from_secs(secs))
-        } else if let Some(min) = s.strip_suffix('m') {
-            let mins: u64 = min.parse().map_err(|_| ParseError::InvalidMetadata {
-                line: line_number,
-                message: format!("Invalid duration: {}", s),
-            })?;
-            Ok(Duration::from_secs(mins * 60))
-        } else {
-            Err(ParseError::InvalidMetadata {
-                line: line_number,
-                message: format!("Duration must end with 'ms', 's', or 'm': {}", s),
-            })
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::metadata;
+    use std::time::Duration;
 
     #[test]
     fn test_parse_simple_get() {
@@ -406,15 +341,15 @@ GET http://example.com
     #[test]
     fn test_parse_duration_formats() {
         assert_eq!(
-            HttpFileParser::parse_duration("1000ms", 1).unwrap(),
+            metadata::parse_duration("1000ms").unwrap(),
             Duration::from_millis(1000)
         );
         assert_eq!(
-            HttpFileParser::parse_duration("5s", 1).unwrap(),
+            metadata::parse_duration("5s").unwrap(),
             Duration::from_secs(5)
         );
         assert_eq!(
-            HttpFileParser::parse_duration("2m", 1).unwrap(),
+            metadata::parse_duration("2m").unwrap(),
             Duration::from_secs(120)
         );
     }

@@ -1,6 +1,7 @@
 pub mod converter;
 pub mod http_file;
 pub mod markdown_file;
+pub mod metadata;
 pub mod types;
 
 // Re-export commonly used types

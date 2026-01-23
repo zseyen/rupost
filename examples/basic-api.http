@@ -1,0 +1,73 @@
+# Basic API Testing Examples
+# 基础 API 测试示例
+#
+# 使用方法:
+# rupost test examples/basic-api.http --env dev
+# rupost test examples/basic-api.http --env prod --var api_key=custom-key
+
+### 1. 简单的 GET 请求
+# 获取用户列表
+GET {{base_url}}/{{api_version}}/users
+Accept: application/json
+
+###
+
+### 2. 带查询参数的 GET 请求
+# 分页获取用户
+GET {{base_url}}/{{api_version}}/users?page=1&limit=10
+Accept: application/json
+
+###
+
+### 3. 带认证的 GET 请求
+# 获取当前用户信息
+GET {{base_url}}/{{api_version}}/profile
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 4. POST 请求 - JSON Body
+# 创建新用户
+POST {{base_url}}/{{api_version}}/users
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "email": "{{test_user_email}}",
+  "password": "{{test_user_password}}",
+  "name": "Test User"
+}
+
+###
+
+### 5. PUT 请求 - 更新资源
+# 更新用户信息
+PUT {{base_url}}/{{api_version}}/users/123
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "name": "Updated Name",
+  "email": "updated@example.com"
+}
+
+###
+
+### 6. DELETE 请求
+# 删除用户
+DELETE {{base_url}}/{{api_version}}/users/123
+Authorization: Bearer {{api_key}}
+
+###
+
+### 7. 带自定义 Headers
+# 测试带多个自定义 Header 的请求
+GET {{base_url}}/{{api_version}}/data
+Authorization: Bearer {{api_key}}
+X-Request-ID: test-request-001
+X-Client-Version: 1.0.0
+Accept: application/json
+Accept-Language: zh-CN
+
+###

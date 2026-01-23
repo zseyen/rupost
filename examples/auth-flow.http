@@ -1,0 +1,82 @@
+# Authentication Flow Example
+# 完整的认证流程示例
+#
+# 使用方法:
+# rupost test examples/auth-flow.http --env dev
+
+### 1. 用户登录
+# @name login
+POST {{base_url}}/{{api_version}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{test_user_email}}",
+  "password": "{{test_user_password}}"
+}
+
+###
+
+### 2. 获取用户信息
+# 注意: 在实际使用中，你需要从上一个请求的响应中提取 token
+# 这里先使用配置的 api_key 作为示例
+GET {{base_url}}/{{api_version}}/auth/profile
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 3. 刷新 Token
+POST {{base_url}}/{{api_version}}/auth/refresh
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "refresh_token": "placeholder-will-be-replaced"
+}
+
+###
+
+### 4. 修改密码
+PUT {{base_url}}/{{api_version}}/auth/password
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "old_password": "{{test_user_password}}",
+  "new_password": "new_password_123"
+}
+
+###
+
+### 5. 登出
+POST {{base_url}}/{{api_version}}/auth/logout
+Authorization: Bearer {{api_key}}
+
+###
+
+### 6. 注册新用户
+POST {{base_url}}/{{api_version}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "newuser@example.com",
+  "password": "secure_password_123",
+  "name": "New User"
+}
+
+###
+
+### 7. 请求重置密码
+POST {{base_url}}/{{api_version}}/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "{{test_user_email}}"
+}
+
+###
+
+### 8. 验证邮箱
+GET {{base_url}}/{{api_version}}/auth/verify-email?token=verification-token-here
+
+###

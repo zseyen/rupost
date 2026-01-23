@@ -1,0 +1,129 @@
+# CRUD Operations Example
+# 完整的 CRUD 操作示例（以文章管理为例）
+#
+# 使用方法:
+# rupost test examples/crud-operations.http --env dev
+
+### 1. CREATE - 创建文章
+# @name create_post
+POST {{base_url}}/{{api_version}}/posts
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "title": "我的第一篇文章",
+  "content": "这是文章的内容...",
+  "tags": ["技术", "教程"],
+  "status": "draft"
+}
+
+###
+
+### 2. READ - 获取文章列表
+GET {{base_url}}/{{api_version}}/posts
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 3. READ - 获取单个文章
+# 假设文章 ID 为 1
+GET {{base_url}}/{{api_version}}/posts/1
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 4. READ - 带过滤参数
+# 获取已发布的文章
+GET {{base_url}}/{{api_version}}/posts?status=published&limit=20
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 5. READ - 带排序和分页
+GET {{base_url}}/{{api_version}}/posts?sort=-created_at&page=1&per_page=10
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 6. UPDATE - 完全更新文章
+PUT {{base_url}}/{{api_version}}/posts/1
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "title": "更新后的标题",
+  "content": "更新后的内容...",
+  "tags": ["技术", "教程", "Rust"],
+  "status": "published"
+}
+
+###
+
+### 7. UPDATE - 部分更新文章
+# 只更新状态
+PATCH {{base_url}}/{{api_version}}/posts/1
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "status": "published"
+}
+
+###
+
+### 8. DELETE - 删除文章
+DELETE {{base_url}}/{{api_version}}/posts/1
+Authorization: Bearer {{api_key}}
+
+###
+
+### 9. 批量操作 - 批量创建
+POST {{base_url}}/{{api_version}}/posts/batch
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "posts": [
+    {
+      "title": "批量文章 1",
+      "content": "内容 1",
+      "status": "draft"
+    },
+    {
+      "title": "批量文章 2",
+      "content": "内容 2",
+      "status": "draft"
+    }
+  ]
+}
+
+###
+
+### 10. 批量操作 - 批量删除
+DELETE {{base_url}}/{{api_version}}/posts/batch
+Content-Type: application/json
+Authorization: Bearer {{api_key}}
+
+{
+  "ids": [1, 2, 3]
+}
+
+###
+
+### 11. 搜索文章
+GET {{base_url}}/{{api_version}}/posts/search?q=Rust&fields=title,content
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###
+
+### 12. 获取文章统计
+GET {{base_url}}/{{api_version}}/posts/stats
+Authorization: Bearer {{api_key}}
+Accept: application/json
+
+###

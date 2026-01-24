@@ -1,11 +1,15 @@
 use crate::Result;
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
+use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
+use crate::history::storage::get_storage;
 use crate::http::Client;
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture_from_response};
+use reqwest::header::{HeaderName, HeaderValue};
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use uuid::Uuid;
 
 pub struct TestExecutor {
     client: Client,
@@ -61,9 +65,6 @@ impl TestExecutor {
         parsed.url = VariableResolver::resolve(&parsed.url, context);
 
         // 替换 Headers
-        // parsed.headers = parsed.headers.into_iter()
-        //     .map(|(k, v)| (k, VariableResolver::resolve(&v, context)))
-        //     .collect();
         for (_key, value) in &mut parsed.headers {
             *value = VariableResolver::resolve(value, context);
             // header key 通常不需要替换，也可以根据需求支持
@@ -85,6 +86,26 @@ impl TestExecutor {
         let assertions_to_eval = parsed.metadata.assertions.clone();
         let captures_to_eval = parsed.metadata.captures.clone();
 
+        // [History] 创建请求快照 (在 parsed 被 move 之前)
+        let request_snapshot = {
+            let mut headers = reqwest::header::HeaderMap::new();
+            for (k, v) in &parsed.headers {
+                if let (Ok(n), Ok(v)) = (
+                    HeaderName::from_bytes(k.as_bytes()),
+                    HeaderValue::from_str(v),
+                ) {
+                    headers.insert(n, v);
+                }
+            }
+
+            RequestSnapshot {
+                method: method.clone(),
+                url: url.clone(),
+                headers,
+                body: parsed.body.clone(),
+            }
+        };
+
         // 转换为 Request
         let request = match parsed.try_into() {
             Ok(req) => req,
@@ -103,6 +124,27 @@ impl TestExecutor {
         // 执行请求
         match self.client.execute(request).await {
             Ok(response) => {
+                // 计算耗时
+                let duration = start.elapsed();
+
+                // [History] 异步保存历史记录 (Best Effort)
+                let history_entry = HistoryEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp: chrono::Utc::now(),
+                    duration_ms: duration.as_millis() as u64,
+                    request: request_snapshot,
+                    response: ResponseMeta {
+                        status: response.status.code(),
+                        headers: response.headers.clone(),
+                    },
+                };
+
+                // 不等待历史记录写入，避免阻塞测试流程（对于本地文件写很快，同步也无妨）
+                // 若要极致性能可放到 spawn blocking，但这里保持简单
+                if let Err(e) = get_storage().append(&history_entry) {
+                    warn!("Failed to save request history: {}", e);
+                }
+
                 // 2. 变量捕获
                 if !captures_to_eval.is_empty() {
                     match capture_from_response(

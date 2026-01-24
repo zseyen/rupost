@@ -1,5 +1,7 @@
 pub mod assertion;
 pub mod error;
+pub mod generator;
+pub mod history;
 pub mod http;
 pub mod logger;
 pub mod parser;

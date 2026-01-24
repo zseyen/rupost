@@ -36,6 +36,35 @@ pub enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Manage request history
+    History {
+        #[command(subcommand)]
+        command: HistoryCommands,
+    },
+
+    /// Generate test file from history
+    Generate(GenerateArgs),
+}
+
+#[derive(Subcommand)]
+pub enum HistoryCommands {
+    /// List request history
+    List {
+        /// Limit the number of entries
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+}
+
+#[derive(Parser)]
+pub struct GenerateArgs {
+    /// Output file path
+    pub output_file: String,
+
+    /// Number of recent requests to include
+    #[arg(short, long, default_value = "1")]
+    pub last: usize,
 }
 
 struct CliRunner {

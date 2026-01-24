@@ -19,6 +19,32 @@ async fn main() -> Result<()> {
         }) => {
             run_test(&path, env.as_deref(), &var, verbose).await?;
         }
+        Some(Commands::History { command }) => match command {
+            cli::HistoryCommands::List { limit } => {
+                rupost::history::printer::list_history(limit)?;
+            }
+        },
+        Some(Commands::Generate(args)) => {
+            use rupost::generator::http::HttpGenerator;
+            use rupost::history::storage::get_storage;
+            use std::fs;
+
+            let storage = get_storage();
+            let entries = storage.tail(args.last)?;
+
+            if entries.is_empty() {
+                eprintln!("No history found to generate.");
+                return Ok(());
+            }
+
+            let content = HttpGenerator::generate(&entries)?;
+            fs::write(&args.output_file, content)?;
+            println!(
+                "Generated test file: {} ({} requests)",
+                args.output_file,
+                entries.len()
+            );
+        }
         None => {
             if cli.args.is_empty() {
                 eprintln!("No command provided");

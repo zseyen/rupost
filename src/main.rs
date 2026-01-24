@@ -39,11 +39,11 @@ async fn run_test(
 ) -> Result<()> {
     use rupost::parser::{HttpFileParser, MarkdownFileParser};
     use rupost::runner::{TestExecutor, TestReporter, TestSummary};
-    use rupost::variable::{ConfigLoader, VariableContext, VariableResolver};
+    use rupost::variable::{ConfigLoader, VariableContext};
     use std::path::Path;
 
     // 1. 加载配置并构建变量上下文
-    let var_context = if env_name.is_some() || !var_overrides.is_empty() {
+    let mut var_context = if env_name.is_some() || !var_overrides.is_empty() {
         let config = ConfigLoader::find_and_load().unwrap_or_default();
 
         // 解析 CLI 变量覆盖
@@ -59,27 +59,11 @@ async fn run_test(
 
     // 2. 根据文件扩展名选择解析器
     let path = Path::new(file_path);
-    let mut parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
+    let parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
         MarkdownFileParser::parse_file(path)?
     } else {
         HttpFileParser::parse_file(path)?
     };
-
-    // 3. 应用变量替换
-    for request in &mut parsed_file.requests {
-        // 替换 URL
-        request.url = VariableResolver::resolve(&request.url, &var_context);
-
-        // 替换 Headers
-        for (_, value) in &mut request.headers {
-            *value = VariableResolver::resolve(value, &var_context);
-        }
-
-        // 替换 Body
-        if let Some(body) = &mut request.body {
-            *body = VariableResolver::resolve(body, &var_context);
-        }
-    }
 
     let total = parsed_file.requests.len();
 
@@ -89,7 +73,7 @@ async fn run_test(
 
     // 5. 执行所有请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed_file).await?;
+    let results = executor.execute_all(parsed_file, &mut var_context).await?;
 
     // 6. 打印每个结果
     for result in &results {

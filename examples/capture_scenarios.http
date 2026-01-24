@@ -1,0 +1,90 @@
+# Advanced Variable Capture Scenarios
+
+### 1. Header Capture
+# Capture the 'Date' and 'Content-Type' headers
+@name capture_headers
+@capture server_date from header.date
+@capture content_type from header.content-type
+GET https://httpbin.org/response-headers?X-Custom-Header=test_value
+
+### 2. Verify Header Capture
+# Echo back the captured headers
+@name verify_headers
+@assert body.headers.X-Echo-Date == "{{server_date}}"
+@assert body.headers.X-Echo-Type == "{{content_type}}"
+GET https://httpbin.org/headers
+X-Echo-Date: {{server_date}}
+X-Echo-Type: {{content_type}}
+
+### 3. Nested JSON Capture
+# Capture deeply nested fields
+@name deep_capture
+@capture user_city from body.json.address.city
+@capture user_zip from body.json.address.zipcode
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+    "address": {
+        "city": "Wonderland",
+        "zipcode": 12345,
+        "coordinates": {
+            "lat": 90.0,
+            "long": 10.0
+        }
+    }
+}
+
+### 4. Verify Nested Capture
+@name verify_nested
+@assert body.json.city == "Wonderland"
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+    "city": "{{user_city}}",
+    "zip": "{{user_zip}}"
+}
+
+### 5. Chain Requests (A -> B -> C)
+# A: Get UUID
+@name chain_step_1
+@capture id_1 from body.uuid
+GET https://httpbin.org/uuid
+
+### 6. Chain Step 2
+@name chain_step_2
+@capture prev_id_echo from body.json.prev_id
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+    "prev_id": "{{id_1}}"
+}
+
+### 7. Chain Step 3
+@name chain_step_3
+@assert body.json.val == "{{id_1}}"
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+    "val": "{{prev_id_echo}}"
+}
+
+### 8. Missing Field (Boundary Test)
+# Trying to capture a non-existent field. Should log error but not crash.
+@name missing_field
+@capture phantom from body.non.existent.field
+GET https://httpbin.org/json
+
+### 9. Verify Missing Variable
+# The variable {{phantom}} should remain unresolved (literal string)
+@name verify_missing
+@assert body.json.test == "{{phantom}}"
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+    "test": "{{phantom}}"
+}

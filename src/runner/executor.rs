@@ -3,7 +3,9 @@ use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
 use crate::http::Client;
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
+use crate::variable::{VariableContext, VariableResolver, capture_from_response};
 use std::time::Instant;
+use tracing::{error, info};
 
 pub struct TestExecutor {
     client: Client,
@@ -17,7 +19,11 @@ impl TestExecutor {
     }
 
     /// 批量执行所有请求
-    pub async fn execute_all(&self, parsed_file: ParsedFile) -> Result<Vec<TestResult>> {
+    pub async fn execute_all(
+        &self,
+        parsed_file: ParsedFile,
+        context: &mut VariableContext,
+    ) -> Result<Vec<TestResult>> {
         let mut results = Vec::new();
 
         for (index, parsed_request) in parsed_file.requests.into_iter().enumerate() {
@@ -34,7 +40,9 @@ impl TestExecutor {
                 continue;
             }
 
-            let result = self.execute_one(parsed_request, request_number).await;
+            let result = self
+                .execute_one(parsed_request, request_number, context)
+                .await;
             results.push(result);
         }
 
@@ -42,7 +50,30 @@ impl TestExecutor {
     }
 
     /// 执行单个请求
-    async fn execute_one(&self, parsed: ParsedRequest, request_number: usize) -> TestResult {
+    async fn execute_one(
+        &self,
+        mut parsed: ParsedRequest,
+        request_number: usize,
+        context: &mut VariableContext,
+    ) -> TestResult {
+        // 1. 变量替换
+        // 替换 URL
+        parsed.url = VariableResolver::resolve(&parsed.url, context);
+
+        // 替换 Headers
+        // parsed.headers = parsed.headers.into_iter()
+        //     .map(|(k, v)| (k, VariableResolver::resolve(&v, context)))
+        //     .collect();
+        for (_key, value) in &mut parsed.headers {
+            *value = VariableResolver::resolve(value, context);
+            // header key 通常不需要替换，也可以根据需求支持
+        }
+
+        // 替换 Body
+        if let Some(body) = &mut parsed.body {
+            *body = VariableResolver::resolve(body, context);
+        }
+
         let method = parsed.method_or_default().to_string();
         let url = parsed.url.clone();
         let name = parsed.name().map(|s| s.to_string());
@@ -50,8 +81,9 @@ impl TestExecutor {
         // 开始计时
         let start = Instant::now();
 
-        // 提前保存断言列表（在 parsed 被移动前）
+        // 提前保存断言列表和捕获配置（在 parsed 被移动前）
         let assertions_to_eval = parsed.metadata.assertions.clone();
+        let captures_to_eval = parsed.metadata.captures.clone();
 
         // 转换为 Request
         let request = match parsed.try_into() {
@@ -71,11 +103,34 @@ impl TestExecutor {
         // 执行请求
         match self.client.execute(request).await {
             Ok(response) => {
-                // 执行断言求值
+                // 2. 变量捕获
+                if !captures_to_eval.is_empty() {
+                    match capture_from_response(
+                        &response.body,
+                        &response.headers,
+                        &captures_to_eval,
+                    ) {
+                        Ok(captured_vars) => {
+                            for (key, value) in &captured_vars {
+                                info!("Captured variable: {} = '{}'", key, value);
+                            }
+                            context.extend(captured_vars);
+                        }
+                        Err(e) => {
+                            error!("Failed to capture variables: {}", e);
+                            // 捕获失败不应导致测试失败，但需要记录
+                        }
+                    }
+                }
+
+                // 3. 执行断言求值
                 let mut assertion_results = Vec::new();
 
                 for assertion_str in &assertions_to_eval {
-                    match parse_assertion(assertion_str) {
+                    // 先对断言字符串进行变量替换
+                    let resolved_assertion = VariableResolver::resolve(assertion_str, context);
+
+                    match parse_assertion(&resolved_assertion) {
                         Ok(assertion_expr) => {
                             let result = evaluate_assertion(&assertion_expr, &response);
                             assertion_results.push(result);

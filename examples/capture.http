@@ -1,0 +1,17 @@
+# Response Variable Capture Example
+
+### 1. Get a random UUID
+@name get_src
+@capture my_uuid from body.uuid
+GET https://httpbin.org/uuid
+
+### 2. Use the captured UUID
+# We send the captured UUID back to the server
+@name use_var
+@assert body.json.sent_uuid == "{{my_uuid}}"
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+    "sent_uuid": "{{my_uuid}}"
+}

@@ -19,6 +19,11 @@ impl VariableContext {
         self.variables.insert(key.into(), value.into());
     }
 
+    /// 设置变量 (insert 的别名)
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.insert(key, value);
+    }
+
     /// 获取变量值
     pub fn get(&self, key: &str) -> Option<&str> {
         self.variables.get(key).map(|s| s.as_str())

@@ -1,6 +1,6 @@
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
 use rupost::runner::TestExecutor;
-use rupost::variable::{ConfigLoader, VariableResolver};
+use rupost::variable::{ConfigLoader, VariableContext};
 use std::fs;
 use tempfile::TempDir;
 use wiremock::matchers::{header, method, path};
@@ -46,7 +46,8 @@ Accept: application/json
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let mut context = VariableContext::new(); // 新增空上下文
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 1);
@@ -105,7 +106,8 @@ Content-Type: application/json
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 1);
@@ -160,26 +162,16 @@ Authorization: Bearer {{api_key}}
 
     // 加载配置并构建变量上下文
     let config = ConfigLoader::load_from_path(&config_file).unwrap();
-    let context = ConfigLoader::build_context(&config, Some("test"), &[]);
+    let mut context = ConfigLoader::build_context(&config, Some("test"), &[]);
 
     // 解析文件
-    let mut parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
 
-    // 应用变量替换
-    for request in &mut parsed.requests {
-        request.url = VariableResolver::substitute(&request.url, &context);
-        // headers 是 Vec 不是 Option
-        for (_, value) in &mut request.headers {
-            *value = VariableResolver::substitute(value, &context);
-        }
-        if let Some(body) = &mut request.body {
-            *body = VariableResolver::substitute(body, &context);
-        }
-    }
+    // 手动替换部分已移除，由 executor 处理
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 1);
@@ -238,7 +230,8 @@ GET {}/api/status
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 1);
@@ -309,7 +302,8 @@ Authorization: Bearer auth-token-456
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 2);
@@ -364,22 +358,16 @@ X-API-Key: {{api_key}}
 
     // 加载配置并构建变量上下文
     let config = ConfigLoader::load_from_path(&config_file).unwrap();
-    let context = ConfigLoader::build_context(&config, Some("test"), &[]);
+    let mut context = ConfigLoader::build_context(&config, Some("test"), &[]);
 
     // 解析文件
-    let mut parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
 
-    // 应用变量替换
-    for request in &mut parsed.requests {
-        request.url = VariableResolver::substitute(&request.url, &context);
-        for (_, value) in &mut request.headers {
-            *value = VariableResolver::substitute(value, &context);
-        }
-    }
+    // 移除手动替换
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 1);
@@ -438,24 +426,94 @@ X-Custom-Header: {{custom_header}}
         "cli-override-value".to_string(),
     )];
     let config = ConfigLoader::load_from_path(&config_file).unwrap();
-    let context = ConfigLoader::build_context(&config, Some("test"), &cli_vars);
+    let mut context = ConfigLoader::build_context(&config, Some("test"), &cli_vars);
 
     // 解析文件
-    let mut parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
 
-    // 应用变量替换
-    for request in &mut parsed.requests {
-        request.url = VariableResolver::substitute(&request.url, &context);
-        for (_, value) in &mut request.headers {
-            *value = VariableResolver::substitute(value, &context);
-        }
-    }
+    // 移除手动替换
 
     // 执行请求
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed).await.unwrap();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
 
     // 验证结果
     assert_eq!(results.len(), 1);
     assert!(results[0].success);
+}
+
+/// 测试响应变量捕获功能
+#[tokio::test]
+async fn test_response_variable_capture() {
+    // 启动模拟服务器
+    let mock_server = MockServer::start().await;
+
+    // 1. 登录接口 - 返回 token
+    Mock::given(method("POST"))
+        .and(path("/auth/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": 0,
+            "data": {
+                "token": "secret-access-token-123",
+                "user_id": 42
+            }
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // 2. 获取信息接口 - 需要 Bearer Token
+    Mock::given(method("GET"))
+        .and(path("/api/users/42"))
+        .and(header("Authorization", "Bearer secret-access-token-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "name": "Test User"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // 创建临时 HTTP 文件
+    let temp_dir = TempDir::new().unwrap();
+    let http_file = temp_dir.path().join("capture_test.http");
+
+    let content = format!(
+        r#"
+### Login
+@name login
+@capture token from body.data.token
+@capture uid from body.data.user_id
+POST {}/auth/login
+Content-Type: application/json
+
+{{ "username": "admin" }}
+
+### Get User Info
+# 使用捕获的变量
+GET {}/api/users/{{{{uid}}}}
+Authorization: Bearer {{{{token}}}}
+
+###
+"#,
+        mock_server.uri(),
+        mock_server.uri()
+    );
+
+    fs::write(&http_file, content).unwrap();
+
+    // 解析文件
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    assert_eq!(parsed.requests.len(), 2);
+
+    // 执行请求
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+
+    // 验证结果
+    assert_eq!(results.len(), 2);
+    assert!(results[0].success); // Login success
+    assert!(results[1].success); // Get User Info success (implies token was captured and used)
+
+    // 验证变量上下文是否已更新
+    assert_eq!(context.get("token"), Some("secret-access-token-123"));
+    assert_eq!(context.get("uid"), Some("42"));
 }

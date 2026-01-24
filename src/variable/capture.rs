@@ -1,3 +1,9 @@
+use crate::Result;
+use crate::error::RupostError;
+use reqwest::header::HeaderMap;
+use serde_json::Value;
+use std::collections::HashMap;
+
 /// 变量捕获来源
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CaptureSource {
@@ -83,6 +89,94 @@ impl VariableCapture {
     }
 }
 
+/// 从响应中提取变量
+pub fn capture_from_response(
+    response_body: &str,
+    response_headers: &HeaderMap,
+    captures: &[VariableCapture],
+) -> Result<HashMap<String, String>> {
+    let mut vars = HashMap::new();
+
+    if captures.is_empty() {
+        return Ok(vars);
+    }
+
+    // 只有当需要从 Body 提取时才解析 JSON
+    let body_value: Option<Value> = if captures
+        .iter()
+        .any(|c| matches!(c.source, CaptureSource::Body(_)))
+    {
+        serde_json::from_str(response_body).ok()
+    } else {
+        None
+    };
+
+    for capture in captures {
+        let value = match &capture.source {
+            CaptureSource::Body(path) => {
+                if let Some(json) = &body_value {
+                    extract_from_json_path(json, path)?
+                } else {
+                    return Err(RupostError::ParseError(format!(
+                        "Response body is not valid JSON, cannot capture '{}'",
+                        capture.name
+                    )));
+                }
+            }
+            CaptureSource::Header(name) => response_headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(String::from)
+                .ok_or_else(|| RupostError::Other(format!("Header '{}' not found", name)))?,
+            _ => {
+                return Err(RupostError::Other(format!(
+                    "Unsupported capture source for '{}'",
+                    capture.name
+                )));
+            }
+        };
+
+        vars.insert(capture.name.clone(), value);
+    }
+
+    Ok(vars)
+}
+
+/// 简单的 JSON Path 提取 (支持 . 符号)
+fn extract_from_json_path(json: &Value, path: &str) -> Result<String> {
+    let parts: Vec<&str> = path.split('.').collect();
+    let mut current = json;
+
+    for part in parts {
+        match current {
+            Value::Object(map) => {
+                if let Some(val) = map.get(part) {
+                    current = val;
+                } else {
+                    return Err(RupostError::Other(format!(
+                        "Key '{}' not found in path '{}'",
+                        part, path
+                    )));
+                }
+            }
+            _ => {
+                return Err(RupostError::Other(format!(
+                    "Cannot navigate path '{}' on non-object value",
+                    path
+                )));
+            }
+        }
+    }
+
+    match current {
+        Value::String(s) => Ok(s.clone()),
+        Value::Number(n) => Ok(n.to_string()),
+        Value::Bool(b) => Ok(b.to_string()),
+        Value::Null => Ok("null".to_string()),
+        _ => Ok(current.to_string()), // Object/Array 转为 JSON 字符串
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +223,51 @@ mod tests {
     fn test_parse_default_to_body() {
         let capture = VariableCapture::parse("token", "token");
         assert_eq!(capture.source, CaptureSource::Body("token".to_string()));
+    }
+
+    #[test]
+    fn test_capture_from_json_body() {
+        let body = r#"{"user": {"id": 123, "name": "test"}, "token": "abc-123"}"#;
+        let headers = HeaderMap::new();
+        let captures = vec![
+            VariableCapture::from_body("user_id", "user.id"),
+            VariableCapture::from_body("token", "token"),
+        ];
+
+        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        assert_eq!(vars.get("user_id").unwrap(), "123");
+        assert_eq!(vars.get("token").unwrap(), "abc-123");
+    }
+
+    #[test]
+    fn test_capture_from_header() {
+        let body = "{}";
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Token", "header-token-123".parse().unwrap());
+
+        let captures = vec![VariableCapture::from_header("auth_token", "X-Token")];
+
+        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        assert_eq!(vars.get("auth_token").unwrap(), "header-token-123");
+    }
+
+    #[test]
+    fn test_capture_nested_json() {
+        let body = r#"{"data": {"items": {"first": "item1"}}}"#;
+        let headers = HeaderMap::new();
+        let captures = vec![VariableCapture::from_body("item", "data.items.first")];
+
+        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        assert_eq!(vars.get("item").unwrap(), "item1");
+    }
+
+    #[test]
+    fn test_capture_missing_key() {
+        let body = r#"{"data": {}}"#;
+        let headers = HeaderMap::new();
+        let captures = vec![VariableCapture::from_body("item", "data.missing")];
+
+        let result = capture_from_response(body, &headers, &captures);
+        assert!(result.is_err());
     }
 }

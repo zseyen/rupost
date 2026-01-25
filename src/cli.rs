@@ -54,6 +54,10 @@ pub enum HistoryCommands {
         /// Limit the number of entries
         #[arg(long, default_value = "20")]
         limit: usize,
+
+        /// Show latest entries first (Effective mainly for UI display)
+        #[arg(short, long)]
+        reverse: bool,
     },
 }
 

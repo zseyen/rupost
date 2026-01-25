@@ -20,8 +20,8 @@ async fn main() -> Result<()> {
             run_test(&path, env.as_deref(), &var, verbose).await?;
         }
         Some(Commands::History { command }) => match command {
-            cli::HistoryCommands::List { limit } => {
-                rupost::history::printer::list_history(limit)?;
+            cli::HistoryCommands::List { limit, reverse } => {
+                rupost::history::printer::list_history(limit, reverse)?;
             }
         },
         Some(Commands::Generate(args)) => {

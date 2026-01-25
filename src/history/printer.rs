@@ -3,9 +3,13 @@ use crate::Result;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, Table};
 
-pub fn list_history(limit: usize) -> Result<()> {
+pub fn list_history(limit: usize, reverse: bool) -> Result<()> {
     let storage = get_storage();
-    let entries = storage.tail(limit)?;
+    let mut entries = storage.tail(limit)?;
+
+    if reverse {
+        entries.reverse();
+    }
 
     let mut table = Table::new();
     table

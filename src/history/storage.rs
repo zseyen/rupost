@@ -1,6 +1,7 @@
 use super::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
+use fs2::FileExt;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -41,8 +42,16 @@ impl HistoryStorage {
     }
 
     /// Append a new entry to history
+    ///
+    /// # Concurrency Strategy
+    /// Uses `fs2::lock_exclusive` to ensure atomic writes across multiple processes.
+    /// This is safer than relying on `O_APPEND` across different OSs (e.g. Windows).
+    ///
+    /// # Performance
+    /// The lock is held only for the duration of the write (microseconds).
     pub fn append(&self, entry: &HistoryEntry) -> Result<()> {
         self.ensure_dir()?;
+        let json = serde_json::to_string(entry)?;
 
         let mut file = OpenOptions::new()
             .create(true)
@@ -50,8 +59,13 @@ impl HistoryStorage {
             .open(&self.file_path)
             .map_err(RupostError::IoError)?;
 
-        let json = serde_json::to_string(entry)?;
+        // Lock for writing
+        file.lock_exclusive().map_err(RupostError::IoError)?;
+
         writeln!(file, "{}", json).map_err(RupostError::IoError)?;
+
+        // Unlock happens automatically when file is dropped, but excessive scoping is good habit
+        drop(file);
 
         Ok(())
     }
@@ -62,13 +76,22 @@ impl HistoryStorage {
             return Ok(Vec::new());
         }
 
-        // Check if compaction is needed
+        // Lazy Compaction: Check size on Read, not on Write.
+        // This keeps the "hot path" (append) fast and robust.
         self.compact_if_needed()?;
 
         self.read_all()
     }
 
-    /// Read last N entries (efficiently by reading backward usually, but MVP reads all)
+    /// Read last N entries
+    ///
+    /// # Order
+    /// Returns entries in Chronological order (Oldest -> Newest).
+    /// To display "Latest First", the caller (Printer) should reverse the result.
+    ///
+    /// # Optimization
+    /// Currently reads the whole file (up to 20MB limit).
+    /// Future optimization: Use `Seek` to read from end backwards.
     pub fn tail(&self, n: usize) -> Result<Vec<HistoryEntry>> {
         let entries = self.list()?;
         let skip = entries.len().saturating_sub(n);
@@ -76,7 +99,12 @@ impl HistoryStorage {
     }
 
     fn read_all(&self) -> Result<Vec<HistoryEntry>> {
+        // Read lock? Append only is atomic, but to be sure we don't read partial line from a writer
+        // we can take shared lock. `fs2` supports shared lock.
+        // However, standard `BufReader` with `File` needs `File` object.
         let file = fs::File::open(&self.file_path).map_err(RupostError::IoError)?;
+        file.lock_shared().map_err(RupostError::IoError)?;
+
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
 
@@ -85,24 +113,54 @@ impl HistoryStorage {
             if line.trim().is_empty() {
                 continue;
             }
-            // Ignore parse errors for resilience (skip bad lines)
             if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&line) {
                 entries.push(entry);
             }
         }
-
+        // Unlock on drop
         Ok(entries)
     }
 
     /// Check file size and prune if needed
     fn compact_if_needed(&self) -> Result<()> {
-        let metadata = fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true) // Need write for compaction
+            .open(&self.file_path)
+            .map_err(RupostError::IoError)?;
+
+        // Try to lock exclusive to checking metadata size?
+        // Or check metadata first (fast) then lock?
+        // Let's check metadata first to avoid locking on every read
+        let metadata = file.metadata().map_err(RupostError::IoError)?;
         if metadata.len() < COMPACTION_THRESHOLD_BYTES {
             return Ok(());
         }
 
-        // Compact!
-        let entries = self.read_all()?;
+        // Need compaction. Acquire Exclusive Lock.
+        // We use TRUNCATE strategy instead of Rename for better Windows compatibility with locks.
+        file.lock_exclusive().map_err(RupostError::IoError)?;
+
+        // critical section
+        // ... (read-truncate-rewrite)
+
+        // Re-check size under lock (double-check locking pattern) in case someone else just compacted
+        let metadata = file.metadata().map_err(RupostError::IoError)?;
+        if metadata.len() < COMPACTION_THRESHOLD_BYTES {
+            return Ok(());
+        }
+
+        // Read all
+        let reader = BufReader::new(&file);
+        let mut entries = Vec::new();
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&l) {
+                    entries.push(entry);
+                }
+            }
+        }
+
         if entries.len() <= MAX_ENTRIES {
             return Ok(());
         }
@@ -111,12 +169,28 @@ impl HistoryStorage {
         let skip_count = entries.len() - keep_count;
         let to_keep = entries.iter().skip(skip_count);
 
-        // Atomic write via temp file would be better, but simple overwrite for MVP
-        let mut file = fs::File::create(&self.file_path).map_err(RupostError::IoError)?;
+        // Truncate and Rewrite
+        file.set_len(0).map_err(RupostError::IoError)?;
+
+        // We need to write to the SAME file handle to keep the lock valid and atomic-ish
+        // `BufReader` took `&file`, so `file` is still valid.
+        // But we need a Writer.
+        // `file` is `File`. `File` implements `Write`.
+        // We need to seek to start? `set_len(0)` usually truncates but doesn't move cursor?
+        // Yes, need to seek.
+        use std::io::Seek;
+        let mut file = file; // make mutable
+        file.seek(std::io::SeekFrom::Start(0))
+            .map_err(RupostError::IoError)?;
+
+        // Use BufWriter for performance
+        let mut writer = std::io::BufWriter::new(file);
+
         for entry in to_keep {
             let json = serde_json::to_string(entry)?;
-            writeln!(file, "{}", json).map_err(RupostError::IoError)?;
+            writeln!(writer, "{}", json).map_err(RupostError::IoError)?;
         }
+        writer.flush().map_err(RupostError::IoError)?;
 
         Ok(())
     }

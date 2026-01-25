@@ -62,7 +62,7 @@ pub enum HistoryCommands {
     },
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 pub struct GenerateArgs {
     /// Output file path
     pub output_file: String,
@@ -70,6 +70,10 @@ pub struct GenerateArgs {
     /// Number of recent requests to include
     #[arg(short, long, default_value = "1")]
     pub last: usize,
+
+    /// Interactive selection mode
+    #[arg(short, long)]
+    pub interactive: bool,
 }
 
 struct CliRunner {

@@ -26,14 +26,24 @@ async fn main() -> Result<()> {
         },
         Some(Commands::Generate(args)) => {
             use rupost::generator::http::HttpGenerator;
+            use rupost::history::selector::{self, SelectionStrategy};
             use rupost::history::storage::get_storage;
             use std::fs;
 
             let storage = get_storage();
-            let entries = storage.tail(args.last)?;
+
+            // Determine strategy
+            let strategy = if args.interactive {
+                SelectionStrategy::Interactive
+            } else {
+                SelectionStrategy::Last(args.last)
+            };
+
+            // Execute selection
+            let entries = selector::select_entries(storage, strategy)?;
 
             if entries.is_empty() {
-                eprintln!("No history found to generate.");
+                eprintln!("No history found or selected to generate.");
                 return Ok(());
             }
 

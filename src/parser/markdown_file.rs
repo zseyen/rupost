@@ -205,4 +205,25 @@ More text here.
         let parsed = MarkdownFileParser::parse_content(content).unwrap();
         assert_eq!(parsed.requests.len(), 0);
     }
+
+    #[test]
+    fn test_metadata_in_code_block() {
+        let content = r#"
+## Metadata Test
+
+```http
+@name WithMetadata
+@assert status == 200
+@skip
+GET https://api.example.com
+```
+"#;
+        let parsed = MarkdownFileParser::parse_content(content).unwrap();
+        assert_eq!(parsed.requests.len(), 1);
+        let req = &parsed.requests[0];
+        assert_eq!(req.metadata.name, Some("WithMetadata".to_string()));
+        assert_eq!(req.metadata.assertions.len(), 1);
+        assert_eq!(req.metadata.assertions[0], "status == 200");
+        assert!(req.metadata.skip);
+    }
 }

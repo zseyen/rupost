@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-
 use clap::{Parser, Subcommand};
-use rupost::history::model::RequestSnapshot;
-use rupost::http::{Client, Request, Response};
+use rupost::http::Response;
+use rupost::parser::types::ParsedRequest;
+use rupost::runner::TestExecutor;
 use rupost::utils::{ResponseFormat, ResponseFormatter};
+use rupost::variable::VariableContext;
 use rupost::{Result, RupostError};
 use tracing::{debug, error, info};
 
@@ -73,51 +73,40 @@ pub struct GenerateArgs {
 }
 
 struct CliRunner {
-    client: Client,
     formatter: ResponseFormatter,
+    executor: TestExecutor,
 }
 
 impl CliRunner {
     fn new() -> Self {
         Self {
-            client: Client::new(),
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
+            executor: TestExecutor::new(),
         }
     }
 
     async fn run(&self, args: Vec<String>) -> Result<()> {
         info!("Parsing command line arguments");
-        let request = self.parse_args(args)?;
+        let parsed_request = self.parse_args(args)?;
 
-        // [History] Create snapshot before request is consumed
-        let method = request.method.to_string();
-        let url = request.url.to_string();
-        let headers = request.headers.clone(); // HeaderMap is cloneable
+        // Setup empty context for CLI run
+        let mut context = VariableContext::new();
 
-        // Try to capture body if it's in memory (which it is for CLI args)
-        let body = request
-            .body
-            .as_ref()
-            .and_then(|b| b.as_bytes())
-            .map(|b| String::from_utf8_lossy(b).to_string());
+        info!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
 
-        let request_snapshot = RequestSnapshot {
-            method: method.clone(),
-            url: url.clone(),
-            headers,
-            body,
-        };
+        // Execute with source="cli"
+        let result = self
+            .executor
+            .execute_one(parsed_request, 1, &mut context, Some("cli".to_string()))
+            .await;
 
-        info!(url = %url, method = ?method, "Executing HTTP request");
-
-        // Execute consumes the Request
-        let response = self.client.execute(request).await?;
-
-        // [History] Record execution
-        use rupost::history::recorder::record_history;
-        record_history(request_snapshot, &response);
-
-        self.format_response(response);
+        if result.success {
+            if let Some(response) = result.response {
+                self.format_response(response);
+            }
+        } else {
+            error!("Request failed: {}", result.error.unwrap_or_default());
+        }
         Ok(())
     }
 
@@ -127,7 +116,8 @@ impl CliRunner {
             Err(e) => error!("Failed to format response: {}", e),
         }
     }
-    fn parse_args(&self, args: Vec<String>) -> Result<Request> {
+
+    fn parse_args(&self, args: Vec<String>) -> Result<ParsedRequest> {
         let args = if args.first().map(|s| s == "curl").unwrap_or(false) {
             debug!("Detected curl-style command");
             args[1..].to_vec()
@@ -139,7 +129,7 @@ impl CliRunner {
         };
 
         // 根据参数特征判断是 curl 风格还是 httpie 风格
-        let is_curl = args.iter().any(|a| a.starts_with("-"));
+        let is_curl = args.iter().any(|a| a.starts_with('-'));
 
         if is_curl {
             debug!("Using curl parser");
@@ -149,11 +139,11 @@ impl CliRunner {
             self.parse_httpie(args)
         }
     }
-    fn parse_curl(&self, args: Vec<String>) -> Result<Request> {
+    fn parse_curl(&self, args: Vec<String>) -> Result<ParsedRequest> {
         let mut method = String::from("GET");
         let mut url = String::new();
-        let mut headers = HashMap::new();
-        let mut data_parts = Vec::new(); // 改为 Vec 以支持多个 -d 参数
+        let mut headers: Vec<(String, String)> = Vec::new(); // Explicit type annotation
+        let mut data_parts = Vec::new();
         let mut force_get = false;
 
         let mut args_iter = args.into_iter().peekable();
@@ -168,10 +158,10 @@ impl CliRunner {
                 }
                 // Header
                 "-H" | "--header" => {
-                    if let Some(header) = args_iter.next()
-                        && let Some((key, value)) = header.split_once(':')
-                    {
-                        headers.insert(key.trim().to_string(), value.trim().to_string());
+                    if let Some(header) = args_iter.next() {
+                        if let Some((key, value)) = header.split_once(':') {
+                            headers.push((key.trim().to_string(), value.trim().to_string()));
+                        }
                     }
                 }
                 // Data (body or query)
@@ -214,33 +204,43 @@ impl CliRunner {
             return Err(RupostError::ParseError("URL is required".to_string()));
         }
 
-        // 构造 Request
-        let mut request = Request::new(&method, &url)?;
+        // Construct ParsedRequest
+        let mut parsed = ParsedRequest::new(0); // Line number 0 for CLI
+        parsed.method = Some(method);
+        parsed.url = url;
+        parsed.headers = headers;
 
-        // 添加 headers
-        for (key, value) in headers {
-            request = request.with_header(&key, &value);
-        }
-
-        // 处理 data: 如果使用 -G，作为 query 参数；否则作为 body
+        // 处理 data
         if force_get && !data_parts.is_empty() {
-            // -G 模式: 将 data 解析为 query 参数
-            for data in data_parts {
-                // 解析 key=value 格式，支持多个参数用 & 分隔
-                for pair in data.split('&') {
-                    if let Some((key, value)) = pair.split_once('=') {
-                        request = request.with_query(key, value);
-                    }
-                }
+            // -G 模式: 处理为 query params，这需要修改 url
+            // 为了简单，直接拼接到 url (有点 naive 但能用)
+            let query_string = data_parts.join("&");
+            if parsed.url.contains('?') {
+                parsed.url.push('&');
+            } else {
+                parsed.url.push('?');
             }
+            parsed.url.push_str(&query_string);
         } else if !data_parts.is_empty() {
             // 非 -G 模式: 作为 body
-            // 将多个 -d 参数用 & 连接
             let body = data_parts.join("&");
-            request = request.with_text(&body);
+            parsed.body = Some(body);
         }
 
-        Ok(request)
+        // 默认 content type 如果有 body
+        if parsed.body.is_some()
+            && !parsed
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("Content-Type"))
+        {
+            parsed.headers.push((
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ));
+        }
+
+        Ok(parsed)
     }
     /// 判断参数是否为键值对参数（headers, query, body）
     /// URL 格式不算键值对：http://, https://, :/, :port
@@ -275,12 +275,12 @@ impl CliRunner {
         arg.contains("==") || arg.contains(":=") || arg.contains('=') || arg.contains(':')
     }
 
-    fn parse_httpie(&self, args: Vec<String>) -> Result<Request> {
+    fn parse_httpie(&self, args: Vec<String>) -> Result<ParsedRequest> {
         let mut method = String::from("GET"); // Default method
         let mut url = String::new();
-        let mut headers = HashMap::new();
-        let mut query_params = HashMap::new();
-        let mut body_parts = HashMap::new();
+        let mut headers: Vec<(String, String)> = Vec::new();
+        let mut query_params: Vec<(String, String)> = Vec::new();
+        let mut body_parts = serde_json::Map::new();
 
         let mut args_iter = args.into_iter().peekable();
 
@@ -304,7 +304,7 @@ impl CliRunner {
         for arg in args_iter {
             if let Some((key, value)) = arg.split_once("==") {
                 // Query parameter
-                query_params.insert(key.to_string(), value.to_string());
+                query_params.push((key.to_string(), value.to_string()));
             } else if let Some((key, value)) = arg.split_once(":=") {
                 // Raw JSON field
                 body_parts.insert(
@@ -320,7 +320,7 @@ impl CliRunner {
                 );
             } else if let Some((key, value)) = arg.split_once(':') {
                 // Header
-                headers.insert(key.to_string(), value.to_string());
+                headers.push((key.to_string(), value.to_string()));
             }
             // 非键值对参数在 Step 2 之后应该不存在，忽略
         }
@@ -334,22 +334,45 @@ impl CliRunner {
             return Err(RupostError::ParseError("URL is required".to_string()));
         }
 
+        // Append query params to URL manually if needed
+        if !query_params.is_empty() {
+            if url.contains('?') {
+                url.push('&');
+            } else {
+                url.push('?');
+            }
+            let qs: Vec<String> = query_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            url.push_str(&qs.join("&"));
+        }
+
         debug!(method = %method, url = %url, "Parsed httpie arguments");
-        debug!(headers = ?headers, query_params = ?query_params, body_parts = ?body_parts);
 
-        let mut request = Request::new(&method, &url)?;
-        for (key, value) in headers {
-            request = request.with_header(&key, &value);
-        }
-        for (key, value) in query_params {
-            request = request.with_query(&key, &value);
-        }
-        // 添加 body
+        // Construct ParsedRequest
+        let mut parsed = ParsedRequest::new(0);
+        parsed.method = Some(method);
+        parsed.url = url;
+        parsed.headers = headers;
+
+        // 添加 body (JSON)
         if !body_parts.is_empty() {
-            request = request.with_json(&body_parts)?;
+            let json_body = serde_json::to_string(&body_parts)
+                .map_err(|e| RupostError::ParseError(e.to_string()))?;
+            parsed.body = Some(json_body);
+            if !parsed
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("Content-Type"))
+            {
+                parsed
+                    .headers
+                    .push(("Content-Type".to_string(), "application/json".to_string()));
+            }
         }
 
-        Ok(request)
+        Ok(parsed)
     }
 }
 
@@ -417,8 +440,8 @@ mod tests {
             "example.com".to_string(),
         ];
         let request3 = runner.parse_curl(args3).unwrap();
-        assert_eq!(request3.query_params.len(), 1);
-        assert_eq!(request3.query_params.get("q"), Some(&"search".to_string()));
+        // Since query_params are merged into URL, check URL
+        assert!(request3.url.contains("q=search"));
 
         // Test case: Simple GET
         let args4 = vec!["example.com".to_string()];
@@ -434,9 +457,9 @@ mod tests {
             "example.com".to_string(),
         ];
         let request5 = runner.parse_curl(args5).unwrap();
-        assert_eq!(request5.query_params.len(), 2);
-        assert_eq!(request5.query_params.get("q"), Some(&"search".to_string()));
-        assert_eq!(request5.query_params.get("page"), Some(&"1".to_string()));
+        // Check URL for multiple params
+        assert!(request5.url.contains("q=search"));
+        assert!(request5.url.contains("page=1"));
 
         // Test case: -G with combined data (q=search&page=1 in one -d)
         let args6 = vec![
@@ -446,9 +469,8 @@ mod tests {
             "example.com".to_string(),
         ];
         let request6 = runner.parse_curl(args6).unwrap();
-        assert_eq!(request6.query_params.len(), 2);
-        assert_eq!(request6.query_params.get("q"), Some(&"search".to_string()));
-        assert_eq!(request6.query_params.get("page"), Some(&"1".to_string()));
+        assert!(request6.url.contains("q=search"));
+        assert!(request6.url.contains("page=1"));
     }
 
     #[test]

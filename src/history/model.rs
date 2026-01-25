@@ -19,6 +19,9 @@ pub struct HistoryEntry {
     /// 请求快照
     pub request: RequestSnapshot,
 
+    /// 请求来源 (例如 "cli", "file:test.http")
+    pub source: Option<String>,
+
     /// 响应元数据
     pub response: ResponseMeta,
 }

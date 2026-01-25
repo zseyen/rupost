@@ -17,6 +17,7 @@ fn create_dummy_entry(id: String) -> HistoryEntry {
             headers: HeaderMap::new(),
             body: None,
         },
+        source: None,
         response: ResponseMeta {
             status: 200,
             headers: HeaderMap::new(),

@@ -28,6 +28,13 @@ impl TestExecutor {
     ) -> Result<Vec<TestResult>> {
         let mut results = Vec::new();
 
+        // Determine source once for the file
+        let source = parsed_file
+            .source_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+
         for (index, parsed_request) in parsed_file.requests.into_iter().enumerate() {
             let request_number = index + 1;
 
@@ -43,7 +50,12 @@ impl TestExecutor {
             }
 
             let result = self
-                .execute_one(parsed_request, request_number, context)
+                .execute_one(
+                    parsed_request,
+                    request_number,
+                    context,
+                    Some(source.clone()),
+                )
                 .await;
             results.push(result);
         }
@@ -52,11 +64,12 @@ impl TestExecutor {
     }
 
     /// 执行单个请求
-    async fn execute_one(
+    pub async fn execute_one(
         &self,
         mut parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
+        source: Option<String>,
     ) -> TestResult {
         // 1. 变量替换
         // 替换 URL
@@ -125,7 +138,7 @@ impl TestExecutor {
                 // 计算耗时
                 // [History] 异步保存历史记录 (Best Effort)
                 use crate::history::recorder::record_history;
-                record_history(request_snapshot, &response);
+                record_history(request_snapshot, &response, source);
 
                 // 2. 变量捕获
                 if !captures_to_eval.is_empty() {

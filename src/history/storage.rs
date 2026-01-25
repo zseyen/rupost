@@ -220,6 +220,7 @@ mod tests {
                 headers: HeaderMap::new(),
                 body: None,
             },
+            source: None,
             response: ResponseMeta {
                 status: 200,
                 headers: HeaderMap::new(),

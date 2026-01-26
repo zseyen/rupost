@@ -17,6 +17,7 @@ pub fn init_logger() {
         .with_thread_ids(false)
         .with_file(false)
         .with_line_number(false)
+        .with_writer(std::io::stderr)
         .init();
 
     tracing::info!("Logger initialized");

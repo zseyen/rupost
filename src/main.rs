@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
             let entries = selector::select_entries(storage, strategy)?;
 
             if entries.is_empty() {
-                eprintln!("No history found or selected to generate.");
+                tracing::warn!("No history found or selected to generate.");
                 return Ok(());
             }
 
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
         }
         None => {
             if cli.args.is_empty() {
-                eprintln!("No command provided");
+                tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
                 cli::run(cli.args).await?;

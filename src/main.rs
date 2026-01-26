@@ -1,8 +1,8 @@
 mod cli;
 
-use anyhow::Result;
 use clap::Parser;
 use cli::{Cli, Commands};
+use rupost::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -11,14 +11,50 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Some(Commands::Test { path }) => println!("Test: {}", path),
+        Some(Commands::Test { path, verbose }) => {
+            run_test(&path, verbose).await?;
+        }
         None => {
             if cli.args.is_empty() {
-                println!("No command provided");
+                eprintln!("No command provided");
+                std::process::exit(1);
             } else {
                 cli::run(cli.args).await?;
             }
         }
     }
+    Ok(())
+}
+
+async fn run_test(file_path: &str, verbose: bool) -> Result<()> {
+    use rupost::parser;
+    use rupost::runner::{TestExecutor, TestReporter, TestSummary};
+
+    // 1. 解析文件
+    let parsed_file = parser::parse_file(file_path)?;
+    let total = parsed_file.requests.len();
+
+    // 2. 创建报告器并打印开始信息
+    let reporter = TestReporter::new(verbose);
+    reporter.print_header(file_path, total);
+
+    // 3. 执行所有请求
+    let executor = TestExecutor::new();
+    let results = executor.execute_all(parsed_file).await?;
+
+    // 4. 打印每个结果
+    for result in &results {
+        reporter.print_result(result);
+    }
+
+    // 5. 打印摘要
+    let summary = TestSummary::from_results(&results);
+    reporter.print_summary(&summary);
+
+    // 6. 设置退出码
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+
     Ok(())
 }

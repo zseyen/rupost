@@ -19,7 +19,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    Test { path: String },
+    /// Run requests from a file
+    Test {
+        /// Path to the .http file
+        path: String,
+
+        /// Show detailed request/response information
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 struct CliRunner {

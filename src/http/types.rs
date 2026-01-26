@@ -148,6 +148,7 @@ impl fmt::Display for Url {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Status(u16);
 impl Status {
     pub fn new(code: u16) -> Result<Self> {

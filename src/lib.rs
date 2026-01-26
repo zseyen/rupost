@@ -2,6 +2,7 @@ pub mod error;
 pub mod http;
 pub mod logger;
 pub mod parser;
+pub mod runner;
 pub mod utils;
 
 // Re-export commonly used types

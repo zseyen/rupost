@@ -3,6 +3,7 @@ use crate::http::types::Status;
 use reqwest::header::HeaderMap as Headers;
 use std::time::Duration;
 
+#[derive(Debug, Clone)]
 pub struct Response {
     pub status: Status,
     pub headers: Headers,

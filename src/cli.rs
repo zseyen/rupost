@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use clap::{Parser, Subcommand};
+use rupost::history::model::RequestSnapshot;
 use rupost::http::{Client, Request, Response};
 use rupost::utils::{ResponseFormat, ResponseFormatter};
 use rupost::{Result, RupostError};
@@ -88,8 +89,33 @@ impl CliRunner {
         info!("Parsing command line arguments");
         let request = self.parse_args(args)?;
 
-        info!(url = %request.url, method = ?request.method, "Executing HTTP request");
+        // [History] Create snapshot before request is consumed
+        let method = request.method.to_string();
+        let url = request.url.to_string();
+        let headers = request.headers.clone(); // HeaderMap is cloneable
+
+        // Try to capture body if it's in memory (which it is for CLI args)
+        let body = request
+            .body
+            .as_ref()
+            .and_then(|b| b.as_bytes())
+            .map(|b| String::from_utf8_lossy(b).to_string());
+
+        let request_snapshot = RequestSnapshot {
+            method: method.clone(),
+            url: url.clone(),
+            headers,
+            body,
+        };
+
+        info!(url = %url, method = ?method, "Executing HTTP request");
+
+        // Execute consumes the Request
         let response = self.client.execute(request).await?;
+
+        // [History] Record execution
+        use rupost::history::recorder::record_history;
+        record_history(request_snapshot, &response);
 
         self.format_response(response);
         Ok(())

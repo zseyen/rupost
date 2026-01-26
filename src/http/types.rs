@@ -53,6 +53,12 @@ impl Method {
     }
 }
 
+impl fmt::Display for Method {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Clone)]
 pub struct Url {
     pub scheme: String,

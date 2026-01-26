@@ -1,15 +1,13 @@
 use crate::Result;
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
-use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
-use crate::history::storage::get_storage;
+use crate::history::model::RequestSnapshot;
 use crate::http::Client;
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture_from_response};
 use reqwest::header::{HeaderName, HeaderValue};
 use std::time::Instant;
-use tracing::{error, info, warn};
-use uuid::Uuid;
+use tracing::{error, info};
 
 pub struct TestExecutor {
     client: Client,
@@ -125,25 +123,9 @@ impl TestExecutor {
         match self.client.execute(request).await {
             Ok(response) => {
                 // 计算耗时
-                let duration = start.elapsed();
-
                 // [History] 异步保存历史记录 (Best Effort)
-                let history_entry = HistoryEntry {
-                    id: Uuid::new_v4().to_string(),
-                    timestamp: chrono::Utc::now(),
-                    duration_ms: duration.as_millis() as u64,
-                    request: request_snapshot,
-                    response: ResponseMeta {
-                        status: response.status.code(),
-                        headers: response.headers.clone(),
-                    },
-                };
-
-                // 不等待历史记录写入，避免阻塞测试流程（对于本地文件写很快，同步也无妨）
-                // 若要极致性能可放到 spawn blocking，但这里保持简单
-                if let Err(e) = get_storage().append(&history_entry) {
-                    warn!("Failed to save request history: {}", e);
-                }
+                use crate::history::recorder::record_history;
+                record_history(request_snapshot, &response);
 
                 // 2. 变量捕获
                 if !captures_to_eval.is_empty() {

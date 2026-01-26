@@ -53,6 +53,7 @@ impl Method {
     }
 }
 
+#[derive(Clone)]
 pub struct Url {
     pub scheme: String,
     pub host: String,

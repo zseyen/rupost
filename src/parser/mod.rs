@@ -1,7 +1,9 @@
+pub mod converter;
 pub mod http_file;
 pub mod types;
 
 // Re-export commonly used types
+pub use converter::to_request;
 pub use http_file::HttpFileParser;
 pub use types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata};
 

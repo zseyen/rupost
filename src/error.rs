@@ -34,5 +34,12 @@ impl From<anyhow::Error> for RupostError {
     }
 }
 
+// Add conversion from parser::ParseError
+impl From<crate::parser::ParseError> for RupostError {
+    fn from(err: crate::parser::ParseError) -> Self {
+        RupostError::ParseError(err.to_string())
+    }
+}
+
 /// Result type for rupost crate
 pub type Result<T> = std::result::Result<T, RupostError>;

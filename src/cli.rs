@@ -21,6 +21,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Run requests from a file
+    #[command(alias = "t")]
     Test {
         /// Path to the .http file
         path: String,
@@ -39,18 +40,21 @@ pub enum Commands {
     },
 
     /// Manage request history
+    #[command(alias = "h")]
     History {
         #[command(subcommand)]
         command: HistoryCommands,
     },
 
     /// Generate test file from history
+    #[command(alias = "g")]
     Generate(GenerateArgs),
 }
 
 #[derive(Subcommand)]
 pub enum HistoryCommands {
     /// List request history
+    #[command(alias = "l")]
     List {
         /// Limit the number of entries
         #[arg(long, default_value = "20")]

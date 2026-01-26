@@ -21,6 +21,18 @@ impl TestExecutor {
 
         for (index, parsed_request) in parsed_file.requests.into_iter().enumerate() {
             let request_number = index + 1;
+
+            // 检查是否跳过
+            if parsed_request.should_skip() {
+                results.push(TestResult::skipped(
+                    request_number,
+                    parsed_request.name().map(|s| s.to_string()),
+                    parsed_request.method_or_default().to_string(),
+                    parsed_request.url.clone(),
+                ));
+                continue;
+            }
+
             let result = self.execute_one(parsed_request, request_number).await;
             results.push(result);
         }

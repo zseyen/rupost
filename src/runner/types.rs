@@ -30,6 +30,9 @@ pub struct TestResult {
 
     /// 完整的 HTTP 响应（用于详细输出）
     pub response: Option<Response>,
+
+    /// 是否被跳过
+    pub skipped: bool,
 }
 
 impl TestResult {
@@ -54,6 +57,7 @@ impl TestResult {
             success,
             error: None,
             response: Some(response),
+            skipped: false,
         }
     }
 
@@ -75,6 +79,27 @@ impl TestResult {
             success: false,
             error: Some(error),
             response: None,
+            skipped: false,
+        }
+    }
+
+    pub fn skipped(
+        request_number: usize,
+        name: Option<String>,
+        method: String,
+        url: String,
+    ) -> Self {
+        Self {
+            request_number,
+            name,
+            method,
+            url,
+            status: None,
+            duration: Duration::from_secs(0),
+            success: true, // 跳过的测试算作成功
+            error: None,
+            response: None,
+            skipped: true,
         }
     }
 }
@@ -85,18 +110,21 @@ pub struct TestSummary {
     pub total: usize,
     pub passed: usize,
     pub failed: usize,
+    pub skipped: usize,
     pub total_duration: Duration,
 }
 
 impl TestSummary {
     pub fn from_results(results: &[TestResult]) -> Self {
-        let passed = results.iter().filter(|r| r.success).count();
+        let passed = results.iter().filter(|r| r.success && !r.skipped).count();
+        let skipped = results.iter().filter(|r| r.skipped).count();
         let total_duration = results.iter().map(|r| r.duration).sum();
 
         Self {
             total: results.len(),
             passed,
-            failed: results.len() - passed,
+            failed: results.len() - passed - skipped,
+            skipped,
             total_duration,
         }
     }

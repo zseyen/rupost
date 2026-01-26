@@ -23,28 +23,46 @@ impl TestReporter {
 
     /// 打印单个测试结果
     pub fn print_result(&self, result: &TestResult) {
-        // 1. 打印测试状态行
-        if result.success {
+        // 跳过的测试
+        if result.skipped {
+            let name_part = if let Some(ref name) = result.name {
+                format!(" {} -", name)
+            } else {
+                String::new()
+            };
             println!(
-                " {} [{}] {} {} ({}ms)",
-                "✓".green(),
+                " {} [{}]{} {} {} {}",
+                "⊘".dimmed(),
                 result.request_number,
+                name_part,
                 result.method.cyan(),
                 result.url,
-                result.duration.as_millis()
+                "(skipped)".dimmed()
             );
-        } else {
-            println!(
-                " {} [{}] {} {} ({}ms)",
-                "✗".red(),
-                result.request_number,
-                result.method.cyan(),
-                result.url,
-                result.duration.as_millis()
-            );
+            return;
         }
 
-        // 2. 如果是 verbose 模式，或者失败了，显示详细信息
+        // 成功或失败的测试
+        let symbol = if result.success { "✓" } else { "✗" };
+        let color = if result.success { "green" } else { "red" };
+
+        let name_part = if let Some(ref name) = result.name {
+            format!(" {} -", name)
+        } else {
+            String::new()
+        };
+
+        println!(
+            " {} [{}]{} {} {} ({}ms)",
+            symbol.color(color),
+            result.request_number,
+            name_part,
+            result.method.cyan(),
+            result.url,
+            result.duration.as_millis()
+        );
+
+        // 如果是 verbose 模式，或者失败了，显示详细信息
         if (self.verbose || !result.success) && result.response.is_some() {
             let response = result.response.as_ref().unwrap();
             // 复用 ResponseFormatter 格式化响应
@@ -66,7 +84,7 @@ impl TestReporter {
             println!(); // 空行分隔
         }
 
-        // 3. 如果有错误消息（转换或网络错误），显示错误
+        // 如果有错误消息（转换或网络错误），显示错误
         if let Some(error) = &result.error {
             println!("   {}: {}", "Error".red().bold(), error);
             println!();
@@ -88,7 +106,16 @@ impl TestReporter {
         println!("{}", "Summary".bold());
         println!("{}", "━".repeat(50));
 
-        if summary.failed == 0 {
+        if summary.skipped > 0 {
+            println!(
+                "  {}: {} passed, {} failed, {} skipped, {} total",
+                "Tests".bold(),
+                summary.passed.to_string().green(),
+                summary.failed.to_string().red(),
+                summary.skipped.to_string().dimmed(),
+                summary.total
+            );
+        } else if summary.failed == 0 {
             println!(
                 "  {}: {} passed, {} total",
                 "Tests".bold(),

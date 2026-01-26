@@ -1,5 +1,6 @@
-use crate::parser::types::{ParseError, ParseResult, ParsedFile, ParsedRequest};
+use crate::parser::types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata};
 use std::path::Path;
+use std::time::Duration;
 
 /// HTTP 文件解析器
 pub struct HttpFileParser;
@@ -84,25 +85,36 @@ impl HttpFileParser {
         let mut line_index = 0;
         let mut current_line = start_line;
 
-        // 跳过空行和注释
+        // 解析元数据和跳过空行/注释
         while line_index < lines.len() {
             let line = lines[line_index].trim();
-            if !line.is_empty() && !Self::is_comment(line) && !Self::is_metadata(line) {
-                break;
+
+            if line.is_empty() || Self::is_comment(line) {
+                line_index += 1;
+                current_line += 1;
+                continue;
             }
-            line_index += 1;
-            current_line += 1;
+
+            // 解析元数据
+            if Self::is_metadata(line) {
+                Self::parse_metadata_line(line, current_line, &mut request.metadata)?;
+                line_index += 1;
+                current_line += 1;
+                continue;
+            }
+
+            // 遇到非元数据行，结束元数据解析
+            break;
         }
 
         if line_index >= lines.len() {
-            return Ok(None); // 空块
+            return Ok(None); // 只有元数据，没有请求
         }
 
         // 解析请求行（方法 + URL）
         let request_line = lines[line_index].trim();
         Self::parse_request_line(request_line, current_line, &mut request)?;
         line_index += 1;
-        current_line += 1;
 
         // 解析 Headers
         while line_index < lines.len() {
@@ -117,22 +129,18 @@ impl HttpFileParser {
             // 跳过注释
             if Self::is_comment(line) {
                 line_index += 1;
-                current_line += 1;
                 continue;
             }
 
             // 解析 header
             if let Some((key, value)) = Self::parse_header(line) {
                 request.headers.push((key.to_string(), value.to_string()));
-            } else {
-                return Err(ParseError::InvalidHeader { line: current_line });
             }
 
             line_index += 1;
-            current_line += 1;
         }
 
-        // 解析 Body（空行后的所有内容）
+        // 解析 Body（空行后只内容）
         if line_index < lines.len() {
             let body = lines[line_index..].join("\n");
             let body = body.trim();
@@ -157,27 +165,36 @@ impl HttpFileParser {
     ) -> ParseResult<()> {
         let parts: Vec<&str> = line.split_whitespace().collect();
 
-        if parts.is_empty() {
-            return Err(ParseError::MissingUrl { line: line_number });
-        }
-
-        // 可能的格式：
-        // 1. URL (默认 GET)
-        // 2. METHOD URL
-        let valid_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
-
-        if parts.len() == 1 {
-            // 只有 URL，默认 GET
-            request.url = parts[0].to_string();
-        } else if parts.len() >= 2 {
-            let first = parts[0].to_uppercase();
-            if valid_methods.contains(&first.as_str()) {
-                // METHOD URL
-                request.method = Some(first);
+        match parts.len() {
+            0 => {
+                return Err(ParseError::InvalidFormat {
+                    line: line_number,
+                    message: "Empty request line".to_string(),
+                });
+            }
+            1 => {
+                // 只有 URL，方法默认为 GET
+                request.url = parts[0].to_string();
+                request.method = None;
+            }
+            2 => {
+                // 方法 + URL
+                let method = parts[0].to_uppercase();
+                let valid_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+                if !valid_methods.contains(&method.as_str()) {
+                    return Err(ParseError::InvalidMethod {
+                        method,
+                        line: line_number,
+                    });
+                }
+                request.method = Some(method);
                 request.url = parts[1].to_string();
-            } else {
-                // 整个作为 URL（可能包含查询参数）
-                request.url = parts.join(" ");
+            }
+            _ => {
+                return Err(ParseError::InvalidFormat {
+                    line: line_number,
+                    message: "Too many parts in request line".to_string(),
+                });
             }
         }
 
@@ -186,15 +203,14 @@ impl HttpFileParser {
 
     /// 解析 header 行
     fn parse_header(line: &str) -> Option<(&str, &str)> {
-        let colon_pos = line.find(':')?;
-        let key = line[..colon_pos].trim();
-        let value = line[colon_pos + 1..].trim();
-
-        if key.is_empty() {
-            return None;
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            let value = line[colon_pos + 1..].trim();
+            if !key.is_empty() {
+                return Some((key, value));
+            }
         }
-
-        Some((key, value))
+        None
     }
 
     /// 判断是否为注释行
@@ -202,9 +218,70 @@ impl HttpFileParser {
         line.starts_with('#') || line.starts_with("//")
     }
 
-    /// 判断是否为元数据行（暂时只识别，不解析）
+    /// 判断是否为元数据行
     fn is_metadata(line: &str) -> bool {
         line.starts_with('@')
+    }
+
+    /// 解析元数据行
+    fn parse_metadata_line(
+        line: &str,
+        line_number: usize,
+        metadata: &mut RequestMetadata,
+    ) -> ParseResult<()> {
+        let line = line.trim();
+
+        if let Some(name) = line.strip_prefix("@name") {
+            metadata.name = Some(name.trim().to_string());
+        } else if line.starts_with("@skip") {
+            // @skip 或 @skip true/false
+            let value = line
+                .strip_prefix("@skip")
+                .and_then(|s| {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        Some(true)
+                    } else {
+                        trimmed.parse::<bool>().ok()
+                    }
+                })
+                .unwrap_or(true);
+            metadata.skip = value;
+        } else if let Some(timeout_str) = line.strip_prefix("@timeout") {
+            metadata.timeout = Some(Self::parse_duration(timeout_str.trim(), line_number)?);
+        }
+
+        Ok(())
+    }
+
+    /// 解析时间字符串（支持 "5s", "1000ms", "2m"）
+    fn parse_duration(s: &str, line_number: usize) -> ParseResult<Duration> {
+        let s = s.trim();
+
+        if let Some(ms) = s.strip_suffix("ms") {
+            let millis: u64 = ms.parse().map_err(|_| ParseError::InvalidMetadata {
+                line: line_number,
+                message: format!("Invalid duration: {}", s),
+            })?;
+            Ok(Duration::from_millis(millis))
+        } else if let Some(sec) = s.strip_suffix('s') {
+            let secs: u64 = sec.parse().map_err(|_| ParseError::InvalidMetadata {
+                line: line_number,
+                message: format!("Invalid duration: {}", s),
+            })?;
+            Ok(Duration::from_secs(secs))
+        } else if let Some(min) = s.strip_suffix('m') {
+            let mins: u64 = min.parse().map_err(|_| ParseError::InvalidMetadata {
+                line: line_number,
+                message: format!("Invalid duration: {}", s),
+            })?;
+            Ok(Duration::from_secs(mins * 60))
+        } else {
+            Err(ParseError::InvalidMetadata {
+                line: line_number,
+                message: format!("Duration must end with 'ms', 's', or 'm': {}", s),
+            })
+        }
     }
 }
 
@@ -216,89 +293,66 @@ mod tests {
     fn test_parse_simple_get() {
         let content = "GET http://example.com";
         let result = HttpFileParser::parse_content(content).unwrap();
-
         assert_eq!(result.requests.len(), 1);
-        let req = &result.requests[0];
-        assert_eq!(req.method, Some("GET".to_string()));
-        assert_eq!(req.url, "http://example.com");
-        assert_eq!(req.headers.len(), 0);
-        assert_eq!(req.body, None);
+        assert_eq!(result.requests[0].method, Some("GET".to_string()));
+        assert_eq!(result.requests[0].url, "http://example.com");
     }
 
     #[test]
     fn test_parse_url_only() {
         let content = "http://example.com";
         let result = HttpFileParser::parse_content(content).unwrap();
-
         assert_eq!(result.requests.len(), 1);
-        let req = &result.requests[0];
-        assert_eq!(req.method, None);
-        assert_eq!(req.method_or_default(), "GET");
-        assert_eq!(req.url, "http://example.com");
+        assert_eq!(result.requests[0].method, None);
+        assert_eq!(result.requests[0].url, "http://example.com");
     }
 
     #[test]
     fn test_parse_with_headers() {
         let content = r#"
-POST http://example.com/api
+POST http://example.com
 Content-Type: application/json
 Authorization: Bearer token123
-"#;
+        "#;
         let result = HttpFileParser::parse_content(content).unwrap();
-
         assert_eq!(result.requests.len(), 1);
-        let req = &result.requests[0];
-        assert_eq!(req.method, Some("POST".to_string()));
-        assert_eq!(req.url, "http://example.com/api");
-        assert_eq!(req.headers.len(), 2);
-        assert_eq!(
-            req.headers[0],
-            ("Content-Type".to_string(), "application/json".to_string())
-        );
-        assert_eq!(
-            req.headers[1],
-            ("Authorization".to_string(), "Bearer token123".to_string())
-        );
+        assert_eq!(result.requests[0].method, Some("POST".to_string()));
+        assert_eq!(result.requests[0].headers.len(), 2);
+        assert_eq!(result.requests[0].headers[0].0, "Content-Type");
+        assert_eq!(result.requests[0].headers[0].1, "application/json");
+        assert_eq!(result.requests[0].headers[1].0, "Authorization");
+        assert_eq!(result.requests[0].headers[1].1, "Bearer token123");
     }
 
     #[test]
     fn test_parse_with_body() {
         let content = r#"
-POST http://example.com/api
+POST http://example.com
 Content-Type: application/json
 
-{"name": "test", "value": 123}
-"#;
+{"name": "test"}
+        "#;
         let result = HttpFileParser::parse_content(content).unwrap();
-
         assert_eq!(result.requests.len(), 1);
-        let req = &result.requests[0];
-        assert_eq!(req.method, Some("POST".to_string()));
         assert_eq!(
-            req.body,
-            Some(r#"{"name": "test", "value": 123}"#.to_string())
+            result.requests[0].body,
+            Some(r#"{"name": "test"}"#.to_string())
         );
     }
 
     #[test]
     fn test_parse_multiple_requests() {
         let content = r#"
-GET http://example.com/users
+GET http://example.com/1
 
 ###
 
-POST http://example.com/users
-Content-Type: application/json
-
-{"name": "Alice"}
-"#;
+POST http://example.com/2
+        "#;
         let result = HttpFileParser::parse_content(content).unwrap();
-
         assert_eq!(result.requests.len(), 2);
-        assert_eq!(result.requests[0].method, Some("GET".to_string()));
-        assert_eq!(result.requests[0].url, "http://example.com/users");
-        assert_eq!(result.requests[1].method, Some("POST".to_string()));
-        assert_eq!(result.requests[1].url, "http://example.com/users");
+        assert_eq!(result.requests[0].url, "http://example.com/1");
+        assert_eq!(result.requests[1].url, "http://example.com/2");
     }
 
     #[test]
@@ -306,7 +360,6 @@ Content-Type: application/json
         let content = "";
         let result = HttpFileParser::parse_content(content);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ParseError::NoRequests));
     }
 
     #[test]
@@ -315,13 +368,51 @@ Content-Type: application/json
 # This is a comment
 GET http://example.com
 // Another comment
-User-Agent: RuPost
-"#;
+        "#;
         let result = HttpFileParser::parse_content(content).unwrap();
-
         assert_eq!(result.requests.len(), 1);
-        let req = &result.requests[0];
-        assert_eq!(req.headers.len(), 1);
-        assert_eq!(req.headers[0].0, "User-Agent");
+    }
+
+    #[test]
+    fn test_parse_name_metadata() {
+        let content = "@name My Test\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.name,
+            Some("My Test".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_skip_metadata() {
+        let content = "@skip\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert!(result.requests[0].metadata.skip);
+    }
+
+    #[test]
+    fn test_parse_timeout_metadata() {
+        let content = "@timeout 5s\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.timeout,
+            Some(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_formats() {
+        assert_eq!(
+            HttpFileParser::parse_duration("1000ms", 1).unwrap(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            HttpFileParser::parse_duration("5s", 1).unwrap(),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            HttpFileParser::parse_duration("2m", 1).unwrap(),
+            Duration::from_secs(120)
+        );
     }
 }

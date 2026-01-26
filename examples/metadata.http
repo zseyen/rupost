@@ -1,0 +1,32 @@
+# 测试元数据功能
+# 这个文件包含各种元数据指令的测试
+
+@name Health Check
+GET https://httpbin.org/status/200
+
+###
+
+@name User Login Test
+@timeout 5s
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{"username": "test", "password": "pass123"}
+
+###
+
+@name Slow Endpoint (skipped)
+@skip
+@timeout 30s
+GET https://httpbin.org/delay/10
+
+###
+
+@name Get User Data
+GET https://httpbin.org/json
+
+###
+
+@name Timeout Test
+@timeout 500ms
+GET https://httpbin.org/delay/2

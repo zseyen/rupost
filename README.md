@@ -58,6 +58,59 @@ RuPost 提供了直观的命令行界面：
 
 ---
 
+## 🔑 变量与环境 (Variables & Environments)
+
+RuPost 提供了一套灵活且强大的变量系统，遵循“一次配置，多处复用”的原则。
+
+### 1. 定义变量
+
+#### 在 `rupost.toml` 中定义 (推荐)
+在项目根目录创建或编辑 `rupost.toml`，按环境组织变量：
+
+```toml
+[environments.dev]
+base_url = "https://httpbin.org"
+token = "dev-token-123"
+
+[environments.prod]
+base_url = "https://api.example.com"
+token = "${PROD_TOKEN}" # 支持引用系统环境变量
+```
+
+#### 从响应中动态捕获 (@capture)
+在请求块中使用 `@capture` 从上一个响应中提取数据：
+
+```http
+POST /login
+# ...
+@capture auth_token = body.token
+```
+
+#### 通过命令行定义 (--var)
+临时覆盖或新增变量：
+```bash
+rupost t test.http --var base_url=http://localhost:8080
+```
+
+### 2. 使用变量
+
+在 `.http` 或 `.md` 文件中，使用 `{{var_name}}` 语法引用变量：
+
+```http
+GET {{base_url}}/users/1
+Authorization: Bearer {{token}}
+```
+
+### 3. 环境切换
+
+执行时通过 `-e` 或 `--env` 指定环境：
+
+```bash
+rupost t examples/basic.http -e dev
+```
+
+---
+
 ## 📂 文件格式示例
 
 ### `.http` 文件

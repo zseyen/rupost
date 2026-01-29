@@ -161,10 +161,10 @@ fn test_mixed_http_rest_blocks() {
     let parsed = MarkdownFileParser::parse_file(&path).unwrap();
 
     // 两种语言标识符应该都能被识别
-    assert!(parsed.requests.len() > 0);
+    assert!(!parsed.requests.is_empty());
 
     // 验证 http 和 rest 块都被解析
     let path2 = PathBuf::from("examples/auth-examples.md");
     let parsed2 = MarkdownFileParser::parse_file(&path2).unwrap();
-    assert!(parsed2.requests.len() > 0);
+    assert!(!parsed2.requests.is_empty());
 }

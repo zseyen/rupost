@@ -21,11 +21,19 @@ pub struct HistoryStorage {
 impl HistoryStorage {
     /// Create a new HistoryStorage (project-local)
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for HistoryStorage {
+    fn default() -> Self {
         let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| HISTORY_DIR.to_string());
         let path = Path::new(&dir).join(HISTORY_FILE);
         Self { file_path: path }
     }
+}
 
+impl HistoryStorage {
     /// Create with specific path (internal/testing use)
     pub fn new_with_path(path: PathBuf) -> Self {
         Self { file_path: path }
@@ -33,10 +41,10 @@ impl HistoryStorage {
 
     /// Ensure directory exists
     fn ensure_dir(&self) -> Result<()> {
-        if let Some(parent) = self.file_path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-            }
+        if let Some(parent) = self.file_path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).map_err(RupostError::IoError)?;
         }
         Ok(())
     }
@@ -153,11 +161,9 @@ impl HistoryStorage {
         // Read all
         let reader = BufReader::new(&file);
         let mut entries = Vec::new();
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&l) {
-                    entries.push(entry);
-                }
+        for l in reader.lines().map_while(|l| l.ok()) {
+            if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&l) {
+                entries.push(entry);
             }
         }
 

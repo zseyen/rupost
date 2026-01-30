@@ -67,6 +67,7 @@ impl HistoryStorage {
         let file = loop {
             let result = OpenOptions::new()
                 .create(true)
+                .read(true)
                 .append(true)
                 .open(&self.file_path);
 

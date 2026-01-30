@@ -54,21 +54,19 @@ impl HttpGenerator {
         }
 
         // 4. Body
-        if let Some(body) = &entry.request.body {
-            if !body.trim().is_empty() {
-                block.push('\n');
-                // Try to pretty print JSON
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-                    if let Ok(pretty) = serde_json::to_string_pretty(&json) {
-                        block.push_str(&pretty);
-                    } else {
-                        block.push_str(body);
-                    }
+        if let Some(body) = entry.request.body.as_ref().filter(|b| !b.trim().is_empty()) {
+            block.push('\n');
+            // Try to pretty print JSON
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+                if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+                    block.push_str(&pretty);
                 } else {
                     block.push_str(body);
                 }
-                block.push('\n');
+            } else {
+                block.push_str(body);
             }
+            block.push('\n');
         }
 
         // 5. Assertions (Metadata)

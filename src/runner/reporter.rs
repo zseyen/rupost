@@ -63,8 +63,9 @@ impl TestReporter {
         );
 
         // 如果是 verbose 模式，或者失败了，显示详细信息
-        if (self.verbose || !result.success) && result.response.is_some() {
-            let response = result.response.as_ref().unwrap();
+        if (self.verbose || !result.success)
+            && let Some(response) = &result.response
+        {
             // 复用 ResponseFormatter 格式化响应
             match self.formatter.format(response) {
                 Ok(formatted) => {

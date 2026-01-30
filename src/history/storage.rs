@@ -6,6 +6,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::thread;
+use std::time::Duration;
 
 const HISTORY_DIR: &str = ".rupost";
 const HISTORY_FILE: &str = "history.jsonl";
@@ -21,11 +23,19 @@ pub struct HistoryStorage {
 impl HistoryStorage {
     /// Create a new HistoryStorage (project-local)
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for HistoryStorage {
+    fn default() -> Self {
         let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| HISTORY_DIR.to_string());
         let path = Path::new(&dir).join(HISTORY_FILE);
         Self { file_path: path }
     }
+}
 
+impl HistoryStorage {
     /// Create with specific path (internal/testing use)
     pub fn new_with_path(path: PathBuf) -> Self {
         Self { file_path: path }
@@ -33,10 +43,10 @@ impl HistoryStorage {
 
     /// Ensure directory exists
     fn ensure_dir(&self) -> Result<()> {
-        if let Some(parent) = self.file_path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-            }
+        if let Some(parent) = self.file_path.parent()
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent).map_err(RupostError::IoError)?;
         }
         Ok(())
     }
@@ -53,18 +63,35 @@ impl HistoryStorage {
         self.ensure_dir()?;
         let json = serde_json::to_string(entry)?;
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.file_path)
-            .map_err(RupostError::IoError)?;
+        let mut retries = 0;
+        let file = loop {
+            let result = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.file_path);
+
+            match result {
+                Ok(f) => break f,
+                Err(e) => {
+                    if retries >= 5 {
+                        return Err(RupostError::IoError(e));
+                    }
+                    retries += 1;
+                    thread::sleep(Duration::from_millis(10 * retries));
+                }
+            }
+        };
 
         // Lock for writing
+        // On Windows, this waits appropriately.
         file.lock_exclusive().map_err(RupostError::IoError)?;
+
+        // Need mut file for writeln!
+        let mut file = file;
 
         writeln!(file, "{}", json).map_err(RupostError::IoError)?;
 
-        // Unlock happens automatically when file is dropped, but excessive scoping is good habit
+        // Unlock happens automatically when file is dropped
         drop(file);
 
         Ok(())
@@ -153,11 +180,9 @@ impl HistoryStorage {
         // Read all
         let reader = BufReader::new(&file);
         let mut entries = Vec::new();
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&l) {
-                    entries.push(entry);
-                }
+        for l in reader.lines().map_while(|l| l.ok()) {
+            if let Ok(entry) = serde_json::from_str::<HistoryEntry>(&l) {
+                entries.push(entry);
             }
         }
 

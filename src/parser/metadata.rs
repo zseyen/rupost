@@ -81,7 +81,7 @@ fn parse_capture(content: &str) -> ParseResult<Metadata> {
     if parts.len() < 3 || parts[1] != "from" {
         return Err(ParseError::InvalidMetadata {
             line: 0,
-            message: format!("Invalid @capture syntax. Expected: @capture <var> from <source>"),
+            message: "Invalid @capture syntax. Expected: @capture <var> from <source>".to_string(),
         });
     }
 

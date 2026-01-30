@@ -6,6 +6,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::thread;
+use std::time::Duration;
 
 const HISTORY_DIR: &str = ".rupost";
 const HISTORY_FILE: &str = "history.jsonl";
@@ -61,18 +63,35 @@ impl HistoryStorage {
         self.ensure_dir()?;
         let json = serde_json::to_string(entry)?;
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.file_path)
-            .map_err(RupostError::IoError)?;
+        let mut retries = 0;
+        let file = loop {
+            let result = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.file_path);
+
+            match result {
+                Ok(f) => break f,
+                Err(e) => {
+                    if retries >= 5 {
+                        return Err(RupostError::IoError(e));
+                    }
+                    retries += 1;
+                    thread::sleep(Duration::from_millis(10 * retries));
+                }
+            }
+        };
 
         // Lock for writing
+        // On Windows, this waits appropriately.
         file.lock_exclusive().map_err(RupostError::IoError)?;
+
+        // Need mut file for writeln!
+        let mut file = file;
 
         writeln!(file, "{}", json).map_err(RupostError::IoError)?;
 
-        // Unlock happens automatically when file is dropped, but excessive scoping is good habit
+        // Unlock happens automatically when file is dropped
         drop(file);
 
         Ok(())

@@ -166,10 +166,10 @@ impl CliRunner {
                 }
                 // Header
                 "-H" | "--header" => {
-                    if let Some(header) = args_iter.next() {
-                        if let Some((key, value)) = header.split_once(':') {
-                            headers.push((key.trim().to_string(), value.trim().to_string()));
-                        }
+                    if let Some(header) = args_iter.next()
+                        && let Some((key, value)) = header.split_once(':')
+                    {
+                        headers.push((key.trim().to_string(), value.trim().to_string()));
                     }
                 }
                 // Data (body or query)

@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::http::types::Method;
+use reqwest_cookie_store::CookieStoreMutex;
 
 #[derive(Clone)]
 pub struct Client {
@@ -17,12 +19,27 @@ impl Default for Client {
 }
 
 impl Client {
+    /// Create a new client without cookie support.
     pub fn new() -> Self {
         Self {
             inner: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("Failed to build HTTP client"),
+        }
+    }
+
+    /// Create a new client with cookie store support.
+    ///
+    /// # Arguments
+    /// * `cookie_store` - The cookie store to use for automatic cookie handling.
+    pub fn with_cookie_store(cookie_store: Arc<CookieStoreMutex>) -> Self {
+        Self {
+            inner: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .cookie_provider(cookie_store)
+                .build()
+                .expect("Failed to build HTTP client with cookie store"),
         }
     }
 

@@ -2,21 +2,50 @@ use crate::Result;
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
 use crate::history::model::RequestSnapshot;
 use crate::http::Client;
+use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture_from_response};
 use reqwest::header::{HeaderName, HeaderValue};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, info};
 
 pub struct TestExecutor {
     client: Client,
+    cookie_middleware: Option<Arc<CookieMiddleware>>,
 }
 
 impl TestExecutor {
+    /// Create a new executor without cookie support.
     pub fn new() -> Self {
         Self {
             client: Client::new(),
+            cookie_middleware: None,
+        }
+    }
+
+    /// Create a new executor with cookie persistence.
+    ///
+    /// # Arguments
+    /// * `cookie_file` - Path to the cookie storage file.
+    pub fn with_cookies(cookie_file: PathBuf) -> Result<Self> {
+        let middleware = CookieMiddleware::new_with_persistence(cookie_file)?;
+        let cookie_store = middleware.cookie_store();
+        Ok(Self {
+            client: Client::with_cookie_store(cookie_store),
+            cookie_middleware: Some(Arc::new(middleware)),
+        })
+    }
+
+    /// Create a new executor with ephemeral (in-memory only) cookies.
+    pub fn with_ephemeral_cookies() -> Self {
+        let middleware = CookieMiddleware::new_ephemeral();
+        let cookie_store = middleware.cookie_store();
+        Self {
+            client: Client::with_cookie_store(cookie_store),
+            cookie_middleware: Some(Arc::new(middleware)),
         }
     }
 
@@ -135,7 +164,13 @@ impl TestExecutor {
         // 执行请求
         match self.client.execute(request).await {
             Ok(response) => {
-                // 计算耗时
+                // [Cookie] Middleware after_response hook (best effort)
+                if let Some(ref mw) = self.cookie_middleware {
+                    if let Err(e) = mw.after_response(&response).await {
+                        error!("Cookie middleware error: {}", e);
+                    }
+                }
+
                 // [History] 异步保存历史记录 (Best Effort)
                 use crate::history::recorder::record_history;
                 record_history(request_snapshot, &response, source);

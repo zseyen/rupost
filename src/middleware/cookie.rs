@@ -6,7 +6,6 @@ use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::middleware::Middleware;
-use async_trait::async_trait;
 use cookie_store::CookieStore;
 use reqwest_cookie_store::CookieStoreMutex;
 use std::fs::{self, File};
@@ -108,7 +107,6 @@ impl CookieMiddleware {
     }
 }
 
-#[async_trait]
 impl Middleware for CookieMiddleware {
     async fn before_request(&self, _req: &mut Request) -> Result<()> {
         // Cookie injection is handled by reqwest's cookie_provider.

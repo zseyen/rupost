@@ -33,7 +33,6 @@ url = "2.5.8"
 uuid = { version = "1.19.0", features = ["v4"] }
 reqwest_cookie_store = "0.10.0"
 cookie_store = "0.22"
-async-trait = "0.1"
 
 [dev-dependencies]
 cookie = "0.18"

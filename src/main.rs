@@ -16,8 +16,18 @@ async fn main() -> Result<()> {
             env,
             var,
             verbose,
+            no_cookies,
+            cookie_file,
         }) => {
-            run_test(&path, env.as_deref(), &var, verbose).await?;
+            run_test(
+                &path,
+                env.as_deref(),
+                &var,
+                verbose,
+                no_cookies,
+                cookie_file,
+            )
+            .await?;
         }
         Some(Commands::History { command }) => match command {
             cli::HistoryCommands::List { limit, reverse } => {
@@ -72,6 +82,8 @@ async fn run_test(
     env_name: Option<&str>,
     var_overrides: &[String],
     verbose: bool,
+    no_cookies: bool,
+    cookie_file: Option<String>,
 ) -> Result<()> {
     use rupost::parser::{HttpFileParser, MarkdownFileParser};
     use rupost::runner::{TestExecutor, TestReporter, TestSummary};
@@ -108,7 +120,13 @@ async fn run_test(
     reporter.print_header(file_path, total);
 
     // 5. 执行所有请求
-    let executor = TestExecutor::new();
+    let executor = if no_cookies {
+        TestExecutor::new()
+    } else if let Some(cookie_path) = cookie_file {
+        TestExecutor::with_cookies(std::path::PathBuf::from(cookie_path))?
+    } else {
+        TestExecutor::with_ephemeral_cookies()
+    };
     let results = executor.execute_all(parsed_file, &mut var_context).await?;
 
     // 6. 打印每个结果

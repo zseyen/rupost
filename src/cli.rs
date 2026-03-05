@@ -37,6 +37,14 @@ pub enum Commands {
         /// Show detailed request/response information
         #[arg(short, long)]
         verbose: bool,
+
+        /// Disable automatic cookie handling
+        #[arg(long)]
+        no_cookies: bool,
+
+        /// File path for persistent cookie storage
+        #[arg(long, value_name = "FILE")]
+        cookie_file: Option<String>,
     },
 
     /// Manage request history
@@ -89,7 +97,7 @@ impl CliRunner {
     fn new() -> Self {
         Self {
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
-            executor: TestExecutor::new(),
+            executor: TestExecutor::with_ephemeral_cookies(),
         }
     }
 

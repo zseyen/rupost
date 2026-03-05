@@ -1,0 +1,17 @@
+### Set Cookie
+GET https://httpbin.org/cookies/set?session_token=secret_val_123
+
+### Verify Cookie
+# @name Request2
+@assert status == 200
+@assert body.cookies.session_token == "secret_val_123"
+GET https://httpbin.org/cookies
+
+### Add Another Cookie
+GET https://httpbin.org/cookies/set?user_id=usr_999
+
+### Verify Multiple Cookies
+@assert status == 200
+@assert body.cookies.session_token == "secret_val_123"
+@assert body.cookies.user_id == "usr_999"
+GET https://httpbin.org/cookies

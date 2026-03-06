@@ -16,6 +16,14 @@ pub struct Cli {
     /// 可选参数用于默认运行(curl/httpie 风格)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
+
+    /// Disable automatic cookie handling for CLI requests
+    #[arg(long, global = true)]
+    pub no_cookies: bool,
+
+    /// File path for persistent cookie storage for CLI requests
+    #[arg(long, global = true, value_name = "FILE")]
+    pub cookie_file: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -94,16 +102,24 @@ struct CliRunner {
 }
 
 impl CliRunner {
-    fn new() -> Self {
-        Self {
+    fn new(no_cookies: bool, cookie_file: Option<String>) -> Result<Self> {
+        let executor = if no_cookies {
+            TestExecutor::new()
+        } else if let Some(path) = cookie_file {
+            TestExecutor::with_cookies(std::path::PathBuf::from(path))?
+        } else {
+            TestExecutor::with_ephemeral_cookies()
+        };
+
+        Ok(Self {
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
-            executor: TestExecutor::with_ephemeral_cookies(),
-        }
+            executor,
+        })
     }
 
-    async fn run(&self, args: Vec<String>) -> Result<()> {
+    async fn run(self, args: Vec<String>) -> Result<()> {
         info!("Parsing command line arguments");
-        let parsed_request = self.parse_args(args)?;
+        let parsed_request = self.parse_args(&args)?;
 
         // Setup empty context for CLI run
         let mut context = VariableContext::new();
@@ -123,6 +139,7 @@ impl CliRunner {
         } else {
             error!("Request failed: {}", result.error.unwrap_or_default());
         }
+
         Ok(())
     }
 
@@ -133,7 +150,7 @@ impl CliRunner {
         }
     }
 
-    fn parse_args(&self, args: Vec<String>) -> Result<ParsedRequest> {
+    fn parse_args(&self, args: &[String]) -> Result<ParsedRequest> {
         let args = if args.first().map(|s| s == "curl").unwrap_or(false) {
             debug!("Detected curl-style command");
             args[1..].to_vec()
@@ -141,7 +158,7 @@ impl CliRunner {
             debug!("Detected httpie-style command");
             args[1..].to_vec()
         } else {
-            args
+            args.to_vec()
         };
 
         // 根据参数特征判断是 curl 风格还是 httpie 风格
@@ -392,8 +409,8 @@ impl CliRunner {
     }
 }
 
-pub async fn run(args: Vec<String>) -> Result<()> {
-    let runner = CliRunner::new();
+pub async fn run(args: Vec<String>, no_cookies: bool, cookie_file: Option<String>) -> Result<()> {
+    let runner = CliRunner::new(no_cookies, cookie_file)?;
     runner.run(args).await
 }
 
@@ -403,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_parse_httpie() {
-        let runner = CliRunner::new();
+        let runner = CliRunner::new(false, None).unwrap();
         // Test case: POST example.com id:=1 name=foo token:123 q==search
         let args = vec![
             "POST".to_string(),
@@ -426,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_parse_curl() {
-        let runner = CliRunner::new();
+        let runner = CliRunner::new(false, None).unwrap();
 
         // Test case: curl -X POST -H "Content-Type: application/json" -d '{"name":"foo"}' example.com
         let args = vec![
@@ -512,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_parse_httpie_with_urls() {
-        let runner = CliRunner::new();
+        let runner = CliRunner::new(false, None).unwrap();
 
         // Test: http:// URL
         let args = vec!["http://example.com".to_string()];

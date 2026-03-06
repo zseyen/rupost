@@ -37,6 +37,7 @@ impl Client {
         Self {
             inner: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
+                .cookie_store(true)
                 .cookie_provider(cookie_store)
                 .build()
                 .expect("Failed to build HTTP client with cookie store"),

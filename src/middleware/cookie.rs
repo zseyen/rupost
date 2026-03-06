@@ -68,8 +68,8 @@ impl CookieMiddleware {
         if path.exists() {
             let file = File::open(path)?;
             let reader = BufReader::new(file);
-            // Load as JSON format
-            let store: CookieStore = serde_json::from_reader(reader)
+            // Load as JSON using load_all to include session cookies
+            let store: CookieStore = cookie_store::serde::json::load_all(reader)
                 .map_err(|e| anyhow::anyhow!("Failed to load cookies: {}", e))?;
             tracing::info!("Loaded cookies from: {:?}", path);
             Ok(store)
@@ -97,8 +97,15 @@ impl CookieMiddleware {
 
         // Save as JSON
         let store = self.store.lock().unwrap();
+
+        // Debug print
+        tracing::debug!(
+            "Cookies in store before save: {:?}",
+            store.iter_any().collect::<Vec<_>>()
+        );
+
         let mut writer = std::io::BufWriter::new(&file);
-        serde_json::to_writer_pretty(&mut writer, &*store)
+        cookie_store::serde::json::save_incl_expired_and_nonpersistent(&store, &mut writer)
             .map_err(|e| anyhow::anyhow!("Failed to save cookies: {}", e))?;
 
         file.unlock()?;

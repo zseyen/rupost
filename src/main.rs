@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                cli::run(cli.args).await?;
+                cli::run(cli.args, cli.no_cookies, cli.cookie_file).await?;
             }
         }
     }

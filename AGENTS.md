@@ -11,7 +11,7 @@
 为了实现项目的卓越品质，我们定义了以下核心智能体角色，每个角色对应项目特定的 `.agent/skills`：
 
 ### 1. 架构师 (Architect) - Brainstormer
-*   **关联技能**: `brainstorming`
+*   **关联技能**: `brainstorming`, `rupost-architecture`, `ai-integration-guidelines`
 *   **职责**:
     *   将最初的创意转化为详细的设计方案和规格。
     *   在实施前进行需求分析与架构评审。
@@ -19,7 +19,7 @@
 *   **原则**: YAGNI (You Ain't Gonna Need It)，一次只解决一个核心问题。
 
 ### 2. Implementation Expert (Rust Async)
-*   **关联技能**: `rust-async-patterns`
+*   **关联技能**: `rust-async-patterns`, `rupost-architecture`
 *   **职责**:
     *   负责 `rupost` 核心引擎的开发，特别是基于 Tokio 的异步模型。
     *   处理并发网络请求、Cookie 管理、文件执行流。
@@ -27,7 +27,7 @@
 *   **原则**: 遵循开闭原则，确保核心逻辑易于扩展而不必修改已有代码。
 
 ### 3. UI/UX 专家 (Frontend Specialist)
-*   **关联技能**: `frontend-design`
+*   **关联技能**: `frontend-design`, `cli-aesthetic-ux`
 *   **职责**:
     *   设计并实现 `rupost` 的用户界面（如 Dashboard 或示例页面）。
     *   确保界面美观、具有高级感，避免“AI 同质化”审美。

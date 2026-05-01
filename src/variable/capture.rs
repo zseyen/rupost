@@ -25,8 +25,7 @@ pub enum CaptureSource {
     #[allow(dead_code)]
     Cookie(String),
 
-    /// 使用正则表达式提取（P3）
-    #[allow(dead_code)]
+    /// 使用正则表达式提取
     Regex(String),
 }
 
@@ -68,6 +67,12 @@ impl VariableCapture {
             CaptureSource::Body(path.to_string())
         } else if let Some(header_name) = source_str.strip_prefix("header.") {
             CaptureSource::Header(header_name.to_string())
+        } else if let Some(regex_pattern) = source_str.strip_prefix("regex ") {
+            let mut pattern = regex_pattern.trim();
+            if pattern.starts_with('"') && pattern.ends_with('"') && pattern.len() >= 2 {
+                pattern = &pattern[1..pattern.len() - 1];
+            }
+            CaptureSource::Regex(pattern.to_string())
         } else {
             // 默认从 body 提取（向后兼容）
             CaptureSource::Body(source_str.to_string())
@@ -128,6 +133,29 @@ pub fn capture_from_response(
                 .and_then(|v| v.to_str().ok())
                 .map(String::from)
                 .ok_or_else(|| RupostError::Other(format!("Header '{}' not found", name)))?,
+            CaptureSource::Regex(pattern) => {
+                let re = regex::Regex::new(pattern).map_err(|e| {
+                    RupostError::ParseError(format!("Invalid regex pattern '{}': {}", pattern, e))
+                })?;
+                
+                if let Some(caps) = re.captures(response_body) {
+                    // 如果有捕获组，提取第一个捕获组 (索引1)
+                    // 否则提取整个匹配的内容 (索引0)
+                    if let Some(matched) = caps.get(1).or_else(|| caps.get(0)) {
+                        matched.as_str().to_string()
+                    } else {
+                        return Err(RupostError::Other(format!(
+                            "Regex '{}' matched but captured nothing for '{}'",
+                            pattern, capture.name
+                        )));
+                    }
+                } else {
+                    return Err(RupostError::Other(format!(
+                        "Regex '{}' matched nothing in response body for '{}'",
+                        pattern, capture.name
+                    )));
+                }
+            }
             _ => {
                 return Err(RupostError::Other(format!(
                     "Unsupported capture source for '{}'",
@@ -309,5 +337,36 @@ mod tests {
 
         let vars = capture_from_response(body, &headers, &captures).unwrap();
         assert_eq!(vars.get("first_id").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_capture_regex_from_html() {
+        let body = r#"
+            <html>
+                <body>
+                    <input type="hidden" name="csrf_token" value="abc123xyz">
+                </body>
+            </html>
+        "#;
+        let headers = HeaderMap::new();
+        
+        // 测试有捕获组
+        let capture1 = VariableCapture::parse("token1", r#"regex <input type="hidden" name="csrf_token" value="([^"]+)">"#);
+        // 测试无捕获组
+        let capture2 = VariableCapture::parse("token2", r#"regex name="csrf_token""#);
+
+        let vars = capture_from_response(body, &headers, &[capture1, capture2]).unwrap();
+        assert_eq!(vars.get("token1").unwrap(), "abc123xyz");
+        assert_eq!(vars.get("token2").unwrap(), r#"name="csrf_token""#);
+    }
+
+    #[test]
+    fn test_capture_regex_no_match() {
+        let body = "Plain text body";
+        let headers = HeaderMap::new();
+        let captures = vec![VariableCapture::parse("token", "regex [0-9]+")];
+
+        let result = capture_from_response(body, &headers, &captures);
+        assert!(result.is_err());
     }
 }

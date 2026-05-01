@@ -75,19 +75,38 @@ fn parse_assert(content: &str) -> ParseResult<Metadata> {
 }
 
 fn parse_capture(content: &str) -> ParseResult<Metadata> {
-    let parts: Vec<&str> = content.split_whitespace().collect();
+    let mut parts = content.split_whitespace();
+    let var_name = parts.next().ok_or_else(|| ParseError::InvalidMetadata {
+        line: 0,
+        message: "Invalid @capture syntax. Expected: @capture <var> from <source>".to_string(),
+    })?;
+    
+    let from_keyword = parts.next().ok_or_else(|| ParseError::InvalidMetadata {
+        line: 0,
+        message: "Invalid @capture syntax. Expected: @capture <var> from <source>".to_string(),
+    })?;
 
-    // 语法: <var_name> from <source> (注意：这里 content 已经去掉了 @capture)
-    if parts.len() < 3 || parts[1] != "from" {
+    if from_keyword != "from" {
         return Err(ParseError::InvalidMetadata {
             line: 0,
             message: "Invalid @capture syntax. Expected: @capture <var> from <source>".to_string(),
         });
     }
 
+    // 提取 from 后面的所有内容（保留空格，如正则表达式）
+    let from_idx = content.find("from").unwrap();
+    let source = content[from_idx + 4..].trim();
+    
+    if source.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: "Invalid @capture syntax. Source cannot be empty".to_string(),
+        });
+    }
+
     Ok(Metadata::Capture {
-        var_name: parts[0].to_string(),
-        source: parts[2].to_string(),
+        var_name: var_name.to_string(),
+        source: source.to_string(),
     })
 }
 
@@ -168,6 +187,18 @@ mod tests {
     fn test_parse_capture_invalid() {
         let result = parse_metadata("@capture invalid syntax");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_capture_with_spaces() {
+        let result = parse_metadata(r#"@capture token from regex <input name="csrf" value="([^"]+)">"#)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            Metadata::Capture { ref var_name, ref source }
+            if var_name == "token" && source == r#"regex <input name="csrf" value="([^"]+)">"#
+        ));
     }
 
     #[test]

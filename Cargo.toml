@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 about = "A API test tool based on documents"
 
+[workspace]
+members = [
+    "crates/rupost-ai"
+]
+
 [lib]
 name = "rupost"
 path = "src/lib.rs"

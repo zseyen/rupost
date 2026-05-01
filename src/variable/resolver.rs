@@ -6,14 +6,25 @@ use std::sync::OnceLock;
 pub struct VariableResolver;
 
 impl VariableResolver {
-    /// 替换文本中的所有 {{variable}} 占位符
+    /// 替换文本中的所有 {{variable}} 占位符，支持动态内置变量
     pub fn substitute(text: &str, context: &VariableContext) -> String {
         static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
-        let re = VAR_REGEX.get_or_init(|| Regex::new(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap());
+        let re = VAR_REGEX.get_or_init(|| Regex::new(r"\{\{([$a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap());
 
         re.replace_all(text, |caps: &Captures| {
             let var_name = &caps[1];
-            context.get(var_name).unwrap_or(&caps[0]).to_string()
+            
+            // 处理动态内置变量
+            match var_name {
+                "$uuid" => uuid::Uuid::new_v4().to_string(),
+                "$timestamp" => chrono::Utc::now().timestamp().to_string(),
+                "$random_int" => {
+                    use rand::Rng;
+                    let mut rng = rand::rng();
+                    rng.random_range(1..=10000).to_string()
+                },
+                _ => context.get(var_name).unwrap_or(&caps[0]).to_string(),
+            }
         })
         .to_string()
     }
@@ -115,5 +126,41 @@ mod tests {
         unsafe {
             std::env::remove_var("API_KEY");
         }
+    }
+
+    #[test]
+    fn test_resolve_builtin_uuid() {
+        let ctx = VariableContext::new();
+        let input = "ID: {{$uuid}}";
+        let output1 = VariableResolver::resolve(input, &ctx);
+        let output2 = VariableResolver::resolve(input, &ctx);
+        
+        assert!(output1.starts_with("ID: "));
+        assert_eq!(output1.len(), 4 + 36); // "ID: " + 36 char UUID
+        // 验证两次生成的 UUID 不同
+        assert_ne!(output1, output2);
+    }
+
+    #[test]
+    fn test_resolve_builtin_timestamp() {
+        let ctx = VariableContext::new();
+        let input = "Time: {{$timestamp}}";
+        let output = VariableResolver::resolve(input, &ctx);
+        
+        assert!(output.starts_with("Time: "));
+        // 简单验证时间戳长度 (例如 1714543200 是 10 位)
+        assert!(output.len() >= 14); 
+    }
+
+    #[test]
+    fn test_resolve_builtin_random_int() {
+        let ctx = VariableContext::new();
+        let input = "Rand: {{$random_int}}";
+        let output = VariableResolver::resolve(input, &ctx);
+        
+        assert!(output.starts_with("Rand: "));
+        let num_str = &output[6..];
+        let num: u32 = num_str.parse().unwrap();
+        assert!(num >= 1 && num <= 10000);
     }
 }

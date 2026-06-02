@@ -2,7 +2,7 @@
 
 这个目录包含了各种使用示例，既可以作为学习文档，也可以用于实际测试。
 
-## 📁 文件说明
+## 文件说明
 
 ### 配置文件
 
@@ -34,7 +34,7 @@
   - 类似 API 文档的格式
   - 可以直接作为测试用例执行
 
-## 🚀 使用方法
+## 使用方法
 
 ### 1. 准备配置文件
 
@@ -81,7 +81,7 @@ rupost test examples/api-testing.md --env dev
 rupost test examples/basic-api.http --env dev --verbose
 ```
 
-## 📝 变量使用说明
+## 变量使用说明
 
 ### 配置文件中的变量
 
@@ -109,7 +109,7 @@ Authorization: Bearer {{api_key}}
 2. **环境配置** (`rupost.toml` 中的环境)
 3. **系统环境变量** (`${VAR}`)
 
-## 🎯 测试场景
+## 测试场景
 
 每个示例文件都涵盖了特定的测试场景：
 
@@ -118,7 +118,7 @@ Authorization: Bearer {{api_key}}
 - **crud-operations.http** - 测试完整的数据管理功能
 - **api-testing.md** - 适合作为 API 文档和测试用例
 
-## 💡 提示
+## 提示
 
 1. **修改示例以适应你的 API**
    - 替换 URL 和端点
@@ -147,6 +147,6 @@ Authorization: Bearer {{api_key}}
    POST {{base_url}}/heavy-operation
    ```
 
-## 🔍 更多信息
+## 更多信息
 
 查看项目主 README 了解更多功能和用法。

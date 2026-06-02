@@ -100,7 +100,7 @@ rupost run api.http --cookie-jar ./my-cookies.txt
 *   **问题**: Cookie 是“隐式”的全局状态。用户可能上次测试登录成功了，几天后测试另一个接口，仅仅因为旧 Cookie 还在且未过期而通过。这会导致脚本在纯净环境（如 CI/CD）中失败。
 *   **对策**: 
     1.  **CI 模式默认不仅用**: 在 CI 环境下（检测 `CI=true` 环境变量），默认**不**加载本地 Cookie 文件，除非显式指定。
-    2.  **UI 提示**: TUI 界面底部状态栏应显示 "🍪 Cookies Loaded: 5" 等字样，提醒用户当前有激活的 Cookie。
+    2.  **UI 提示**: TUI 界面底部状态栏应显示 "Cookies Loaded: 5" 等字样，提醒用户当前有激活的 Cookie。
 
 ### 6.3 安全性 (Security)
 *   **问题**: `cookies.json` 是明文存储。如果包含 `SESSION_ID` 或 `access_token`，且该文件被误提交到 GitHub，会导致严重安全事故。

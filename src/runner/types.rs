@@ -37,6 +37,9 @@ pub struct TestResult {
 
     /// 断言结果列表
     pub assertions: Vec<AssertionResult>,
+
+    /// 细粒度网络时序诊断
+    pub timing: Option<crate::http::timing::RequestTiming>,
 }
 
 impl TestResult {
@@ -63,6 +66,7 @@ impl TestResult {
             response: Some(response),
             skipped: false,
             assertions: Vec::new(),
+            timing: None,
         }
     }
 
@@ -86,6 +90,7 @@ impl TestResult {
             response: None,
             skipped: false,
             assertions: Vec::new(),
+            timing: None,
         }
     }
 
@@ -107,6 +112,7 @@ impl TestResult {
             response: None,
             skipped: true,
             assertions: Vec::new(),
+            timing: None,
         }
     }
 }

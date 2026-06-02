@@ -83,6 +83,8 @@ mod tests {
             headers,
             body: body.to_string(),
             duration: Duration::from_millis(123),
+            ttfb: Duration::from_millis(0),
+            transfer: Duration::from_millis(0),
         }
     }
 

@@ -63,12 +63,14 @@ impl Client {
 
         let start = std::time::Instant::now();
         let response = req.send().await?;
-        let duration = start.elapsed();
+        let ttfb = start.elapsed();
 
         let status = response.status().as_u16();
         let headers = response.headers().clone();
         let body = response.text().await?;
+        let total_duration = start.elapsed();
+        let transfer = total_duration.saturating_sub(ttfb);
 
-        Response::new(status, headers, body, duration)
+        Response::new(status, headers, body, total_duration, ttfb, transfer)
     }
 }

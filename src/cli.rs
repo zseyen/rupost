@@ -24,6 +24,14 @@ pub struct Cli {
     /// File path for persistent cookie storage for CLI requests
     #[arg(long, global = true, value_name = "FILE")]
     pub cookie_file: Option<String>,
+
+    /// Enable detailed network diagnostics timing
+    #[arg(long, global = true)]
+    pub debug: bool,
+
+    /// Enable detailed network diagnostics only on failure
+    #[arg(long, global = true)]
+    pub debug_on_failure: bool,
 }
 
 #[derive(Subcommand)]
@@ -102,14 +110,16 @@ struct CliRunner {
 }
 
 impl CliRunner {
-    fn new(no_cookies: bool, cookie_file: Option<String>) -> Result<Self> {
+    fn new(no_cookies: bool, cookie_file: Option<String>, debug: bool, debug_on_failure: bool) -> Result<Self> {
         let executor = if no_cookies {
             TestExecutor::new()
         } else if let Some(path) = cookie_file {
             TestExecutor::with_cookies(std::path::PathBuf::from(path))?
         } else {
             TestExecutor::with_ephemeral_cookies()
-        };
+        }
+        .with_debug(debug)
+        .with_debug_on_failure(debug_on_failure);
 
         Ok(Self {
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
@@ -409,8 +419,8 @@ impl CliRunner {
     }
 }
 
-pub async fn run(args: Vec<String>, no_cookies: bool, cookie_file: Option<String>) -> Result<()> {
-    let runner = CliRunner::new(no_cookies, cookie_file)?;
+pub async fn run(args: Vec<String>, no_cookies: bool, cookie_file: Option<String>, debug: bool, debug_on_failure: bool) -> Result<()> {
+    let runner = CliRunner::new(no_cookies, cookie_file, debug, debug_on_failure)?;
     runner.run(args).await
 }
 
@@ -420,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_parse_httpie() {
-        let runner = CliRunner::new(false, None).unwrap();
+        let runner = CliRunner::new(false, None, false, false).unwrap();
         // Test case: POST example.com id:=1 name=foo token:123 q==search
         let args = vec![
             "POST".to_string(),
@@ -443,7 +453,7 @@ mod tests {
 
     #[test]
     fn test_parse_curl() {
-        let runner = CliRunner::new(false, None).unwrap();
+        let runner = CliRunner::new(false, None, false, false).unwrap();
 
         // Test case: curl -X POST -H "Content-Type: application/json" -d '{"name":"foo"}' example.com
         let args = vec![
@@ -529,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_parse_httpie_with_urls() {
-        let runner = CliRunner::new(false, None).unwrap();
+        let runner = CliRunner::new(false, None, false, false).unwrap();
 
         // Test: http:// URL
         let args = vec!["http://example.com".to_string()];

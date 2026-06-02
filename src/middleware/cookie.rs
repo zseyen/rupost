@@ -12,8 +12,20 @@ use fs2::FileExt;
 use reqwest_cookie_store::CookieStoreMutex;
 use std::fs::{self, File};
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// 根据环境名自动重构 Cookie 文件名，实现环境间隔离
+pub fn resolve_cookie_path(base_path: PathBuf, env_name: Option<&str>) -> PathBuf {
+    if let Some(env) = env_name {
+        let parent = base_path.parent().unwrap_or_else(|| Path::new(""));
+        let file_stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("cookies");
+        let extension = base_path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+        parent.join(format!("{}_{}.{}", file_stem, env, extension))
+    } else {
+        base_path
+    }
+}
 
 /// Cookie operation mode.
 #[derive(Debug, Clone, Default)]

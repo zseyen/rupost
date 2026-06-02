@@ -5,7 +5,7 @@
 
 mod cookie;
 
-pub use cookie::{CookieMiddleware, CookieMode};
+pub use cookie::{CookieMiddleware, CookieMode, resolve_cookie_path};
 use std::future::Future;
 
 use crate::Result;

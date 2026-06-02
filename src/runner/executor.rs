@@ -9,12 +9,14 @@ use crate::variable::{VariableContext, VariableResolver, capture_from_response};
 use reqwest::header::{HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use tracing::{error, info};
 
 pub struct TestExecutor {
     client: Client,
     cookie_middleware: Option<Arc<CookieMiddleware>>,
+    pub debug: bool,
+    pub debug_on_failure: bool,
 }
 
 impl TestExecutor {
@@ -23,7 +25,21 @@ impl TestExecutor {
         Self {
             client: Client::new(),
             cookie_middleware: None,
+            debug: false,
+            debug_on_failure: false,
         }
+    }
+
+    /// Set debug mode
+    pub fn with_debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    /// Set debug-on-failure mode
+    pub fn with_debug_on_failure(mut self, debug_on_failure: bool) -> Self {
+        self.debug_on_failure = debug_on_failure;
+        self
     }
 
     /// Create a new executor with cookie persistence.
@@ -36,6 +52,8 @@ impl TestExecutor {
         Ok(Self {
             client: Client::with_cookie_store(cookie_store),
             cookie_middleware: Some(Arc::new(middleware)),
+            debug: false,
+            debug_on_failure: false,
         })
     }
 
@@ -46,6 +64,8 @@ impl TestExecutor {
         Self {
             client: Client::with_cookie_store(cookie_store),
             cookie_middleware: Some(Arc::new(middleware)),
+            debug: false,
+            debug_on_failure: false,
         }
     }
 
@@ -161,6 +181,14 @@ impl TestExecutor {
             }
         };
 
+        // 1. 进行 Pre-flight 探测 (带容错，不干扰主流程)
+        let probe_result = if self.debug || self.debug_on_failure {
+            use crate::http::timing::DiagnosticsProber;
+            DiagnosticsProber::probe_connection(&url).await.ok()
+        } else {
+            None
+        };
+
         // 执行请求
         match self.client.execute(request).await {
             Ok(response) => {
@@ -217,7 +245,7 @@ impl TestExecutor {
 
                 // 创建成功的测试结果
                 let mut test_result =
-                    TestResult::success(request_number, name, method, url, response);
+                    TestResult::success(request_number, name, method, url, response.clone());
                 test_result.assertions = assertion_results;
 
                 // 如果有断言失败，标记测试为失败
@@ -225,16 +253,45 @@ impl TestExecutor {
                     test_result.success = false;
                 }
 
+                // 判断是否需要挂载 timing
+                let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
+                if need_timing {
+                    if let Some((dns, tcp)) = probe_result {
+                        test_result.timing = Some(crate::http::timing::RequestTiming {
+                            dns_lookup: dns,
+                            tcp_connect: tcp,
+                            ttfb: response.ttfb,
+                            transfer: response.transfer,
+                        });
+                    }
+                }
+
                 test_result
             }
-            Err(e) => TestResult::error(
-                request_number,
-                name,
-                method,
-                url,
-                format!("Request failed: {}", e),
-                start.elapsed(),
-            ),
+            Err(e) => {
+                let mut test_result = TestResult::error(
+                    request_number,
+                    name,
+                    method,
+                    url,
+                    format!("Request failed: {}", e),
+                    start.elapsed(),
+                );
+
+                let need_timing = self.debug || self.debug_on_failure;
+                if need_timing {
+                    if let Some((dns, tcp)) = probe_result {
+                        test_result.timing = Some(crate::http::timing::RequestTiming {
+                            dns_lookup: dns,
+                            tcp_connect: tcp,
+                            ttfb: Duration::from_millis(0),
+                            transfer: Duration::from_millis(0),
+                        });
+                    }
+                }
+
+                test_result
+            }
         }
     }
 }

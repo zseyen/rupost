@@ -26,6 +26,8 @@ async fn main() -> Result<()> {
                 verbose,
                 no_cookies,
                 cookie_file,
+                cli.debug,
+                cli.debug_on_failure,
             )
             .await?;
         }
@@ -70,7 +72,14 @@ async fn main() -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                cli::run(cli.args, cli.no_cookies, cli.cookie_file).await?;
+                cli::run(
+                    cli.args,
+                    cli.no_cookies,
+                    cli.cookie_file,
+                    cli.debug,
+                    cli.debug_on_failure,
+                )
+                .await?;
             }
         }
     }
@@ -84,6 +93,8 @@ async fn run_test(
     verbose: bool,
     no_cookies: bool,
     cookie_file: Option<String>,
+    debug: bool,
+    debug_on_failure: bool,
 ) -> Result<()> {
     use rupost::parser::{HttpFileParser, MarkdownFileParser};
     use rupost::runner::{TestExecutor, TestReporter, TestSummary};
@@ -120,13 +131,17 @@ async fn run_test(
     reporter.print_header(file_path, total);
 
     // 5. 执行所有请求
-    let executor = if no_cookies {
+    let mut executor = if no_cookies {
         TestExecutor::new()
     } else if let Some(cookie_path) = cookie_file {
-        TestExecutor::with_cookies(std::path::PathBuf::from(cookie_path))?
+        use rupost::middleware::resolve_cookie_path;
+        let resolved = resolve_cookie_path(std::path::PathBuf::from(cookie_path), env_name);
+        TestExecutor::with_cookies(resolved)?
     } else {
         TestExecutor::with_ephemeral_cookies()
     };
+
+    executor = executor.with_debug(debug).with_debug_on_failure(debug_on_failure);
     let results = executor.execute_all(parsed_file, &mut var_context).await?;
 
     // 6. 打印每个结果

@@ -23,7 +23,7 @@ impl TestExecutor {
     /// Create a new executor without cookie support.
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::new(None),
             cookie_middleware: None,
             debug: false,
             debug_on_failure: false,
@@ -50,7 +50,7 @@ impl TestExecutor {
         let middleware = CookieMiddleware::new_with_persistence(cookie_file)?;
         let cookie_store = middleware.cookie_store();
         Ok(Self {
-            client: Client::with_cookie_store(cookie_store),
+            client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(Arc::new(middleware)),
             debug: false,
             debug_on_failure: false,
@@ -62,7 +62,7 @@ impl TestExecutor {
         let middleware = CookieMiddleware::new_ephemeral();
         let cookie_store = middleware.cookie_store();
         Self {
-            client: Client::with_cookie_store(cookie_store),
+            client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(Arc::new(middleware)),
             debug: false,
             debug_on_failure: false,
@@ -128,6 +128,17 @@ impl TestExecutor {
         for (_key, value) in &mut parsed.headers {
             *value = VariableResolver::resolve(value, context);
             // header key 通常不需要替换，也可以根据需求支持
+        }
+
+        // 检查全局变量 context 中是否提供了 user_agent，如果是且请求中没有显式设置，则追加
+        if let Some(ua) = context.get("user_agent") {
+            let has_ua = parsed
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
+            if !has_ua {
+                parsed.headers.push(("User-Agent".to_string(), ua.to_string()));
+            }
         }
 
         // 替换 Body

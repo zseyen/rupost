@@ -14,17 +14,18 @@ pub struct Client {
 
 impl Default for Client {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl Client {
     /// Create a new client without cookie support.
-    pub fn new() -> Self {
+    pub fn new(user_agent: Option<&str>) -> Self {
+        let ua = user_agent.unwrap_or("rupost/1.0.0");
         Self {
             inner: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
-                .user_agent("rupost/1.0.0")
+                .user_agent(ua)
                 .build()
                 .expect("Failed to build HTTP client"),
         }
@@ -34,13 +35,14 @@ impl Client {
     ///
     /// # Arguments
     /// * `cookie_store` - The cookie store to use for automatic cookie handling.
-    pub fn with_cookie_store(cookie_store: Arc<CookieStoreMutex>) -> Self {
+    pub fn with_cookie_store(cookie_store: Arc<CookieStoreMutex>, user_agent: Option<&str>) -> Self {
+        let ua = user_agent.unwrap_or("rupost/1.0.0");
         Self {
             inner: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .cookie_store(true)
                 .cookie_provider(cookie_store)
-                .user_agent("rupost/1.0.0")
+                .user_agent(ua)
                 .build()
                 .expect("Failed to build HTTP client with cookie store"),
         }

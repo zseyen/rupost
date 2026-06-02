@@ -32,7 +32,7 @@ async fn test_cookie_sending() {
         store.insert_raw(&cookie, &url).unwrap();
     }
 
-    let client = Client::with_cookie_store(cookie_store);
+    let client = Client::with_cookie_store(cookie_store, None);
 
     // Make request
     let request = Request::new("GET", &format!("{}/protected", mock_server.uri())).unwrap();
@@ -61,7 +61,7 @@ async fn test_set_cookie_receiving() {
     // Create client with ephemeral cookies
     let middleware = CookieMiddleware::new_ephemeral();
     let cookie_store = middleware.cookie_store();
-    let client = Client::with_cookie_store(Arc::clone(&cookie_store));
+    let client = Client::with_cookie_store(Arc::clone(&cookie_store), None);
 
     // Make login request
     let request = Request::new("GET", &format!("{}/login", mock_server.uri())).unwrap();
@@ -109,7 +109,7 @@ async fn test_cookie_persistence() {
     {
         let middleware = CookieMiddleware::new_with_persistence(cookie_file.clone()).unwrap();
         let cookie_store = middleware.cookie_store();
-        let client = Client::with_cookie_store(cookie_store);
+        let client = Client::with_cookie_store(cookie_store, None);
 
         let request = Request::new("GET", &format!("{}/set", server_uri)).unwrap();
         let response = client.execute(request).await.unwrap();
@@ -188,7 +188,7 @@ async fn test_cookie_domain_and_path_matching() {
         store.insert_raw(&cookie_path, &url).unwrap();
     }
 
-    let client = Client::with_cookie_store(cookie_store);
+    let client = Client::with_cookie_store(cookie_store, None);
 
     // 1. Request to /other
     let request1 = Request::new("GET", &format!("{}/other", mock_server.uri())).unwrap();
@@ -256,7 +256,7 @@ async fn test_cookie_expiration() {
     // Wait for the cookie to expire
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
-    let client = Client::with_cookie_store(cookie_store);
+    let client = Client::with_cookie_store(cookie_store, None);
     let request = Request::new("GET", &format!("{}/test", mock_server.uri())).unwrap();
     let response = client.execute(request).await.unwrap();
 
@@ -404,7 +404,7 @@ async fn test_cookie_disabled() {
         .await;
 
     // Create client without cookie support
-    let client = Client::new();
+    let client = Client::new(None);
 
     // 1. Request to set cookie
     let request1 = Request::new("GET", &format!("{}/set_cookie", mock_server.uri())).unwrap();

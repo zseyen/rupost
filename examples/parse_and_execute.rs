@@ -23,7 +23,7 @@ async fn main() -> rupost::Result<()> {
 
     // 3. 执行第一个请求
     println!("📤 步骤 3: 执行第一个请求");
-    let client = Client::new();
+    let client = Client::new(None);
 
     if let Some(request) = requests.into_iter().next() {
         println!("   方法: {}", request.method.as_str());

@@ -1,0 +1,28 @@
+### 1. 模拟登录并写入 Session Cookie (Cookie 隔离验证)
+# 本接口会向客户端写入一个 Set-Cookie: session_id=sprint1_token
+# 配合 --env dev 或 --env prod，您将在本地磁盘上看到被完全物理隔离的文件：
+# - cookies_dev.json
+# - cookies_prod.json
+# 隔离文件名保证了环境之间 Session 永不串线。
+@name SetupSessionCookie
+GET {{base_url}}/cookies/set?session_id=sprint1_token
+Accept: application/json
+
+@assert status == 200
+@assert body.cookies.session_id == "sprint1_token"
+
+
+### 2. 模拟高延迟后端服务 (网络诊断时序 Bar Chart 验证)
+# 本接口利用 httpbingo 延迟 1 秒返回。
+# 开启 --debug 或 --debug-on-failure 后，您会看到终端输出极其精美的时序条：
+# - DNS Lookup (DNS解析)
+# - TCP Connect (建立连接)
+# - Server Wait (TTFB, 即这 1 秒的等待)
+# - Transfer (数据传输)
+# 从而一目了然定位到是网络不好，还是后端性能慢。
+@name HeavyDelayDiagnostics
+GET {{base_url}}/delay/1
+Accept: application/json
+
+@assert status == 200
+@assert response.time > 1000

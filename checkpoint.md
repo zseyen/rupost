@@ -1,17 +1,14 @@
 # Checkpoint - 2026-06-02
 
 ## 当前状态
-- **完成 Sprint 1 阶段攻坚开发**：
-  1. **网络诊断时序诊断 (Detailed Debug Mode)**：实现了基于 OS 原生 Socket 的 Pre-flight DNS 与 TCP 探测逻辑 (`DiagnosticsProber`)，以及主 `Client::execute` 内置的 TTFB 与 Transfer 精度统计；并在 `reporter.rs` 中设计了精致的彩色 ASCII 时序条渲染器，支持 `--debug` 与 `--debug-on-failure` CLI 选项。
-  2. **Cookie 环境隔离**：根据 `-e/--env` 命令行参数自动重构 Cookie 物理存储文件名，实现 dev/prod 环境下 Session 的物理隔离。
-- **质量保障与测试用例覆盖**：
-  - 新增 `tests/cookie_isolation_test.rs` 与 `tests/timing_diagnostics_test.rs` 集成测试，验证重构文件名和时序捕获精度。
-  - 全套 174 个测试用例全部高质量通过。
+- **解决 Demo 用例公网 503 与 402 报错**：
+  1. 将演示用例（`examples/sprint1_diagnostics_demo`、`examples/cookie_demo`）的公网目标替换为极其稳定的 `httpbingo.org`，并全面采用 `{{base_url}}` 进行多环境变量插值注入。
+  2. 为 HTTP 客户端 `Client` 补充了默认的 `User-Agent: rupost/1.0.0` 头，彻底避开了 Fly.io 对空 UA 的 402 拦截。
+  3. 执行 `cargo run -- test examples/sprint1_diagnostics_demo.md -e dev --debug` 实测 100% 成功通过，网络时序 Bar Chart 染色输出正常。
+- **输出多文件与文件夹测试设计方案**：
+  - 完成了多文件/目录递归测试的方案设计并编写了规格说明书 [multi_file_and_directory_testing.md](file:///Users/zsyzzx/project/rust/rupost/doc/plans/multi_file_and_directory_testing.md)，详细规范了 `paths: Vec<String>` 参数、目录扫描过滤器、共享会话以及全局汇总报告的设计。
 - **JJ 版本化代码提交**：
-  - 通过 `jj describe` 对工作区修改进行轻量提交，版本号已更新。
-- **文档沉淀**：
-  - 创建了 `user_story_walkthrough.md` 用户走查、`sprint1_progress_and_issues.md` 进度汇总与 `walkthrough.md` 里程碑报告。
+  - 描述了本次工作复本，提交标识为 `fix(demo): resolve httpbin 503 instability using httpbingo and add multi-file testing design plan`。
 
 ## 下一步
-- 进入 **Sprint 2**：研发 **【测试快照保存与高保真 Diff 对比 (建议 3)】**。
-- 支持命令行 `--save-snapshot` 与 `--compare-with`，并实现针对 JSON 响应的深度优先语义 Diff 算法在终端的对比渲染。
+- 开启多文件与文件夹分类执行测试的编码实现（根据已提交的方案文档）。

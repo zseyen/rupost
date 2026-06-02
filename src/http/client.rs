@@ -24,6 +24,7 @@ impl Client {
         Self {
             inner: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
+                .user_agent("rupost/1.0.0")
                 .build()
                 .expect("Failed to build HTTP client"),
         }
@@ -39,6 +40,7 @@ impl Client {
                 .timeout(Duration::from_secs(30))
                 .cookie_store(true)
                 .cookie_provider(cookie_store)
+                .user_agent("rupost/1.0.0")
                 .build()
                 .expect("Failed to build HTTP client with cookie store"),
         }

@@ -13,7 +13,7 @@
 ```http
 @name set-first-cookie
 @assert status == 200
-GET https://httpbin.org/cookies/set?session_token=secret_val_123
+GET {{base_url}}/cookies/set?session_token=secret_val_123
 ```
 
 ## 2. 验证会话（自动携带）
@@ -24,7 +24,7 @@ GET https://httpbin.org/cookies/set?session_token=secret_val_123
 @name verify-first-cookie
 @assert status == 200
 @assert body.cookies.session_token == "secret_val_123"
-GET https://httpbin.org/cookies
+GET {{base_url}}/cookies
 ```
 
 ## 3. 追加第二个 Cookie（模拟购物车或多因子认证流程）
@@ -34,7 +34,7 @@ GET https://httpbin.org/cookies
 ```http
 @name set-second-cookie
 @assert status == 200
-GET https://httpbin.org/cookies/set?user_id=usr_999
+GET {{base_url}}/cookies/set?user_id=usr_999
 ```
 
 ## 4. 终极验证（多 Cookie 共存）
@@ -46,7 +46,7 @@ GET https://httpbin.org/cookies/set?user_id=usr_999
 @assert status == 200
 @assert body.cookies.session_token == "secret_val_123"
 @assert body.cookies.user_id == "usr_999"
-GET https://httpbin.org/cookies
+GET {{base_url}}/cookies
 ```
 
 ---

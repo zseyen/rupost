@@ -58,19 +58,17 @@
         *   **语法**: 提取标记为 `http` 或 `rest` 的代码块内容进行执行。这对于编写包含文档和可执行示例的 **Literate Programming** 非常有用。
     *   **示例 (.http)**:
         ```http
-        ### Login
         POST {{base_url}}/login
         Content-Type: application/json
 
         { "user": "test" }
         ```
     *   **示例 (.md)**:
-        ```markdown
+
         # API Docs
         Here is how to login:
         ```http
         POST {{base_url}}/login
-        ```
         ```
 2.  **变量替换**
     *   使用 `{{variable}}` 语法。

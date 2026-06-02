@@ -327,8 +327,7 @@ Content-Type: application/json
 
 状态码应该是 200，并返回 token 字段。
 
-```markdown
-```
+
 
 📖 **结果**: 文档即测试，测试即文档！
 

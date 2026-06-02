@@ -42,12 +42,14 @@
 
 ## 协作流程与规则
 
-1.  **需求分析**: 所有新功能或重大变更必须先由 **架构师** 通过 `brainstorming` 流程输出设计文档（存放在 `doc/plans/`）。
-2.  **Clean Architecture**: 设计与代码必须层级分明，实体逻辑、用例逻辑与外部接口（HTTP, CLI）应当解耦。
-3.  **版本控制**: 使用 `jj` 命令进行版本管理。完成一个小功能点后，立即提交。
-4.  **自动化保障**: 每个功能的完成都必须包含相应的测试用例，确保系统的鲁棒性。
-5.  **增量交付**: 严守 MVP 原则，快速迭代，实际测试，而非憋大招。
+在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/development_workflow.md)。该流程规范由以下核心环节构成：
+
+1. **功能分析与架构设计 (Stage 0 & 1)**：所有新功能或重大变更必须先由 **架构师** 通过 `brainstorming` 流程输出 PRD 与设计文档（存放在 `doc/plans/`），并确保设计符合 **Clean Architecture** 规范。
+2. **关键代码与单元测试 (Stage 2 & 3)**：在动工前先设计核心 Trait 与数据模型，单元测试必须在 `mod tests` 编写，并通过 Mock 隔离外部网络与文件 IO。
+3. **具体实现与 E2E 校验 (Stage 4 & 5)**：极致简洁实现，利用 `jj` 命令进行原子化提交，并在 `tests/` 下编写真实环境的 E2E 校验。
+4. **进度归档与文档更新 (Stage 6)**：将已完成功能记录到唯一的进度事实来源 [progress_summary.md](file:///Users/zsyzzx/project/rust/rupost/doc/progress_summary.md) 中，并同步更新 [README.md](file:///Users/zsyzzx/project/rust/rupost/README.md) 与 `checkpoint.md`。
 
 ---
 
 *由 Antigravity AI 自动生成，旨在促进人机协作的卓越效率。*
+

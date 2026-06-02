@@ -1,4 +1,4 @@
-# RuPost (AntiGravity)
+# RuPost 
 
 > **极简、强大、富有美感的终端 HTTP 客服端与 API 测试工具**
 

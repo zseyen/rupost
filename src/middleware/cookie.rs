@@ -6,7 +6,9 @@ use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::middleware::Middleware;
+use cookie_store::serde::json::{load_all, save_incl_expired_and_nonpersistent};
 use cookie_store::CookieStore;
+use fs2::FileExt;
 use reqwest_cookie_store::CookieStoreMutex;
 use std::fs::{self, File};
 use std::io::BufReader;
@@ -67,11 +69,25 @@ impl CookieMiddleware {
     fn load_or_create(path: &PathBuf) -> Result<CookieStore> {
         if path.exists() {
             let file = File::open(path)?;
-            let reader = BufReader::new(file);
+            file.lock_shared()?;
+
+            let reader = BufReader::new(&file);
             // Load as JSON using load_all to include session cookies
-            let store: CookieStore = cookie_store::serde::json::load_all(reader)
-                .map_err(|e| anyhow::anyhow!("Failed to load cookies: {}", e))?;
-            tracing::info!("Loaded cookies from: {:?}", path);
+            let store = match load_all(reader) {
+                Ok(store) => {
+                    tracing::info!("Loaded cookies from: {:?}", path);
+                    store
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse cookie file ({:?}), falling back to empty store. Error: {}",
+                        path,
+                        e
+                    );
+                    CookieStore::default()
+                }
+            };
+            file.unlock()?;
             Ok(store)
         } else {
             tracing::debug!("Cookie file not found, creating new store");
@@ -92,7 +108,6 @@ impl CookieMiddleware {
 
         // Open with file lock
         let file = File::create(path)?;
-        use fs2::FileExt;
         file.lock_exclusive()?;
 
         // Save as JSON
@@ -105,7 +120,7 @@ impl CookieMiddleware {
         );
 
         let mut writer = std::io::BufWriter::new(&file);
-        cookie_store::serde::json::save_incl_expired_and_nonpersistent(&store, &mut writer)
+        save_incl_expired_and_nonpersistent(&store, &mut writer)
             .map_err(|e| anyhow::anyhow!("Failed to save cookies: {}", e))?;
 
         file.unlock()?;

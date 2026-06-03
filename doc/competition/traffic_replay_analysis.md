@@ -135,26 +135,25 @@ impl MarkdownSpecGenerator {
 ```mermaid
 graph TD
 
-    subgraph Core
-        Core[rupost-core: 基础 HTTP 请求、断言定义]
+    subgraph core_sub ["Core"]
+        CoreNode[rupost-core: 基础 HTTP 请求、断言定义]
     end
 
-
-    subgraph Adapters / Infrastructure
+    subgraph adapters_sub ["Adapters / Infrastructure"]
         Import[rupost-import: HAR/cURL 流量导入]
         Codegen[rupost-codegen: Markdown/HTTP 模板生成]
         Debug[rupost-debug: Kubernetes/SSH 日志拉取]
     end
 
-    subgraph CLI Entry point
+    subgraph cli_sub ["CLI Entry point"]
         Cli[rupost CLI: 命令分发]
     end
 
     Cli --> Import
     Cli --> Codegen
-    Import --> Core
-    Codegen --> Core
-    Debug --> Core
+    Import --> CoreNode
+    Codegen --> CoreNode
+    Debug --> CoreNode
 ```
 
 通过这一 Clean Architecture 模式的设计，`rupost` 的核心测试解析执行引擎（`rupost-core`）可以保持纯粹和轻量，而流量录制（`import`/`codegen`）和链路追踪调试（`debug`）则作为适配器模块独立演进，不会污染核心的 HTTP 解析与执行流。

@@ -10,31 +10,37 @@
 
 ```mermaid
 graph TD
-    CLI[CLI Entry] --> AppCore
-    TUI[TUI Entry] --> AppCore
-    
-    subgraph "Core Kernel (src/core)"
+    %% 1. 子图与节点定义
+    subgraph core_kernel ["Core Kernel (src/core)"]
         AppCore[App Controller]
         ConfigMgr[Config Manager]
-        HttpEngine[HTTP Engine (Reqwest)]
+        HttpEngine["HTTP Engine (Reqwest)"]
     end
     
-    subgraph "Middleware Chain (src/middleware)"
-        PreScript[1. Pre-Script (Rhai)]
-        CookieInj[2. Cookie Injector]
-        ProdDebug[3. Prod Replay (Optional)]
+    subgraph middleware_chain ["Middleware Chain (src/middleware)"]
+        PreScript["1. Pre-Script (Rhai)"]
+        CookieInj["2. Cookie Injector"]
+        ProdDebug["3. Prod Replay (Optional)"]
         
-        CookieExt[4. Cookie Extractor]
-        PostScript[5. Post-Script (Test/Assert)]
+        CookieExt["4. Cookie Extractor"]
+        PostScript["5. Post-Script (Test/Assert)"]
     end
     
-    subgraph "Services (src/services)"
-        AiService[AI Service (LLM)]
+    subgraph services_sub ["Services (src/services)"]
+        AiService["AI Service (LLM)"]
         DocGen[Doc Generator]
-        PluginMgr[Plugin Manager (Future)]
+        PluginMgr["Plugin Manager (Future)"]
     end
+
+    %% 2. 外部入口节点定义
+    CLI["CLI Entry"]
+    TUI["TUI Entry"]
+    FileSystem[("Disk")]
+
+    %% 3. 数据流与连线关系
+    CLI --> AppCore
+    TUI --> AppCore
     
-    %% Data Flow
     AppCore -->|Request| PreScript
     PreScript --> CookieInj
     CookieInj --> ProdDebug
@@ -44,10 +50,9 @@ graph TD
     CookieExt --> PostScript
     PostScript -->|Result| AppCore
     
-    %% Side Capabilities
     TUI -.->|Event: Analyze| AiService
     CLI -.->|Command: doc| DocGen
-    CookieInj -.->|Load/Save| FileSystem[(Disk)]
+    CookieInj -.->|Load/Save| FileSystem
 ```
 
 ## 3. 分阶段技术落地详细方案

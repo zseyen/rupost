@@ -57,11 +57,12 @@ GET {{base_url}}/cookies
 
 ```bash
 # 默认内存模式执行
-rupost run examples/cookie_demo.md
+rupost test examples/cookie_demo.md
 
 # 如果需要将登录状态保存到本地，以便下一次运行，可以指定 cookie 文件：
-rupost run examples/cookie_demo.md --cookie-file my_session.json
+rupost test examples/cookie_demo.md --cookie-file my_session.json
 
 # 如果想要完全无 Cookie 执行（无状态请求验证）：
-rupost run examples/cookie_demo.md --no-cookies
+rupost test examples/cookie_demo.md --no-cookies
+
 ```

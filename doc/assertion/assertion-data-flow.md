@@ -42,7 +42,7 @@ POST https://api.example.com/login
 {"username": "test"}
 ```
 
-**Parser 处理** ([http_file.rs:252](file:///Users/zsyzzx/project/rust/rupost/src/parser/http_file.rs#L252-L256)):
+**Parser 处理** ([http_file.rs:252](../../src/parser/http_file.rs#L252-L256)):
 ```rust
 // parse_metadata_line() 识别 @assert
 else if let Some(assertion) = line.strip_prefix("@assert") {
@@ -50,7 +50,7 @@ else if let Some(assertion) = line.strip_prefix("@assert") {
 }
 ```
 
-**生成数据结构** ([types.rs](file:///Users/zsyzzx/project/rust/rupost/src/parser/types.rs#L55-L69)):
+**生成数据结构** ( [types.rs](../../src/parser/types.rs#L55-L69) ):
 ```rust
 ParsedRequest {
     name: Some("User Login"),
@@ -75,7 +75,8 @@ ParsedRequest {
 
 ### **阶段 2：执行 HTTP 请求** ⚙️ → 🌐
 
-**Executor 处理** ([executor.rs:50-54](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs#L50-L54)):
+**Executor 处理** ([executor.rs:50-54](../../src/runner/executor.rs#L50-L54)):
+
 ```rust
 // 1. 提前保存断言列表（在 parsed 被移动前）
 let assertions_to_eval = parsed.metadata.assertions.clone();
@@ -109,7 +110,7 @@ Response {
 
 #### **3.1 循环处理每个断言字符串**
 
-**Executor 代码** ([executor.rs:72-88](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs#L72-L88)):
+**Executor 代码** ([executor.rs:72-88](../../src/runner/executor.rs#L72-L88)):
 ```rust
 let mut assertion_results = Vec::new();
 
@@ -122,7 +123,7 @@ for assertion_str in &assertions_to_eval {
 
 #### **3.2 解析断言字符串 → 抽象语法树**
 
-**Parser 模块** ([assertion/parser.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/parser.rs#L11-L60)):
+**Parser 模块** ([assertion/parser.rs](../../src/assertion/parser.rs#L11-L60)):
 
 ```rust
 // 输入: "status == 200"
@@ -168,7 +169,7 @@ AssertExpr::Exists {
 
 #### **3.3 值提取：从 Response 中提取实际值**
 
-**Extractor 模块** ([assertion/extractor.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/extractor.rs#L5-L32)):
+**Extractor 模块** ([assertion/extractor.rs](../../src/assertion/extractor.rs#L5-L32)):
 
 ```rust
 // 根据 ValuePath 提取值
@@ -207,7 +208,7 @@ fn extract_from_json_body(body: &str, segments: &[String]) -> Result<AssertValue
 
 #### **3.4 求值：比较实际值与期望值**
 
-**Evaluator 模块** ([assertion/evaluator.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/evaluator.rs#L6-L58)):
+**Evaluator 模块** ([assertion/evaluator.rs](../../src/assertion/evaluator.rs#L6-L58)):
 
 ```rust
 // 断言 #1: status == 200
@@ -255,7 +256,7 @@ AssertionResult {
 
 ### **阶段 4：收集断言结果** 🔍 → 📊
 
-**Executor 完成求值** ([executor.rs:72-106](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs#L72-L106)):
+**Executor 完成求值** ([executor.rs:72-106](../../src/runner/executor.rs#L72-L106)):
 ```rust
 let mut assertion_results = Vec::new();
 
@@ -283,7 +284,7 @@ assertion_results = vec![
 
 ### **阶段 5：创建 TestResult** 📊 → 📦
 
-**Executor 生成最终结果** ([executor.rs:90-106](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs#L90-L106)):
+**Executor 生成最终结果** ([executor.rs:90-106](../../src/runner/executor.rs#L90-L106)):
 ```rust
 // 创建成功的测试结果
 let mut test_result = TestResult::success(
@@ -326,7 +327,7 @@ TestResult {
 
 ### **阶段 6：统计汇总** 📦 → 📈
 
-**TestSummary 聚合统计** ([types.rs:126-145](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs#L126-L145)):
+**TestSummary 聚合统计** ([types.rs:126-145](../../src/runner/types.rs#L126-L145)):
 ```rust
 TestSummary::from_results(&results)
 
@@ -365,7 +366,7 @@ TestSummary {
 
 ### **阶段 7：显示输出** 📈 → 🖥️
 
-**Reporter 格式化输出** ([reporter.rs:92-107](file:///Users/zsyzzx/project/rust/rupost/src/runner/reporter.rs#L92-L107)):
+**Reporter 格式化输出** ([reporter.rs:92-107](../../src/runner/reporter.rs#L92-L107)):
 
 ```rust
 // 显示断言结果

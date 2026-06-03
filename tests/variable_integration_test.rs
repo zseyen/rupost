@@ -280,3 +280,40 @@ fn test_cli_variable_parsing() {
     assert_eq!(k3, "key3");
     assert_eq!(v3, "value=with=equals");
 }
+
+/// 测试使用 base_url 但未在当前环境配置时能够触发友好错误
+#[tokio::test]
+async fn test_unconfigured_base_url_error() {
+    let executor = rupost::runner::TestExecutor::new();
+    let mut context = VariableContext::new(); // 未配置 base_url
+
+    let mut parsed = rupost::parser::ParsedRequest::new(1);
+    parsed.url = "{{base_url}}/cookies".to_string();
+    parsed.method = Some("GET".to_string());
+
+    let result = executor.execute_one(parsed, 1, &mut context, None).await;
+
+    assert!(!result.success);
+    assert!(result.error.is_some());
+    let error_msg = result.error.unwrap();
+    assert!(error_msg.contains("使用了 base_url/baseUrl 变量，但是没有在当前环境中配置它"));
+}
+
+/// 测试使用 baseUrl 但未在当前环境配置时能够触发友好错误
+#[tokio::test]
+async fn test_unconfigured_base_url_camel_case_error() {
+    let executor = rupost::runner::TestExecutor::new();
+    let mut context = VariableContext::new(); // 未配置 baseUrl
+
+    let mut parsed = rupost::parser::ParsedRequest::new(1);
+    parsed.url = "{{baseUrl}}/cookies".to_string();
+    parsed.method = Some("GET".to_string());
+
+    let result = executor.execute_one(parsed, 1, &mut context, None).await;
+
+    assert!(!result.success);
+    assert!(result.error.is_some());
+    let error_msg = result.error.unwrap();
+    assert!(error_msg.contains("使用了 base_url/baseUrl 变量，但是没有在当前环境中配置它"));
+}
+

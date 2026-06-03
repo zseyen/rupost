@@ -120,9 +120,28 @@ impl TestExecutor {
         context: &mut VariableContext,
         source: Option<String>,
     ) -> TestResult {
+        // 开始计时
+        let start = Instant::now();
+
         // 1. 变量替换
         // 替换 URL
         parsed.url = VariableResolver::resolve(&parsed.url, context);
+
+        let method = parsed.method_or_default().to_string();
+        let url = parsed.url.clone();
+        let name = parsed.name().map(|s| s.to_string());
+
+        // 检查未配置的 base_url/baseUrl 变量
+        if parsed.url.contains("{{base_url}}") || parsed.url.contains("{{baseUrl}}") {
+            return TestResult::error(
+                request_number,
+                name,
+                method,
+                url,
+                "使用了 base_url/baseUrl 变量，但是没有在当前环境中配置它。请在 rupost.toml 对应的环境配置 base_url，或者在执行命令时使用 --env 选项指定环境 (如 `--env dev`)，或使用 `-v base_url=...` 传入变量。".to_string(),
+                start.elapsed(),
+            );
+        }
 
         // 替换 Headers
         for (_key, value) in &mut parsed.headers {
@@ -146,12 +165,6 @@ impl TestExecutor {
             *body = VariableResolver::resolve(body, context);
         }
 
-        let method = parsed.method_or_default().to_string();
-        let url = parsed.url.clone();
-        let name = parsed.name().map(|s| s.to_string());
-
-        // 开始计时
-        let start = Instant::now();
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
         let assertions_to_eval = parsed.metadata.assertions.clone();

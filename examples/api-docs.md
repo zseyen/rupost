@@ -18,7 +18,7 @@
 最简单的 GET 请求示例，返回请求信息。
 
 ```http
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 ```
 
 **期望响应**:
@@ -30,7 +30,7 @@ GET https://httpbin.org/get
 发送 JSON 数据到服务器。
 
 ```rest
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -52,7 +52,7 @@ Content-Type: application/json
 使用 HTTP Basic 认证。
 
 ```http
-GET https://httpbin.org/basic-auth/user/passwd
+GET https://httpbingo.org/basic-auth/user/passwd
 Authorization: Basic dXNlcjpwYXNzd2Q=
 ```
 
@@ -63,7 +63,7 @@ Authorization: Basic dXNlcjpwYXNzd2Q=
 使用 Bearer Token 认证。
 
 ```rest
-GET https://httpbin.org/bearer
+GET https://httpbingo.org/bearer
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 ```
 
@@ -76,7 +76,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 这个端点返回你发送的所有 headers。
 
 ```http
-GET https://httpbin.org/headers
+GET https://httpbingo.org/headers
 User-Agent: RuPost/1.0
 X-Custom-Header: 自定义值
 Accept-Language: zh-CN
@@ -87,7 +87,7 @@ Accept-Language: zh-CN
 可以通过查询参数设置响应 headers。
 
 ```rest
-GET https://httpbin.org/response-headers?FOO=BAR&BIZ=BAZ
+GET https://httpbingo.org/response-headers?FOO=BAR&BIZ=BAZ
 ```
 
 ### POST Form Data
@@ -95,7 +95,7 @@ GET https://httpbin.org/response-headers?FOO=BAR&BIZ=BAZ
 发送表单数据。
 
 ```http
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/x-www-form-urlencoded
 
 username=alice&password=secret123
@@ -112,25 +112,25 @@ username=alice&password=secret123
 #### 成功 - 200 OK
 
 ```http
-GET https://httpbin.org/status/200
+GET https://httpbingo.org/status/200
 ```
 
 #### 重定向 - 302 Found
 
 ```rest
-GET https://httpbin.org/status/302
+GET https://httpbingo.org/status/302
 ```
 
 #### 客户端错误 - 404 Not Found
 
 ```http
-GET https://httpbin.org/status/404
+GET https://httpbingo.org/status/404
 ```
 
 #### 服务端错误 - 500 Server Error
 
 ```http
-GET https://httpbin.org/status/500
+GET https://httpbingo.org/status/500
 ```
 
 ### 延迟响应
@@ -138,7 +138,7 @@ GET https://httpbin.org/status/500
 模拟慢速 API，延迟 2 秒后响应。
 
 ```rest
-GET https://httpbin.org/delay/2
+GET https://httpbingo.org/delay/2
 ```
 
 > **注意**: 适合测试超时配置。
@@ -148,7 +148,7 @@ GET https://httpbin.org/delay/2
 生成一个随机 UUID。
 
 ```http
-GET https://httpbin.org/uuid
+GET https://httpbingo.org/uuid
 ```
 
 **示例响应**:
@@ -163,7 +163,7 @@ GET https://httpbin.org/uuid
 返回一个示例 JSON 对象。
 
 ```rest
-GET https://httpbin.org/json
+GET https://httpbingo.org/json
 Accept: application/json
 ```
 
@@ -176,7 +176,7 @@ Accept: application/json
 测试 HTTP 重定向。
 
 ```http
-GET https://httpbin.org/redirect/3
+GET https://httpbingo.org/redirect/3
 ```
 
 这会进行 3 次重定向后返回最终结果。
@@ -186,13 +186,13 @@ GET https://httpbin.org/redirect/3
 #### 设置 Cookie
 
 ```rest
-GET https://httpbin.org/cookies/set?name=value
+GET https://httpbingo.org/cookies/set?name=value
 ```
 
 #### 读取 Cookie
 
 ```http
-GET https://httpbin.org/cookies
+GET https://httpbingo.org/cookies
 Cookie: name=value
 ```
 
@@ -201,7 +201,7 @@ Cookie: name=value
 获取一个 JPEG 图片（注意：返回的是图片数据，不是 JSON）。
 
 ```rest
-GET https://httpbin.org/image/jpeg
+GET https://httpbingo.org/image/jpeg
 Accept: image/jpeg
 ```
 
@@ -214,7 +214,7 @@ Accept: image/jpeg
 返回指定字节数的随机数据。
 
 ```http
-GET https://httpbin.org/bytes/1024
+GET https://httpbingo.org/bytes/1024
 ```
 
 以上示例返回 1KB 的随机数据。
@@ -222,7 +222,7 @@ GET https://httpbin.org/bytes/1024
 ### 流式响应
 
 ```rest
-GET https://httpbin.org/stream/10
+GET https://httpbingo.org/stream/10
 ```
 
 返回 10 行流式 JSON 数据。
@@ -235,7 +235,7 @@ GET https://httpbin.org/stream/10
 
 1. **测试单个请求**:
    ```bash
-   rupost run "GET https://httpbin.org/get"
+   rupost run "GET https://httpbingo.org/get"
    ```
 
 2. **运行整个文档**:
@@ -245,7 +245,7 @@ GET https://httpbin.org/stream/10
 
 3. **使用环境变量** (Phase 3):
    ```bash
-   export BASE_URL=https://httpbin.org
+   export BASE_URL=https://httpbingo.org
    rupost test api-docs.md --env production
    ```
 

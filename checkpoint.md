@@ -19,10 +19,17 @@
   2. 在 `TestExecutor::execute_one` 变量替换步骤后，增加了针对 URL 是否仍然包含原始占位符 `{{base_url}}` 或 `{{baseUrl}}` 的检测。若发现未替换（说明当前环境未配置此变量），则直接以 `TestResult::error` 返回高度易读的中文友好提示，并不再发起网络请求。
   3. 在 `tests/variable_integration_test.rs` 中新增了 `test_unconfigured_base_url_error` 与 `test_unconfigured_base_url_camel_case_error` 集成测试，验证提示拦截逻辑符合预期。
   4. 全量跑通了 121 个单元与集成测试。
+- **修复示例目录中 httpbin.org 503 报错与 exists 断言 Bug**：
+  1. 修复了 `examples/` 目录下全部 `.http` 与 `.md` 文件在请求 `httpbin.org` 时的 503 连通失败问题，统一迁移测试源至稳定的 `httpbingo.org`。
+  2. 修复了断言系统在 `exists` 判定时遇到 JSON 对象（Object）与数组（Array）字段会误报不匹配/不存在的缺陷。在 `AssertValue` 中追加了 `Object` 与 `Array` 变体，使得复杂类型字段的“存在性断言”能够获得正确处理。
+  3. 新增了 `test_evaluate_exists_object_and_array_success` 单元测试，并同步迁移了相关集成测试中的硬编码断言路径。
+  4. 重构并升级了 `examples/README.md`，详细划分为“免配置开箱即用”和“多环境变量执行”两类操作说明，极大降低了用户学习和执行示例的门槛。
 - **JJ 代码版本化提交**：
   - 提交 `docs: fix CLI commands in cookie_demo.md`
   - 提交 `feat: check unconfigured base_url and display friendly error`
+  - 提交 `feat(examples,assertion): resolve httpbin.org 503 errors and fix exists assertion bug on JSON objects/arrays`
 
 ## 下一步
 - 开启多文件与文件夹分类执行测试的编码实现（根据已提交的方案文档）。
+
 

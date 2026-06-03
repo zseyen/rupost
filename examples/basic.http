@@ -2,13 +2,13 @@
 
 # GET request
 # @name get-users
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 
 ###
 
 # POST request with JSON body
 # @name create-user
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -21,10 +21,10 @@ Content-Type: application/json
 
 # GET request with query parameters
 # @name search-users
-GET https://httpbin.org/get?name=Alice&status=active
+GET https://httpbingo.org/get?name=Alice&status=active
 
 ###
 
 # DELETE request
 # @name delete-user
-DELETE https://httpbin.org/delete
+DELETE https://httpbingo.org/delete

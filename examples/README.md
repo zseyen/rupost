@@ -36,48 +36,65 @@
 
 ## 使用方法
 
-### 1. 准备配置文件
+由于部分高级示例使用了变量（如 `{{base_url}}` 或 `{{baseUrl}}`），如果直接运行未配置环境的用例，引擎会友好拦截并提示未配置错误。我们把示例分为 **免配置直接执行** 与 **多环境变量执行** 两类：
 
-将 `rupost.toml` 复制到项目根目录：
+### 1. 免配置直接执行 (开箱即用)
+
+对于不含自定义变量、直接请求公共测试源（`https://httpbingo.org`）的示例，可以直接输入命令执行（如果未安装全局命令，可使用 `cargo run -- test` 替代 `rupost test`）：
+
+```bash
+# 运行基础 HTTP 示例
+rupost test examples/basic.http
+
+# 运行断言机制示例 (HTTP 文件版)
+rupost test examples/assertions.http
+
+# 运行断言机制示例 (Markdown 包含版)
+rupost test examples/assertions.md
+
+# 运行多请求链式批量执行
+rupost test examples/multiple.http
+
+# 运行 Markdown 嵌套代码块提取示例
+rupost test examples/nested-blocks.md
+```
+
+### 2. 准备多环境变量
+
+若要运行包含业务逻辑、使用 `{{base_url}}` 等变量的示例（如 `basic-api.http`, `auth-flow.http` 等），请按照以下步骤准备变量上下文：
+
+#### 步骤 1: 拷贝配置文件
+将示例中的 `rupost.toml` 复制到项目根目录（该配置默认将 `dev` / `test` 环境的 `base_url` 设置为稳定的公共源 `https://httpbingo.org`）：
 
 ```bash
 cp examples/rupost.toml .
 ```
 
-### 2. 设置环境变量（可选）
-
-如果使用系统环境变量：
+#### 步骤 2: 设置环境变量（可选）
+如果配置文件中引用了系统环境变量（如 `${DEV_API_KEY}`）：
 
 ```bash
 export DEV_API_KEY="your-dev-api-key"
 export PROD_API_KEY="your-prod-api-key"
 ```
 
-### 3. 运行测试
+#### 步骤 3: 指定环境执行
+运行时通过 `-e` 或 `--env` 指定加载哪个环境配置，以便引擎能够顺利解析出 `base_url`：
 
-**使用默认环境：**
 ```bash
-rupost test examples/basic-api.http
-```
-
-**指定环境：**
-```bash
+# 指定 dev 环境运行 basic-api.http
 rupost test examples/basic-api.http --env dev
-rupost test examples/auth-flow.http --env prod
-```
 
-**覆盖变量：**
-```bash
-rupost test examples/basic-api.http --env dev --var api_key=custom-key
-```
-
-**测试 Markdown 文件：**
-```bash
+# 运行 Markdown 格式的完整 API 测试文档
 rupost test examples/api-testing.md --env dev
-```
 
-**详细输出：**
-```bash
+# 在运行 cookie 演示时使用 dev 环境进行状态保持
+rupost test examples/cookie_demo.md --env dev
+
+# 覆盖配置文件中的变量
+rupost test examples/basic-api.http --env dev --var api_key=custom-key
+
+# 开启详细输出查看调试日志
 rupost test examples/basic-api.http --env dev --verbose
 ```
 

@@ -9,14 +9,14 @@
 获取指定用户的详细信息。
 
 ```http
-GET https://httpbin.org/get?user_id=123
+GET https://httpbingo.org/get?user_id=123
 Accept: application/json
 ```
 
 ### 创建新用户
 
 ```rest
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -29,7 +29,7 @@ Content-Type: application/json
 ### 更新用户信息
 
 ```http
-PUT https://httpbin.org/put
+PUT https://httpbingo.org/put
 Content-Type: application/json
 
 {
@@ -43,11 +43,11 @@ Content-Type: application/json
 ### 搜索用户
 
 ```rest
-GET https://httpbin.org/get?q=developer&page=1&limit=10
+GET https://httpbingo.org/get?q=developer&page=1&limit=10
 ```
 
 ### 删除用户
 
 ```http
-DELETE https://httpbin.org/delete?user_id=123
+DELETE https://httpbingo.org/delete?user_id=123
 ```

@@ -9,7 +9,7 @@
 下面是一个四反引号的例子（用于文档）：
 
 ````http
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 ````
 
 这个不会被执行，因为它是展示用的。
@@ -19,7 +19,7 @@ GET https://httpbin.org/get
 ### 正常的 HTTP 请求
 
 ```rest
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 User-Agent: RuPost/Test
 ```
 
@@ -28,7 +28,7 @@ User-Agent: RuPost/Test
 有时候文档中需要展示 JSON 响应格式：
 
 ```http
-GET https://httpbin.org/json
+GET https://httpbingo.org/json
 Accept: application/json
 ```
 
@@ -48,5 +48,5 @@ Accept: application/json
 @name uuid-generator
 @assert status == 200
 @assert body.uuid exists
-GET https://httpbin.org/uuid
+GET https://httpbingo.org/uuid
 ```

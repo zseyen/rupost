@@ -5,14 +5,14 @@
 @name capture_headers
 @capture server_date from header.date
 @capture content_type from header.content-type
-GET https://httpbin.org/response-headers?X-Custom-Header=test_value
+GET https://httpbingo.org/response-headers?X-Custom-Header=test_value
 
 ### 2. Verify Header Capture
 # Echo back the captured headers
 @name verify_headers
 @assert body.headers.X-Echo-Date == "{{server_date}}"
 @assert body.headers.X-Echo-Type == "{{content_type}}"
-GET https://httpbin.org/headers
+GET https://httpbingo.org/headers
 X-Echo-Date: {{server_date}}
 X-Echo-Type: {{content_type}}
 
@@ -21,7 +21,7 @@ X-Echo-Type: {{content_type}}
 @name deep_capture
 @capture user_city from body.json.address.city
 @capture user_zip from body.json.address.zipcode
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -38,7 +38,7 @@ Content-Type: application/json
 ### 4. Verify Nested Capture
 @name verify_nested
 @assert body.json.city == "Wonderland"
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -50,12 +50,12 @@ Content-Type: application/json
 # A: Get UUID
 @name chain_step_1
 @capture id_1 from body.uuid
-GET https://httpbin.org/uuid
+GET https://httpbingo.org/uuid
 
 ### 6. Chain Step 2
 @name chain_step_2
 @capture prev_id_echo from body.json.prev_id
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -65,7 +65,7 @@ Content-Type: application/json
 ### 7. Chain Step 3
 @name chain_step_3
 @assert body.json.val == "{{id_1}}"
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -76,13 +76,13 @@ Content-Type: application/json
 # Trying to capture a non-existent field. Should log error but not crash.
 @name missing_field
 @capture phantom from body.non.existent.field
-GET https://httpbin.org/json
+GET https://httpbingo.org/json
 
 ### 9. Verify Missing Variable
 # The variable {{phantom}} should remain unresolved (literal string)
 @name verify_missing
 @assert body.json.test == "{{phantom}}"
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {

@@ -9,7 +9,7 @@
 ```http
 @name success-request
 @assert status == 200
-GET https://httpbin.org/status/200
+GET https://httpbingo.org/status/200
 ```
 
 ### 创建资源
@@ -18,7 +18,7 @@ GET https://httpbin.org/status/200
 @name created-resource
 @assert status == 201
 @assert headers.Content-Type contains "json"
-POST https://httpbin.org/status/201
+POST https://httpbingo.org/status/201
 ```
 
 ## Body 断言
@@ -30,7 +30,7 @@ POST https://httpbin.org/status/201
 @assert status == 200
 @assert body.url exists
 @assert body.headers exists
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 ```
 
 ### 嵌套字段断言
@@ -40,7 +40,7 @@ GET https://httpbin.org/get
 @assert status == 200
 @assert body.json.name == "测试"
 @assert body.json.active == true
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -59,7 +59,7 @@ Content-Type: application/json
 @assert status == 200
 @assert headers.Content-Type exists
 @assert headers.Server exists
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 ```
 
 ### 自定义响应头
@@ -68,7 +68,7 @@ GET https://httpbin.org/get
 @name custom-response-headers
 @assert status == 200
 @assert headers.X-Custom-Header == "test-value"
-GET https://httpbin.org/response-headers?X-Custom-Header=test-value
+GET https://httpbingo.org/response-headers?X-Custom-Header=test-value
 ```
 
 ## @name 覆盖测试
@@ -80,7 +80,7 @@ GET https://httpbin.org/response-headers?X-Custom-Header=test-value
 ```http
 @name this-is-custom-name
 @assert status == 200
-GET https://httpbin.org/get
+GET https://httpbingo.org/get
 ```
 
 ## 复杂断言组合
@@ -91,10 +91,10 @@ GET https://httpbin.org/get
 @name full-validation
 @assert status == 200
 @assert headers.Content-Type contains "application/json"
-@assert body.url == "https://httpbin.org/post"
+@assert body.url == "https://httpbingo.org/post"
 @assert body.json.email == "test@example.com"
 @assert body.json.age == 30
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {

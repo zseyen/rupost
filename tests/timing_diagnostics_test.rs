@@ -30,7 +30,7 @@ async fn test_diagnostics_probe_localhost() {
 #[tokio::test]
 async fn test_diagnostics_probe_public_url() {
     // 探测公网公共接口以验证 DNS 和 TCP
-    let probe_res = DiagnosticsProber::probe_connection("https://httpbin.org/get").await;
+    let probe_res = DiagnosticsProber::probe_connection("https://httpbingo.org/get").await;
     
     // 如果有公网连接则测试通过
     if let Ok((dns, tcp)) = probe_res {

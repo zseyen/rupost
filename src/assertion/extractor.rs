@@ -60,9 +60,8 @@ fn json_value_to_assert_value(value: &serde_json::Value) -> Result<AssertValue, 
         serde_json::Value::String(s) => Ok(AssertValue::String(s.clone())),
         serde_json::Value::Bool(b) => Ok(AssertValue::Bool(*b)),
         serde_json::Value::Null => Ok(AssertValue::Null),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(
-            AssertError::ExtractionError("Cannot compare arrays or objects directly".to_string()),
-        ),
+        serde_json::Value::Array(_) => Ok(AssertValue::Array),
+        serde_json::Value::Object(_) => Ok(AssertValue::Object),
     }
 }
 

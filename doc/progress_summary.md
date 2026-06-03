@@ -215,6 +215,8 @@ ParsedRequest → Request
 | 解析器优化 | `doc/parser_optimization_suggestions.md` | ✅ |
 | Stage 4 改进 | `doc/stage4_improvements.md` | ✅ |
 | Reporter 集成 | `doc/stage4_reporter_integration.md` | ✅ |
+| 竞品分析 | `doc/competition/competitive_analysis.md` | ✅ (补充 Keploy & Reqable) |
+| 重放专题分析 | `doc/competition/traffic_replay_analysis.md` | ✅ (新建) |
 
 ### 需要更新的文档
 

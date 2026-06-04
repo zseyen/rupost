@@ -20,6 +20,11 @@ pub struct TestExecutor {
 }
 
 impl TestExecutor {
+    /// Check if the executor has cookie support enabled.
+    pub fn has_cookies(&self) -> bool {
+        self.cookie_middleware.is_some()
+    }
+
     /// Create a new executor without cookie support.
     pub fn new() -> Self {
         Self {

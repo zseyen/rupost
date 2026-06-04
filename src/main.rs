@@ -8,13 +8,19 @@ use rupost::history::selector::{self, SelectionStrategy};
 use rupost::history::storage::get_storage;
 use rupost::middleware::resolve_cookie_path;
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
-use rupost::runner::{TestExecutor, TestReporter, TestSummary};
+use rupost::runner::{BatchExecutor, DirectoryScanner, TestExecutor, TestReporter, WorkflowGraph};
 use rupost::variable::{ConfigLoader, VariableContext};
+use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::time::Instant;
 
 struct RunTestOptions<'a> {
-    file_path: &'a str,
+    paths: Vec<String>,
+    mode: &'a str,
+    concurrency: usize,
+    report: &'a str,
+    fail_fast: bool,
     env_name: Option<&'a str>,
     var_overrides: &'a [String],
     verbose: bool,
@@ -32,7 +38,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Commands::Test {
-            path,
+            paths,
+            mode,
+            concurrency,
+            report,
+            fail_fast,
             env,
             var,
             verbose,
@@ -40,7 +50,11 @@ async fn main() -> Result<()> {
             cookie_file,
         }) => {
             let options = RunTestOptions {
-                file_path: &path,
+                paths,
+                mode: &mode,
+                concurrency,
+                report: &report,
+                fail_fast,
                 env_name: env.as_deref(),
                 var_overrides: &var,
                 verbose,
@@ -102,7 +116,31 @@ async fn main() -> Result<()> {
 }
 
 async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
-    // 1. 加载配置并构建变量上下文
+    // 1. 递归扫描文件
+    let scanned_files = DirectoryScanner::scan(&options.paths)?;
+    if scanned_files.is_empty() {
+        println!("No test files found.");
+        return Ok(());
+    }
+
+    // 2. 解析所有文件
+    let mut files_map = HashMap::new();
+    let mut parse_pairs = Vec::new();
+    for path in scanned_files {
+        let parsed = if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            MarkdownFileParser::parse_file(&path)?
+        } else {
+            HttpFileParser::parse_file(&path)?
+        };
+        files_map.insert(path.clone(), parsed.clone());
+        parse_pairs.push((path, parsed));
+    }
+
+    // 3. 拓扑排序解析依赖
+    let graph = WorkflowGraph::new(&parse_pairs);
+    let execution_order = graph.resolve_execution_order()?;
+
+    // 4. 加载配置并构建变量上下文
     let mut var_context = if options.env_name.is_some() || !options.var_overrides.is_empty() {
         let config = ConfigLoader::find_and_load().unwrap_or_default();
 
@@ -118,24 +156,10 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
         VariableContext::new()
     };
 
-    // 2. 根据文件扩展名选择解析器
-    let path = Path::new(options.file_path);
-    let parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
-        MarkdownFileParser::parse_file(path)?
-    } else {
-        HttpFileParser::parse_file(path)?
-    };
-
-    let total = parsed_file.requests.len();
-
-    // 4. 创建报告器并打印开始信息
-    let reporter = TestReporter::new(options.verbose);
-    reporter.print_header(options.file_path, total);
-
-    // 5. 执行所有请求
+    // 5. 构建 TestExecutor
     let mut executor = if options.no_cookies {
         TestExecutor::new()
-    } else if let Some(cookie_path) = options.cookie_file {
+    } else if let Some(cookie_path) = &options.cookie_file {
         let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env_name);
         TestExecutor::with_cookies(resolved)?
     } else {
@@ -145,19 +169,44 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
     executor = executor
         .with_debug(options.debug)
         .with_debug_on_failure(options.debug_on_failure);
-    let results = executor.execute_all(parsed_file, &mut var_context).await?;
 
-    // 6. 打印每个结果
-    for result in &results {
-        reporter.print_result(result);
+    let batch_executor = BatchExecutor::new(executor);
+
+    // 6. 执行批处理
+    let start_time = Instant::now();
+    let batch_results = batch_executor
+        .execute_batch(
+            execution_order,
+            files_map,
+            &mut var_context,
+            options.mode,
+            options.concurrency,
+            options.fail_fast,
+        )
+        .await?;
+    let duration = start_time.elapsed();
+
+    // 7. 渲染与汇报结果
+    let has_failure = batch_results
+        .iter()
+        .any(|(_, res_list)| res_list.iter().any(|r| !r.success));
+
+    if options.report == "json" {
+        TestReporter::report_json(&batch_results, &mut std::io::stdout())?;
+    } else {
+        let reporter = TestReporter::new(options.verbose);
+        for (path, file_results) in &batch_results {
+            let path_str = path.to_string_lossy().to_string();
+            reporter.print_header(&path_str, file_results.len());
+            for r in file_results {
+                reporter.print_result(r);
+            }
+        }
+        TestReporter::print_batch_summary(&batch_results, duration);
     }
 
-    // 7. 打印摘要
-    let summary = TestSummary::from_results(&results);
-    reporter.print_summary(&summary);
-
     // 8. 设置退出码
-    if summary.failed > 0 {
+    if has_failure {
         std::process::exit(1);
     }
 

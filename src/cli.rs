@@ -39,8 +39,25 @@ pub enum Commands {
     /// Run requests from a file
     #[command(alias = "t")]
     Test {
-        /// Path to the .http file
-        path: String,
+        /// Paths to .http/.md files or directories containing them
+        #[arg(required = true, value_name = "PATHS")]
+        paths: Vec<String>,
+
+        /// 执行模式 (sequential 或 parallel)
+        #[arg(long, default_value = "sequential")]
+        mode: String,
+
+        /// 并行模式下的并发数
+        #[arg(long, default_value = "4")]
+        concurrency: usize,
+
+        /// 报告输出格式 (terminal 或 json)
+        #[arg(long, default_value = "terminal")]
+        report: String,
+
+        /// 遇到第一个失败文件时立即停止
+        #[arg(long)]
+        fail_fast: bool,
 
         /// Environment name (e.g., dev, staging, prod)
         #[arg(short, long)]

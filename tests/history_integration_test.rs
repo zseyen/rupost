@@ -39,7 +39,8 @@ async fn test_history_recording() {
 
     let parsed_file = ParsedFile {
         requests: vec![parsed_request],
-        source_path: None, // Added field
+        source_path: None,
+        dependencies: Vec::new(),
     };
     let mut context = VariableContext::new();
 

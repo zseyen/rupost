@@ -91,6 +91,9 @@ pub struct ParsedFile {
 
     /// 源文件路径（用于错误报告）
     pub source_path: Option<PathBuf>,
+
+    /// 文件级别的依赖声明 (### @depends-on <filename>)
+    pub dependencies: Vec<String>,
 }
 
 impl ParsedFile {
@@ -99,6 +102,7 @@ impl ParsedFile {
         Self {
             requests: Vec::new(),
             source_path: None,
+            dependencies: Vec::new(),
         }
     }
 

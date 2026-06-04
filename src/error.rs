@@ -32,6 +32,9 @@ pub enum RupostError {
     #[error("请求执行失败: {0}")]
     RequestExecutionFailed(String),
 
+    #[error("循环依赖错误: {0}")]
+    CyclicDependency(String),
+
     #[error("{0}")]
     Other(String),
 }

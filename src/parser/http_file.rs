@@ -18,6 +18,9 @@ impl HttpFileParser {
     pub fn parse_content(content: &str) -> ParseResult<ParsedFile> {
         let mut file = ParsedFile::new();
 
+        // 提取依赖
+        file.dependencies = Self::extract_dependencies(content);
+
         // 按 ### 分割请求块
         let blocks = Self::split_by_separator(content);
 
@@ -36,6 +39,24 @@ impl HttpFileParser {
         }
 
         Ok(file)
+    }
+
+    /// 提取全局依赖
+    fn extract_dependencies(content: &str) -> Vec<String> {
+        let mut deps = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if (trimmed.starts_with("###") || trimmed.starts_with('#')) && trimmed.contains("@depends-on") {
+                if let Some(pos) = trimmed.find("@depends-on") {
+                    let dep = trimmed[pos + "@depends-on".len()..].trim();
+                    let dep = dep.trim_end_matches("-->").trim();
+                    if !dep.is_empty() {
+                        deps.push(dep.to_string());
+                    }
+                }
+            }
+        }
+        deps
     }
 
     /// 按 ### 分隔符分割内容

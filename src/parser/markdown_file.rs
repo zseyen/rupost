@@ -21,11 +21,14 @@ impl MarkdownFileParser {
 
         let mut parsed_file = ParsedFile::new();
 
+        // 提取依赖
+        parsed_file.dependencies = Self::extract_dependencies(content);
+
         for block in code_blocks {
             // 解析代码块内容为请求
             let mut block_parsed = HttpFileParser::parse_content(&block.content)?;
 
-            // 为每个请求设置名称（如果没有明确的 @name）
+            // 为每个请求设置名称（如果没有明确 of @name）
             for req in &mut block_parsed.requests {
                 if req.metadata.name.is_none() {
                     req.metadata.name = block.preceding_header.clone();
@@ -36,6 +39,24 @@ impl MarkdownFileParser {
         }
 
         Ok(parsed_file)
+    }
+
+    /// 提取全局依赖
+    fn extract_dependencies(content: &str) -> Vec<String> {
+        let mut deps = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if (trimmed.starts_with("###") || trimmed.starts_with('#') || trimmed.starts_with("<!--")) && trimmed.contains("@depends-on") {
+                if let Some(pos) = trimmed.find("@depends-on") {
+                    let dep = trimmed[pos + "@depends-on".len()..].trim();
+                    let dep = dep.trim_end_matches("-->").trim();
+                    if !dep.is_empty() {
+                        deps.push(dep.to_string());
+                    }
+                }
+            }
+        }
+        deps
     }
 
     /// 提取所有 http/rest 代码块（使用 pulldown-cmark）

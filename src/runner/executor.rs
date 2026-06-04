@@ -1,12 +1,12 @@
 use crate::{Result, RupostError};
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
 use crate::history::model::RequestSnapshot;
-use crate::http::Client;
+use crate::http::{Client, Request};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture_from_response};
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
@@ -172,7 +172,7 @@ impl TestExecutor {
 
         // [History] 创建请求快照 (在 parsed 被 move 之前)
         let request_snapshot = {
-            let mut headers = reqwest::header::HeaderMap::new();
+            let mut headers = HeaderMap::new();
             for (k, v) in &parsed.headers {
                 if let (Ok(n), Ok(v)) = (
                     HeaderName::from_bytes(k.as_bytes()),
@@ -191,7 +191,7 @@ impl TestExecutor {
         };
 
         // 转换为 Request
-        let request = match crate::http::Request::try_from(parsed) {
+        let request = match Request::try_from(parsed) {
             Ok(req) => req,
             Err(e) => {
                 return TestResult::error(

@@ -3,7 +3,7 @@
 
 # 开发环境
 [environments.dev]
-base_url = "https://httpbingo.org/anything"
+base_url = "https://httpbingo.org"
 api_version = "v1"
 # 使用系统环境变量
 api_key = "${DEV_API_KEY}"
@@ -14,12 +14,21 @@ test_user_password = "password123"
 
 # 测试环境
 [environments.test]
-base_url = "https://httpbingo.org/anything"
+base_url = "https://httpbingo.org"
 api_version = "v1"
 api_key = "test-key-12345"
 timeout = "60"
 test_user_email = "tester@example.com"
 test_user_password = "test123"
+
+# Mock 环境（使用 httpbingo.org 的 anything 万能反射端点跑通所有业务 API 示例）
+[environments.mock]
+base_url = "https://httpbingo.org/anything"
+api_version = "v1"
+api_key = "mock-key-12345"
+timeout = "30"
+test_user_email = "test@example.com"
+test_user_password = "password123"
 
 # 预发布环境
 [environments.staging]

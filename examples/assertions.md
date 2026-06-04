@@ -17,7 +17,7 @@ GET https://httpbingo.org/status/200
 ```rest
 @name created-resource
 @assert status == 201
-@assert headers.Content-Type contains "json"
+@assert headers.Content-Type contains "text/plain"
 POST https://httpbingo.org/status/201
 ```
 

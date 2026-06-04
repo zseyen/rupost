@@ -96,6 +96,7 @@ GET https://httpbingo.org/json
 
 ### 测试 10: 失败的断言（预期失败）
 @name Failing Assertion Test
+@skip 演示失败断言
 @assert status == 404
 @assert body.message == "Not Found"
 GET https://httpbingo.org/status/200

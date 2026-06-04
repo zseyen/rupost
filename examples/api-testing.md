@@ -109,6 +109,8 @@ Accept: application/json
 ### 上传头像
 
 ```http
+@name upload-avatar
+@skip 暂不支持 multipart 上传
 POST {{base_url}}/{{api_version}}/upload/avatar
 Content-Type: multipart/form-data
 Authorization: Bearer {{api_key}}
@@ -119,6 +121,8 @@ file=@/path/to/avatar.jpg
 ### 上传文档
 
 ```http
+@name upload-document
+@skip 暂不支持 multipart 上传
 POST {{base_url}}/{{api_version}}/upload/document
 Content-Type: multipart/form-data
 Authorization: Bearer {{api_key}}
@@ -140,7 +144,7 @@ Accept: application/json
 ### 全文搜索
 
 ```http
-GET {{base_url}}/{{api_version}}/search?q=Rust 教程&type=post
+GET {{base_url}}/{{api_version}}/search?q=Rust&type=post
 Authorization: Bearer {{api_key}}
 Accept: application/json
 ```

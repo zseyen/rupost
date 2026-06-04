@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{Result, RupostError};
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
 use crate::history::model::RequestSnapshot;
 use crate::http::Client;
@@ -138,7 +138,7 @@ impl TestExecutor {
                 name,
                 method,
                 url,
-                "使用了 base_url/baseUrl 变量，但是没有在当前环境中配置它。请在 rupost.toml 对应的环境配置 base_url，或者在执行命令时使用 --env 选项指定环境 (如 `--env dev`)，或使用 `-v base_url=...` 传入变量。".to_string(),
+                RupostError::BaseUrlNotConfigured.to_user_friendly_string(),
                 start.elapsed(),
             );
         }
@@ -191,7 +191,7 @@ impl TestExecutor {
         };
 
         // 转换为 Request
-        let request = match parsed.try_into() {
+        let request = match crate::http::Request::try_from(parsed) {
             Ok(req) => req,
             Err(e) => {
                 return TestResult::error(
@@ -199,7 +199,7 @@ impl TestExecutor {
                     name,
                     method,
                     url,
-                    format!("Failed to build request: {}", e),
+                    RupostError::RequestBuildFailed(e.to_string()).to_user_friendly_string(),
                     start.elapsed(),
                 );
             }
@@ -298,7 +298,7 @@ impl TestExecutor {
                     name,
                     method,
                     url,
-                    format!("Request failed: {}", e),
+                    RupostError::RequestExecutionFailed(e.to_string()).to_user_friendly_string(),
                     start.elapsed(),
                 );
 

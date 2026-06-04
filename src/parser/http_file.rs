@@ -75,76 +75,75 @@ impl HttpFileParser {
 
     /// 解析单个请求块
     fn parse_request_block(block: &str, start_line: usize) -> ParseResult<Option<ParsedRequest>> {
-        let lines: Vec<&str> = block.lines().collect();
-
-        if lines.is_empty() {
-            return Ok(None);
-        }
-
         let mut request = ParsedRequest::new(start_line);
-        let mut line_index = 0;
+        let mut http_lines = Vec::new();
         let mut current_line = start_line;
 
-        // 解析元数据和跳过空行/注释
-        while line_index < lines.len() {
-            let line = lines[line_index].trim();
-
-            if line.is_empty() || Self::is_comment(line) {
-                line_index += 1;
-                current_line += 1;
-                continue;
-            }
-
-            // 解析元数据
-            if line.starts_with('@') {
-                if let Some(metadata) = metadata::parse_metadata(line)? {
+        // 预过滤并提取合法的元数据指令
+        for line in block.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('@') {
+                if let Some(metadata) = metadata::parse_metadata(trimmed)? {
                     metadata::apply_metadata(&metadata, &mut request.metadata);
+                    current_line += 1;
+                    continue; // 成功提取元数据，该行不作为 HTTP 报文行
                 }
+            }
+            http_lines.push((line, current_line));
+            current_line += 1;
+        }
+
+        let mut line_index = 0;
+
+        // 跳过前导空行和注释
+        while line_index < http_lines.len() {
+            let (line, _) = http_lines[line_index];
+            let trimmed = line.trim();
+            if trimmed.is_empty() || Self::is_comment(trimmed) {
                 line_index += 1;
-                current_line += 1;
                 continue;
             }
-
-            // 遇到非元数据行，结束元数据解析
             break;
         }
 
-        if line_index >= lines.len() {
-            return Ok(None); // 只有元数据，没有请求
+        if line_index >= http_lines.len() {
+            return Ok(None); // 没有请求内容
         }
 
         // 解析请求行（方法 + URL）
-        let request_line = lines[line_index].trim();
-        Self::parse_request_line(request_line, current_line, &mut request)?;
+        let (request_line, req_line_num) = http_lines[line_index];
+        Self::parse_request_line(request_line.trim(), req_line_num, &mut request)?;
         line_index += 1;
 
         // 解析 Headers
-        while line_index < lines.len() {
-            let line = lines[line_index].trim();
+        while line_index < http_lines.len() {
+            let (line, _) = http_lines[line_index];
+            let trimmed = line.trim();
 
             // 空行表示 headers 结束，body 开始
-            if line.is_empty() {
+            if trimmed.is_empty() {
                 line_index += 1;
                 break;
             }
 
             // 跳过注释
-            if Self::is_comment(line) {
+            if Self::is_comment(trimmed) {
                 line_index += 1;
                 continue;
             }
 
             // 解析 header
-            if let Some((key, value)) = Self::parse_header(line) {
+            if let Some((key, value)) = Self::parse_header(trimmed) {
                 request.headers.push((key.to_string(), value.to_string()));
             }
 
             line_index += 1;
         }
 
-        // 解析 Body（空行后只内容）
-        if line_index < lines.len() {
-            let body = lines[line_index..].join("\n");
+        // 解析 Body（空行后所有内容）
+        if line_index < http_lines.len() {
+            let body_parts: Vec<&str> = http_lines[line_index..].iter().map(|(l, _)| *l).collect();
+            let body = body_parts.join("\n");
             let body = body.trim();
             if !body.is_empty() {
                 request.body = Some(body.to_string());
@@ -361,6 +360,25 @@ GET http://example.com
         assert_eq!(result.requests[0].metadata.assertions.len(), 2);
         assert_eq!(result.requests[0].metadata.assertions[0], "status == 200");
         assert_eq!(result.requests[0].metadata.assertions[1], "body.id > 0");
+    }
+
+    #[test]
+    fn test_parse_metadata_at_the_end() {
+        let content = r#"
+GET http://example.com
+Content-Type: application/json
+
+{"name": "test"}
+@assert status == 200
+@assert body.success == true
+        "#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests.len(), 1);
+        let req = &result.requests[0];
+        assert_eq!(req.metadata.assertions.len(), 2);
+        assert_eq!(req.metadata.assertions[0], "status == 200");
+        assert_eq!(req.metadata.assertions[1], "body.success == true");
+        assert_eq!(req.body.as_deref(), Some(r#"{"name": "test"}"#));
     }
 
     #[test]

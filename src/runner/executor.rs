@@ -272,9 +272,10 @@ impl TestExecutor {
                     TestResult::success(request_number, name, method, url, response.clone());
                 test_result.assertions = assertion_results;
 
-                // 如果有断言失败，标记测试为失败
-                if test_result.assertions.iter().any(|a| !a.passed) {
-                    test_result.success = false;
+                // 如果有显式断言，则测试的成功与否完全取决于断言是否全部通过；
+                // 否则，默认取决于 HTTP 状态码是否为 2xx。
+                if !test_result.assertions.is_empty() {
+                    test_result.success = test_result.assertions.iter().all(|a| a.passed);
                 }
 
                 // 判断是否需要挂载 timing

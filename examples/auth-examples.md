@@ -60,9 +60,9 @@ Authorization: Bearer token123
 X-API-Key: api-key-456
 X-Request-ID: req-789
 Content-Type: application/json
-@assert status == 200
 
 {
   "action": "authenticate"
 }
+@assert status == 200
 ```

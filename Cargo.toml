@@ -2,7 +2,7 @@
 name = "rupost"
 version = "0.1.0"
 edition = "2024"
-about = "A API test tool based on documents"
+description = "A API test tool based on documents"
 
 [workspace]
 members = [

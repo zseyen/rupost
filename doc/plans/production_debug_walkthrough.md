@@ -1,13 +1,13 @@
-# RuPost 生产调试模式场景驱动 User Story 与架构走查报告
+# RuPost 生产调试模式场景驱动 User Story 与架构走查报告 (修订版)
 
-本报告针对 RuPost 项目规划中 3.0 版本的**生产环境调试与排障模式**进行全方位的深度分析。我们摒弃传统的孤立走查，采用**场景驱动开发 (Scenario-Driven Development)** 的第一性原理：由具体的开发者使用场景，推导出端到端的 User Story 及命令行/TUI 交互流，并以此走查规划中的核心数据结构与 API，找出其潜在的 Gap 与漏洞，最终提供具体的架构演进与修改建议。
+本报告针对 RuPost 项目规划中 3.0 版本的**生产环境调试与排障模式**进行全方位的深度分析。我们采用**场景驱动开发 (Scenario-Driven Development)** 的第一性原理：由具体的开发者使用场景，推导出端到端的 User Story 及命令行/TUI 交互流，并以此走查规划中的核心数据结构与 API，找出其潜在的 Gap 与漏洞，最终提供具体的架构演进与修改建议。
 
 ---
 
 ## 1. 深度扩展的用户画像 (User Personas)
 
 ### 👤 后端排障工程师 - 小李 (Li) — 微服务健康与全链路追踪守护者
-*   **痛点**：生产服务在特定高并发或复杂入参时报 500 错，但本地和 Staging 环境难以重现。面对分布式微服务集群，小李必须人肉 SSH 登录多台主机 grep 日志，或者在庞大的 ELK 平台里大海捞针般比对 Trace ID，极其耗时（通常 1-3 小时）。
+*   **痛点**：生产服务在特定高并发或复杂入参时报 500 错，但本地和 Staging 环境难以重现。面对分布式微服务集群，小李必须人肉 SSH 登录多台主机 grep 日志，或者在庞大的 ELK 平台里大数据量检索比对 Trace ID，极其耗时（通常 1-3 小时）。
 *   **期望**：在请求失败的瞬间，工具能自动抓取并聚合关联的分布式多 Pod 日志和 Trace 链路，并在 3 分钟内定位根因。
 
 ### 👤 技术支持与 QA 工程师 - 小赵 (Zhao) — 线上问题捕获与回归测试员
@@ -167,7 +167,7 @@ $ rupost ws replay ws-session.json --target ws://localhost:8080/chat --speed 1.0
 ---
 
 ### 📖 US 6：本地开发内循环高频调试与 Schema 自动校验 (开发阶段场景)
-> **场景描述**：作为全栈开发，在日常开发迭代中，我希望通过轻量级的 Markdown 文档定义 API，一键执行本地测试。在修改后端代码后，能够随时加载本地 `.env` 的快速局部覆盖，并以极致清晰、高亮易读的红绿 Diff 格式在终端直观看到 Schema 或字段值的偏离，快速进行开发自测。
+> **场景描述**：作为全栈开发，在本地 API 热联调和接口高频重构阶段，我希望通过本地的局部环境变量快速覆盖共享配置，而不会引起 Git 文件冲突；同时可以通过极佳的红绿高亮 Diff 直观看到本地代码修改后，响应体 Schema 的偏离，实现开发内的自测闭环。
 
 #### 💻 CLI 交互设计流：
 ```bash
@@ -211,174 +211,88 @@ $ rupost test api-docs.md --env dev --watch --diff-format pretty
 
 ---
 
-## 4. 针对走查问题的 Clean Architecture 架构演进与修改建议
+## 4. 各阶段功能设计的复用性与可扩展性原则 (Clean Architecture)
 
-为了解决上述走查中发现的 12 项 Gap，我们在 **Clean Architecture** 架构体系（Interface 层、UseCase 层、Domain 层、Infrastructure 层）的指导下，提出如下具体的系统数据结构与接口演进设计方案：
+为了保证 8 个原子化开发阶段之间的代码不发生二次重构，必须从系统设计伊始确立高度的可扩展性与复用性原则：
 
-### 🛠️ 建议 1：解耦 HTTP 局限，重构 Snapshot 为多态会话快照 (解决 Gap 3, 4)
-*   **设计重构**：将 Domain 层的 `Snapshot` 改造为多态 Enum，支持单次 HTTP 与流式 WebSocket / gRPC 时序会话。
-*   **代码演进示意**：
+### 4.1 核心数据结构的可多态扩展
+*   **Snapshot 的流式长连接设计**：阶段 3 定义的 `Snapshot` 结构在底层抽象为 `Exchange` 特性，阶段 7 的 Mock 引擎与阶段 8 的 WebSocket 时序帧，将直接继承此特性，使核心持久化层（`SnapshotRepo`）在阶段 3 开发完成后无需修改。
+
+### 4.2 核心业务逻辑组件的复用
+*   **VariableContext 作为全局计算引擎 (阶段 1 -> 5 & 7)**：阶段 1 交付的级联优先级变量上下文，将直接输出为不可变的 `VariableContext` 结构。该结构被阶段 5 的 Replay 拦截器用于获取最新认证 Token，并被阶段 7 的 Mock 条件变体判定器用于解析计算 JSONPath。
+*   **统一匹配器 (RequestMatcher) 的横向复用 (阶段 3 -> 7 & 4)**：将快照重放（阶段 3）的请求识别算法提炼为统一的 `RequestMatcher` 模块。阶段 7 的 Mock 服务器可 100% 复用此匹配器以支持模糊路由和 Trie 树参数提取；阶段 4 的回归 Diff 模块复用它来判定两个网络请求是否属于同一语义路由。
+*   **DataMasker 作为切面组件 (阶段 4 -> 6)**：阶段 4 完成的掩码脱敏组件是一个独立的 Domain 逻辑，将作为管道插件，在阶段 6 获取 K8s/SSH 日志展现时，直接对日志输出进行掩码，实现代码级的高效复用。
+
+---
+
+## 5. 针对走查问题的 Clean Architecture 架构演进与修改建议
+
+### 🛠5.1 重构 Snapshot 为多态会话快照 (解决 Gap 3, 4)
 ```rust
-// src/debug_mode/snapshot/domain/model.rs
-
 pub enum SnapshotContent {
     Http(HttpExchange),
     WebSocket(WsSessionExchange),
 }
 
-pub struct Snapshot {
-    pub id: String,
-    pub timestamp: DateTime<Utc>,
-    pub environment: String,
-    pub content: SnapshotContent,
-    pub is_masked: bool,
-    pub encryption_algo: Option<String>,
-}
-
 pub struct WsSessionExchange {
-    /// 一段时间内的所有帧
     pub frames: Vec<WsFrameSnapshot>,
 }
 
 pub struct WsFrameSnapshot {
-    pub relative_ms: u64,           // 相对于连接建立时的毫秒偏移
-    pub direction: FrameDirection,  // Inbound / Outbound
-    pub frame_type: WsFrameType,    // Text, Binary, Ping, Pong, Close
-    pub payload: Vec<u8>,           // 帧数据
+    pub relative_ms: u64,
+    pub direction: FrameDirection,
+    pub frame_type: WsFrameType,
+    pub payload: Vec<u8>,
 }
 ```
 
-### 🛠️ 建议 2：在数据落盘前引入 DataMasker 混淆切面与加密层 (解决 Gap 3, 8)
-*   **设计重构**：在 Infrastructure 层的 `SnapshotRepo` 写入数据前，强制挂载 `DataMasker`，并利用对称加密（AES-GCM-256）保护快照包。支持 SSH 密钥等敏感项从 Keychain / 环境变量中提取。
-*   **代码演进示意**：
+### 🛠5.2 在数据落盘前引入 DataMasker 混淆与加密层 (解决 Gap 3, 8)
 ```rust
-// src/debug_mode/snapshot/infrastructure/masker.rs
-
 pub trait DataMasker: Send + Sync {
     fn mask_headers(&self, headers: &mut HashMap<String, String>, rules: &[String]);
     fn mask_body(&self, body: &mut Option<String>, rules: &[String]);
 }
-
-pub struct SnapshotEncryptor;
-
-impl SnapshotEncryptor {
-    pub fn encrypt(data: &[u8], key: &[u8]) -> Result<Vec<u8>, EncryptionError> {
-        // 使用 AEAD (如 AES-GCM) 算法对快照字节流进行加密
-        unimplemented!()
-    }
-}
 ```
 
-### 🛠️ 建议 3：日志流式拉取（Streaming）与多行合并过滤器 (解决 Gap 5, 6, 7)
-*   **设计重构**：改造 `LogAdapter` 接口，用异步 Rust 的 `Stream` 替换单一的 `Result<Vec<LogEntry>>` 从而支持流式大日志过滤；在 UseCase 层引入 `MultilineCombiner` 模块处理崩溃栈。
-*   **代码演进示意**：
+### 🛠5.3 日志流式拉取（Streaming）与多行合并过滤器 (解决 Gap 5, 6, 7)
 ```rust
-// src/debug_mode/logs/usecase/combiner.rs
-
-use futures_util::Stream;
-use std::pin::Pin;
-
 #[async_trait]
 pub trait LogAdapter: Send + Sync {
-    /// 返回异步日志帧流，解耦内存瓶颈
     async fn fetch_logs_stream(
         &self, 
         filter: &LogFilter
     ) -> Result<Pin<Box<dyn Stream<Item = Result<LogEntry>> + Send>>, LogError>;
 }
-
-pub struct MultilineCombiner {
-    /// 判定多行日志开始的正则表达式（如匹配时间戳 "^\d{4}-\d{2}-\d{2}"）
-    start_pattern: Regex,
-}
-
-impl MultilineCombiner {
-    pub fn combine(&self, raw_lines: Vec<String>) -> Vec<LogEntry> {
-        // 将未配对的 Stacktrace 多行文本聚合成单个 LogEntry 的 message 字段
-        unimplemented!()
-    }
-}
 ```
 
-### 🛠️ 建议 4：基于通配符的模糊 Mock 引擎与分支变体设计 (解决 Gap 9, 10)
-*   **设计重构**：在 Mock Server 侧，引入 `MockRoute` 的 Trie 树路由匹配，支持路径参数（Path Variable）和通配符匹配。同时引入 `MockVariant` 评估请求字段分发。
-*   **代码演进示意**：
+### 🛠5.4 基于通配符的 Mock Trie 树匹配器与条件分支变体 (解决 Gap 9, 10)
 ```rust
-// src/debug_mode/mock/domain/matcher.rs
-
 pub struct MockRoute {
-    pub path_pattern: String,      // 例如: "/api/users/:id/billing"
+    pub path_pattern: String,      // 例如 "/api/users/:id/billing"
     pub method: String,
-    pub query_wildcards: HashMap<String, String>,
     pub variants: Vec<MockVariant>,
 }
 
 pub struct MockVariant {
-    pub condition: VariantCondition, // 判定条件，例如: "body.username == 'admin'"
+    pub condition: Option<VariantCondition>,
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub response_body: String,
 }
 ```
 
-### 🛠️ 建议 5：重构 ReplayEngine 引入拦截器管道（Interceptor Pipeline）(解决 Gap 11)
-*   **设计重构**：为了让保存的快照能重现于不同环境，必须能够在执行前动态修正/注入参数。我们需要设计一个 Pipeline，类似于 HTTP 客户端的拦截器中间件。
-*   **代码演进示意**：
+### 🛠5.5 重构 ReplayEngine 引入拦截器管道 (解决 Gap 11)
 ```rust
-// src/debug_mode/replay/usecase/engine.rs
-
 #[async_trait]
 pub trait ReplayInterceptor: Send + Sync {
     async fn intercept(&self, req: &mut RequestSnapshot, ctx: &VariableContext);
 }
-
-pub struct ReplayEngine {
-    interceptors: Vec<Box<dyn ReplayInterceptor>>,
-}
-
-impl ReplayEngine {
-    pub async fn replay(&self, snapshot: &Snapshot, env_ctx: &VariableContext) -> Result<Response, ReplayError> {
-        let mut req_snap = snapshot.content.as_http_request().clone();
-        
-        // 依次执行拦截器，动态重写凭证、API Base URL 等
-        for interceptor in &self.interceptors {
-            interceptor.intercept(&mut req_snap, env_ctx).await;
-        }
-        
-        // 执行底层 HTTP/WS 发包
-        unimplemented!()
-    }
-}
 ```
 
-### 🛠️ 建议 6：添加配置文件热加载与 .env 级联覆盖机制 (解决 Gap 12)
-*   **设计重构**：利用 `notify` 监听 `rupost.toml` 和本地 `.env` 文件的变化事件，触发 `ConfigLoader` 的热加载；重新设计变量覆盖优先级树，最底层支持级联式 `.env` 局部加载。
-*   **代码演进示意**：
+### 🛠5.6 配置文件热加载与 .env 级联覆盖机制 (解决 Gap 12)
 ```rust
-// src/variable/config.rs 演进建议
-
 pub struct HotReloadConfigLoader {
     config_path: PathBuf,
     env_file_path: Option<PathBuf>,
 }
-
-impl HotReloadConfigLoader {
-    pub fn start_watching<F>(&self, on_change: F) 
-    where 
-        F: Fn(VariableConfig) + Send + 'static 
-    {
-        // 绑定 notify 管道事件，变更时自动触发 on_change 重新生成 VariableContext 并在 TUI/CLI 中更新
-        unimplemented!()
-    }
-}
 ```
-
----
-
-## 5. 总结与实施建议
-
-本走查报告通过 6 个紧贴开发生命周期（从本地开发内循环、多协议 WebSocket 调试、前端 Mock 联调，到灰度发布回归测试、生产微服务 500 级故障定位）的真实使用场景，清晰印证了：
-*   **环境隔离、状态脱敏和多协议流式重放**是生产调试功能的生命线。
-*   现有的简单 HTTP 单次拉取设计在面临大规模企业级排障时存在安全漏洞（数据泄露、密钥明文暴露）以及性能瓶颈（大日志内存耗尽、Mock 精确匹配过窄）。
-
-我们建议，在未来的 3.0 开发中，依据本报告第 4 节中的**多态会话快照**、**流式日志传输**、**动态 Mock 路由 Trie 树**以及**拦截器 Pipeline** 方案，在 Domain 层和 UseCase 层进行优先的代码重构，确保 Rupost 的架构在保持极致简洁的同时，具备业界顶级的生产调试竞争力。

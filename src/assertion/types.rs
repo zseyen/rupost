@@ -116,6 +116,8 @@ pub enum AssertValue {
     String(String),
     Bool(bool),
     Null,
+    Array,
+    Object,
 }
 
 impl fmt::Display for AssertValue {
@@ -125,6 +127,8 @@ impl fmt::Display for AssertValue {
             AssertValue::String(s) => write!(f, "\"{}\"", s),
             AssertValue::Bool(b) => write!(f, "{}", b),
             AssertValue::Null => write!(f, "null"),
+            AssertValue::Array => write!(f, "array"),
+            AssertValue::Object => write!(f, "object"),
         }
     }
 }

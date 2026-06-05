@@ -1,8 +1,28 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, HistoryCommands};
 use rupost::Result;
+use rupost::generator::http::HttpGenerator;
+use rupost::history::selector::{self, SelectionStrategy};
+use rupost::history::storage::get_storage;
+use rupost::middleware::resolve_cookie_path;
+use rupost::parser::{HttpFileParser, MarkdownFileParser};
+use rupost::runner::{TestExecutor, TestReporter, TestSummary};
+use rupost::variable::{ConfigLoader, VariableContext};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+struct RunTestOptions<'a> {
+    file_path: &'a str,
+    env_name: Option<&'a str>,
+    var_overrides: &'a [String],
+    verbose: bool,
+    no_cookies: bool,
+    cookie_file: Option<String>,
+    debug: bool,
+    debug_on_failure: bool,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,20 +36,27 @@ async fn main() -> Result<()> {
             env,
             var,
             verbose,
+            no_cookies,
+            cookie_file,
         }) => {
-            run_test(&path, env.as_deref(), &var, verbose).await?;
+            let options = RunTestOptions {
+                file_path: &path,
+                env_name: env.as_deref(),
+                var_overrides: &var,
+                verbose,
+                no_cookies,
+                cookie_file,
+                debug: cli.debug,
+                debug_on_failure: cli.debug_on_failure,
+            };
+            run_test(options).await?;
         }
         Some(Commands::History { command }) => match command {
-            cli::HistoryCommands::List { limit, reverse } => {
+            HistoryCommands::List { limit, reverse } => {
                 rupost::history::printer::list_history(limit, reverse)?;
             }
         },
         Some(Commands::Generate(args)) => {
-            use rupost::generator::http::HttpGenerator;
-            use rupost::history::selector::{self, SelectionStrategy};
-            use rupost::history::storage::get_storage;
-            use std::fs;
-
             let storage = get_storage();
 
             // Determine strategy
@@ -60,41 +87,39 @@ async fn main() -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                cli::run(cli.args).await?;
+                cli::run(
+                    cli.args,
+                    cli.no_cookies,
+                    cli.cookie_file,
+                    cli.debug,
+                    cli.debug_on_failure,
+                )
+                .await?;
             }
         }
     }
     Ok(())
 }
 
-async fn run_test(
-    file_path: &str,
-    env_name: Option<&str>,
-    var_overrides: &[String],
-    verbose: bool,
-) -> Result<()> {
-    use rupost::parser::{HttpFileParser, MarkdownFileParser};
-    use rupost::runner::{TestExecutor, TestReporter, TestSummary};
-    use rupost::variable::{ConfigLoader, VariableContext};
-    use std::path::Path;
-
+async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
     // 1. 加载配置并构建变量上下文
-    let mut var_context = if env_name.is_some() || !var_overrides.is_empty() {
+    let mut var_context = if options.env_name.is_some() || !options.var_overrides.is_empty() {
         let config = ConfigLoader::find_and_load().unwrap_or_default();
 
         // 解析 CLI 变量覆盖
-        let cli_vars: Vec<(String, String)> = var_overrides
+        let cli_vars: Vec<(String, String)> = options
+            .var_overrides
             .iter()
             .filter_map(|s| ConfigLoader::parse_cli_var(s))
             .collect();
 
-        ConfigLoader::build_context(&config, env_name, &cli_vars)
+        ConfigLoader::build_context(&config, options.env_name, &cli_vars)
     } else {
         VariableContext::new()
     };
 
     // 2. 根据文件扩展名选择解析器
-    let path = Path::new(file_path);
+    let path = Path::new(options.file_path);
     let parsed_file = if path.extension().and_then(|s| s.to_str()) == Some("md") {
         MarkdownFileParser::parse_file(path)?
     } else {
@@ -104,11 +129,22 @@ async fn run_test(
     let total = parsed_file.requests.len();
 
     // 4. 创建报告器并打印开始信息
-    let reporter = TestReporter::new(verbose);
-    reporter.print_header(file_path, total);
+    let reporter = TestReporter::new(options.verbose);
+    reporter.print_header(options.file_path, total);
 
     // 5. 执行所有请求
-    let executor = TestExecutor::new();
+    let mut executor = if options.no_cookies {
+        TestExecutor::new()
+    } else if let Some(cookie_path) = options.cookie_file {
+        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env_name);
+        TestExecutor::with_cookies(resolved)?
+    } else {
+        TestExecutor::with_ephemeral_cookies()
+    };
+
+    executor = executor
+        .with_debug(options.debug)
+        .with_debug_on_failure(options.debug_on_failure);
     let results = executor.execute_all(parsed_file, &mut var_context).await?;
 
     // 6. 打印每个结果

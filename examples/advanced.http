@@ -2,7 +2,7 @@
 
 ### Authentication Example
 # @name login
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 User-Agent: RuPost/0.1.0
 Accept: application/json
@@ -16,7 +16,7 @@ Accept: application/json
 
 ### Request with Multiple Headers
 # @name api-request-with-headers
-GET https://httpbin.org/headers
+GET https://httpbingo.org/headers
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
 X-Request-ID: req-123-456
 X-API-Version: v1
@@ -27,7 +27,7 @@ Accept-Language: zh-CN,en-US
 
 ### PUT Request (Update Resource)
 # @name update-user
-PUT https://httpbin.org/put
+PUT https://httpbingo.org/put
 Content-Type: application/json
 Authorization: Bearer token123
 
@@ -46,7 +46,7 @@ Authorization: Bearer token123
 
 ### PATCH Request (Partial Update)
 # @name partial-update
-PATCH https://httpbin.org/patch
+PATCH https://httpbingo.org/patch
 Content-Type: application/json
 
 {
@@ -57,7 +57,7 @@ Content-Type: application/json
 
 ### Request with Form Data
 # @name login-form
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/x-www-form-urlencoded
 
 username=alice&password=secret123&remember=true
@@ -66,7 +66,7 @@ username=alice&password=secret123&remember=true
 
 ### Request with Plain Text Body
 # @name create-note
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: text/plain
 
 This is a plain text note.
@@ -77,7 +77,7 @@ It can span multiple lines.
 
 ### Complex JSON with Nested Objects
 # @name create-order
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {
@@ -115,7 +115,7 @@ Content-Type: application/json
 
 ### Request with Custom Headers
 # @name custom-headers-demo
-GET https://httpbin.org/headers
+GET https://httpbingo.org/headers
 X-Custom-Header: custom-value
 X-Trace-ID: trace-abc-123
 X-Correlation-ID: corr-xyz-789

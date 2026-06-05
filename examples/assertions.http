@@ -4,7 +4,7 @@
 ### 测试 1: 状态码断言
 @name Basic Status Check
 @assert status == 200
-GET https://httpbin.org/status/200
+GET https://httpbingo.org/status/200
 
 ###
 
@@ -14,7 +14,7 @@ GET https://httpbin.org/status/200
 @assert headers.content-type contains "json"
 @assert body.slideshow exists
 @assert response.time < 5000
-GET https://httpbin.org/json
+GET https://httpbingo.org/json
 
 ###
 
@@ -23,7 +23,7 @@ GET https://httpbin.org/json
 @assert status == 200
 @assert body.json.number > 0
 @assert body.json.number < 1000
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {"number": 42, "text": "test"}
@@ -34,7 +34,7 @@ Content-Type: application/json
 @name String Assertion Test
 @assert status == 200
 @assert body.json.text == "hello"
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {"text": "hello"}
@@ -45,7 +45,7 @@ Content-Type: application/json
 @name Null Check Test
 @assert status == 200
 @assert body.json.value != null
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {"value": "not null"}
@@ -57,7 +57,7 @@ Content-Type: application/json
 @assert status == 200
 @assert body.json.user.name == "test"
 @assert body.json.user.id > 0
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {"user": {"name": "test", "id": 123}}
@@ -69,7 +69,7 @@ Content-Type: application/json
 @assert status == 200
 @assert body.json.token exists
 @assert body.json.data exists
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {"token": "abc123", "data": {"key": "value"}}
@@ -81,7 +81,7 @@ Content-Type: application/json
 @assert status == 200
 @assert headers.server exists
 @assert headers.content-type contains "application/json"
-GET https://httpbin.org/headers
+GET https://httpbingo.org/headers
 
 ###
 
@@ -90,7 +90,7 @@ GET https://httpbin.org/headers
 @assert status == 200
 @assert response.time < 3000
 @assert body.slideshow exists
-GET https://httpbin.org/json
+GET https://httpbingo.org/json
 
 ###
 
@@ -98,4 +98,4 @@ GET https://httpbin.org/json
 @name Failing Assertion Test
 @assert status == 404
 @assert body.message == "Not Found"
-GET https://httpbin.org/status/200
+GET https://httpbingo.org/status/200

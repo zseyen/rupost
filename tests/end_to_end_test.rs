@@ -517,3 +517,85 @@ Authorization: Bearer {{{{token}}}}
     assert_eq!(context.get("token"), Some("secret-access-token-123"));
     assert_eq!(context.get("uid"), Some("42"));
 }
+
+/// 测试 Markdown 文件的响应变量捕获功能 (跨代码块共享)
+#[tokio::test]
+async fn test_markdown_response_variable_capture() {
+    // 启动模拟服务器
+    let mock_server = MockServer::start().await;
+
+    // 1. 登录接口 - 返回 token
+    Mock::given(method("POST"))
+        .and(path("/api/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "md-secret-token"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // 2. 验证接口 - 使用前面提取的 token
+    Mock::given(method("GET"))
+        .and(path("/api/verify"))
+        .and(header("Authorization", "Bearer md-secret-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "valid"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // 创建临时 Markdown 文件
+    let temp_dir = TempDir::new().unwrap();
+    let md_file = temp_dir.path().join("markdown_capture_test.md");
+
+    let content = format!(
+        r#"
+# Auth Flow
+
+This is a test of cross-block variable sharing in Markdown.
+
+## Login Step
+
+First, we login and capture the token.
+
+```http
+@name Login
+@capture my_token from body.token
+POST {}/api/login
+Content-Type: application/json
+
+{{ "user": "admin" }}
+```
+
+## Verify Step
+
+Then, we use `my_token` in the next request block.
+
+```http
+@name Verify
+GET {}/api/verify
+Authorization: Bearer {{{{my_token}}}}
+```
+"#,
+        mock_server.uri(),
+        mock_server.uri()
+    );
+
+    fs::write(&md_file, content).unwrap();
+
+    // 解析文件
+    let parsed = MarkdownFileParser::parse_file(&md_file).unwrap();
+    assert_eq!(parsed.requests.len(), 2);
+
+    // 执行请求
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+
+    // 验证结果
+    assert_eq!(results.len(), 2);
+    assert!(results[0].success); // Login success
+    assert!(results[1].success); // Verify success (implies token was captured and shared across blocks)
+
+    // 验证变量上下文已跨代码块累积
+    assert_eq!(context.get("my_token"), Some("md-secret-token"));
+}

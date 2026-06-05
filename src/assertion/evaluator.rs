@@ -88,6 +88,8 @@ mod tests {
             headers,
             body: body.to_string(),
             duration: Duration::from_millis(duration_ms),
+            ttfb: Duration::from_millis(0),
+            transfer: Duration::from_millis(0),
         }
     }
 
@@ -167,6 +169,21 @@ mod tests {
 
         assert!(!result.passed);
         assert!(result.message.is_some());
+    }
+
+    #[test]
+    fn test_evaluate_exists_object_and_array_success() {
+        let response = create_test_response(200, r#"{"user": {"id": 123}, "items": [1, 2]}"#, 100);
+
+        let assertion_obj = parse_assertion("body.user exists").unwrap();
+        let result_obj = evaluate_assertion(&assertion_obj, &response);
+        assert!(result_obj.passed);
+        assert_eq!(result_obj.actual, Some("object".to_string()));
+
+        let assertion_arr = parse_assertion("body.items exists").unwrap();
+        let result_arr = evaluate_assertion(&assertion_arr, &response);
+        assert!(result_arr.passed);
+        assert_eq!(result_arr.actual, Some("array".to_string()));
     }
 
     #[test]

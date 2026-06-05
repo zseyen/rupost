@@ -23,7 +23,7 @@ fn test_parse_simple_api() {
 
     // 验证请求方法和 URL
     assert_eq!(parsed.requests[0].method_or_default(), "GET");
-    assert!(parsed.requests[0].url.contains("httpbin.org/get"));
+    assert!(parsed.requests[0].url.contains("httpbingo.org/get"));
 }
 
 #[test]

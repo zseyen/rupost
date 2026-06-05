@@ -20,5 +20,5 @@ pub fn init_logger() {
         .with_writer(std::io::stderr)
         .init();
 
-    tracing::info!("Logger initialized");
+    tracing::debug!("Logger initialized");
 }

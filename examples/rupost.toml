@@ -3,7 +3,7 @@
 
 # 开发环境
 [environments.dev]
-base_url = "http://localhost:3000"
+base_url = "https://httpbingo.org/anything"
 api_version = "v1"
 # 使用系统环境变量
 api_key = "${DEV_API_KEY}"
@@ -14,7 +14,7 @@ test_user_password = "password123"
 
 # 测试环境
 [environments.test]
-base_url = "http://test-server:3000"
+base_url = "https://httpbingo.org/anything"
 api_version = "v1"
 api_key = "test-key-12345"
 timeout = "60"

@@ -106,6 +106,60 @@ impl TestReporter {
             }
             println!();
         }
+
+        // 显示网络时序诊断
+        if let Some(ref timing) = result.timing {
+            self.print_timing(timing);
+        }
+    }
+
+    fn print_timing(&self, timing: &crate::http::timing::RequestTiming) {
+        use std::cmp::max;
+
+        let dns_ms = timing.dns_lookup.as_millis();
+        let tcp_ms = timing.tcp_connect.as_millis();
+        let ttfb_ms = timing.ttfb.as_millis();
+        let transfer_ms = timing.transfer.as_millis();
+
+        let total_ms = dns_ms + tcp_ms + ttfb_ms + transfer_ms;
+        if total_ms == 0 {
+            return;
+        }
+
+        println!("   Network Diagnostics (Total: {}ms):", total_ms);
+
+        let render_bar = |name: &str, ms: u128, color: &str| {
+            let percentage = (ms as f64 / total_ms as f64) * 100.0;
+            // 设定进度条最大字符长度为 30
+            let bar_len = ((ms as f64 / total_ms as f64) * 30.0).round() as usize;
+            let bar_len = max(bar_len, if ms > 0 { 1 } else { 0 });
+
+            let bar = "■".repeat(bar_len);
+            let empty = " ".repeat(30 - bar_len);
+
+            let colored_bar = match color {
+                "blue" => bar.blue(),
+                "yellow" => bar.yellow(),
+                "green" => bar.green(),
+                "cyan" => bar.cyan(),
+                _ => bar.white(),
+            };
+
+            println!(
+                "     {:12} : {}{} ({:3}ms, {:.1}%)",
+                name.dimmed(),
+                colored_bar,
+                empty.dimmed(),
+                ms,
+                percentage
+            );
+        };
+
+        render_bar("DNS Lookup", dns_ms, "blue");
+        render_bar("TCP Connect", tcp_ms, "yellow");
+        render_bar("Server Wait", ttfb_ms, "green");
+        render_bar("Transfer", transfer_ms, "cyan");
+        println!();
     }
 
     /// 打印测试开始

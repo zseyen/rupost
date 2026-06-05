@@ -2,13 +2,13 @@
 use rupost::parser;
 
 fn main() {
-    println!("🧪 测试 RuPost 解析器\n");
+    println!("测试 RuPost 解析器\n");
 
     // 测试 1: 解析 basic.http
-    println!("📄 测试 1: 解析 examples/basic.http");
+    println!("测试 1: 解析 examples/basic.http");
     match parser::parse_file("examples/basic.http") {
         Ok(parsed) => {
-            println!("✅ 解析成功！");
+            println!("[OK] 解析成功！");
             println!("   - 找到 {} 个请求", parsed.requests.len());
             for (i, req) in parsed.requests.iter().enumerate() {
                 println!(
@@ -24,7 +24,7 @@ fn main() {
             }
         }
         Err(e) => {
-            println!("❌ 解析失败: {}", e);
+            println!("[FAIL] 解析失败: {}", e);
         }
     }
 
@@ -33,7 +33,7 @@ fn main() {
     println!();
 
     // 测试 2: 解析字符串内容
-    println!("📝 测试 2: 解析字符串内容");
+    println!("测试 2: 解析字符串内容");
     let content = r#"
 GET http://example.com/api/users
 Accept: application/json
@@ -48,7 +48,7 @@ Content-Type: application/json
 
     match parser::parse_content(content) {
         Ok(parsed) => {
-            println!("✅ 解析成功！");
+            println!("[OK] 解析成功！");
             println!("   - 找到 {} 个请求", parsed.requests.len());
             for (i, req) in parsed.requests.iter().enumerate() {
                 println!(
@@ -60,9 +60,9 @@ Content-Type: application/json
             }
         }
         Err(e) => {
-            println!("❌ 解析失败: {}", e);
+            println!("[FAIL] 解析失败: {}", e);
         }
     }
 
-    println!("\n✨ 测试完成！");
+    println!("\n测试完成！");
 }

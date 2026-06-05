@@ -25,6 +25,7 @@ struct RunTestOptions<'a> {
     fail_fast: bool,
     env_name: Option<&'a str>,
     var_overrides: &'a [String],
+    env_file: Option<&'a str>,
     verbose: bool,
     no_cookies: bool,
     cookie_file: Option<String>,
@@ -47,6 +48,7 @@ async fn main() -> Result<()> {
             fail_fast,
             env,
             var,
+            env_file,
             verbose,
             no_cookies,
             cookie_file,
@@ -59,6 +61,7 @@ async fn main() -> Result<()> {
                 fail_fast,
                 env_name: env.as_deref(),
                 var_overrides: &var,
+                env_file: env_file.as_deref(),
                 verbose,
                 no_cookies,
                 cookie_file,
@@ -138,20 +141,20 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
     let execution_order = graph.resolve_execution_order()?;
 
     // 4. 加载配置并构建变量上下文
-    let mut var_context = if options.env_name.is_some() || !options.var_overrides.is_empty() {
-        let config = ConfigLoader::find_and_load().unwrap_or_default();
+    let config = ConfigLoader::find_and_load().unwrap_or_default();
 
-        // 解析 CLI 变量覆盖
-        let cli_vars: Vec<(String, String)> = options
-            .var_overrides
-            .iter()
-            .filter_map(|s| ConfigLoader::parse_cli_var(s))
-            .collect();
+    // 解析 CLI 变量覆盖
+    let cli_vars: Vec<(String, String)> = options
+        .var_overrides
+        .iter()
+        .filter_map(|s| ConfigLoader::parse_cli_var(s))
+        .collect();
 
-        ConfigLoader::build_context(&config, options.env_name, &cli_vars)
-    } else {
-        VariableContext::new()
-    };
+    // 如果指定了 env_file 则使用它，否则默认自动寻找加载并合并本地 .env
+    let env_file_to_load = options.env_file.or(Some(".env"));
+
+    let mut var_context =
+        ConfigLoader::build_context(&config, options.env_name, &cli_vars, env_file_to_load);
 
     // 5. 构建 TestExecutor
     let mut executor = if options.no_cookies {

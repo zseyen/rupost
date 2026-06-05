@@ -67,6 +67,10 @@ pub enum Commands {
         #[arg(long, value_name = "KEY=VALUE")]
         var: Vec<String>,
 
+        /// Path to a local environment file (e.g., .env)
+        #[arg(long, value_name = "FILE")]
+        env_file: Option<String>,
+
         /// Show detailed request/response information
         #[arg(short, long)]
         verbose: bool,

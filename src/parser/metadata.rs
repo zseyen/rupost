@@ -161,7 +161,8 @@ fn parse_stream_to(content: &str) -> ParseResult<Metadata> {
     let mut parts = content.split_whitespace();
     let path = parts.next().ok_or_else(|| ParseError::InvalidMetadata {
         line: 0,
-        message: "Invalid @stream_to syntax. Expected: @stream_to <path> [append|overwrite]".to_string(),
+        message: "Invalid @stream_to syntax. Expected: @stream_to <path> [append|overwrite]"
+            .to_string(),
     })?;
 
     let mode = parts.next().unwrap_or("overwrite");
@@ -299,15 +300,23 @@ mod tests {
     #[test]
     fn test_parse_stream_to() {
         let result = parse_metadata("@stream_to ./output.md").unwrap().unwrap();
-        assert!(matches!(result, Metadata::StreamTo { ref path, append } if path == "./output.md" && !append));
+        assert!(
+            matches!(result, Metadata::StreamTo { ref path, append } if path == "./output.md" && !append)
+        );
 
-        let result = parse_metadata("@stream_to ./log.txt append").unwrap().unwrap();
-        assert!(matches!(result, Metadata::StreamTo { ref path, append } if path == "./log.txt" && append));
+        let result = parse_metadata("@stream_to ./log.txt append")
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Metadata::StreamTo { ref path, append } if path == "./log.txt" && append)
+        );
     }
 
     #[test]
     fn test_parse_forward_to() {
-        let result = parse_metadata("@forward_to http://my-proxy.com").unwrap().unwrap();
+        let result = parse_metadata("@forward_to http://my-proxy.com")
+            .unwrap()
+            .unwrap();
         assert!(matches!(result, Metadata::ForwardTo(ref url) if url == "http://my-proxy.com"));
     }
 

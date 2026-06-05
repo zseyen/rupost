@@ -1,7 +1,7 @@
+use crate::Result;
 use std::path::PathBuf;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::AsyncWriteExt;
-use crate::Result;
 
 pub struct FileSyncWriter {
     target_path: PathBuf,
@@ -23,10 +23,8 @@ impl FileSyncWriter {
     pub async fn write_delta(&mut self, delta: &str, _provider_name: &str) -> Result<()> {
         if self.file.is_none() {
             // Ensure parent directory exists
-            if let Some(parent) = self.target_path.parent() {
-                if !parent.exists() {
-                    tokio::fs::create_dir_all(parent).await?;
-                }
+            if let Some(parent) = self.target_path.parent().filter(|p| !p.exists()) {
+                tokio::fs::create_dir_all(parent).await?;
             }
 
             let file = if self.append {

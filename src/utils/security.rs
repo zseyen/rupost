@@ -1,7 +1,22 @@
+use crate::{Result, RupostError};
 use std::path::Path;
-use crate::Result;
 
-pub fn run_security_lint(_path: &Path) -> Result<()> {
-    // 骨架默认返回 OK。在 TDD 中，由于未检测并报错明文 Key，测试一将会失败，符合红灯预期。
+pub fn run_security_lint(path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(path)?;
+
+    // Detect typical API keys (e.g. starting with 'sk-' followed by at least 12 alphanumeric characters)
+    let re = regex::Regex::new(r"sk-[a-zA-Z0-9]{12,}").unwrap();
+
+    for (idx, line) in content.lines().enumerate() {
+        if re.is_match(line) {
+            return Err(RupostError::Other(format!(
+                "[SECURITY ALERT] Leaked plain-text API key detected in {:?} at line {}: {}",
+                path,
+                idx + 1,
+                line.trim()
+            )));
+        }
+    }
+
     Ok(())
 }

@@ -3,10 +3,9 @@ use rupost::middleware::routing::{RoutingMiddleware, RoutingRule};
 use rupost::runner::{TestExecutor, TestResult};
 use rupost::variable::VariableContext;
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
 
 // 辅助工具：运行 HTTP 测试用例内容并返回结果
 async fn run_http_content(content: &str, executor: &TestExecutor) -> TestResult {
@@ -45,13 +44,15 @@ async fn start_mock_proxy_server() -> (String, tokio::sync::mpsc::Receiver<Strin
     tokio::spawn(async move {
         if let Ok((mut socket, _)) = listener.accept().await {
             let mut buf = [0u8; 1024];
-            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await.unwrap();
+            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut buf)
+                .await
+                .unwrap();
             let req_str = String::from_utf8_lossy(&buf[..n]).to_string();
-            
+
             // 返回 200
             let res = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
             socket.write_all(res.as_bytes()).await.unwrap();
-            
+
             let _ = tx.send(req_str).await;
         }
     });
@@ -76,13 +77,25 @@ async fn start_sys_log_mock_server() -> (String, tokio::task::JoinHandle<()>) {
             socket.write_all(handshake.as_bytes()).await.unwrap();
 
             // 发送通用非大模型日志帧
-            socket.write_all(b"event: build_start\ndata: {\"build_id\": 42}\n\n").await.unwrap();
+            socket
+                .write_all(b"event: build_start\ndata: {\"build_id\": 42}\n\n")
+                .await
+                .unwrap();
             tokio::time::sleep(Duration::from_millis(10)).await;
-            socket.write_all(b"event: log\ndata: Compiling cargo...\n\n").await.unwrap();
+            socket
+                .write_all(b"event: log\ndata: Compiling cargo...\n\n")
+                .await
+                .unwrap();
             tokio::time::sleep(Duration::from_millis(10)).await;
-            socket.write_all(b"event: log\ndata: Finished dev profile.\n\n").await.unwrap();
+            socket
+                .write_all(b"event: log\ndata: Finished dev profile.\n\n")
+                .await
+                .unwrap();
             tokio::time::sleep(Duration::from_millis(10)).await;
-            socket.write_all(b"event: build_success\ndata: {\"duration\": 15}\n\n").await.unwrap();
+            socket
+                .write_all(b"event: build_success\ndata: {\"duration\": 15}\n\n")
+                .await
+                .unwrap();
         }
     });
 
@@ -125,10 +138,18 @@ async fn test_llm_stream_normalization() {
         port
     );
     let mut context_openai = VariableContext::new();
-    let res_openai = run_http_content_with_context(&content_openai, &executor, &mut context_openai).await;
+    let res_openai =
+        run_http_content_with_context(&content_openai, &executor, &mut context_openai).await;
 
-    assert!(res_openai.success, "Normalization OpenAI test failed: {:?}", res_openai.error);
-    assert_eq!(context_openai.get("captured_openai"), Some("Rust is perfect."));
+    assert!(
+        res_openai.success,
+        "Normalization OpenAI test failed: {:?}",
+        res_openai.error
+    );
+    assert_eq!(
+        context_openai.get("captured_openai"),
+        Some("Rust is perfect.")
+    );
 
     // 2. 验证 Anthropic 格式规整
     let content_anthropic = format!(
@@ -139,10 +160,18 @@ async fn test_llm_stream_normalization() {
         port
     );
     let mut context_anthropic = VariableContext::new();
-    let res_anthropic = run_http_content_with_context(&content_anthropic, &executor, &mut context_anthropic).await;
+    let res_anthropic =
+        run_http_content_with_context(&content_anthropic, &executor, &mut context_anthropic).await;
 
-    assert!(res_anthropic.success, "Normalization Anthropic test failed: {:?}", res_anthropic.error);
-    assert_eq!(context_anthropic.get("captured_anthropic"), Some("Rust is perfect."));
+    assert!(
+        res_anthropic.success,
+        "Normalization Anthropic test failed: {:?}",
+        res_anthropic.error
+    );
+    assert_eq!(
+        context_anthropic.get("captured_anthropic"),
+        Some("Rust is perfect.")
+    );
 }
 
 #[tokio::test]
@@ -166,10 +195,20 @@ async fn test_file_sync_output() {
     let _res = run_http_content(&content, &executor).await;
 
     // 验证物理文件被成功创建，并包含了标题头和大模型拼接内容
-    assert!(sync_file_path.exists(), "File sync output should be created");
+    assert!(
+        sync_file_path.exists(),
+        "File sync output should be created"
+    );
     let file_content = std::fs::read_to_string(&sync_file_path).unwrap();
-    assert!(file_content.contains("# LLM Prompt Debugging Report"), "Should contain title header");
-    assert!(file_content.contains("Rust is perfect."), "Should contain accumulated tokens: {:?}", file_content);
+    assert!(
+        file_content.contains("# LLM Prompt Debugging Report"),
+        "Should contain title header"
+    );
+    assert!(
+        file_content.contains("Rust is perfect."),
+        "Should contain accumulated tokens: {:?}",
+        file_content
+    );
 }
 
 #[tokio::test]
@@ -181,39 +220,70 @@ async fn test_global_routing_middleware() {
     let rules = vec![RoutingRule {
         match_host: "api.openai.com".to_string(),
         replace_host: proxy_host.clone(),
-        inject_headers: HashMap::from([
-            ("Authorization".to_string(), "Bearer sk-mock-secret-key".to_string()),
-        ]),
+        inject_headers: HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer sk-mock-secret-key".to_string(),
+        )]),
     }];
 
     let routing_middleware = RoutingMiddleware::new(rules);
     let executor = TestExecutor::new().with_middleware(std::sync::Arc::new(routing_middleware));
 
-    let content = "POST https://api.openai.com/v1/chat/completions\nContent-Type: application/json\n\n{}";
-    let res = run_http_content(&content, &executor).await;
+    let content =
+        "POST https://api.openai.com/v1/chat/completions\nContent-Type: application/json\n\n{}";
+    let res = run_http_content(content, &executor).await;
 
-    // TDD 预期：由于 RoutingMiddleware before_request 还是空实现，请求会直连 api.openai.com 产生网络错误或超时
-    assert!(!res.success, "Routing middleware test should fail initially in TDD");
+    assert!(
+        res.success,
+        "Routing middleware test failed: {:?}",
+        res.error
+    );
+
+    let received_req = request_receiver.recv().await.unwrap().to_lowercase();
+    assert!(
+        received_req.contains("authorization: bearer sk-mock-secret-key"),
+        "Should contain injected auth header: {}",
+        received_req
+    );
 }
 
 #[tokio::test]
 async fn test_security_lint() {
     let temp_dir = tempfile::TempDir::new().unwrap();
-    
+
     // 1. 泄露明文密钥的文件
     let file1 = temp_dir.path().join("leaked.http");
-    std::fs::write(&file1, "POST http://api.com\nAuthorization: Bearer sk-b51f045c1234567890\n").unwrap();
+    std::fs::write(
+        &file1,
+        "POST http://api.com\nAuthorization: Bearer sk-b51f045c1234567890\n",
+    )
+    .unwrap();
 
     // 2. 使用环境变量占位符的安全文件
     let file2 = temp_dir.path().join("safe.http");
-    std::fs::write(&file2, "POST http://api.com\nAuthorization: Bearer {{env.API_KEY}}\n").unwrap();
+    std::fs::write(
+        &file2,
+        "POST http://api.com\nAuthorization: Bearer {{env.API_KEY}}\n",
+    )
+    .unwrap();
 
     // 运行安全扫描
     let res1 = rupost::utils::security::run_security_lint(&file1);
     let res2 = rupost::utils::security::run_security_lint(&file2);
 
-    // TDD 预期：由于 run_security_lint 暂时是空实现（直接返回 Ok），res1 不会报错，断言会失败
-    assert!(res1.is_ok(), "Initially in TDD, security lint returns Ok on leaked file");
+    // 预期 res1 报错并包含 [SECURITY ALERT] 警报
+    assert!(res1.is_err(), "Leaked key file should fail security lint");
+    assert!(
+        res1.unwrap_err().to_string().contains("[SECURITY ALERT]"),
+        "Should trigger security alert"
+    );
+
+    // 预期 res2 正常通过
+    assert!(
+        res2.is_ok(),
+        "Safe file with env variable placeholders should pass: {:?}",
+        res2
+    );
 }
 
 #[tokio::test]
@@ -239,9 +309,10 @@ async fn test_generic_sys_log_stream() {
         "stream.event == \"build_start\" should pass at least once"
     );
     assert!(
-        res.assertions
-            .iter()
-            .any(|a| a.raw.contains("stream.llm.content contains \"Compiling cargo...\"") && a.passed),
+        res.assertions.iter().any(|a| a
+            .raw
+            .contains("stream.llm.content contains \"Compiling cargo...\"")
+            && a.passed),
         "stream.llm.content assertion should pass"
     );
 }

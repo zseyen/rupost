@@ -1,9 +1,9 @@
+use crate::Result;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tracing::{error, info};
-use crate::Result;
+use tracing::info;
 
 pub struct MockLlmServer {
     port: u16,

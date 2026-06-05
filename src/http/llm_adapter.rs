@@ -13,7 +13,10 @@ impl LlmStreamAdapter {
     pub fn detect_provider(url: &str, _headers: &HeaderMap) -> LlmProvider {
         if url.contains("api.anthropic.com") || url.contains("/v1/messages") {
             LlmProvider::Anthropic
-        } else if url.contains("api.openai.com") || url.contains("api.deepseek.com") || url.contains("/v1/chat/completions") {
+        } else if url.contains("api.openai.com")
+            || url.contains("api.deepseek.com")
+            || url.contains("/v1/chat/completions")
+        {
             LlmProvider::OpenAi
         } else {
             LlmProvider::Generic

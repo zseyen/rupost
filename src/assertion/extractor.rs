@@ -67,10 +67,9 @@ pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValu
 
         ValuePath::StreamBody(segments) => extract_from_json_body(&response.body, segments),
         ValuePath::StreamLlmContent => {
-            let value = response
-                .headers
-                .get("x-sse-llm-content")
-                .ok_or_else(|| AssertError::PathNotFound("stream.llm.content not found".to_string()))?;
+            let value = response.headers.get("x-sse-llm-content").ok_or_else(|| {
+                AssertError::PathNotFound("stream.llm.content not found".to_string())
+            })?;
             Ok(AssertValue::String(
                 value
                     .to_str()

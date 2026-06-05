@@ -241,7 +241,7 @@ impl TestExecutor {
         };
 
         // 转换为 Request
-        let request = match Request::try_from(parsed) {
+        let mut request = match Request::try_from(parsed) {
             Ok(req) => req,
             Err(e) => {
                 return TestResult::error(
@@ -255,10 +255,26 @@ impl TestExecutor {
             }
         };
 
+        // 调用路由与 Key 注入中间件
+        if let Some(ref mw) = self.routing_middleware {
+            use crate::middleware::Middleware;
+            if let Err(e) = mw.before_request(&mut request).await {
+                return TestResult::error(
+                    request_number,
+                    name,
+                    method,
+                    url,
+                    format!("Routing middleware error: {}", e),
+                    start.elapsed(),
+                );
+            }
+        }
+
         // 1. 进行 Pre-flight 探测 (带容错，不干扰主流程)
+        let final_url = request.url.to_string();
         let probe_result = if self.debug || self.debug_on_failure {
             use crate::http::timing::DiagnosticsProber;
-            DiagnosticsProber::probe_connection(&url).await.ok()
+            DiagnosticsProber::probe_connection(&final_url).await.ok()
         } else {
             None
         };
@@ -501,17 +517,16 @@ impl TestExecutor {
         let mut accumulated_body = String::new();
         let mut accumulated_llm_content = String::new();
         let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
-        let llm_provider = crate::http::llm_adapter::LlmStreamAdapter::detect_provider(&url, &headers);
+        let llm_provider =
+            crate::http::llm_adapter::LlmStreamAdapter::detect_provider(&url, &headers);
         let mut event_count = 0;
 
-        let mut file_writer = if let Some(ref path_str) = stream_to {
-            Some(crate::runner::file_sync::FileSyncWriter::new(
+        let mut file_writer = stream_to.as_ref().map(|path_str| {
+            crate::runner::file_sync::FileSyncWriter::new(
                 std::path::PathBuf::from(path_str),
                 stream_to_append,
-            ))
-        } else {
-            None
-        };
+            )
+        });
 
         loop {
             if sse_max_events.is_some_and(|max| event_count >= max) {
@@ -734,7 +749,8 @@ impl TestExecutor {
         let mut final_headers = headers.clone();
         final_headers.insert(
             "x-sse-llm-content",
-            HeaderValue::from_str(&accumulated_llm_content).unwrap_or_else(|_| HeaderValue::from_static("")),
+            HeaderValue::from_str(&accumulated_llm_content)
+                .unwrap_or_else(|_| HeaderValue::from_static("")),
         );
 
         let final_response = crate::http::Response::new(
@@ -766,20 +782,22 @@ impl TestExecutor {
         // 4. 评估包含 stream.llm.content 的捕获
         let mut final_captures = Vec::new();
         for cap in captures_to_eval {
-            if let crate::variable::capture::CaptureSource::Body(ref path) = cap.source {
-                if path == "stream.llm.content" {
-                    let mut new_cap = cap.clone();
-                    new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-llm-content".to_string());
-                    final_captures.push(new_cap);
-                }
+            if matches!(&cap.source, crate::variable::capture::CaptureSource::Body(path) if path == "stream.llm.content")
+            {
+                let mut new_cap = cap.clone();
+                new_cap.source = crate::variable::capture::CaptureSource::Header(
+                    "x-sse-llm-content".to_string(),
+                );
+                final_captures.push(new_cap);
             }
         }
         if !final_captures.is_empty() {
-            if let Ok(captured_vars) = capture_from_response(
+            let captured_res = capture_from_response(
                 &final_response.body,
                 &final_response.headers,
                 &final_captures,
-            ) {
+            );
+            if let Ok(captured_vars) = captured_res {
                 context.extend(captured_vars);
             }
         }

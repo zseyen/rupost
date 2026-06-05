@@ -1,11 +1,12 @@
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
 use crate::history::model::RequestSnapshot;
-use crate::http::{Client, Request};
+use crate::http::{Client, Request, SseParser};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
-use crate::variable::{VariableContext, VariableResolver, capture_from_response};
+use crate::variable::{VariableContext, VariableResolver, capture_from_response, capture::VariableCapture};
 use crate::{Result, RupostError};
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -192,6 +193,12 @@ impl TestExecutor {
         }
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
+        let is_sse_requested = parsed.metadata.sse || parsed.headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream")
+        });
+        let sse_timeout = parsed.metadata.sse_timeout;
+        let sse_max_events = parsed.metadata.sse_max_events;
+
         let assertions_to_eval = parsed.metadata.assertions.clone();
         let captures_to_eval = parsed.metadata.captures.clone();
 
@@ -239,24 +246,78 @@ impl TestExecutor {
         };
 
         // 执行请求
-        match self.client.execute(request).await {
-            Ok(response) => {
+        match self.client.execute_raw(request).await {
+            Ok((response, ttfb)) => {
+                // 判断是否是 SSE 响应
+                let is_sse_by_content_type = response.headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|val| val.to_str().ok())
+                    .map(|val| val.contains("text/event-stream"))
+                    .unwrap_or(false);
+                let is_sse = is_sse_requested || is_sse_by_content_type;
+
+                if is_sse {
+                    return self.execute_stream(
+                        response,
+                        ttfb,
+                        request_number,
+                        name,
+                        method,
+                        url,
+                        &assertions_to_eval,
+                        &captures_to_eval,
+                        sse_timeout,
+                        sse_max_events,
+                        context,
+                        start,
+                        source,
+                        request_snapshot,
+                        probe_result,
+                    ).await;
+                }
+
+                // 常规单请求流程
+                let status = response.status().as_u16();
+                let headers = response.headers().clone();
+                let body = match response.text().await {
+                    Ok(b) => b,
+                    Err(e) => {
+                        return TestResult::error(
+                            request_number,
+                            name,
+                            method,
+                            url,
+                            format!("Failed to read response body: {}", e),
+                            start.elapsed(),
+                        );
+                    }
+                };
+
+                let response_obj = crate::http::Response::new(
+                    status,
+                    headers,
+                    body,
+                    start.elapsed(),
+                    ttfb,
+                    start.elapsed().saturating_sub(ttfb),
+                ).unwrap();
+
                 // [Cookie] Middleware after_response hook (best effort)
                 if let Some(mw) = &self.cookie_middleware {
-                    let _ = mw.after_response(&response).await.map_err(|e| {
+                    let _ = mw.after_response(&response_obj).await.map_err(|e| {
                         error!("Cookie middleware error: {}", e);
                     });
                 }
 
                 // [History] 异步保存历史记录 (Best Effort)
                 use crate::history::recorder::record_history;
-                record_history(request_snapshot, &response, source);
+                record_history(request_snapshot, &response_obj, source);
 
                 // 2. 变量捕获
                 if !captures_to_eval.is_empty() {
                     match capture_from_response(
-                        &response.body,
-                        &response.headers,
+                        &response_obj.body,
+                        &response_obj.headers,
                         &captures_to_eval,
                     ) {
                         Ok(captured_vars) => {
@@ -267,7 +328,6 @@ impl TestExecutor {
                         }
                         Err(e) => {
                             error!("Failed to capture variables: {}", e);
-                            // 捕获失败不应导致测试失败，但需要记录
                         }
                     }
                 }
@@ -276,16 +336,14 @@ impl TestExecutor {
                 let mut assertion_results = Vec::new();
 
                 for assertion_str in &assertions_to_eval {
-                    // 先对断言字符串进行变量替换
                     let resolved_assertion = VariableResolver::resolve(assertion_str, context);
 
                     match parse_assertion(&resolved_assertion) {
                         Ok(assertion_expr) => {
-                            let result = evaluate_assertion(&assertion_expr, &response);
+                            let result = evaluate_assertion(&assertion_expr, &response_obj);
                             assertion_results.push(result);
                         }
                         Err(e) => {
-                            // 解析失败，生成错误断言结果
                             assertion_results
                                 .push(AssertionResult::error(assertion_str.clone(), e));
                         }
@@ -294,23 +352,20 @@ impl TestExecutor {
 
                 // 创建成功的测试结果
                 let mut test_result =
-                    TestResult::success(request_number, name, method, url, response.clone());
+                    TestResult::success(request_number, name, method, url, response_obj.clone());
                 test_result.assertions = assertion_results;
 
-                // 如果有显式断言，则测试的成功与否完全取决于断言是否全部通过；
-                // 否则，默认取决于 HTTP 状态码是否为 2xx。
                 if !test_result.assertions.is_empty() {
                     test_result.success = test_result.assertions.iter().all(|a| a.passed);
                 }
 
-                // 判断是否需要挂载 timing
                 let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
                 if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
                     test_result.timing = Some(crate::http::timing::RequestTiming {
                         dns_lookup: dns,
                         tcp_connect: tcp,
-                        ttfb: response.ttfb,
-                        transfer: response.transfer,
+                        ttfb: response_obj.ttfb,
+                        transfer: response_obj.transfer,
                     });
                 }
 
@@ -339,6 +394,330 @@ impl TestExecutor {
                 test_result
             }
         }
+    }
+
+    /// 执行 SSE 流式请求
+    async fn execute_stream(
+        &self,
+        response: reqwest::Response,
+        ttfb: Duration,
+        request_number: usize,
+        name: Option<String>,
+        method: String,
+        url: String,
+        assertions_to_eval: &[String],
+        captures_to_eval: &[VariableCapture],
+        sse_timeout: Option<Duration>,
+        sse_max_events: Option<usize>,
+        context: &mut VariableContext,
+        start_time: Instant,
+        source: Option<String>,
+        request_snapshot: RequestSnapshot,
+        probe_result: Option<(Duration, Duration)>,
+    ) -> TestResult {
+        let status_code = response.status().as_u16();
+        let headers = response.headers().clone();
+
+        // [Cookie] Middleware after_response hook (best effort)
+        if let Some(mw) = &self.cookie_middleware {
+            let handshake_response_tmp = crate::http::Response::new(
+                status_code,
+                headers.clone(),
+                String::new(),
+                ttfb,
+                ttfb,
+                Duration::from_millis(0),
+            ).unwrap();
+            let _ = mw.after_response(&handshake_response_tmp).await.map_err(|e| {
+                error!("Cookie middleware error: {}", e);
+            });
+        }
+
+        let mut assertion_results = Vec::new();
+
+        // 评估非 stream 握手断言
+        let handshake_response = crate::http::Response::new(
+            status_code,
+            headers.clone(),
+            String::new(),
+            ttfb,
+            ttfb,
+            Duration::from_millis(0),
+        ).unwrap();
+
+        for assertion_str in assertions_to_eval {
+            if !assertion_str.contains("stream.") {
+                let resolved_assertion = VariableResolver::resolve(assertion_str, context);
+                match parse_assertion(&resolved_assertion) {
+                    Ok(assertion_expr) => {
+                        let result = evaluate_assertion(&assertion_expr, &handshake_response);
+                        assertion_results.push(result);
+                    }
+                    Err(e) => {
+                        assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+                    }
+                }
+            }
+        }
+
+        let timeout_duration = sse_timeout.unwrap_or(Duration::from_secs(30));
+        let sleep_timer = tokio::time::sleep(timeout_duration);
+        tokio::pin!(sleep_timer);
+
+        let mut byte_stream = response.bytes_stream();
+        let mut sse_parser = SseParser::new();
+        let mut accumulated_body = String::new();
+        let mut event_count = 0;
+
+        loop {
+            if let Some(max) = sse_max_events {
+                if event_count >= max {
+                    info!("SSE max events limit reached: {}", max);
+                    break;
+                }
+            }
+
+            tokio::select! {
+                _ = &mut sleep_timer => {
+                    info!("SSE stream execution timed out after {:?}", timeout_duration);
+                    break;
+                }
+                maybe_chunk = byte_stream.next() => {
+                    match maybe_chunk {
+                        Some(Ok(chunk)) => {
+                            let chunk_str = String::from_utf8_lossy(&chunk);
+                            let events = sse_parser.feed(&chunk_str);
+                            for event in events {
+                                event_count += 1;
+                                accumulated_body.push_str(&event.data);
+                                accumulated_body.push('\n');
+
+                                if self.debug {
+                                    println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
+                                }
+
+                                // 构造虚拟响应帧以供 capture & assertions
+                                let mut sse_headers = HeaderMap::new();
+                                if let Some(ref ev) = event.event {
+                                    sse_headers.insert("x-sse-event", HeaderValue::from_str(ev).unwrap_or(HeaderValue::from_static("")));
+                                }
+                                if let Some(ref id) = event.id {
+                                    sse_headers.insert("x-sse-id", HeaderValue::from_str(id).unwrap_or(HeaderValue::from_static("")));
+                                }
+                                for (k, v) in headers.iter() {
+                                    sse_headers.insert(k.clone(), v.clone());
+                                }
+
+                                let virtual_response = crate::http::Response::new(
+                                    status_code,
+                                    sse_headers,
+                                    event.data.clone(),
+                                    Duration::from_millis(0),
+                                    Duration::from_millis(0),
+                                    Duration::from_millis(0),
+                                ).unwrap();
+
+                                // 1. 实时变量捕获
+                                let mut stream_captures = Vec::new();
+                                for cap in captures_to_eval {
+                                    if let crate::variable::capture::CaptureSource::Body(ref path) = cap.source {
+                                        if let Some(rest) = path.strip_prefix("stream.body.") {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Body(rest.to_string());
+                                            stream_captures.push(new_cap);
+                                        } else if path == "stream.event" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
+                                            stream_captures.push(new_cap);
+                                        } else if path == "stream.id" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
+                                            stream_captures.push(new_cap);
+                                        }
+                                    } else if let crate::variable::capture::CaptureSource::Header(ref name) = cap.source {
+                                        if name == "stream.event" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
+                                            stream_captures.push(new_cap);
+                                        } else if name == "stream.id" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
+                                            stream_captures.push(new_cap);
+                                        }
+                                    }
+                                }
+
+                                if !stream_captures.is_empty() {
+                                    if let Ok(captured_vars) = capture_from_response(
+                                        &virtual_response.body,
+                                        &virtual_response.headers,
+                                        &stream_captures,
+                                    ) {
+                                        context.extend(captured_vars);
+                                    }
+                                }
+
+                                // 2. 实时流断言
+                                for assertion_str in assertions_to_eval {
+                                    if assertion_str.contains("stream.") {
+                                        let resolved_assertion = VariableResolver::resolve(assertion_str, context);
+                                        match parse_assertion(&resolved_assertion) {
+                                            Ok(assertion_expr) => {
+                                                let result = evaluate_assertion(&assertion_expr, &virtual_response);
+                                                assertion_results.push(result.with_stream_index(event_count));
+                                            }
+                                            Err(e) => {
+                                                assertion_results.push(AssertionResult::error(assertion_str.clone(), e).with_stream_index(event_count));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let Some(max) = sse_max_events {
+                                    if event_count >= max {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            error!("Error reading SSE chunk: {}", e);
+                            break;
+                        }
+                        None => {
+                            // 自然结束流，刷新可能未完成的事件
+                            if let Some(event) = sse_parser.flush() {
+                                event_count += 1;
+                                accumulated_body.push_str(&event.data);
+                                accumulated_body.push('\n');
+
+                                if self.debug {
+                                    println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
+                                }
+
+                                let mut sse_headers = HeaderMap::new();
+                                if let Some(ref ev) = event.event {
+                                    sse_headers.insert("x-sse-event", HeaderValue::from_str(ev).unwrap_or(HeaderValue::from_static("")));
+                                }
+                                if let Some(ref id) = event.id {
+                                    sse_headers.insert("x-sse-id", HeaderValue::from_str(id).unwrap_or(HeaderValue::from_static("")));
+                                }
+                                for (k, v) in headers.iter() {
+                                    sse_headers.insert(k.clone(), v.clone());
+                                }
+
+                                let virtual_response = crate::http::Response::new(
+                                    status_code,
+                                    sse_headers,
+                                    event.data.clone(),
+                                    Duration::from_millis(0),
+                                    Duration::from_millis(0),
+                                    Duration::from_millis(0),
+                                ).unwrap();
+
+                                // 1. 实时变量捕获
+                                let mut stream_captures = Vec::new();
+                                for cap in captures_to_eval {
+                                    if let crate::variable::capture::CaptureSource::Body(ref path) = cap.source {
+                                        if let Some(rest) = path.strip_prefix("stream.body.") {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Body(rest.to_string());
+                                            stream_captures.push(new_cap);
+                                        } else if path == "stream.event" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
+                                            stream_captures.push(new_cap);
+                                        } else if path == "stream.id" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
+                                            stream_captures.push(new_cap);
+                                        }
+                                    } else if let crate::variable::capture::CaptureSource::Header(ref name) = cap.source {
+                                        if name == "stream.event" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
+                                            stream_captures.push(new_cap);
+                                        } else if name == "stream.id" {
+                                            let mut new_cap = cap.clone();
+                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
+                                            stream_captures.push(new_cap);
+                                        }
+                                    }
+                                }
+
+                                if !stream_captures.is_empty() {
+                                    if let Ok(captured_vars) = capture_from_response(
+                                        &virtual_response.body,
+                                        &virtual_response.headers,
+                                        &stream_captures,
+                                    ) {
+                                        context.extend(captured_vars);
+                                    }
+                                }
+
+                                // 2. 实时流断言
+                                for assertion_str in assertions_to_eval {
+                                    if assertion_str.contains("stream.") {
+                                        let resolved_assertion = VariableResolver::resolve(assertion_str, context);
+                                        match parse_assertion(&resolved_assertion) {
+                                            Ok(assertion_expr) => {
+                                                let result = evaluate_assertion(&assertion_expr, &virtual_response);
+                                                assertion_results.push(result.with_stream_index(event_count));
+                                            }
+                                            Err(e) => {
+                                                assertion_results.push(AssertionResult::error(assertion_str.clone(), e).with_stream_index(event_count));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let total_duration = start_time.elapsed();
+        let transfer = total_duration.saturating_sub(ttfb);
+        let final_response = crate::http::Response::new(
+            status_code,
+            headers.clone(),
+            accumulated_body,
+            total_duration,
+            ttfb,
+            transfer,
+        ).unwrap();
+
+        // [History] 保存历史记录 (Best Effort)
+        use crate::history::recorder::record_history;
+        record_history(request_snapshot, &final_response, source);
+
+        // 构造最终测试结果
+        let mut test_result = TestResult::success(
+            request_number,
+            name,
+            method,
+            url,
+            final_response.clone(),
+        );
+        test_result.assertions = assertion_results;
+
+        if !test_result.assertions.is_empty() {
+            test_result.success = test_result.assertions.iter().all(|a| a.passed);
+        }
+
+        let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
+        if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
+            test_result.timing = Some(crate::http::timing::RequestTiming {
+                dns_lookup: dns,
+                tcp_connect: tcp,
+                ttfb: final_response.ttfb,
+                transfer: final_response.transfer,
+            });
+        }
+
+        test_result
     }
 }
 

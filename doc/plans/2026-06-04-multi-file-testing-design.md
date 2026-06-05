@@ -158,3 +158,28 @@ graph TD
     *   *JJ commit*: `feat(runner): implement batch executor with parallel JoinSet and Cookie isolation`
 *   **Step 5: 升级 CLI 参数、TestReporter JSON 报告输出并运行所有测试**
     *   *JJ commit*: `feat(cli): upgrade command line arguments and support json report format`
+
+---
+
+## 6. 技术决定归档与实施记录 (Architectural Decisions & Implementation Records)
+
+在 Sprint 2 的具体落地执行中，我们做出了以下几项核心的技术决策与架构规范，以确保代码质量、安全性和后续可扩展性：
+
+### 6.1 依赖分析机制 (Dependency Extraction)
+为了无缝适配 `.http` 纯文本格式与 `.md` Markdown 格式文档，我们在解析端实现了一套统一的依赖提取规则：
+*   **兼容的前缀匹配**：系统支持解析 `### @depends-on <file>`、`# @depends-on <file>` 以及 Markdown 常用的 HTML 注释形式 `<!-- @depends-on <file> -->`。
+*   **路径规范化处理**：所有的依赖声明在构建拓扑图时，都会自动与当前文件所在的目录拼接并调用 `canonicalize()` 进行规范化处理。如果在运行的测试文件集合之外存在外部依赖，算法只对处于待执行队列中的节点执行 Kahn 拓扑排序，排除外部无关依赖的影响。
+
+### 6.2 并行 Cookie 的无竞争隔离 (Cookie Store Isolation in Parallel Mode)
+*   **会话数据安全**：为杜绝多线程下并行读写物理 Cookie 文件产生数据争用（Data Race）和锁竞争，我们决定在并行执行（`parallel`）时，为每一个并发 Worker 动态分配一个独立的 **Ephemeral CookieStore 副本**。
+*   **隔离策略**：各个并行任务仅在内存中独立存取 Cookie，彼此不共享、不污染；而顺序执行（`sequential`）时，默认共享同一个 CookieStore 并处理物理文件的读写同步锁，完美平衡了“无状态并发”和“有状态流水线式执行”两大场景。
+
+### 6.3 并发度控制与 Fail-Fast 主动中断 (Concurrency & Abort Mechanism)
+*   **并发管理**：借助 `tokio::sync::Semaphore` 对 `concurrency` 进行精细度控制，避免海量用例在并行模式下瞬间耗尽系统文件句柄或造成目标服务器拒绝服务。
+*   **主动 Abort**：一旦开启 `--fail-fast`：
+    *   在**串行模式**下：遇到错误立即 `break` 循环，退出批处理。
+    *   在**并行模式**下：借助 `JoinSet::abort_all()`，一旦检测到有任何用例发生失败，立刻强行中止其余所有的并发子任务，保证早期极速反馈。
+
+### 6.4 精细的 JSON 表现层解耦 (Decoupled JSON Report Presentation)
+为了不让 `TestResult` 强行派生 `serde::Serialize` 导致对底层 HTTP/响应数据模型的层层强侵入，我们在 `TestReporter` 内部通过手动构建 `serde_json::json!` 的方式解耦了数据表示层。这为以后提供 HTML 可视化报告或其他的 CI 统计适配器打下了极佳的开闭原则（Open-Closed Principle）基础。
+

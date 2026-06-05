@@ -43,9 +43,7 @@ impl HttpFileParser {
         let mut blocks = Vec::new();
         let mut current_block = String::new();
         let mut block_start_line = 1;
-        let mut current_line = 1;
-
-        for line in content.lines() {
+        for (current_line, line) in (1..).zip(content.lines()) {
             if line.trim().starts_with("###") {
                 // 遇到分隔符，保存当前块
                 if !current_block.trim().is_empty() {
@@ -57,7 +55,6 @@ impl HttpFileParser {
                 current_block.push_str(line);
                 current_block.push('\n');
             }
-            current_line += 1;
         }
 
         // 添加最后一个块
@@ -79,15 +76,18 @@ impl HttpFileParser {
         let mut http_lines = Vec::new();
         let mut current_line = start_line;
 
-        // 预过滤并提取合法的元数据指令
         for line in block.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with('@') {
-                if let Some(metadata) = metadata::parse_metadata(trimmed)? {
-                    metadata::apply_metadata(&metadata, &mut request.metadata);
-                    current_line += 1;
-                    continue; // 成功提取元数据，该行不作为 HTTP 报文行
-                }
+            let metadata = if trimmed.starts_with('@') {
+                metadata::parse_metadata(trimmed)?
+            } else {
+                None
+            };
+
+            if let Some(metadata) = metadata {
+                metadata::apply_metadata(&metadata, &mut request.metadata);
+                current_line += 1;
+                continue; // 成功提取元数据，该行不作为 HTTP 报文行
             }
             http_lines.push((line, current_line));
             current_line += 1;

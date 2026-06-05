@@ -49,6 +49,12 @@ pub enum ValuePath {
     Body(Vec<String>),
     /// 响应时间（毫秒）
     ResponseTime,
+    /// SSE 事件类型
+    StreamEvent,
+    /// SSE 事件 ID
+    StreamId,
+    /// SSE 事件 Body 路径
+    StreamBody(Vec<String>),
 }
 
 impl fmt::Display for ValuePath {
@@ -58,6 +64,9 @@ impl fmt::Display for ValuePath {
             ValuePath::Header(name) => write!(f, "headers.{}", name),
             ValuePath::Body(segments) => write!(f, "body.{}", segments.join(".")),
             ValuePath::ResponseTime => write!(f, "response.time"),
+            ValuePath::StreamEvent => write!(f, "stream.event"),
+            ValuePath::StreamId => write!(f, "stream.id"),
+            ValuePath::StreamBody(segments) => write!(f, "stream.body.{}", segments.join(".")),
         }
     }
 }
@@ -236,9 +245,18 @@ pub struct AssertionResult {
 
     /// 失败消息
     pub message: Option<String>,
+
+    /// SSE 事件流索引（若是流断言，1-based 索引）
+    pub stream_event_index: Option<usize>,
 }
 
 impl AssertionResult {
+    /// 设置流事件索引
+    pub fn with_stream_index(mut self, index: usize) -> Self {
+        self.stream_event_index = Some(index);
+        self
+    }
+
     /// 创建成功的断言结果
     pub fn success(raw: String, actual: String, expected: String) -> Self {
         Self {
@@ -247,6 +265,7 @@ impl AssertionResult {
             actual: Some(actual),
             expected,
             message: None,
+            stream_event_index: None,
         }
     }
 
@@ -258,6 +277,7 @@ impl AssertionResult {
             actual: Some(actual),
             expected,
             message: Some(message),
+            stream_event_index: None,
         }
     }
 
@@ -269,6 +289,7 @@ impl AssertionResult {
             actual: None,
             expected: String::new(),
             message: Some(error.to_string()),
+            stream_event_index: None,
         }
     }
 }
@@ -333,5 +354,11 @@ mod tests {
             "body.user.id"
         );
         assert_eq!(ValuePath::ResponseTime.to_string(), "response.time");
+        assert_eq!(ValuePath::StreamEvent.to_string(), "stream.event");
+        assert_eq!(ValuePath::StreamId.to_string(), "stream.id");
+        assert_eq!(
+            ValuePath::StreamBody(vec!["choices".to_string(), "text".to_string()]).to_string(),
+            "stream.body.choices.text"
+        );
     }
 }

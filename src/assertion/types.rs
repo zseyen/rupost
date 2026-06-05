@@ -55,6 +55,8 @@ pub enum ValuePath {
     StreamId,
     /// SSE 事件 Body 路径
     StreamBody(Vec<String>),
+    /// 统一大模型流规整内容
+    StreamLlmContent,
 }
 
 impl fmt::Display for ValuePath {
@@ -67,6 +69,7 @@ impl fmt::Display for ValuePath {
             ValuePath::StreamEvent => write!(f, "stream.event"),
             ValuePath::StreamId => write!(f, "stream.id"),
             ValuePath::StreamBody(segments) => write!(f, "stream.body.{}", segments.join(".")),
+            ValuePath::StreamLlmContent => write!(f, "stream.llm.content"),
         }
     }
 }

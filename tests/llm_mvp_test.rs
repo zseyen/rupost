@@ -127,9 +127,8 @@ async fn test_llm_stream_normalization() {
     let mut context_openai = VariableContext::new();
     let res_openai = run_http_content_with_context(&content_openai, &executor, &mut context_openai).await;
 
-    // 预期由于未实现 Stream Normalization，断言未通过，捕获值为空
-    assert!(!res_openai.success, "Normalization OpenAI test should fail initially in TDD");
-    assert_eq!(context_openai.get("captured_openai"), None);
+    assert!(res_openai.success, "Normalization OpenAI test failed: {:?}", res_openai.error);
+    assert_eq!(context_openai.get("captured_openai"), Some("Rust is perfect."));
 
     // 2. 验证 Anthropic 格式规整
     let content_anthropic = format!(
@@ -142,9 +141,8 @@ async fn test_llm_stream_normalization() {
     let mut context_anthropic = VariableContext::new();
     let res_anthropic = run_http_content_with_context(&content_anthropic, &executor, &mut context_anthropic).await;
 
-    // 预期由于未实现 Stream Normalization，断言未通过，捕获值为空
-    assert!(!res_anthropic.success, "Normalization Anthropic test should fail initially in TDD");
-    assert_eq!(context_anthropic.get("captured_anthropic"), None);
+    assert!(res_anthropic.success, "Normalization Anthropic test failed: {:?}", res_anthropic.error);
+    assert_eq!(context_anthropic.get("captured_anthropic"), Some("Rust is perfect."));
 }
 
 #[tokio::test]
@@ -167,8 +165,11 @@ async fn test_file_sync_output() {
     let executor = TestExecutor::new();
     let _res = run_http_content(&content, &executor).await;
 
-    // TDD 预期：因为骨架没有真正写入文件，文件应该不存在，或者内容不符合预期
-    assert!(!sync_file_path.exists(), "File sync output should not exist initially in TDD");
+    // 验证物理文件被成功创建，并包含了标题头和大模型拼接内容
+    assert!(sync_file_path.exists(), "File sync output should be created");
+    let file_content = std::fs::read_to_string(&sync_file_path).unwrap();
+    assert!(file_content.contains("# LLM Prompt Debugging Report"), "Should contain title header");
+    assert!(file_content.contains("Rust is perfect."), "Should contain accumulated tokens: {:?}", file_content);
 }
 
 #[tokio::test]
@@ -230,6 +231,17 @@ async fn test_generic_sys_log_stream() {
 
     let res = run_http_content(&content, &executor).await;
 
-    // TDD 预期：`stream.llm.content` 尚未被组装，所以含有此断言的请求应该失败
-    assert!(!res.success, "Generic sys log stream test should fail initially in TDD");
+    assert!(!res.success);
+    assert!(
+        res.assertions
+            .iter()
+            .any(|a| a.raw.contains("stream.event == \"build_start\"") && a.passed),
+        "stream.event == \"build_start\" should pass at least once"
+    );
+    assert!(
+        res.assertions
+            .iter()
+            .any(|a| a.raw.contains("stream.llm.content contains \"Compiling cargo...\"") && a.passed),
+        "stream.llm.content assertion should pass"
+    );
 }

@@ -79,6 +79,10 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
         return Ok(ValuePath::StreamId);
     }
 
+    if input == "stream.llm.content" {
+        return Ok(ValuePath::StreamLlmContent);
+    }
+
     if let Some(rest) = input.strip_prefix("headers.") {
         return Ok(ValuePath::Header(rest.to_string()));
     }

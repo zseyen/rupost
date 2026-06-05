@@ -214,6 +214,8 @@ impl TestExecutor {
                 .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
         let sse_timeout = parsed.metadata.sse_timeout;
         let sse_max_events = parsed.metadata.sse_max_events;
+        let stream_to = parsed.metadata.stream_to.clone();
+        let stream_to_append = parsed.metadata.stream_to_append;
 
         let assertions_to_eval = parsed.metadata.assertions.clone();
         let captures_to_eval = parsed.metadata.captures.clone();
@@ -291,6 +293,8 @@ impl TestExecutor {
                             source,
                             request_snapshot,
                             probe_result,
+                            stream_to,
+                            stream_to_append,
                         )
                         .await;
                 }
@@ -435,6 +439,8 @@ impl TestExecutor {
         source: Option<String>,
         request_snapshot: RequestSnapshot,
         probe_result: Option<(Duration, Duration)>,
+        stream_to: Option<String>,
+        stream_to_append: bool,
     ) -> TestResult {
         let status_code = response.status().as_u16();
         let headers = response.headers().clone();
@@ -493,7 +499,19 @@ impl TestExecutor {
         let mut byte_stream = response.bytes_stream();
         let mut sse_parser = SseParser::new();
         let mut accumulated_body = String::new();
+        let mut accumulated_llm_content = String::new();
+        let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
+        let llm_provider = crate::http::llm_adapter::LlmStreamAdapter::detect_provider(&url, &headers);
         let mut event_count = 0;
+
+        let mut file_writer = if let Some(ref path_str) = stream_to {
+            Some(crate::runner::file_sync::FileSyncWriter::new(
+                std::path::PathBuf::from(path_str),
+                stream_to_append,
+            ))
+        } else {
+            None
+        };
 
         loop {
             if sse_max_events.is_some_and(|max| event_count >= max) {
@@ -518,6 +536,13 @@ impl TestExecutor {
 
                                 if self.debug {
                                     println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
+                                }
+
+                                if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
+                                    accumulated_llm_content.push_str(&delta);
+                                    if let Some(ref mut w) = file_writer {
+                                        let _ = w.write_delta(&delta, &format!("{:?}", llm_provider)).await;
+                                    }
                                 }
 
                                 // 构造虚拟响应帧以供 capture & assertions
@@ -579,9 +604,9 @@ impl TestExecutor {
                                     context.extend(captured_vars);
                                 }
 
-                                // 2. 实时流断言
+                                // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
                                 for assertion_str in assertions_to_eval {
-                                    if assertion_str.contains("stream.") {
+                                    if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
                                         let resolved_assertion = VariableResolver::resolve(assertion_str, context);
                                         match parse_assertion(&resolved_assertion) {
                                             Ok(assertion_expr) => {
@@ -613,6 +638,13 @@ impl TestExecutor {
 
                                 if self.debug {
                                     println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
+                                }
+
+                                if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
+                                    accumulated_llm_content.push_str(&delta);
+                                    if let Some(ref mut w) = file_writer {
+                                        let _ = w.write_delta(&delta, &format!("{:?}", llm_provider)).await;
+                                    }
                                 }
 
                                 let mut sse_headers = HeaderMap::new();
@@ -673,9 +705,9 @@ impl TestExecutor {
                                     context.extend(captured_vars);
                                 }
 
-                                // 2. 实时流断言
+                                // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
                                 for assertion_str in assertions_to_eval {
-                                    if assertion_str.contains("stream.") {
+                                    if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
                                         let resolved_assertion = VariableResolver::resolve(assertion_str, context);
                                         match parse_assertion(&resolved_assertion) {
                                             Ok(assertion_expr) => {
@@ -698,15 +730,59 @@ impl TestExecutor {
 
         let total_duration = start_time.elapsed();
         let transfer = total_duration.saturating_sub(ttfb);
+
+        let mut final_headers = headers.clone();
+        final_headers.insert(
+            "x-sse-llm-content",
+            HeaderValue::from_str(&accumulated_llm_content).unwrap_or_else(|_| HeaderValue::from_static("")),
+        );
+
         let final_response = crate::http::Response::new(
             status_code,
-            headers.clone(),
+            final_headers,
             accumulated_body,
             total_duration,
             ttfb,
             transfer,
         )
         .unwrap();
+
+        // 3. 评估包含 stream.llm.content 的断言
+        for assertion_str in assertions_to_eval {
+            if assertion_str.contains("stream.llm.content") {
+                let resolved_assertion = VariableResolver::resolve(assertion_str, context);
+                match parse_assertion(&resolved_assertion) {
+                    Ok(assertion_expr) => {
+                        let result = evaluate_assertion(&assertion_expr, &final_response);
+                        assertion_results.push(result);
+                    }
+                    Err(e) => {
+                        assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+                    }
+                }
+            }
+        }
+
+        // 4. 评估包含 stream.llm.content 的捕获
+        let mut final_captures = Vec::new();
+        for cap in captures_to_eval {
+            if let crate::variable::capture::CaptureSource::Body(ref path) = cap.source {
+                if path == "stream.llm.content" {
+                    let mut new_cap = cap.clone();
+                    new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-llm-content".to_string());
+                    final_captures.push(new_cap);
+                }
+            }
+        }
+        if !final_captures.is_empty() {
+            if let Ok(captured_vars) = capture_from_response(
+                &final_response.body,
+                &final_response.headers,
+                &final_captures,
+            ) {
+                context.extend(captured_vars);
+            }
+        }
 
         // [History] 保存历史记录 (Best Effort)
         use crate::history::recorder::record_history;

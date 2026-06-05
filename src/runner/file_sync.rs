@@ -1,10 +1,13 @@
 use std::path::PathBuf;
+use tokio::fs::{File, OpenOptions};
+use tokio::io::AsyncWriteExt;
 use crate::Result;
 
 pub struct FileSyncWriter {
     target_path: PathBuf,
     append: bool,
-    buffer: String,
+    file: Option<File>,
+    header_written: bool,
 }
 
 impl FileSyncWriter {
@@ -12,13 +15,40 @@ impl FileSyncWriter {
         Self {
             target_path: path,
             append,
-            buffer: String::new(),
+            file: None,
+            header_written: false,
         }
     }
 
-    pub fn write_delta(&mut self, delta: &str, _provider_name: &str) -> Result<()> {
-        self.buffer.push_str(delta);
-        // MVP 骨架暂时不执行真正物理写入，仅返回 OK
+    pub async fn write_delta(&mut self, delta: &str, _provider_name: &str) -> Result<()> {
+        if self.file.is_none() {
+            // Ensure parent directory exists
+            if let Some(parent) = self.target_path.parent() {
+                if !parent.exists() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+            }
+
+            let file = if self.append {
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.target_path)
+                    .await?
+            } else {
+                let mut f = File::create(&self.target_path).await?;
+                f.write_all(b"# LLM Prompt Debugging Report\n\n").await?;
+                self.header_written = true;
+                f
+            };
+            self.file = Some(file);
+        }
+
+        if let Some(ref mut f) = self.file {
+            f.write_all(delta.as_bytes()).await?;
+            f.flush().await?;
+        }
+
         Ok(())
     }
 }

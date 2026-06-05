@@ -56,6 +56,39 @@ RuPost 提供了直观的命令行界面：
   rupost GET http://httpbin.org/get -H "Authorization: Bearer token"
   ```
 
+- **批量与目录递归执行**:
+  ```bash
+  rupost test examples/batch/
+  # 或者运行特定的多个文件并指定并行模式
+  rupost t examples/batch/03_health.http examples/batch/01_login.http --mode parallel --concurrency 2
+  ```
+
+---
+
+## 批量测试与目录递归执行 (Batch & Directory Testing)
+
+RuPost 支持对整个目录或多个文件进行批量测试。内置了依赖图解析与高效的执行模式：
+
+### 1. 递归目录与隐藏路径过滤
+当传入一个或多个文件夹时，RuPost 会自动递归扫描并收集所有的 `.http` 与 `.md` 文件，同时自动过滤并跳过 `.git/`、`.rupost/`、`target/` 和 `node_modules/` 等隐藏与无关路径。
+
+### 2. 声明式跨文件依赖 (@depends-on)
+支持在 `.http` 或 `.md` 文件的头部通过 `### @depends-on <filename>` 声明前置依赖关系。例如：
+```http
+### @depends-on 01_login.http
+GET {{base_url}}/profile
+Authorization: Bearer {{my_token}}
+```
+RuPost 会构建有向无环图（DAG），利用 **Kahn 拓扑排序算法** 自动计算并编排正确的用例执行顺序（如果检测到循环依赖将报错退出）。
+
+### 3. 双执行模式选择
+- **顺序模式 (Sequential)**：默认行为。按拓扑排序后的链式顺序执行，用例之间**共享变量上下文与 Cookie 会话**。
+- **并行模式 (Parallel)**：通过 `--mode parallel` 开启，支持通过 `--concurrency <N>` 设置并发数。各个并发任务**拥有独立且隔离的 CookieStore 与变量上下文作用域**，防止数据污染和竞争。
+
+### 4. 高级输出控制
+- **早期中断**：使用 `--fail-fast` 可在遇到第一个用例文件失败时，立刻终止后续测试。
+- **结构化 JSON 报告**：使用 `--report json` 会将批量测试结果输出为标准 JSON，完美兼容 CI/CD 自动化分析。
+
 ---
 
 ## 变量与环境 (Variables & Environments)

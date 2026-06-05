@@ -1,0 +1,5 @@
+### 健康检查，独立无依赖
+@name health
+GET https://httpbin.org/status/200
+
+@assert status == 200

@@ -1,6 +1,13 @@
-# Checkpoint - 2026-06-03
+# Checkpoint - 2026-06-05
 
 ## 当前状态
+- **全面修复 GitHub Action 与本地 Clippy 全部警告**：
+  1. 移除了 [Cargo.toml](file:///Users/zsyzzx/project/rust/rupost/Cargo.toml) 中不支持的 `package.about`，修正为标准的 `package.description`。
+  2. 修复了多处 `collapsible_if` 与嵌套的模式匹配，在 [cookie.rs](file:///Users/zsyzzx/project/rust/rupost/src/middleware/cookie.rs) 中使用 `map_err()` 代替 `drop` 时的嵌套 `if let` 块。
+  3. 将 [executor.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs) 中嵌套的多处时间开销计算 `if let` 改为 **元组解构模式匹配**（如 `if let (true, Some(val)) = (need_timing, probe_result)`），完全消除了 `collapsible_if` 警告并极大提升了可读性。
+  4. 修复了 [markdown_file.rs](file:///Users/zsyzzx/project/rust/rupost/src/parser/markdown_file.rs) 中代码块结束时判断 `in_code_block` 的 `collapsible_match`，改用模式匹配守卫（Match Guard）合并判断。
+  5. 修复了 [resolver.rs](file:///Users/zsyzzx/project/rust/rupost/src/variable/resolver.rs) 测试中手动做范围判断的 `manual_range_contains`，替换为标准的 `(1..=10000).contains(&num)`。
+  6. 修复了 [main.rs](file:///Users/zsyzzx/project/rust/rupost/src/main.rs) 中 `run_test` 函数参数过多（8个）的 `too_many_arguments` 问题。定义了 `RunTestOptions` 结构体对其参数进行优雅聚合。同时，将文件内散落的所有函数内部的内联 `use` 导入语句统一移至文件顶部管理。
 - **完成全量 WBS 用户故事与架构走查**：
   1. 结合 [project_next_state.md](file:///Users/zsyzzx/project/rust/rupost/doc/project_next_state.md) 的 20 项后续功能规划，扩展了 4 类用户画像，提炼出 10 个核心 User Story 并梳理出详尽 of [user_story_walkthrough_detailed.md](file:///Users/zsyzzx/project/rust/rupost/doc/plans/user_story_walkthrough_detailed.md) 分析报告。
   2. 深度剖析了多协议 Connection 句柄、DAG 文件夹依赖拓扑、企业脱敏审计切面、WASM 插件沙箱等领域的系统数据结构与 API 设计 Gap，给出了针对性的演进建议。

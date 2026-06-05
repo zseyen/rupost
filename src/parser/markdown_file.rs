@@ -86,16 +86,14 @@ impl MarkdownFileParser {
                 }
 
                 // 代码块结束
-                Event::End(TagEnd::CodeBlock) => {
-                    if in_code_block {
-                        blocks.push(ExtractedCodeBlock {
-                            content: current_code.clone(),
-                            preceding_header: current_header.clone(),
-                        });
+                Event::End(TagEnd::CodeBlock) if in_code_block => {
+                    blocks.push(ExtractedCodeBlock {
+                        content: current_code.clone(),
+                        preceding_header: current_header.clone(),
+                    });
 
-                        in_code_block = false;
-                        current_code.clear();
-                    }
+                    in_code_block = false;
+                    current_code.clear();
                 }
 
                 _ => {}

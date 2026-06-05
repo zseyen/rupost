@@ -75,6 +75,17 @@ async fn main() -> Result<()> {
                 rupost::history::printer::list_history(limit, reverse)?;
             }
         },
+        Some(Commands::Diagnose { url }) => {
+            match rupost::http::diagnose_url(&url).await {
+                Ok(report) => {
+                    rupost::http::print_diagnose_report(&report);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
         Some(Commands::Generate(args)) => {
             let storage = get_storage();
 

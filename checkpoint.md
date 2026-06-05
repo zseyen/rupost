@@ -1,28 +1,19 @@
 # Checkpoint - 2026-06-10
 
 ## 当前状态
-- **完成多测试文件、文件夹批量递归执行及安全依赖拓扑级联特性**：
-  1. 设计并实现了 `DependencyResolver`，自动递归解析加载物理存在的测试依赖项（`.http`/`.md`），免除用户在命令行手动输入繁琐依赖文件的痛苦。
-  2. 实现了**沙箱边界防御（Sandbox Scope Jail）**，强制校验被依赖文件的物理路径必须位于当前工作目录或指定执行目录下，切断由 `### @depends-on` 引入的任意路径穿越攻击（Path Traversal）。
-  3. 实现了 **DAG 状态克隆传递（State Cloning on Directed Edges）**：子节点启动前，能够从依赖的父节点中，单向合并克隆其变量（Context 差集增量）与 Cookie 状态（通过 `serde_json` 序列化无损还原包含 Session Cookie 的 Cookie 罐状态），完美解决了并行模式下依赖链上的动态鉴权数据传递。
-  4. 大幅降低圈复杂度：将 `ParallelScheduler` 并发派发逻辑解耦，提炼出 `wait_for_deps`, `build_executor_with_state`, `extract_changed_vars` 等高内聚辅助函数，并为它们增加了单元测试。
-  5. 实现了不破坏任何现有 API 和功能的 `export_cookie_state` 与 `import_cookie_state` 公共序列化接口，保留了极强的向后兼容性。
-  6. 在 `tests/batch_testing_test.rs` 中新增了 `test_batch_parallel_local_variable_cascade` 与 `test_batch_parallel_cookie_cascade` 的 E2E 回归集成测试。
-  7. **新增 JSON Path 数组下标数值提取支持**：在 `src/assertion/extractor.rs` 中重构支持了使用数值（如 `body.headers.Cookie.0`）查找 JSON 数组元素的功能，并覆盖了完整的单元测试，解决先前 `PathNotFound` 的缺陷。
-  8. **回归并调优批量并发测试集**：创建并跑通了包含 6 个复杂 DAG 依赖关系并发运行的测试集（`examples/batch_complex`），针对 HTTP 服务端 Cookie 乱序的问题，将其 `@assert` 优化为了 `contains` 校验，实现并发模式 100% 稳定运行。
-  9. 全量跑通了 **212+** 个测试，无任何编译警告或运行期 Panic。
-
-- **JJ 代码版本化原子提交记录**：
-  - `feat(cookie): add serialization import/export support for CookieMiddleware` (oqyznrnm)
-  - `feat(runner): implement recursive DependencyResolver with sandbox checks` (kzkoxwmz)
-  - `feat(runner): integrate DependencyResolver in main.rs and cleanup unused imports` (nzsylzqs)
-  - `refactor(runner): support TaskOutput cascade in ParallelScheduler and split long closure methods` (ypwstzyy)
-  - `test(runner): add E2E parallel variable and cookie cascade integration tests` (pylmklrn)
-  - `feat(assertion): support array index extraction in json path and add unit tests` (fb046d33)
-  - `chore(examples): optimize Cookie assertions in complex batch test cases and update docs` (f8ca3f08)
-
-- **文档与事实同步**：
-  - 更新了 [progress_summary.md](file:///doc/progress_summary.md)、[README.md](file:///README.md) 的并发模式和安全沙箱说明，以及 [walkthrough.md](file:///walkthrough.md)。
-
+- **完成生产调试模式阶段 1：本地局部环境变量级联覆盖与热重载**：
+  1. 实现了高健壮度的 `.env` 解析器，自动剥离引号、支持行内注释与前导/尾随空格。
+  2. 建立了级联优先级体系：`CLI命令行覆盖 (--var key=val)` > `系统环境变量` > `本地局部 .env 文件` > `共享 rupost.toml 环境配置`。
+  3. 新增了多段单元测试与集成测试，验证了局部 `.env` 覆盖本地网关端口和网络请求闭环。
+- **完成生产调试模式阶段 2：网络连通性分析与高亮诊断工具**：
+  1. 在 `src/cli.rs` 中为子命令新增 `Diagnose` 变体（别名 `d`），并连接 `src/main.rs` 分发。
+  2. 编写 `src/http/diagnose.rs`，基于第一性原理，利用 `lookup_host`，`TcpStream`，及纯 Rust 的 `tokio-rustls` (显式注入 `ring` 密码库) 进行手动握手与探测，精准分离 DNS 解析时延、TCP 握手时延、TLS 协商时延、HTTP TTFB 时延和总耗时。
+  3. 引入 `x509-parser` 解析服务器证书的 Validity 期限，算出剩余有效天数，并对临期（<= 30天）的场景显示黄色警告 `[WARNING]`，已过期的场景显示红色 `[EXPIRED]`，同时解析并显示 Issuer 和 Subject SAN 域名信息。
+  4. 采用色块条形图与 `colored` 库在终端格式化输出诊断瀑布流及证书元数据。
+  5. 编写 `tests/diagnose_integration_test.rs` 集成测试，验证了本地 HTTP mock 服务与公网 HTTPS 接口的正确探测与时耗输出。
 ## 下一步
 - 准备开启 Sprint 3 的“高级特性与脚本引擎”开发（包括 `@loop` 循环, `@skip-if` 条件运行以及前置/后置 Javascript 脚本等引擎集成）。
+- 开启**阶段 3：HTTP 请求/响应基础快照录制与原样重放**。
+  - 规划快照文件的序列化结构。
+  - 实现用例执行时自动带入 `--save-snapshot` 参数，将 HTTP 头部和 Body 数据落盘存储。
+  - 实现独立重放命令 `rupost history replay` 原样发送请求。

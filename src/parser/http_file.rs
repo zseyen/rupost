@@ -46,13 +46,17 @@ impl HttpFileParser {
         let mut deps = Vec::new();
         for line in content.lines() {
             let trimmed = line.trim();
-            if (trimmed.starts_with("###") || trimmed.starts_with('#')) && trimmed.contains("@depends-on") {
-                if let Some(pos) = trimmed.find("@depends-on") {
-                    let dep = trimmed[pos + "@depends-on".len()..].trim();
-                    let dep = dep.trim_end_matches("-->").trim();
-                    if !dep.is_empty() {
-                        deps.push(dep.to_string());
-                    }
+            let has_depends = (trimmed.starts_with("###") || trimmed.starts_with('#'))
+                && trimmed.contains("@depends-on");
+            if let Some(pos) = if has_depends {
+                trimmed.find("@depends-on")
+            } else {
+                None
+            } {
+                let dep = trimmed[pos + "@depends-on".len()..].trim();
+                let dep = dep.trim_end_matches("-->").trim();
+                if !dep.is_empty() {
+                    deps.push(dep.to_string());
                 }
             }
         }

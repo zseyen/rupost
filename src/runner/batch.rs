@@ -1,11 +1,11 @@
 use crate::Result;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 use crate::parser::ParsedFile;
 use crate::runner::executor::TestExecutor;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
@@ -53,11 +53,14 @@ impl BatchExecutor {
                     join_set.spawn(async move {
                         let _permit = sem.acquire().await.unwrap();
 
-                        if fail_fast && has_failed_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                        if fail_fast && has_failed_clone.load(std::sync::atomic::Ordering::Relaxed)
+                        {
                             return (file_path, Vec::new(), true);
                         }
 
-                        let res = worker_executor.execute_all(parsed_file, &mut worker_context).await;
+                        let res = worker_executor
+                            .execute_all(parsed_file, &mut worker_context)
+                            .await;
                         let mut success = true;
                         let results_val = match res {
                             Ok(res_list) => {
@@ -100,7 +103,10 @@ impl BatchExecutor {
                         results.push((path, run_results));
                     }
                     Err(e) => {
-                        return Err(crate::error::RupostError::Other(format!("任务执行 Join 失败: {}", e)));
+                        return Err(crate::error::RupostError::Other(format!(
+                            "任务执行 Join 失败: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -123,10 +129,8 @@ impl BatchExecutor {
             .enumerate()
             .map(|(i, p)| (p.clone(), i))
             .collect();
-        
-        results.sort_by_key(|(path, _)| {
-            order_map.get(path).cloned().unwrap_or(usize::MAX)
-        });
+
+        results.sort_by_key(|(path, _)| order_map.get(path).cloned().unwrap_or(usize::MAX));
 
         Ok(results)
     }

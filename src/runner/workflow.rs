@@ -1,8 +1,8 @@
 use crate::Result;
+use crate::error::RupostError;
+use crate::parser::ParsedFile;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use crate::parser::ParsedFile;
-use crate::error::RupostError;
 
 #[derive(Debug, Clone)]
 pub struct WorkflowNode {
@@ -30,10 +30,13 @@ impl WorkflowGraph {
                 resolved_deps.push(canonical_dep);
             }
             let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-            nodes.insert(canonical_path.clone(), WorkflowNode {
-                file_path: canonical_path,
-                depends_on: resolved_deps,
-            });
+            nodes.insert(
+                canonical_path.clone(),
+                WorkflowNode {
+                    file_path: canonical_path,
+                    depends_on: resolved_deps,
+                },
+            );
         }
         Self { nodes }
     }
@@ -51,7 +54,7 @@ impl WorkflowGraph {
             for dep in &node.depends_on {
                 if self.nodes.contains_key(dep) {
                     *in_degree.entry(path.clone()).or_insert(0) += 1;
-                    adj.entry(dep.clone()).or_insert_with(Vec::new).push(path.clone());
+                    adj.entry(dep.clone()).or_default().push(path.clone());
                 }
             }
         }

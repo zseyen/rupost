@@ -232,19 +232,26 @@ impl TestReporter {
     }
 
     /// 导出为 JSON 报告
-    pub fn report_json(results: &[(std::path::PathBuf, Vec<TestResult>)], writer: &mut impl std::io::Write) -> crate::Result<()> {
+    pub fn report_json(
+        results: &[(std::path::PathBuf, Vec<TestResult>)],
+        writer: &mut impl std::io::Write,
+    ) -> crate::Result<()> {
         let mut json_list = Vec::new();
         for (path, file_results) in results {
             let mut req_results = Vec::new();
             for r in file_results {
-                let assertions_json: Vec<serde_json::Value> = r.assertions.iter().map(|a| {
-                    serde_json::json!({
-                        "raw": a.raw,
-                        "passed": a.passed,
-                        "message": a.message,
+                let assertions_json: Vec<serde_json::Value> = r
+                    .assertions
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "raw": a.raw,
+                            "passed": a.passed,
+                            "message": a.message,
+                        })
                     })
-                }).collect();
-                
+                    .collect();
+
                 req_results.push(serde_json::json!({
                     "request_number": r.request_number,
                     "name": r.name,
@@ -263,22 +270,25 @@ impl TestReporter {
                 "results": req_results,
             }));
         }
-        
+
         let json_str = serde_json::to_string_pretty(&json_list)?;
         writer.write_all(json_str.as_bytes())?;
         Ok(())
     }
 
     /// 打印批量测试汇总
-    pub fn print_batch_summary(results: &[(std::path::PathBuf, Vec<TestResult>)], duration: std::time::Duration) {
+    pub fn print_batch_summary(
+        results: &[(std::path::PathBuf, Vec<TestResult>)],
+        duration: std::time::Duration,
+    ) {
         let total_files = results.len();
         let mut passed_files = 0;
         let mut failed_files = 0;
-        
+
         let mut total_tests = 0;
         let mut passed_tests = 0;
         let mut failed_tests = 0;
-        
+
         for (_, file_results) in results {
             let file_failed = file_results.iter().any(|r| !r.success);
             if file_failed {
@@ -286,7 +296,7 @@ impl TestReporter {
             } else {
                 passed_files += 1;
             }
-            
+
             for r in file_results {
                 total_tests += 1;
                 if r.success {
@@ -296,11 +306,11 @@ impl TestReporter {
                 }
             }
         }
-        
+
         println!("\n{}", "━".repeat(50).bold());
         println!("{}", "Batch Test Summary".bold());
         println!("{}", "━".repeat(50).bold());
-        
+
         println!(
             "  Files Ran: {} total ({} passed, {} failed)",
             total_files,
@@ -313,10 +323,7 @@ impl TestReporter {
             failed_tests.to_string().red(),
             total_tests
         );
-        println!(
-            "  Duration:  {:.3}s",
-            duration.as_secs_f64()
-        );
+        println!("  Duration:  {:.3}s", duration.as_secs_f64());
         println!();
     }
 }

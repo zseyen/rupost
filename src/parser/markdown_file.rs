@@ -41,18 +41,37 @@ impl MarkdownFileParser {
         Ok(parsed_file)
     }
 
-    /// 提取全局依赖
+    /// 从 Markdown 文件内容中解析并提取该文件声明的全局拓扑依赖文件。
+    ///
+    /// # 依赖声明格式支持
+    /// 该函数会逐行扫描，识别以 `#`、`###` 或 `<!--` 开头，且包含 `@depends-on` 关键字的行。
+    /// 具体支持以下几种常见的依赖声明格式：
+    /// - Markdown 标题/注释格式：`# @depends-on other_file.http`
+    /// - HTTP 分隔符/指令格式：`### @depends-on other_file.md`
+    /// - HTML 注释嵌入格式：`<!-- @depends-on other_file.http -->` （尾部的 `-->` 会被自动剥离）
+    ///
+    /// # 参数
+    /// * `content` - Markdown 文件的文本内容字符串
+    ///
+    /// # 返回值
+    /// 返回包含所有提取到的依赖文件路径/名称的字符串向量 `Vec<String>`。
     fn extract_dependencies(content: &str) -> Vec<String> {
         let mut deps = Vec::new();
         for line in content.lines() {
             let trimmed = line.trim();
-            if (trimmed.starts_with("###") || trimmed.starts_with('#') || trimmed.starts_with("<!--")) && trimmed.contains("@depends-on") {
-                if let Some(pos) = trimmed.find("@depends-on") {
-                    let dep = trimmed[pos + "@depends-on".len()..].trim();
-                    let dep = dep.trim_end_matches("-->").trim();
-                    if !dep.is_empty() {
-                        deps.push(dep.to_string());
-                    }
+            let has_depends = (trimmed.starts_with("###")
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("<!--"))
+                && trimmed.contains("@depends-on");
+            if let Some(pos) = if has_depends {
+                trimmed.find("@depends-on")
+            } else {
+                None
+            } {
+                let dep = trimmed[pos + "@depends-on".len()..].trim();
+                let dep = dep.trim_end_matches("-->").trim();
+                if !dep.is_empty() {
+                    deps.push(dep.to_string());
                 }
             }
         }

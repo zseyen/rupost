@@ -9,7 +9,10 @@ impl DirectoryScanner {
         for path_str in paths {
             let path = Path::new(path_str);
             if !path.exists() {
-                return Err(crate::error::RupostError::Other(format!("路径不存在: {}", path_str)));
+                return Err(crate::error::RupostError::Other(format!(
+                    "路径不存在: {}",
+                    path_str
+                )));
             }
             let canonical = path.canonicalize()?;
             if canonical.is_file() {
@@ -20,11 +23,11 @@ impl DirectoryScanner {
                 Self::scan_dir(&canonical, &mut files)?;
             }
         }
-        
+
         // 字典序排序并去重
         files.sort();
         files.dedup();
-        
+
         Ok(files)
     }
 
@@ -42,7 +45,7 @@ impl DirectoryScanner {
         for entry in read_dir {
             let entry = entry?;
             let path = entry.path();
-            
+
             // 排除隐藏文件、隐藏目录，以及 target, node_modules 等常见忽略目录
             if let Some(name) = path.file_name() {
                 let name_str = name.to_string_lossy();

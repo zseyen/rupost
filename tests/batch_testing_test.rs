@@ -1,14 +1,12 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use rupost::parser::HttpFileParser;
-use rupost::runner::{DirectoryScanner, WorkflowGraph, BatchExecutor};
 use rupost::runner::executor::TestExecutor;
+use rupost::runner::{BatchExecutor, DirectoryScanner, WorkflowGraph};
 use rupost::variable::VariableContext;
-use rupost::error::RupostError;
 
 #[test]
 fn test_scanner_discovery() {
@@ -18,7 +16,7 @@ fn test_scanner_discovery() {
     // 创建文件和子目录
     let dir1 = root.join("dir1");
     fs::create_dir(&dir1).unwrap();
-    
+
     let dir2 = root.join("dir2");
     fs::create_dir(&dir2).unwrap();
 
@@ -74,10 +72,18 @@ fn test_workflow_topo_sorting() {
     fs::write(&file_b, "### Request B\nGET http://localhost/b").unwrap();
 
     let file_a = root.join("a.http");
-    fs::write(&file_a, "### @depends-on b.http\n### Request A\nGET http://localhost/a").unwrap();
+    fs::write(
+        &file_a,
+        "### @depends-on b.http\n### Request A\nGET http://localhost/a",
+    )
+    .unwrap();
 
     let file_c = root.join("c.http");
-    fs::write(&file_c, "### @depends-on a.http\n### Request C\nGET http://localhost/c").unwrap();
+    fs::write(
+        &file_c,
+        "### @depends-on a.http\n### Request C\nGET http://localhost/c",
+    )
+    .unwrap();
 
     // 解析
     let parsed_a = HttpFileParser::parse_file(&file_a).unwrap();
@@ -115,17 +121,16 @@ fn test_workflow_cycle_detection() {
     let parsed_a = HttpFileParser::parse_file(&file_a).unwrap();
     let parsed_b = HttpFileParser::parse_file(&file_b).unwrap();
 
-    let files = vec![
-        (file_a.clone(), parsed_a),
-        (file_b.clone(), parsed_b),
-    ];
+    let files = vec![(file_a.clone(), parsed_a), (file_b.clone(), parsed_b)];
 
     let graph = WorkflowGraph::new(&files);
     let result = graph.resolve_execution_order();
 
     assert!(result.is_err());
     let err_str = result.err().unwrap().to_string();
-    assert!(err_str.contains("循环") || err_str.contains("Cyclic") || err_str.contains("dependency"));
+    assert!(
+        err_str.contains("循环") || err_str.contains("Cyclic") || err_str.contains("dependency")
+    );
 }
 
 #[tokio::test]
@@ -135,7 +140,9 @@ async fn test_batch_parallel_concurrency_and_cookie_isolation() {
     // mock 响应，如果是获取或者设置 cookie
     Mock::given(method("GET"))
         .and(path("/cookie/set"))
-        .respond_with(ResponseTemplate::new(200).insert_header("Set-Cookie", "session=12345; Path=/"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header("Set-Cookie", "session=12345; Path=/"),
+        )
         .mount(&mock_server)
         .await;
 
@@ -208,7 +215,11 @@ async fn test_batch_report_json() {
     let root = temp_dir.path().canonicalize().unwrap();
 
     let file_a = root.join("a.http");
-    fs::write(&file_a, format!("### Req A\nGET {}/anything", mock_server.uri())).unwrap();
+    fs::write(
+        &file_a,
+        format!("### Req A\nGET {}/anything", mock_server.uri()),
+    )
+    .unwrap();
 
     let parsed_a = HttpFileParser::parse_file(&file_a).unwrap();
     let mut files_map = std::collections::HashMap::new();
@@ -235,5 +246,8 @@ async fn test_batch_report_json() {
     assert!(parsed_json.is_array());
     let arr = parsed_json.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["file_path"].as_str().unwrap(), file_a.to_str().unwrap());
+    assert_eq!(
+        arr[0]["file_path"].as_str().unwrap(),
+        file_a.to_str().unwrap()
+    );
 }

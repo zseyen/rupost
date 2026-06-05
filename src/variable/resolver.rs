@@ -161,6 +161,6 @@ mod tests {
         assert!(output.starts_with("Rand: "));
         let num_str = &output[6..];
         let num: u32 = num_str.parse().unwrap();
-        assert!(num >= 1 && num <= 10000);
+        assert!((1..=10000).contains(&num));
     }
 }

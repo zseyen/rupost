@@ -318,4 +318,3 @@ async fn test_unconfigured_base_url_camel_case_error() {
     assert!(error_msg.contains("使用了 base_url/baseUrl 变量，但是没有在当前环境中配置它"));
     assert!(error_msg.contains("提示: 请在 rupost.toml 对应的环境配置 base_url"));
 }
-

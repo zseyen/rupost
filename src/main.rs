@@ -2,6 +2,7 @@ mod cli;
 
 use clap::Parser;
 use cli::{Cli, Commands, HistoryCommands};
+use rupost::Result;
 use rupost::generator::http::HttpGenerator;
 use rupost::history::selector::{self, SelectionStrategy};
 use rupost::history::storage::get_storage;
@@ -9,7 +10,6 @@ use rupost::middleware::resolve_cookie_path;
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
 use rupost::runner::{TestExecutor, TestReporter, TestSummary};
 use rupost::variable::{ConfigLoader, VariableContext};
-use rupost::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 

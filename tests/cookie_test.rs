@@ -172,7 +172,7 @@ async fn test_cookie_domain_and_path_matching() {
     {
         let mut store = cookie_store.lock().unwrap();
         let url = reqwest::Url::parse(&mock_server.uri()).unwrap();
-        
+
         // Cookie for the domain
         let cookie_domain = cookie::Cookie::build(("domain_val", "localhost"))
             .domain(url.host_str().unwrap().to_string())
@@ -201,18 +201,29 @@ async fn test_cookie_domain_and_path_matching() {
     assert_eq!(resp2.status.code(), 200);
 
     // Inspect actual headers sent to server
-    let received = mock_server.received_requests().await.expect("No received requests found");
+    let received = mock_server
+        .received_requests()
+        .await
+        .expect("No received requests found");
     assert_eq!(received.len(), 2);
 
     // Request 1: to /other. Should have domain_val=localhost, but NOT path_val=sub
     let req1_headers = &received[0].headers;
-    let cookie_header1 = req1_headers.get("cookie").expect("Request to /other should contain Cookie header").to_str().unwrap();
+    let cookie_header1 = req1_headers
+        .get("cookie")
+        .expect("Request to /other should contain Cookie header")
+        .to_str()
+        .unwrap();
     assert!(cookie_header1.contains("domain_val=localhost"));
     assert!(!cookie_header1.contains("path_val=sub"));
 
     // Request 2: to /sub/page. Should contain BOTH cookies
     let req2_headers = &received[1].headers;
-    let cookie_header2 = req2_headers.get("cookie").expect("Request to /sub/page should contain Cookie header").to_str().unwrap();
+    let cookie_header2 = req2_headers
+        .get("cookie")
+        .expect("Request to /sub/page should contain Cookie header")
+        .to_str()
+        .unwrap();
     assert!(cookie_header2.contains("domain_val=localhost"));
     assert!(cookie_header2.contains("path_val=sub"));
 }
@@ -266,8 +277,8 @@ async fn test_cookie_expiration() {
 
 #[tokio::test]
 async fn test_session_and_persistent_cookies() {
-    use tempfile::tempdir;
     use rupost::middleware::Middleware;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let cookie_file = dir.path().join("cookies.json");
@@ -305,13 +316,17 @@ async fn test_session_and_persistent_cookies() {
         let middleware = CookieMiddleware::new_with_persistence(cookie_file).unwrap();
         let cookie_store = middleware.cookie_store();
         let store = cookie_store.lock().unwrap();
-        
+
         let cookies: Vec<_> = store.iter_any().collect();
         assert_eq!(cookies.len(), 2);
 
-        let has_session = cookies.iter().any(|c| c.name() == "session_cookie" && c.value() == "abc");
-        let has_persistent = cookies.iter().any(|c| c.name() == "persistent_cookie" && c.value() == "123");
-        
+        let has_session = cookies
+            .iter()
+            .any(|c| c.name() == "session_cookie" && c.value() == "abc");
+        let has_persistent = cookies
+            .iter()
+            .any(|c| c.name() == "persistent_cookie" && c.value() == "123");
+
         assert!(has_session, "Session cookie should be loaded");
         assert!(has_persistent, "Persistent cookie should be loaded");
     }
@@ -332,18 +347,24 @@ fn test_cookie_file_corruption_recovery() {
     // Under our robust implementation, this should not fail, but fallback to empty store.
     // Let's assert it succeeds. (Note: Currently this will fail before implementation).
     let middleware_res = CookieMiddleware::new_with_persistence(cookie_file);
-    
+
     // Assert we successfully recover and fallback
-    assert!(middleware_res.is_ok(), "Should fallback to empty store on corruption");
+    assert!(
+        middleware_res.is_ok(),
+        "Should fallback to empty store on corruption"
+    );
     let middleware = middleware_res.unwrap();
-    assert_eq!(middleware.cookie_store().lock().unwrap().iter_any().count(), 0);
+    assert_eq!(
+        middleware.cookie_store().lock().unwrap().iter_any().count(),
+        0
+    );
 }
 
 #[tokio::test]
 async fn test_concurrent_cookie_access() {
-    use tempfile::tempdir;
-    use std::sync::Arc;
     use rupost::middleware::Middleware;
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     let dir = tempdir().unwrap();
     let cookie_file = Arc::new(dir.path().join("cookies.json"));
@@ -380,7 +401,10 @@ async fn test_concurrent_cookie_access() {
     let middleware = CookieMiddleware::new_with_persistence((*cookie_file).clone()).unwrap();
     let store = middleware.cookie_store();
     let count = store.lock().unwrap().iter_any().count();
-    assert!(count > 0, "Cookie store should have at least one successfully written cookie");
+    assert!(
+        count > 0,
+        "Cookie store should have at least one successfully written cookie"
+    );
 }
 
 #[tokio::test]
@@ -418,9 +442,15 @@ async fn test_cookie_disabled() {
     let received = mock_server.received_requests().await;
     let received_vec = received.expect("No received requests found");
     assert_eq!(received_vec.len(), 2);
-    
+
     // The second request should NOT have "cookie" header
     let second_req = &received_vec[1];
-    let has_cookie = second_req.headers.keys().any(|k| k.to_string().to_lowercase() == "cookie");
-    assert!(!has_cookie, "Should not send cookie when cookies are disabled");
+    let has_cookie = second_req
+        .headers
+        .keys()
+        .any(|k| k.to_string().to_lowercase() == "cookie");
+    assert!(
+        !has_cookie,
+        "Should not send cookie when cookies are disabled"
+    );
 }

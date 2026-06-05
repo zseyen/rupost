@@ -1,4 +1,3 @@
-use crate::{Result, RupostError};
 use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
 use crate::history::model::RequestSnapshot;
 use crate::http::{Client, Request};
@@ -6,10 +5,11 @@ use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture_from_response};
+use crate::{Result, RupostError};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 use tracing::{error, info};
 
 pub struct TestExecutor {
@@ -156,7 +156,9 @@ impl TestExecutor {
                 .iter()
                 .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
             if !has_ua {
-                parsed.headers.push(("User-Agent".to_string(), ua.to_string()));
+                parsed
+                    .headers
+                    .push(("User-Agent".to_string(), ua.to_string()));
             }
         }
 
@@ -164,7 +166,6 @@ impl TestExecutor {
         if let Some(body) = &mut parsed.body {
             *body = VariableResolver::resolve(body, context);
         }
-
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
         let assertions_to_eval = parsed.metadata.assertions.clone();

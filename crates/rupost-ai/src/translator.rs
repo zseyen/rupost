@@ -25,8 +25,11 @@ Do not return any markdown formatting or explanations. Just the JSON array. \
 Example input: 'Response is 200 and token exists' \
 Example output: [\"status == 200\", \"body.token exists\"]";
 
-        let response = self.client.generate_text(system_prompt, natural_language).await?;
-        
+        let response = self
+            .client
+            .generate_text(system_prompt, natural_language)
+            .await?;
+
         let mut cleaned = response.trim();
         if cleaned.starts_with("```json") {
             cleaned = cleaned.strip_prefix("```json").unwrap();
@@ -39,7 +42,10 @@ Example output: [\"status == 200\", \"body.token exists\"]";
         cleaned = cleaned.trim();
 
         let parsed: Vec<String> = serde_json::from_str(cleaned).map_err(|e| {
-            AiError::TranslationFailed(format!("Failed to parse AI output as JSON array. Error: {}. Output was: {}", e, response))
+            AiError::TranslationFailed(format!(
+                "Failed to parse AI output as JSON array. Error: {}. Output was: {}",
+                e, response
+            ))
         })?;
 
         Ok(parsed)

@@ -6,8 +6,8 @@ use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
 use crate::middleware::Middleware;
-use cookie_store::serde::json::{load_all, save_incl_expired_and_nonpersistent};
 use cookie_store::CookieStore;
+use cookie_store::serde::json::{load_all, save_incl_expired_and_nonpersistent};
 use fs2::FileExt;
 use reqwest_cookie_store::CookieStoreMutex;
 use std::fs::{self, File};
@@ -19,8 +19,14 @@ use std::sync::Arc;
 pub fn resolve_cookie_path(base_path: PathBuf, env_name: Option<&str>) -> PathBuf {
     if let Some(env) = env_name {
         let parent = base_path.parent().unwrap_or_else(|| Path::new(""));
-        let file_stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("cookies");
-        let extension = base_path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+        let file_stem = base_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("cookies");
+        let extension = base_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("json");
         parent.join(format!("{}_{}.{}", file_stem, env, extension))
     } else {
         base_path

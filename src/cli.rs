@@ -110,7 +110,12 @@ struct CliRunner {
 }
 
 impl CliRunner {
-    fn new(no_cookies: bool, cookie_file: Option<String>, debug: bool, debug_on_failure: bool) -> Result<Self> {
+    fn new(
+        no_cookies: bool,
+        cookie_file: Option<String>,
+        debug: bool,
+        debug_on_failure: bool,
+    ) -> Result<Self> {
         let executor = if no_cookies {
             TestExecutor::new()
         } else if let Some(path) = cookie_file {
@@ -419,7 +424,13 @@ impl CliRunner {
     }
 }
 
-pub async fn run(args: Vec<String>, no_cookies: bool, cookie_file: Option<String>, debug: bool, debug_on_failure: bool) -> Result<()> {
+pub async fn run(
+    args: Vec<String>,
+    no_cookies: bool,
+    cookie_file: Option<String>,
+    debug: bool,
+    debug_on_failure: bool,
+) -> Result<()> {
     let runner = CliRunner::new(no_cookies, cookie_file, debug, debug_on_failure)?;
     runner.run(args).await
 }

@@ -137,7 +137,7 @@ pub fn capture_from_response(
                 let re = regex::Regex::new(pattern).map_err(|e| {
                     RupostError::ParseError(format!("Invalid regex pattern '{}': {}", pattern, e))
                 })?;
-                
+
                 if let Some(caps) = re.captures(response_body) {
                     // 如果有捕获组，提取第一个捕获组 (索引1)
                     // 否则提取整个匹配的内容 (索引0)
@@ -174,8 +174,11 @@ pub fn capture_from_response(
 fn extract_from_json_path(json: &Value, path: &str) -> Result<String> {
     // 允许 items[0] 语法，转换为 items.0
     let normalized_path = path.replace('[', ".").replace(']', "");
-    let parts: Vec<&str> = normalized_path.split('.').filter(|s| !s.is_empty()).collect();
-    
+    let parts: Vec<&str> = normalized_path
+        .split('.')
+        .filter(|s| !s.is_empty())
+        .collect();
+
     let mut current = json;
 
     for part in parts {
@@ -349,9 +352,12 @@ mod tests {
             </html>
         "#;
         let headers = HeaderMap::new();
-        
+
         // 测试有捕获组
-        let capture1 = VariableCapture::parse("token1", r#"regex <input type="hidden" name="csrf_token" value="([^"]+)">"#);
+        let capture1 = VariableCapture::parse(
+            "token1",
+            r#"regex <input type="hidden" name="csrf_token" value="([^"]+)">"#,
+        );
         // 测试无捕获组
         let capture2 = VariableCapture::parse("token2", r#"regex name="csrf_token""#);
 

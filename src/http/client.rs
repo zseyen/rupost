@@ -35,7 +35,10 @@ impl Client {
     ///
     /// # Arguments
     /// * `cookie_store` - The cookie store to use for automatic cookie handling.
-    pub fn with_cookie_store(cookie_store: Arc<CookieStoreMutex>, user_agent: Option<&str>) -> Self {
+    pub fn with_cookie_store(
+        cookie_store: Arc<CookieStoreMutex>,
+        user_agent: Option<&str>,
+    ) -> Self {
         let ua = user_agent.unwrap_or("rupost/1.0.0");
         Self {
             inner: reqwest::Client::builder()

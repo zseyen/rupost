@@ -91,7 +91,9 @@ impl AiClient for OpenAiClient {
 
         let mut chat_response: ChatResponse = response.json().await?;
         if chat_response.choices.is_empty() {
-            return Err(AiError::TranslationFailed("No choices returned from AI".to_string()));
+            return Err(AiError::TranslationFailed(
+                "No choices returned from AI".to_string(),
+            ));
         }
 
         Ok(chat_response.choices.remove(0).message.content)

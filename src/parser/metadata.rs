@@ -80,7 +80,7 @@ fn parse_capture(content: &str) -> ParseResult<Metadata> {
         line: 0,
         message: "Invalid @capture syntax. Expected: @capture <var> from <source>".to_string(),
     })?;
-    
+
     let from_keyword = parts.next().ok_or_else(|| ParseError::InvalidMetadata {
         line: 0,
         message: "Invalid @capture syntax. Expected: @capture <var> from <source>".to_string(),
@@ -96,7 +96,7 @@ fn parse_capture(content: &str) -> ParseResult<Metadata> {
     // 提取 from 后面的所有内容（保留空格，如正则表达式）
     let from_idx = content.find("from").unwrap();
     let source = content[from_idx + 4..].trim();
-    
+
     if source.is_empty() {
         return Err(ParseError::InvalidMetadata {
             line: 0,
@@ -191,9 +191,10 @@ mod tests {
 
     #[test]
     fn test_parse_capture_with_spaces() {
-        let result = parse_metadata(r#"@capture token from regex <input name="csrf" value="([^"]+)">"#)
-            .unwrap()
-            .unwrap();
+        let result =
+            parse_metadata(r#"@capture token from regex <input name="csrf" value="([^"]+)">"#)
+                .unwrap()
+                .unwrap();
         assert!(matches!(
             result,
             Metadata::Capture { ref var_name, ref source }

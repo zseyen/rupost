@@ -63,11 +63,11 @@ async fn test_request_level_user_agent_override() {
 
     // 即使 Client 全局设置为 CustomTester/2.0.0
     let client = Client::new(Some("CustomTester/2.0.0"));
-    
+
     let mut request = Request::new("GET", &format!("{}/ua", mock_server.uri())).unwrap();
     // 手工在单请求中加入 User-Agent
     request = request.with_header("User-Agent", "OverrideUA/9.9");
-    
+
     let response = client.execute(request).await.unwrap();
 
     assert_eq!(response.status.code(), 200);
@@ -92,7 +92,7 @@ async fn test_executor_variable_context_user_agent() {
 
     // 创建 executor，这里初始化为默认行为
     let executor = TestExecutor::new();
-    
+
     // 构造测试 ParsedRequest
     let mut parsed = rupost::parser::ParsedRequest::new(1);
     parsed.url = format!("{}/ua", mock_server.uri());

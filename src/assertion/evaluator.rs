@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn test_evaluate_exists_object_and_array_success() {
         let response = create_test_response(200, r#"{"user": {"id": 123}, "items": [1, 2]}"#, 100);
-        
+
         let assertion_obj = parse_assertion("body.user exists").unwrap();
         let result_obj = evaluate_assertion(&assertion_obj, &response);
         assert!(result_obj.passed);
@@ -185,7 +185,6 @@ mod tests {
         assert!(result_arr.passed);
         assert_eq!(result_arr.actual, Some("array".to_string()));
     }
-
 
     #[test]
     fn test_evaluate_nested_body() {

@@ -26,6 +26,8 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@sse" => parse_sse(content).map(Some),
         "@sse_timeout" => parse_sse_timeout(content).map(Some),
         "@sse_max_events" => parse_sse_max_events(content).map(Some),
+        "@stream_to" => parse_stream_to(content).map(Some),
+        "@forward_to" => parse_forward_to(content).map(Some),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -62,6 +64,13 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         }
         Metadata::SseMaxEvents(count) => {
             target.sse_max_events = Some(*count);
+        }
+        Metadata::StreamTo { path, append } => {
+            target.stream_to = Some(path.clone());
+            target.stream_to_append = *append;
+        }
+        Metadata::ForwardTo(url) => {
+            target.forward_to = Some(url.clone());
         }
     }
 }
@@ -146,6 +155,32 @@ fn parse_sse_max_events(content: &str) -> ParseResult<Metadata> {
         message: format!("Invalid max events count: {}", content),
     })?;
     Ok(Metadata::SseMaxEvents(count))
+}
+
+fn parse_stream_to(content: &str) -> ParseResult<Metadata> {
+    let mut parts = content.split_whitespace();
+    let path = parts.next().ok_or_else(|| ParseError::InvalidMetadata {
+        line: 0,
+        message: "Invalid @stream_to syntax. Expected: @stream_to <path> [append|overwrite]".to_string(),
+    })?;
+
+    let mode = parts.next().unwrap_or("overwrite");
+    let append = mode == "append";
+
+    Ok(Metadata::StreamTo {
+        path: path.to_string(),
+        append,
+    })
+}
+
+fn parse_forward_to(content: &str) -> ParseResult<Metadata> {
+    if content.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: "@forward_to URL cannot be empty".to_string(),
+        });
+    }
+    Ok(Metadata::ForwardTo(content.to_string()))
 }
 
 /// 解析时间字符串（支持 "5s", "1000ms", "2m"）
@@ -259,6 +294,21 @@ mod tests {
     fn test_parse_sse_max_events() {
         let result = parse_metadata("@sse_max_events 50").unwrap().unwrap();
         assert!(matches!(result, Metadata::SseMaxEvents(50)));
+    }
+
+    #[test]
+    fn test_parse_stream_to() {
+        let result = parse_metadata("@stream_to ./output.md").unwrap().unwrap();
+        assert!(matches!(result, Metadata::StreamTo { ref path, append } if path == "./output.md" && !append));
+
+        let result = parse_metadata("@stream_to ./log.txt append").unwrap().unwrap();
+        assert!(matches!(result, Metadata::StreamTo { ref path, append } if path == "./log.txt" && append));
+    }
+
+    #[test]
+    fn test_parse_forward_to() {
+        let result = parse_metadata("@forward_to http://my-proxy.com").unwrap().unwrap();
+        assert!(matches!(result, Metadata::ForwardTo(ref url) if url == "http://my-proxy.com"));
     }
 
     #[test]

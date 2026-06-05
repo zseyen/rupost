@@ -102,12 +102,20 @@ pub struct RequestMetadata {
 
     /// SSE 最大事件数限制（@sse_max_events，可选）
     pub sse_max_events: Option<usize>,
-
     /// 新增：是否是测试用例
     pub is_test: bool,
 
     /// 新增：关联的 Mock 响应变体分支
     pub mock_variants: Vec<ParsedMockVariant>,
+
+    /// 流同步输出文件路径（@stream_to，可选）
+    pub stream_to: Option<String>,
+
+    /// 是否追加流内容到同步文件（@stream_to 路径 append）
+    pub stream_to_append: bool,
+
+    /// 请求重定向转发 URL（@forward_to，可选）
+    pub forward_to: Option<String>,
 }
 
 /// 解析出的元数据指令（中间状态）
@@ -122,6 +130,8 @@ pub enum Metadata {
     Sse(bool),
     SseTimeout(Duration),
     SseMaxEvents(usize),
+    StreamTo { path: String, append: bool },
+    ForwardTo(String),
 }
 
 /// 整个文件的解析结果

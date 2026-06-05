@@ -74,9 +74,11 @@ rupost test api-tests.http --env-file .env.prod
 ```
 
 **实现要点**:
-- 变量优先级: 命令行 > 环境变量 > 配置文件
-- 支持嵌套变量: `{{base_url}}/{{api_version}}/login`
-- 敏感信息保护: API key 不出现在日志中
+- **变量级联优先级**：`命令行覆盖 (--var key=val)` > `系统环境变量` > `本地局部环境文件 (.env 或 .env.<env>)` > `共享 rupost.toml 环境配置`
+- **本地局部变量覆盖**：支持在根目录或指定路径自动检测并加载 `.env`，避免了团队成员共享 `rupost.toml` 时修改变量产生的 Git 提交冲突。可使用 `--env-file <file>` 显式重写。
+- **系统环境变量覆盖**：采用“同名精准覆盖”原则，仅用当前进程的系统环境变量去覆盖已有同名键（例如 `base_url`），不会将不相干的系统全局变量（如 `PATH`）大面积引入污染 Context。
+- **支持嵌套变量**: `{{base_url}}/{{api_version}}/login`
+- **敏感信息保护**: API key 不出现在日志中
 
 ---
 

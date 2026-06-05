@@ -231,6 +231,49 @@ sys_var = local-sys
     }
 
     #[test]
+    fn test_build_context_with_specific_env_file() {
+        let config_content = r#"
+[environments.prod]
+base_url = "https://api.production.com"
+api_key = "prod-global-key"
+"#;
+        let config: VariableConfig = toml::from_str(config_content).unwrap();
+
+        // 创建临时 .env.prod 文件
+        let env_content = "base_url = https://api.local-prod-proxy.com";
+        fs::write(".env.prod", env_content).unwrap();
+
+        // 执行加载 (env_name = "prod")
+        let context = ConfigLoader::build_context(&config, Some("prod"), &[], None);
+
+        // 清理临时文件
+        let _ = fs::remove_file(".env.prod");
+
+        // 验证特定环境文件级联覆盖成功
+        assert_eq!(context.get("base_url"), Some("https://api.local-prod-proxy.com"));
+        assert_eq!(context.get("api_key"), Some("prod-global-key")); // 未在 .env.prod 覆盖的依然保持 toml 中定义
+    }
+
+    #[test]
+    fn test_build_context_missing_env_file_tolerance() {
+        let config_content = r#"
+[environments.dev]
+base_url = "http://localhost:8080"
+"#;
+        let config: VariableConfig = toml::from_str(config_content).unwrap();
+
+        // 传入一个不存在的 env_file，验证其优雅容错，不发生 panic 且返回默认配置
+        let context = ConfigLoader::build_context(
+            &config,
+            Some("dev"),
+            &[],
+            Some("non_existent_file_path_123.env"),
+        );
+
+        assert_eq!(context.get("base_url"), Some("http://localhost:8080"));
+    }
+
+    #[test]
     fn test_parse_cli_var() {
         assert_eq!(
             ConfigLoader::parse_cli_var("key=value"),

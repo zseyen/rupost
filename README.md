@@ -128,7 +128,22 @@ POST /login
 rupost t test.http --var base_url=http://localhost:8080
 ```
 
-### 2. 使用变量
+#### 本地局部环境变量 (.env)
+在本地开发联调时，如果不想修改共享的 `rupost.toml`（防止 Git 提交冲突），你可以在根目录下创建一个 `.env` 或 `.env.<env_name>` 文件：
+```env
+base_url = http://localhost:8081
+api_key = my-local-key
+```
+RuPost 启动时会自动检测并加载 `.env`，从而对 `rupost.toml` 中的同名变量进行级联覆盖。
+
+### 2. 级联覆盖优先级 (Cascading Priority)
+在变量发生冲突时，RuPost 严格遵循以下优先级进行覆盖合并：
+1. **最高优先级**：命令行 `--var` 传参 (如 `--var key=val`)
+2. **第二优先级**：当前终端进程的**系统环境变量** (仅覆盖已有同名变量，不污染命名空间)
+3. **第三优先级**：本地局部环境变量文件 (`.env` 或 `.env.<env_name>`)
+4. **最低优先级**：共享 `rupost.toml` 环境配置中的默认变量
+
+### 3. 使用变量
 
 在 `.http` 或 `.md` 文件中，使用 `{{var_name}}` 语法引用变量：
 
@@ -137,12 +152,16 @@ GET {{base_url}}/users/1
 Authorization: Bearer {{token}}
 ```
 
-### 3. 环境切换
+### 4. 环境与局部变量文件切换
 
-执行时通过 `-e` 或 `--env` 指定环境：
+执行时可以通过 `-e` / `--env` 指定环境名，并可以通过 `--env-file` 显式指定局部变量文件的路径：
 
 ```bash
+# 自动合并加载共享 dev 配置和本地局部默认 .env
 rupost t examples/basic.http -e dev
+
+# 显式指定加载本地特定的局部配置文件
+rupost t examples/basic.http -e dev --env-file .env.staging
 ```
 
 ---

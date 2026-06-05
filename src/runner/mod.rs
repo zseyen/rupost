@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod executor;
+pub mod file_sync;
 pub mod parallel;
 pub mod path;
 pub mod reporter;
@@ -10,6 +11,7 @@ pub mod workflow;
 
 pub use batch::{BatchExecutor, BatchMode, BatchRunRequest};
 pub use executor::TestExecutor;
+pub use file_sync::FileSyncWriter;
 pub use path::display_path;
 pub use reporter::TestReporter;
 pub use resolver::DependencyResolver;

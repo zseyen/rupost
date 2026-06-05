@@ -18,6 +18,7 @@ use tracing::{debug, error};
 pub struct TestExecutor {
     client: Client,
     cookie_middleware: Option<Arc<CookieMiddleware>>,
+    routing_middleware: Option<Arc<crate::middleware::routing::RoutingMiddleware>>,
     pub debug: bool,
     pub debug_on_failure: bool,
 }
@@ -48,9 +49,18 @@ impl TestExecutor {
         Self {
             client: Client::new(None),
             cookie_middleware: None,
+            routing_middleware: None,
             debug: false,
             debug_on_failure: false,
         }
+    }
+
+    pub fn with_middleware(
+        mut self,
+        middleware: Arc<crate::middleware::routing::RoutingMiddleware>,
+    ) -> Self {
+        self.routing_middleware = Some(middleware);
+        self
     }
 
     /// Set debug mode
@@ -75,6 +85,7 @@ impl TestExecutor {
         Ok(Self {
             client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(Arc::new(middleware)),
+            routing_middleware: None,
             debug: false,
             debug_on_failure: false,
         })
@@ -87,6 +98,7 @@ impl TestExecutor {
         Self {
             client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(Arc::new(middleware)),
+            routing_middleware: None,
             debug: false,
             debug_on_failure: false,
         }

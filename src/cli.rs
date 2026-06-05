@@ -94,7 +94,6 @@ pub enum Commands {
     /// Generate test file from history
     #[command(alias = "g")]
     Generate(GenerateArgs),
-
     /// Diagnose network connectivity and TLS status for a URL
     #[command(alias = "d")]
     Diagnose {

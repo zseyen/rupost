@@ -217,10 +217,10 @@ impl TestExecutor {
         match self.client.execute(request).await {
             Ok(response) => {
                 // [Cookie] Middleware after_response hook (best effort)
-                if let Some(ref mw) = self.cookie_middleware {
-                    if let Err(e) = mw.after_response(&response).await {
+                if let Some(mw) = &self.cookie_middleware {
+                    let _ = mw.after_response(&response).await.map_err(|e| {
                         error!("Cookie middleware error: {}", e);
-                    }
+                    });
                 }
 
                 // [History] 异步保存历史记录 (Best Effort)
@@ -280,15 +280,13 @@ impl TestExecutor {
 
                 // 判断是否需要挂载 timing
                 let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
-                if need_timing {
-                    if let Some((dns, tcp)) = probe_result {
-                        test_result.timing = Some(crate::http::timing::RequestTiming {
-                            dns_lookup: dns,
-                            tcp_connect: tcp,
-                            ttfb: response.ttfb,
-                            transfer: response.transfer,
-                        });
-                    }
+                if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
+                    test_result.timing = Some(crate::http::timing::RequestTiming {
+                        dns_lookup: dns,
+                        tcp_connect: tcp,
+                        ttfb: response.ttfb,
+                        transfer: response.transfer,
+                    });
                 }
 
                 test_result
@@ -304,15 +302,13 @@ impl TestExecutor {
                 );
 
                 let need_timing = self.debug || self.debug_on_failure;
-                if need_timing {
-                    if let Some((dns, tcp)) = probe_result {
-                        test_result.timing = Some(crate::http::timing::RequestTiming {
-                            dns_lookup: dns,
-                            tcp_connect: tcp,
-                            ttfb: Duration::from_millis(0),
-                            transfer: Duration::from_millis(0),
-                        });
-                    }
+                if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
+                    test_result.timing = Some(crate::http::timing::RequestTiming {
+                        dns_lookup: dns,
+                        tcp_connect: tcp,
+                        ttfb: Duration::from_millis(0),
+                        transfer: Duration::from_millis(0),
+                    });
                 }
 
                 test_result

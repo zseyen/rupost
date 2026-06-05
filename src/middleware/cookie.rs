@@ -162,9 +162,9 @@ impl Drop for CookieMiddleware {
     fn drop(&mut self) {
         // Best effort save on drop
         if matches!(self.mode, CookieMode::AutoPersist) {
-            if let Err(e) = self.save() {
+            let _ = self.save().map_err(|e| {
                 tracing::warn!("Failed to save cookies on drop: {}", e);
-            }
+            });
         }
     }
 }

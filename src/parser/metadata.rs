@@ -23,6 +23,9 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@assert" => parse_assert(content).map(Some),
         "@capture" => parse_capture(content).map(Some),
         "@test" => Ok(Some(Metadata::Test)),
+        "@sse" => parse_sse(content).map(Some),
+        "@sse_timeout" => parse_sse_timeout(content).map(Some),
+        "@sse_max_events" => parse_sse_max_events(content).map(Some),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -50,6 +53,15 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         }
         Metadata::Test => {
             target.is_test = true;
+        }
+        Metadata::Sse(sse) => {
+            target.sse = *sse;
+        }
+        Metadata::SseTimeout(duration) => {
+            target.sse_timeout = Some(*duration);
+        }
+        Metadata::SseMaxEvents(count) => {
+            target.sse_max_events = Some(*count);
         }
     }
 }
@@ -113,6 +125,29 @@ fn parse_capture(content: &str) -> ParseResult<Metadata> {
         source: source.to_string(),
     })
 }
+
+fn parse_sse(content: &str) -> ParseResult<Metadata> {
+    let value = if content.is_empty() {
+        true
+    } else {
+        content.parse::<bool>().unwrap_or(true)
+    };
+    Ok(Metadata::Sse(value))
+}
+
+fn parse_sse_timeout(content: &str) -> ParseResult<Metadata> {
+    let duration = parse_duration(content)?;
+    Ok(Metadata::SseTimeout(duration))
+}
+
+fn parse_sse_max_events(content: &str) -> ParseResult<Metadata> {
+    let count: usize = content.parse().map_err(|_| ParseError::InvalidMetadata {
+        line: 0,
+        message: format!("Invalid max events count: {}", content),
+    })?;
+    Ok(Metadata::SseMaxEvents(count))
+}
+
 
 /// 解析时间字符串（支持 "5s", "1000ms", "2m"）
 pub fn parse_duration(s: &str) -> ParseResult<Duration> {
@@ -204,6 +239,27 @@ mod tests {
             Metadata::Capture { ref var_name, ref source }
             if var_name == "token" && source == r#"regex <input name="csrf" value="([^"]+)">"#
         ));
+    }
+
+    #[test]
+    fn test_parse_sse() {
+        let result = parse_metadata("@sse").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Sse(true)));
+
+        let result = parse_metadata("@sse false").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Sse(false)));
+    }
+
+    #[test]
+    fn test_parse_sse_timeout() {
+        let result = parse_metadata("@sse_timeout 10s").unwrap().unwrap();
+        assert!(matches!(result, Metadata::SseTimeout(d) if d == Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn test_parse_sse_max_events() {
+        let result = parse_metadata("@sse_max_events 50").unwrap().unwrap();
+        assert!(matches!(result, Metadata::SseMaxEvents(50)));
     }
 
     #[test]

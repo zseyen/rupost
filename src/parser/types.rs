@@ -94,6 +94,15 @@ pub struct RequestMetadata {
     /// 变量捕获列表（@capture）
     pub captures: Vec<VariableCapture>,
 
+    /// 是否为 SSE 请求（@sse）
+    pub sse: bool,
+
+    /// SSE 请求超时时间（@sse_timeout，可选）
+    pub sse_timeout: Option<Duration>,
+
+    /// SSE 最大事件数限制（@sse_max_events，可选）
+    pub sse_max_events: Option<usize>,
+
     /// 新增：是否是测试用例
     pub is_test: bool,
 
@@ -110,6 +119,9 @@ pub enum Metadata {
     Assert(String),
     Capture { var_name: String, source: String },
     Test,
+    Sse(bool),
+    SseTimeout(Duration),
+    SseMaxEvents(usize),
 }
 
 /// 整个文件的解析结果

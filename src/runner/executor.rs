@@ -4,7 +4,9 @@ use crate::http::{Client, Request, SseParser};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
-use crate::variable::{VariableContext, VariableResolver, capture_from_response, capture::VariableCapture};
+use crate::variable::{
+    VariableContext, VariableResolver, capture::VariableCapture, capture_from_response,
+};
 use crate::{Result, RupostError};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -193,9 +195,11 @@ impl TestExecutor {
         }
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
-        let is_sse_requested = parsed.metadata.sse || parsed.headers.iter().any(|(k, v)| {
-            k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream")
-        });
+        let is_sse_requested = parsed.metadata.sse
+            || parsed
+                .headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
         let sse_timeout = parsed.metadata.sse_timeout;
         let sse_max_events = parsed.metadata.sse_max_events;
 
@@ -249,7 +253,8 @@ impl TestExecutor {
         match self.client.execute_raw(request).await {
             Ok((response, ttfb)) => {
                 // 判断是否是 SSE 响应
-                let is_sse_by_content_type = response.headers()
+                let is_sse_by_content_type = response
+                    .headers()
                     .get(reqwest::header::CONTENT_TYPE)
                     .and_then(|val| val.to_str().ok())
                     .map(|val| val.contains("text/event-stream"))
@@ -257,23 +262,25 @@ impl TestExecutor {
                 let is_sse = is_sse_requested || is_sse_by_content_type;
 
                 if is_sse {
-                    return self.execute_stream(
-                        response,
-                        ttfb,
-                        request_number,
-                        name,
-                        method,
-                        url,
-                        &assertions_to_eval,
-                        &captures_to_eval,
-                        sse_timeout,
-                        sse_max_events,
-                        context,
-                        start,
-                        source,
-                        request_snapshot,
-                        probe_result,
-                    ).await;
+                    return self
+                        .execute_stream(
+                            response,
+                            ttfb,
+                            request_number,
+                            name,
+                            method,
+                            url,
+                            &assertions_to_eval,
+                            &captures_to_eval,
+                            sse_timeout,
+                            sse_max_events,
+                            context,
+                            start,
+                            source,
+                            request_snapshot,
+                            probe_result,
+                        )
+                        .await;
                 }
 
                 // 常规单请求流程
@@ -300,7 +307,8 @@ impl TestExecutor {
                     start.elapsed(),
                     ttfb,
                     start.elapsed().saturating_sub(ttfb),
-                ).unwrap();
+                )
+                .unwrap();
 
                 // [Cookie] Middleware after_response hook (best effort)
                 if let Some(mw) = &self.cookie_middleware {
@@ -397,6 +405,7 @@ impl TestExecutor {
     }
 
     /// 执行 SSE 流式请求
+    #[allow(clippy::too_many_arguments)]
     async fn execute_stream(
         &self,
         response: reqwest::Response,
@@ -427,10 +436,14 @@ impl TestExecutor {
                 ttfb,
                 ttfb,
                 Duration::from_millis(0),
-            ).unwrap();
-            let _ = mw.after_response(&handshake_response_tmp).await.map_err(|e| {
-                error!("Cookie middleware error: {}", e);
-            });
+            )
+            .unwrap();
+            let _ = mw
+                .after_response(&handshake_response_tmp)
+                .await
+                .map_err(|e| {
+                    error!("Cookie middleware error: {}", e);
+                });
         }
 
         let mut assertion_results = Vec::new();
@@ -443,7 +456,8 @@ impl TestExecutor {
             ttfb,
             ttfb,
             Duration::from_millis(0),
-        ).unwrap();
+        )
+        .unwrap();
 
         for assertion_str in assertions_to_eval {
             if !assertion_str.contains("stream.") {
@@ -470,11 +484,9 @@ impl TestExecutor {
         let mut event_count = 0;
 
         loop {
-            if let Some(max) = sse_max_events {
-                if event_count >= max {
-                    info!("SSE max events limit reached: {}", max);
-                    break;
-                }
+            if sse_max_events.is_some_and(|max| event_count >= max) {
+                info!("SSE max events limit reached: {}", sse_max_events.unwrap());
+                break;
             }
 
             tokio::select! {
@@ -547,14 +559,12 @@ impl TestExecutor {
                                     }
                                 }
 
-                                if !stream_captures.is_empty() {
-                                    if let Ok(captured_vars) = capture_from_response(
-                                        &virtual_response.body,
-                                        &virtual_response.headers,
-                                        &stream_captures,
-                                    ) {
-                                        context.extend(captured_vars);
-                                    }
+                                if let (false, Ok(captured_vars)) = (stream_captures.is_empty(), capture_from_response(
+                                    &virtual_response.body,
+                                    &virtual_response.headers,
+                                    &stream_captures,
+                                )) {
+                                    context.extend(captured_vars);
                                 }
 
                                 // 2. 实时流断言
@@ -573,10 +583,8 @@ impl TestExecutor {
                                     }
                                 }
 
-                                if let Some(max) = sse_max_events {
-                                    if event_count >= max {
-                                        break;
-                                    }
+                                if sse_max_events.is_some_and(|max| event_count >= max) {
+                                    break;
                                 }
                             }
                         }
@@ -645,14 +653,12 @@ impl TestExecutor {
                                     }
                                 }
 
-                                if !stream_captures.is_empty() {
-                                    if let Ok(captured_vars) = capture_from_response(
-                                        &virtual_response.body,
-                                        &virtual_response.headers,
-                                        &stream_captures,
-                                    ) {
-                                        context.extend(captured_vars);
-                                    }
+                                if let (false, Ok(captured_vars)) = (stream_captures.is_empty(), capture_from_response(
+                                    &virtual_response.body,
+                                    &virtual_response.headers,
+                                    &stream_captures,
+                                )) {
+                                    context.extend(captured_vars);
                                 }
 
                                 // 2. 实时流断言
@@ -687,20 +693,16 @@ impl TestExecutor {
             total_duration,
             ttfb,
             transfer,
-        ).unwrap();
+        )
+        .unwrap();
 
         // [History] 保存历史记录 (Best Effort)
         use crate::history::recorder::record_history;
         record_history(request_snapshot, &final_response, source);
 
         // 构造最终测试结果
-        let mut test_result = TestResult::success(
-            request_number,
-            name,
-            method,
-            url,
-            final_response.clone(),
-        );
+        let mut test_result =
+            TestResult::success(request_number, name, method, url, final_response.clone());
         test_result.assertions = assertion_results;
 
         if !test_result.assertions.is_empty() {

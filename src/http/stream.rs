@@ -45,7 +45,10 @@ impl SseParser {
 
             if line.is_empty() {
                 // 空行代表当前事件结束，开始分发事件
-                if !self.current_data.is_empty() || self.current_event.is_some() || self.current_id.is_some() {
+                if !self.current_data.is_empty()
+                    || self.current_event.is_some()
+                    || self.current_id.is_some()
+                {
                     events.push(SseEvent {
                         id: self.current_id.take(),
                         event: self.current_event.take(),
@@ -57,14 +60,7 @@ impl SseParser {
                 // 忽略注释行（如心跳保持包）
             } else {
                 let (key, value) = match line.split_once(':') {
-                    Some((k, v)) => {
-                        let trimmed_v = if v.starts_with(' ') {
-                            &v[1..]
-                        } else {
-                            v
-                        };
-                        (k, trimmed_v)
-                    }
+                    Some((k, v)) => (k, v.strip_prefix(' ').unwrap_or(v)),
                     None => (line.as_str(), ""),
                 };
 
@@ -87,14 +83,7 @@ impl SseParser {
             let line = line.trim();
             if !line.is_empty() && !line.starts_with(':') {
                 let (key, value) = match line.split_once(':') {
-                    Some((k, v)) => {
-                        let trimmed_v = if v.starts_with(' ') {
-                            &v[1..]
-                        } else {
-                            v
-                        };
-                        (k, trimmed_v)
-                    }
+                    Some((k, v)) => (k, v.strip_prefix(' ').unwrap_or(v)),
                     None => (line, ""),
                 };
 
@@ -107,7 +96,10 @@ impl SseParser {
             }
         }
 
-        if !self.current_data.is_empty() || self.current_event.is_some() || self.current_id.is_some() {
+        if !self.current_data.is_empty()
+            || self.current_event.is_some()
+            || self.current_id.is_some()
+        {
             let event = SseEvent {
                 id: self.current_id.take(),
                 event: self.current_event.take(),
@@ -156,7 +148,7 @@ mod tests {
     #[test]
     fn test_sse_parser_fragmented_chunks() {
         let mut parser = SseParser::new();
-        
+
         let chunk1 = "id: 10\nevent:";
         let events1 = parser.feed(chunk1);
         assert!(events1.is_empty());

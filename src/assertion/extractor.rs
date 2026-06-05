@@ -269,7 +269,8 @@ mod tests {
         let val = extract_value(&response, &ValuePath::StreamId).unwrap();
         assert_eq!(val, AssertValue::String("msg-123".to_string()));
 
-        let val = extract_value(&response, &ValuePath::StreamBody(vec!["text".to_string()])).unwrap();
+        let val =
+            extract_value(&response, &ValuePath::StreamBody(vec!["text".to_string()])).unwrap();
         assert_eq!(val, AssertValue::String("hello".to_string()));
     }
 }

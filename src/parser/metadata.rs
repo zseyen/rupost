@@ -148,7 +148,6 @@ fn parse_sse_max_events(content: &str) -> ParseResult<Metadata> {
     Ok(Metadata::SseMaxEvents(count))
 }
 
-
 /// 解析时间字符串（支持 "5s", "1000ms", "2m"）
 pub fn parse_duration(s: &str) -> ParseResult<Duration> {
     let s = s.trim();

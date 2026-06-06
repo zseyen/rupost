@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use rupost::mock::matcher::TrieRouteMatcher;
-use rupost::mock::server::{MockServer, DummyMockServer};
+use rupost::mock::server::{MockServer, AxumMockServer};
 use rupost::mock::variant::{MockVariant, VariantCondition, ConditionSource, CompareOp};
 
 #[tokio::test]
@@ -51,16 +51,16 @@ async fn test_mock_server_integration_flow() {
     // 使用随机可用端口 (在此硬编码一个本地动态端口)
     let port = 19090;
     
-    // 启动 DummyMockServer 桩
-    let server = DummyMockServer;
+    // 启动 AxumMockServer
+    let server = AxumMockServer;
     tokio::spawn(async move {
         let _ = server.start(port, matcher).await;
     });
     
-    // 等待一小会儿
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // 等待一小会儿让服务器启动
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // 发送请求，此处应由于服务未真起而 panic 报错，构成集成测试红灯
+    // 发送请求，此处应能成功连上并返回预期的匹配内容
     let client = reqwest::Client::new();
     let resp = client.get(format!("http://127.0.0.1:{}/api/users/999", port))
         .send()
@@ -69,5 +69,25 @@ async fn test_mock_server_integration_flow() {
         
     assert_eq!(resp.status().as_u16(), 200);
     let body = resp.text().await.unwrap();
-    assert!(body.contains(r#""user_id": "999""#));
+    assert!(body.contains(r#""user_id": "999""#), "Expected interpolated user_id 999, got: {}", body);
+
+    // 发送 POST 满足 admin-key 条件的请求
+    let resp_admin = client.post(format!("http://127.0.0.1:{}/api/pay", port))
+        .header("Authorization", "admin-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp_admin.status().as_u16(), 200);
+    let body_admin = resp_admin.text().await.unwrap();
+    assert!(body_admin.contains("admin payment processed"));
+
+    // 发送 POST 满足 guest-key 条件的请求
+    let resp_guest = client.post(format!("http://127.0.0.1:{}/api/pay", port))
+        .header("Authorization", "guest-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp_guest.status().as_u16(), 403);
+    let body_guest = resp_guest.text().await.unwrap();
+    assert!(body_guest.contains("forbidden for guest"));
 }

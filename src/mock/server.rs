@@ -16,3 +16,6 @@ impl MockServer for DummyMockServer {
         Ok(())
     }
 }
+
+pub mod axum_adapter;
+pub use axum_adapter::AxumMockServer;

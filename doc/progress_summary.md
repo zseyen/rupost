@@ -12,6 +12,7 @@
 | **Sprint 2: 多文件与目录递归测试** | 递归扫描过滤、有向无环图 (DAG) 拓扑排序、顺序/并行双执行模式、并发 Cookie 隔离保护、Fail-Fast 流程中断、JSON 结构化报告、递归依赖补全与安全沙箱、并行状态克隆传递 | 已完成 | `src/runner/scanner.rs`, `src/runner/workflow.rs`, `src/runner/batch.rs`, `src/runner/resolver.rs`, `src/runner/parallel.rs`, `tests/batch_testing_test.rs` |
 | **生产调试 (阶段 1)** | 本地局部环境变量级联覆盖与热重载，默认合并 `.env` 且支持 `--env-file` 传递 | 已完成 | `src/variable/env_file.rs`, `src/variable/config.rs` |
 | **生产调试 (阶段 2)** | 网络连通性分析与高亮诊断工具 (`rupost diagnose <url>`)，精确测量 DNS/TCP/TLS/TTFB 时延，支持 X.509 证书解析与状态高亮输出 | 已完成 | `src/http/diagnose.rs`, `src/cli.rs`, `src/main.rs`, `tests/diagnose_integration_test.rs` |
+| **生产调试 (阶段 7)** | 模糊路径匹配与条件变体独立 Mock 服务器，支持 Trie 树模糊匹配与多变体分支判断，可插拔的 Axum 网络适配器及高雅控制台高亮访问日志 | 已完成 | `src/mock/`, `src/cli.rs`, `src/main.rs`, `tests/mock_integration_test.rs` |
 | **Sprint 3: 高级特性与脚本引擎** | @loop 循环, @skip-if 条件运行, 前后置 Javascript/Rust 脚本支持 | 未开始 | - |
 | **Sprint 4: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
@@ -38,7 +39,7 @@
 
 4.  **结构化 JSON 报告与批汇总**：支持 `--report json` 格式的控制台或文件输出；支持终端高颜值批测试摘要输出。
 
-### 生产调试：生产环境调试与排障模式 (阶段 1 & 2)
+### 生产调试：生产环境调试与排障模式 (阶段 1 & 2 & 7)
 1. **本地局部变量覆盖 (阶段 1)**：
    * **解析器实现**：支持对本地被 git 忽略的 `.env` 环境变量文件进行高健壮度解析，自动剥离引号、忽略行内注释与前导/尾随空格。
    * **级联优先级控制**：在 `ConfigLoader` 内部建立了明确的覆盖层次顺序（`CLI变量覆盖 --var` > `系统环境变量` > `本地局部 .env 变量` > `共享 rupost.toml 环境配置`），避免本地调试变量泄露或覆盖他人共享配置。
@@ -46,4 +47,8 @@
    * **细粒度时延瀑布图**：基于第一性原理，利用 `lookup_host`、`TcpStream` 和 `tokio-rustls`（使用 `ring` 提供密码库）执行手动握手与连接，精准拆分 DNS 解析、TCP 握手、TLS 协商及 HTTP TTFB（Time To First Byte）的时延表现，在终端绘制占比条形图。
    * **X.509 证书深度分析**：通过 `x509-parser` 直接解构服务器证书的 Validity 期限，算出证书剩余有效天数，对于到期天数临期（<=30天）的场景显示黄色警告 `[WARNING]`，已过期的场景显示红色 `[EXPIRED]`，同时解析并显示 Issuer 与 Subject SAN 域名信息。
    * **独立命令行分发**：新增子命令 `rupost diagnose <url>`（别名 `rupost d <url>`），完美兼容已有的 `test`、`history`、`generate` 模块。
-
+3. **模糊路径匹配与条件变体 Mock 服务器 (阶段 7)**：
+   * **可插拔 Axum 适配器**：将底层网络通信（Axum 服务端）与匹配调度引擎核心剥离，网络框架成为可插拔插件，彻底遵循 Clean Architecture。
+   * **Trie 树模糊匹配**：自主实现 Trie 匹配树，完全支持精确匹配、路径参数捕获（如 `:id` 自动提取至 Context）和通配符匹配（`*`, `**`），实现复杂路由映射。
+   * **多路分支条件匹配 (Variant)**：基于同一路由支持多个 `MockVariant`，并支持通过 Header、Query、Body 内 JSONPath 的 Equals/Contains/Exists 条件自动计算路由变体分发，且支持变量占位符的动态渲染。
+   * **CLI 集成与终端高亮访问日志**：新增 `rupost mock start <file> --port <port>` 命令行工具，智能解析反序列化格式（`untagged` 兼容自定义 JSON 配置与快照包），在控制台以高雅彩色打印实时流量访问与匹配命中信息。

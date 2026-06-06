@@ -112,6 +112,123 @@ async fn main() -> Result<()> {
                 entries.len()
             );
         }
+        Some(Commands::Mock { file, port }) => {
+            use colored::Colorize;
+            use rupost::mock::matcher::{TrieRouteMatcher, MockRouteConfig};
+            use rupost::mock::server::{MockServer, AxumMockServer};
+            use rupost::mock::variant::{MockVariant, VariantCondition, ConditionSource, CompareOp};
+            use rupost::history::model::SnapshotEntry;
+            use std::sync::Arc;
+
+            println!(
+                "{} Loading configuration from: {}",
+                "[*]".bold().blue(),
+                file.cyan()
+            );
+
+            let content = fs::read_to_string(&file).map_err(rupost::error::RupostError::IoError)?;
+
+            #[derive(serde::Deserialize)]
+            #[serde(untagged)]
+            enum MockFileConfig {
+                Routes(Vec<MockRouteConfig>),
+                Snapshots(Vec<SnapshotEntry>),
+            }
+
+            let file_config: MockFileConfig = serde_json::from_str(&content).map_err(|e| {
+                rupost::error::RupostError::ParseError(format!("Failed to parse JSON configuration: {}", e))
+            })?;
+
+            let mut matcher = TrieRouteMatcher::new();
+            let route_count;
+
+            fn extract_path(url_str: &str) -> String {
+                if let Ok(parsed) = url::Url::parse(url_str) {
+                    parsed.path().to_string()
+                } else {
+                    let path_with_query = if url_str.starts_with('/') {
+                        url_str
+                    } else if let Some(slash_pos) = url_str.find('/') {
+                        &url_str[slash_pos..]
+                    } else {
+                        "/"
+                    };
+                    if let Some(q_pos) = path_with_query.find('?') {
+                        path_with_query[..q_pos].to_string()
+                    } else {
+                        path_with_query.to_string()
+                    }
+                }
+            }
+
+            match file_config {
+                MockFileConfig::Routes(routes) => {
+                    route_count = routes.len();
+                    for r in routes {
+                        matcher.add_route(&r.method, &r.path, r.variants);
+                    }
+                }
+                MockFileConfig::Snapshots(snapshots) => {
+                    let mut groups: HashMap<(String, String), Vec<MockVariant>> = HashMap::new();
+                    for s in snapshots {
+                        let path = extract_path(&s.request.url);
+                        let method = s.request.method.to_uppercase();
+                        
+                        let condition = if let Ok(parsed) = url::Url::parse(&s.request.url) {
+                            let query_pairs: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+                            if let Some((k, v)) = query_pairs.first() {
+                                Some(VariantCondition {
+                                    source: ConditionSource::Query,
+                                    key: k.clone(),
+                                    operator: CompareOp::Equals,
+                                    expected_value: v.clone(),
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        let mut headers = HashMap::new();
+                        for (name, val) in &s.response.headers {
+                            if let Ok(val_str) = val.to_str() {
+                                headers.insert(name.to_string(), val_str.to_string());
+                            }
+                        }
+
+                        let variant = MockVariant {
+                            condition,
+                            status: s.response.status,
+                            headers,
+                            response_body: s.response.body,
+                        };
+                        groups.entry((method, path)).or_default().push(variant);
+                    }
+
+                    route_count = groups.len();
+                    for ((method, path), mut variants) in groups {
+                        variants.sort_by_key(|v| v.condition.is_some());
+                        variants.reverse(); // 有条件的在前，兜底的在后
+                        matcher.add_route(&method, &path, variants);
+                    }
+                }
+            }
+
+            println!(
+                "{} Mock engine initialized with {} routes.",
+                "[✓]".bold().green(),
+                route_count
+            );
+            println!(
+                "{} Mock server starting on: {}",
+                "[*]".bold().blue(),
+                format!("http://localhost:{}", port).bold().green()
+            );
+
+            let server = AxumMockServer;
+            server.start(port, Arc::new(matcher)).await?;
+        }
         None => {
             if cli.args.is_empty() {
                 tracing::error!("No command provided");

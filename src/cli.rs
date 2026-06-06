@@ -102,6 +102,18 @@ pub enum Commands {
         #[arg(required = true)]
         url: String,
     },
+
+    /// Start a local Mock server based on a snapshot/config file
+    #[command(alias = "m")]
+    Mock {
+        /// Path to the snapshot or mock configuration JSON file
+        #[arg(required = true, value_name = "FILE")]
+        file: String,
+
+        /// Port to bind the mock server to
+        #[arg(short, long, default_value = "9000")]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand)]

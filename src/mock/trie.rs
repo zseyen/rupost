@@ -48,3 +48,79 @@ impl<T> TrieNode<T> {
         todo!()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trie_literal_match() {
+        let mut root = TrieNode::new(RouteSegment::Wildcard); // Root segment represents wildcard or dummy
+        root.insert("/api/v1/users", "users_list");
+        root.insert("/api/v2/orders", "orders_list");
+
+        let res1 = root.match_path("/api/v1/users");
+        assert!(res1.is_some());
+        let (data, params) = res1.unwrap();
+        assert_eq!(*data, "users_list");
+        assert!(params.is_empty());
+
+        let res2 = root.match_path("/api/v1/orders");
+        assert!(res2.is_none());
+    }
+
+    #[test]
+    fn test_trie_param_capture() {
+        let mut root = TrieNode::new(RouteSegment::Wildcard);
+        root.insert("/api/users/:id", "user_detail");
+        root.insert("/api/users/:id/posts/:post_id", "post_detail");
+
+        let res1 = root.match_path("/api/users/123");
+        assert!(res1.is_some());
+        let (data, params) = res1.unwrap();
+        assert_eq!(*data, "user_detail");
+        assert_eq!(params.get("id").unwrap(), "123");
+
+        let res2 = root.match_path("/api/users/456/posts/789");
+        assert!(res2.is_some());
+        let (data2, params2) = res2.unwrap();
+        assert_eq!(*data2, "post_detail");
+        assert_eq!(params2.get("id").unwrap(), "456");
+        assert_eq!(params2.get("post_id").unwrap(), "789");
+    }
+
+    #[test]
+    fn test_trie_wildcard_match() {
+        let mut root = TrieNode::new(RouteSegment::Wildcard);
+        root.insert("/api/*/config", "config_data");
+
+        let res1 = root.match_path("/api/users/config");
+        assert!(res1.is_some());
+        assert_eq!(*res1.unwrap().0, "config_data");
+
+        let res2 = root.match_path("/api/orders/config");
+        assert!(res2.is_some());
+
+        let res3 = root.match_path("/api/users/profile/config");
+        assert!(res3.is_none());
+    }
+
+    #[test]
+    fn test_trie_multi_wildcard_match() {
+        let mut root = TrieNode::new(RouteSegment::Wildcard);
+        root.insert("/static/**", "static_file");
+
+        let res1 = root.match_path("/static/js/main.js");
+        assert!(res1.is_some());
+        assert_eq!(*res1.unwrap().0, "static_file");
+
+        let res2 = root.match_path("/static/css/theme/dark.css");
+        assert!(res2.is_some());
+
+        let res3 = root.match_path("/static/logo.png");
+        assert!(res3.is_some());
+        
+        let res4 = root.match_path("/api/static/logo.png");
+        assert!(res4.is_none());
+    }
+}

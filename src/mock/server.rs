@@ -6,3 +6,13 @@ use crate::Result;
 pub trait MockServer: Send + Sync {
     async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()>;
 }
+
+pub struct DummyMockServer;
+
+impl MockServer for DummyMockServer {
+    async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()> {
+        let _ = port;
+        let _ = matcher;
+        Ok(())
+    }
+}

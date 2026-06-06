@@ -38,14 +38,92 @@ impl<T> TrieNode<T> {
     }
 
     pub fn insert(&mut self, path: &str, data: T) {
-        let _ = path;
-        let _ = data;
-        todo!()
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        self.insert_segments(&segments, data);
+    }
+
+    fn insert_segments(&mut self, segments: &[&str], data: T) {
+        if segments.is_empty() {
+            self.data = Some(data);
+            return;
+        }
+
+        let first = segments[0];
+        let segment_type = RouteSegment::parse(first);
+
+        let child_idx = if let Some(idx) = self.children.iter().position(|c| c.segment == segment_type) {
+            idx
+        } else {
+            self.children.push(TrieNode::new(segment_type));
+            self.children.len() - 1
+        };
+
+        self.children[child_idx].insert_segments(&segments[1..], data);
     }
 
     pub fn match_path(&self, path: &str) -> Option<(&T, HashMap<String, String>)> {
-        let _ = path;
-        todo!()
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut params = HashMap::new();
+        if let Some(data) = self.match_segments(&segments, &mut params) {
+            Some((data, params))
+        } else {
+            None
+        }
+    }
+
+    fn match_segments(&self, segments: &[&str], params: &mut HashMap<String, String>) -> Option<&T> {
+        if segments.is_empty() {
+            return self.data.as_ref();
+        }
+
+        let first = segments[0];
+
+        // 1. Literal 精确匹配
+        for child in &self.children {
+            if let RouteSegment::Literal(ref lit) = child.segment {
+                if lit == first {
+                    if let Some(res) = child.match_segments(&segments[1..], params) {
+                        return Some(res);
+                    }
+                }
+            }
+        }
+
+        // 2. Param 路径变量匹配 (如 :id)
+        for child in &self.children {
+            if let RouteSegment::Param(ref param_name) = child.segment {
+                let prev_val = params.insert(param_name.clone(), first.to_string());
+                if let Some(res) = child.match_segments(&segments[1..], params) {
+                    return Some(res);
+                }
+                // 回溯
+                if let Some(v) = prev_val {
+                    params.insert(param_name.clone(), v);
+                } else {
+                    params.remove(param_name);
+                }
+            }
+        }
+
+        // 3. Wildcard 单段通配符匹配 (如 *)
+        for child in &self.children {
+            if matches!(child.segment, RouteSegment::Wildcard) {
+                if let Some(res) = child.match_segments(&segments[1..], params) {
+                    return Some(res);
+                }
+            }
+        }
+
+        // 4. MultiWildcard 多段通配符匹配 (如 **)
+        for child in &self.children {
+            if matches!(child.segment, RouteSegment::MultiWildcard) {
+                if let Some(ref data) = child.data {
+                    return Some(data);
+                }
+            }
+        }
+
+        None
     }
 }
 

@@ -30,6 +30,34 @@ pub struct MockVariant {
     pub response_body: String,
 }
 
+fn resolve_jsonpath(body: &str, path: &str) -> Option<serde_json::Value> {
+    let val: serde_json::Value = serde_json::from_str(body).ok()?;
+    if !path.starts_with('$') {
+        return None;
+    }
+
+    let segments: Vec<&str> = path.split('.').skip(1).collect(); // skip '$'
+    let mut current = &val;
+    for seg in segments {
+        // Handle array index shorthand like tags[0]
+        if let Some(open_idx) = seg.find('[')
+            && let Some(close_idx) = seg.find(']')
+        {
+            let field_name = &seg[..open_idx];
+            let index_str = &seg[open_idx + 1..close_idx];
+            let index: usize = index_str.parse().ok()?;
+
+            if !field_name.is_empty() {
+                current = current.get(field_name)?;
+            }
+            current = current.get(index)?;
+        } else {
+            current = current.get(seg)?;
+        }
+    }
+    Some(current.clone())
+}
+
 impl VariantCondition {
     pub fn evaluate(
         &self,
@@ -37,10 +65,69 @@ impl VariantCondition {
         query: &HashMap<String, String>,
         body: &str,
     ) -> bool {
-        let _ = headers;
-        let _ = query;
-        let _ = body;
-        todo!()
+        match self.source {
+            ConditionSource::Header => {
+                let val = match headers.get(&self.key) {
+                    Some(v) => v,
+                    None => {
+                        // case-insensitive header fallback
+                        let lower_key = self.key.to_lowercase();
+                        match headers.iter().find(|(k, _)| k.to_lowercase() == lower_key) {
+                            Some((_, v)) => v,
+                            None => return false,
+                        }
+                    }
+                };
+
+                match self.operator {
+                    CompareOp::Exists => true,
+                    CompareOp::Equals => val == &self.expected_value,
+                    CompareOp::Contains => val.contains(&self.expected_value),
+                }
+            }
+            ConditionSource::Query => {
+                let val = match query.get(&self.key) {
+                    Some(v) => v,
+                    None => return false,
+                };
+
+                match self.operator {
+                    CompareOp::Exists => true,
+                    CompareOp::Equals => val == &self.expected_value,
+                    CompareOp::Contains => val.contains(&self.expected_value),
+                }
+            }
+            ConditionSource::Body => {
+                let json_val = match resolve_jsonpath(body, &self.key) {
+                    Some(v) => v,
+                    None => return false,
+                };
+
+                match self.operator {
+                    CompareOp::Exists => !json_val.is_null(),
+                    CompareOp::Equals => {
+                        match &json_val {
+                            serde_json::Value::String(s) => s == &self.expected_value,
+                            other => other.to_string() == self.expected_value,
+                        }
+                    }
+                    CompareOp::Contains => {
+                        match &json_val {
+                            serde_json::Value::String(s) => s.contains(&self.expected_value),
+                            serde_json::Value::Array(arr) => {
+                                arr.iter().any(|item| {
+                                    match item {
+                                        serde_json::Value::String(s) => s == &self.expected_value,
+                                        other => other.to_string() == self.expected_value,
+                                    }
+                                })
+                            }
+                            other => other.to_string().contains(&self.expected_value),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

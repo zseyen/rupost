@@ -35,17 +35,52 @@ impl TrieRouteMatcher {
     }
 
     pub fn add_route(&mut self, method: &str, path: &str, variants: Vec<MockVariant>) {
-        let _ = method;
-        let _ = path;
-        let _ = variants;
-        todo!()
+        let method_upper = method.to_uppercase();
+        let trie = self
+            .routes
+            .entry(method_upper)
+            .or_insert_with(|| TrieNode::new(crate::mock::trie::RouteSegment::Wildcard));
+        trie.insert(path, variants);
     }
 }
 
 impl MockMatcher for TrieRouteMatcher {
     fn match_request(&self, req: &MockRequest) -> Option<MockResponse> {
-        let _ = req;
-        todo!()
+        let method_upper = req.method.to_uppercase();
+        let trie = self.routes.get(&method_upper)?;
+        let (variants, params) = trie.match_path(&req.path)?;
+
+        for variant in variants {
+            let matched = if let Some(ref cond) = variant.condition {
+                cond.evaluate(&req.headers, &req.query, &req.body)
+            } else {
+                true
+            };
+
+            if matched {
+                // Populate path parameters into variable context
+                let mut context = crate::variable::VariableContext::new();
+                for (k, v) in params {
+                    context.insert(k, v);
+                }
+
+                // Subsitute placeholder variables in response body & headers
+                use crate::variable::VariableResolver;
+                let resolved_body = VariableResolver::resolve(&variant.response_body, &context);
+
+                let mut resolved_headers = HashMap::new();
+                for (k, v) in &variant.headers {
+                    resolved_headers.insert(k.clone(), VariableResolver::resolve(v, &context));
+                }
+
+                return Some(MockResponse {
+                    status: variant.status,
+                    headers: resolved_headers,
+                    body: resolved_body,
+                });
+            }
+        }
+        None
     }
 }
 

@@ -9,6 +9,7 @@ pub mod parser;
 pub mod runner;
 pub mod utils;
 pub mod variable;
+pub mod mock;
 
 // Re-export commonly used types
 pub use error::{Result, RupostError};

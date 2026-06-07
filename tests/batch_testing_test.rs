@@ -251,3 +251,30 @@ async fn test_batch_report_json() {
         file_a.to_str().unwrap()
     );
 }
+
+#[test]
+fn test_workflow_missing_dependency() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let root = temp_dir.path().canonicalize().unwrap();
+
+    let file_a = root.join("a.http");
+    fs::write(
+        &file_a,
+        "### @depends-on non_existent.http\nGET http://localhost/a",
+    )
+    .unwrap();
+
+    let parsed_a = HttpFileParser::parse_file(&file_a).unwrap();
+    let files = vec![(file_a.clone(), parsed_a)];
+
+    let graph = WorkflowGraph::new(&files);
+    let result = graph.resolve_execution_order();
+
+    assert!(result.is_err());
+    let err = result.err().unwrap();
+    assert!(matches!(err, rupost::error::RupostError::DependencyNotFound { .. }));
+    let err_str = err.to_string();
+    assert!(err_str.contains("找不到依赖文件"));
+    assert!(err_str.contains("non_existent.http"));
+}
+

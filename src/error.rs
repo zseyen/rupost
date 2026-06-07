@@ -35,6 +35,12 @@ pub enum RupostError {
     #[error("循环依赖错误: {0}")]
     CyclicDependency(String),
 
+    #[error("找不到依赖文件: {missing_dep} (声明在文件: {file})")]
+    DependencyNotFound {
+        file: String,
+        missing_dep: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }
@@ -45,6 +51,9 @@ impl RupostError {
         match self {
             RupostError::BaseUrlNotConfigured => Some(
                 "请在 rupost.toml 对应的环境配置 base_url，或者在执行命令时使用 --env 选项指定环境 (如 `--env dev`)，或使用 `-v base_url=...` 传入变量。",
+            ),
+            RupostError::DependencyNotFound { .. } => Some(
+                "请检查 @depends-on 指令中声明的依赖文件路径是否正确，并确认执行测试时指定了该依赖文件所在的目录或路径。",
             ),
             _ => None,
         }

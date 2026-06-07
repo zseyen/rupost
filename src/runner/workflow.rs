@@ -55,6 +55,11 @@ impl WorkflowGraph {
                 if self.nodes.contains_key(dep) {
                     *in_degree.entry(path.clone()).or_insert(0) += 1;
                     adj.entry(dep.clone()).or_default().push(path.clone());
+                } else {
+                    return Err(RupostError::DependencyNotFound {
+                        file: path.to_string_lossy().to_string(),
+                        missing_dep: dep.to_string_lossy().to_string(),
+                    });
                 }
             }
         }

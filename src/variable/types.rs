@@ -1,11 +1,23 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// 变量上下文，存储所有可用变量
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct VariableContext {
-    /// 变量映射表
+    /// 局部变量映射表
     variables: HashMap<String, String>,
+    /// 全局共享变量映射表
+    global: Arc<RwLock<HashMap<String, String>>>,
+}
+
+impl Default for VariableContext {
+    fn default() -> Self {
+        Self {
+            variables: HashMap::new(),
+            global: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 impl VariableContext {
@@ -16,7 +28,15 @@ impl VariableContext {
 
     /// 插入变量
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.variables.insert(key.into(), value.into());
+        let key_str = key.into();
+        let val_str = value.into();
+        if key_str.starts_with("global.") {
+            if let Ok(mut g) = self.global.write() {
+                g.insert(key_str, val_str);
+            }
+        } else {
+            self.variables.insert(key_str, val_str);
+        }
     }
 
     /// 设置变量 (insert 的别名)
@@ -25,13 +45,22 @@ impl VariableContext {
     }
 
     /// 获取变量值
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.variables.get(key).map(|s| s.as_str())
+    pub fn get(&self, key: &str) -> Option<String> {
+        if key.starts_with("global.") {
+            self.global.read().ok()?.get(key).cloned()
+        } else if key.starts_with("env.") {
+            let env_name = &key["env.".len()..];
+            std::env::var(env_name).ok()
+        } else {
+            self.variables.get(key).cloned()
+        }
     }
 
     /// 批量插入变量
     pub fn extend(&mut self, vars: HashMap<String, String>) {
-        self.variables.extend(vars);
+        for (k, v) in vars {
+            self.insert(k, v);
+        }
     }
 
     /// 变量数量
@@ -79,8 +108,8 @@ mod tests {
 
         ctx.insert("key", "value");
         assert_eq!(ctx.len(), 1);
-        assert_eq!(ctx.get("key"), Some("value"));
-        assert_eq!(ctx.get("missing"), None);
+        assert_eq!(ctx.get("key").as_deref(), Some("value"));
+        assert_eq!(ctx.get("missing").as_deref(), None);
     }
 
     #[test]
@@ -92,8 +121,8 @@ mod tests {
 
         ctx.extend(vars);
         assert_eq!(ctx.len(), 2);
-        assert_eq!(ctx.get("key1"), Some("value1"));
-        assert_eq!(ctx.get("key2"), Some("value2"));
+        assert_eq!(ctx.get("key1").as_deref(), Some("value1"));
+        assert_eq!(ctx.get("key2").as_deref(), Some("value2"));
     }
 
     #[test]

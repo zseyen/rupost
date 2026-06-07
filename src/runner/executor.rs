@@ -163,7 +163,7 @@ impl TestExecutor {
             if !has_ua {
                 parsed
                     .headers
-                    .push(("User-Agent".to_string(), ua.to_string()));
+                    .push(("User-Agent".to_string(), ua));
             }
         }
 

@@ -1,6 +1,6 @@
 ### 用户登录获取 token
 @name login
-@capture my_token from body.json.password
+@capture global.token from body.json.password
 POST https://httpbin.org/post
 Content-Type: application/json
 

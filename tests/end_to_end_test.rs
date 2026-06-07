@@ -514,8 +514,8 @@ Authorization: Bearer {{{{token}}}}
     assert!(results[1].success); // Get User Info success (implies token was captured and used)
 
     // 验证变量上下文是否已更新
-    assert_eq!(context.get("token"), Some("secret-access-token-123"));
-    assert_eq!(context.get("uid"), Some("42"));
+    assert_eq!(context.get("token").as_deref(), Some("secret-access-token-123"));
+    assert_eq!(context.get("uid").as_deref(), Some("42"));
 }
 
 /// 测试 Markdown 文件的响应变量捕获功能 (跨代码块共享)
@@ -597,5 +597,5 @@ Authorization: Bearer {{{{my_token}}}}
     assert!(results[1].success); // Verify success (implies token was captured and shared across blocks)
 
     // 验证变量上下文已跨代码块累积
-    assert_eq!(context.get("my_token"), Some("md-secret-token"));
+    assert_eq!(context.get("my_token").as_deref(), Some("md-secret-token"));
 }

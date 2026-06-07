@@ -141,13 +141,13 @@ token = "${PROD_TOKEN}"
 
         // 测试 dev 环境
         let context = ConfigLoader::build_context(&config, Some("dev"), &[]);
-        assert_eq!(context.get("base_url"), Some("http://localhost:8080"));
-        assert_eq!(context.get("token"), Some("dev-token"));
+        assert_eq!(context.get("base_url").as_deref(), Some("http://localhost:8080"));
+        assert_eq!(context.get("token").as_deref(), Some("dev-token"));
 
         // 测试 CLI 覆盖
         let cli_vars = vec![("token".to_string(), "custom-token".to_string())];
         let context = ConfigLoader::build_context(&config, Some("dev"), &cli_vars);
-        assert_eq!(context.get("token"), Some("custom-token"));
+        assert_eq!(context.get("token").as_deref(), Some("custom-token"));
     }
 
     #[test]

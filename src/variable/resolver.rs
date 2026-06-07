@@ -10,7 +10,7 @@ impl VariableResolver {
     pub fn substitute(text: &str, context: &VariableContext) -> String {
         static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
         let re =
-            VAR_REGEX.get_or_init(|| Regex::new(r"\{\{([$a-zA-Z_][a-zA-Z0-9_]*)\}\}").unwrap());
+            VAR_REGEX.get_or_init(|| Regex::new(r"\{\{([$a-zA-Z_][a-zA-Z0-9_.]*)\}\}").unwrap());
 
         re.replace_all(text, |caps: &Captures| {
             let var_name = &caps[1];
@@ -24,7 +24,7 @@ impl VariableResolver {
                     let mut rng = rand::rng();
                     rng.random_range(1..=10000).to_string()
                 }
-                _ => context.get(var_name).unwrap_or(&caps[0]).to_string(),
+                _ => context.get(var_name).unwrap_or_else(|| caps[0].to_string()),
             }
         })
         .to_string()
@@ -164,4 +164,31 @@ mod tests {
         let num: u32 = num_str.parse().unwrap();
         assert!((1..=10000).contains(&num));
     }
+
+    #[test]
+    fn test_resolve_global() {
+        let mut ctx = VariableContext::new();
+        ctx.insert("global.token", "global-secret");
+
+        let input = "Bearer {{global.token}}";
+        let output = VariableResolver::resolve(input, &ctx);
+        assert_eq!(output, "Bearer global-secret");
+    }
+
+    #[test]
+    fn test_resolve_env_via_placeholder() {
+        unsafe {
+            std::env::set_var("TEST_PLACEHOLDER", "env-value");
+        }
+
+        let ctx = VariableContext::new();
+        let input = "Val: {{env.TEST_PLACEHOLDER}}";
+        let output = VariableResolver::resolve(input, &ctx);
+        assert_eq!(output, "Val: env-value");
+
+        unsafe {
+            std::env::remove_var("TEST_PLACEHOLDER");
+        }
+    }
 }
+

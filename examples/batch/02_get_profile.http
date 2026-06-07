@@ -2,6 +2,6 @@
 ### 获取用户 Profile，依赖登录获取的 my_token
 @name profile
 GET https://httpbin.org/headers
-Authorization: Bearer {{my_token}}
+Authorization: Bearer {{global.token}}
 
 @assert body.headers.Authorization exists

@@ -21,6 +21,7 @@ impl BatchExecutor {
     pub async fn execute_batch(
         &self,
         execution_order: Vec<PathBuf>,
+        dependencies: HashMap<PathBuf, Vec<PathBuf>>,
         mut files_map: HashMap<PathBuf, ParsedFile>,
         context: &mut VariableContext,
         mode: &str,
@@ -33,6 +34,15 @@ impl BatchExecutor {
             let mut join_set = JoinSet::new();
             let semaphore = Arc::new(Semaphore::new(concurrency));
             let has_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+            // 1. 为每个节点建立一个 watch 通道以传递完成状态。初始化为 None (未完成)
+            let mut senders = HashMap::new();
+            let mut receivers = HashMap::new();
+            for file_path in &execution_order {
+                let (tx, rx) = tokio::sync::watch::channel::<Option<bool>>(None);
+                senders.insert(file_path.clone(), tx);
+                receivers.insert(file_path.clone(), rx);
+            }
 
             for file_path in &execution_order {
                 if let Some(parsed_file) = files_map.remove(file_path) {
@@ -50,14 +60,56 @@ impl BatchExecutor {
                     let has_failed_clone = Arc::clone(&has_failed);
                     let mut worker_context = context.clone();
 
-                    join_set.spawn(async move {
-                        let _permit = sem.acquire().await.unwrap();
+                    // 找出当前节点所依赖的所有前置节点的 Receiver
+                    let mut dep_receivers = Vec::new();
+                    if let Some(deps) = dependencies.get(&file_path) {
+                        for dep in deps {
+                            if let Some(rx) = receivers.get(dep) {
+                                dep_receivers.push(rx.clone());
+                            }
+                        }
+                    }
 
+                    // 获取自己的 Sender，以广播结果状态给后续节点
+                    let my_sender = senders.remove(&file_path).unwrap();
+
+                    join_set.spawn(async move {
+                        // 2. 异步等待所有前置依赖项成功运行完成
+                        for mut rx in dep_receivers {
+                            loop {
+                                let current_val = *rx.borrow();
+                                match current_val {
+                                    Some(true) => {
+                                        break; // 依赖成功，检查下一个
+                                    }
+                                    Some(false) => {
+                                        // 前置依赖失败，级联跳过，当前节点也宣告失败并退出
+                                        let _ = my_sender.send(Some(false));
+                                        return (file_path, Vec::new(), true);
+                                    }
+                                    None => {
+                                        // 还没有数据，等待变更
+                                        if rx.changed().await.is_err() {
+                                            // 管道关闭，代表崩溃/取消，视作失败
+                                            let _ = my_sender.send(Some(false));
+                                            return (file_path, Vec::new(), true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. 检查全局的 fail_fast 中断
                         if fail_fast && has_failed_clone.load(std::sync::atomic::Ordering::Relaxed)
                         {
+                            let _ = my_sender.send(Some(false));
                             return (file_path, Vec::new(), true);
                         }
 
+                        // 获取并发信号量许可
+                        let _permit = sem.acquire().await.unwrap();
+
+                        // 4. 执行真正的测试
                         let res = worker_executor
                             .execute_all(parsed_file, &mut worker_context)
                             .await;
@@ -81,6 +133,9 @@ impl BatchExecutor {
                                 )]
                             }
                         };
+
+                        // 5. 更新并广播自己的结果状态
+                        let _ = my_sender.send(Some(success));
 
                         if !success && fail_fast {
                             has_failed_clone.store(true, std::sync::atomic::Ordering::Relaxed);

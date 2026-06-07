@@ -174,9 +174,17 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
 
     // 6. 执行批处理
     let start_time = Instant::now();
+    // 提取依赖映射关系，传入 execute_batch 供并行调度使用
+    let dependencies: HashMap<PathBuf, Vec<PathBuf>> = graph
+        .nodes
+        .iter()
+        .map(|(k, v)| (k.clone(), v.depends_on.clone()))
+        .collect();
+
     let batch_results = batch_executor
         .execute_batch(
             execution_order,
+            dependencies,
             files_map,
             &mut var_context,
             options.mode,

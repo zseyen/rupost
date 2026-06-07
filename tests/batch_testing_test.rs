@@ -191,9 +191,10 @@ async fn test_batch_parallel_concurrency_and_cookie_isolation() {
     let batch_executor = BatchExecutor::new(executor);
 
     let mut context = VariableContext::new();
+    let deps = std::collections::HashMap::new();
     // 运行 parallel 模式
     let results = batch_executor
-        .execute_batch(order, files_map, &mut context, "parallel", 2, false)
+        .execute_batch(order, deps, files_map, &mut context, "parallel", 2, false)
         .await
         .unwrap();
 
@@ -229,9 +230,10 @@ async fn test_batch_report_json() {
     let executor = TestExecutor::new();
     let batch_executor = BatchExecutor::new(executor);
     let mut context = VariableContext::new();
+    let deps = std::collections::HashMap::new();
 
     let results = batch_executor
-        .execute_batch(order, files_map, &mut context, "sequential", 1, false)
+        .execute_batch(order, deps, files_map, &mut context, "sequential", 1, false)
         .await
         .unwrap();
 
@@ -277,4 +279,82 @@ fn test_workflow_missing_dependency() {
     assert!(err_str.contains("找不到依赖文件"));
     assert!(err_str.contains("non_existent.http"));
 }
+
+#[tokio::test]
+async fn test_batch_parallel_global_variable_sharing() {
+    let mock_server = MockServer::start().await;
+
+    // mock task1.http 响应，返回含有 token 的 json
+    Mock::given(method("GET"))
+        .and(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "my-secret-global-token"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // mock task2.http，验证收到的 Authorization 头是否正确
+    use wiremock::matchers::header;
+    Mock::given(method("GET"))
+        .and(path("/profile"))
+        .and(header("Authorization", "Bearer my-secret-global-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("welcome profile"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path().canonicalize().unwrap();
+
+    let file_1 = root.join("task1.http");
+    fs::write(
+        &file_1,
+        format!(
+            "### Task 1\nGET {}/login\n@capture global.token from body.token",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let file_2 = root.join("task2.http");
+    fs::write(
+        &file_2,
+        format!(
+            "### @depends-on task1.http\n### Task 2\nGET {}/profile\nAuthorization: Bearer {{{{global.token}}}}",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let parsed_1 = HttpFileParser::parse_file(&file_1).unwrap();
+    let parsed_2 = HttpFileParser::parse_file(&file_2).unwrap();
+
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(file_1.clone(), parsed_1);
+    files_map.insert(file_2.clone(), parsed_2);
+
+    let order = vec![file_1.clone(), file_2.clone()];
+
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = VariableContext::new();
+
+    let mut deps = std::collections::HashMap::new();
+    deps.insert(file_2.clone(), vec![file_1.clone()]);
+
+    // 运行 parallel 模式，以并发执行
+    let results = batch_executor
+        .execute_batch(order, deps, files_map, &mut context, "parallel", 2, false)
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    // 两个接口均应该成功
+    for (_path, run_results) in &results {
+        assert!(!run_results.is_empty(), "每个文件应该至少执行一个请求");
+        for r in run_results {
+            assert!(r.success, "请求应该成功，包含断言和网络执行: {:?}", r.error);
+        }
+    }
+}
+
 

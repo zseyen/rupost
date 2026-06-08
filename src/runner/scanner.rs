@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::runner::path::is_supported_file;
 use std::path::{Path, PathBuf};
 
 pub struct DirectoryScanner;
@@ -16,7 +17,7 @@ impl DirectoryScanner {
             }
             let canonical = path.canonicalize()?;
             if canonical.is_file() {
-                if Self::is_supported_file(&canonical) {
+                if is_supported_file(&canonical) {
                     files.push(canonical);
                 }
             } else if canonical.is_dir() {
@@ -31,14 +32,6 @@ impl DirectoryScanner {
         Ok(files)
     }
 
-    fn is_supported_file(path: &Path) -> bool {
-        if let Some(ext) = path.extension() {
-            let ext_str = ext.to_string_lossy().to_lowercase();
-            ext_str == "http" || ext_str == "md"
-        } else {
-            false
-        }
-    }
 
     fn scan_dir(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         let read_dir = std::fs::read_dir(dir)?;
@@ -55,7 +48,7 @@ impl DirectoryScanner {
             }
 
             if path.is_file() {
-                if Self::is_supported_file(&path) {
+                if is_supported_file(&path) {
                     let canonical = path.canonicalize()?;
                     files.push(canonical);
                 }

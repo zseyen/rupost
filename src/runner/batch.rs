@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::parser::ParsedFile;
 use crate::runner::executor::TestExecutor;
+use crate::runner::path::display_path;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
 use std::collections::HashMap;
@@ -127,7 +128,7 @@ impl BatchExecutor {
                                     1,
                                     None,
                                     "BATCH".to_string(),
-                                    file_path.to_string_lossy().to_string(),
+                                    display_path(&file_path),
                                     e.to_string(),
                                     std::time::Duration::from_secs(0),
                                 )]

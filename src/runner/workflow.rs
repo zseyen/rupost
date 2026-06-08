@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::parser::ParsedFile;
+use crate::runner::path::{display_path, resolve_dep_path};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
@@ -19,14 +20,8 @@ impl WorkflowGraph {
         let mut nodes = HashMap::new();
         for (path, parsed) in files {
             let mut resolved_deps = Vec::new();
-            let parent_dir = path.parent();
             for dep in &parsed.dependencies {
-                let dep_path = if let Some(parent) = parent_dir {
-                    parent.join(dep)
-                } else {
-                    PathBuf::from(dep)
-                };
-                let canonical_dep = dep_path.canonicalize().unwrap_or(dep_path);
+                let canonical_dep = resolve_dep_path(path, dep);
                 resolved_deps.push(canonical_dep);
             }
             let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -57,8 +52,8 @@ impl WorkflowGraph {
                     adj.entry(dep.clone()).or_default().push(path.clone());
                 } else {
                     return Err(RupostError::DependencyNotFound {
-                        file: path.to_string_lossy().to_string(),
-                        missing_dep: dep.to_string_lossy().to_string(),
+                        file: display_path(path),
+                        missing_dep: display_path(dep),
                     });
                 }
             }

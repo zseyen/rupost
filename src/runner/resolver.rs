@@ -19,7 +19,9 @@ impl DependencyResolver {
         let mut pending = Vec::new();
 
         // 规范化 sandbox_root
-        let canonical_sandbox = sandbox_root.canonicalize().unwrap_or_else(|_| sandbox_root.to_path_buf());
+        let canonical_sandbox = sandbox_root
+            .canonicalize()
+            .unwrap_or_else(|_| sandbox_root.to_path_buf());
 
         for path in initial_paths {
             let canonical_path = path.canonicalize()?;
@@ -139,8 +141,12 @@ mod tests {
         let b_path = sandbox_path.join("b.http");
 
         // 创建 a.http 并依赖 b.http
-        fs::write(&a_path, "### @depends-on b.http\nGET https://api.example.com/a").unwrap();
-        // 创建 b.http 
+        fs::write(
+            &a_path,
+            "### @depends-on b.http\nGET https://api.example.com/a",
+        )
+        .unwrap();
+        // 创建 b.http
         fs::write(&b_path, "GET https://api.example.com/b").unwrap();
 
         let a_canonical = a_path.canonicalize().unwrap();
@@ -164,7 +170,11 @@ mod tests {
 
         // a.http 试图依赖外部的 external.http
         let dep_str = external_path.to_string_lossy();
-        fs::write(&a_path, format!("### @depends-on {}\nGET https://api.example.com/a", dep_str)).unwrap();
+        fs::write(
+            &a_path,
+            format!("### @depends-on {}\nGET https://api.example.com/a", dep_str),
+        )
+        .unwrap();
         fs::write(&external_path, "GET https://api.example.com/external").unwrap();
 
         let initial = vec![a_path];

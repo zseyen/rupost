@@ -176,9 +176,7 @@ impl TestExecutor {
                 .iter()
                 .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
             if !has_ua {
-                parsed
-                    .headers
-                    .push(("User-Agent".to_string(), ua));
+                parsed.headers.push(("User-Agent".to_string(), ua));
             }
         }
 

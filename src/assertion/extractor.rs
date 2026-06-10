@@ -37,13 +37,13 @@ fn extract_from_json_body(body: &str, segments: &[String]) -> Result<AssertValue
 
     let mut current = &json_value;
     for segment in segments {
-        if let serde_json::Value::Array(arr) = current {
-            if let Ok(idx) = segment.parse::<usize>() {
-                current = arr.get(idx).ok_or_else(|| {
-                    AssertError::PathNotFound(format!("Path 'body.{}' not found", segments.join(".")))
-                })?;
-                continue;
-            }
+        if let serde_json::Value::Array(arr) = current
+            && let Ok(idx) = segment.parse::<usize>()
+        {
+            current = arr.get(idx).ok_or_else(|| {
+                AssertError::PathNotFound(format!("Path 'body.{}' not found", segments.join(".")))
+            })?;
+            continue;
         }
         current = current.get(segment).ok_or_else(|| {
             AssertError::PathNotFound(format!("Path 'body.{}' not found", segments.join(".")))
@@ -166,27 +166,26 @@ mod tests {
     #[test]
     fn test_extract_array_index() {
         let response = create_test_response(200, r#"["first", "second", "third"]"#);
-        let value = extract_value(
-            &response,
-            &ValuePath::Body(vec!["0".to_string()]),
-        )
-        .unwrap();
+        let value = extract_value(&response, &ValuePath::Body(vec!["0".to_string()])).unwrap();
         assert_eq!(value, AssertValue::String("first".to_string()));
 
-        let value2 = extract_value(
-            &response,
-            &ValuePath::Body(vec!["1".to_string()]),
-        )
-        .unwrap();
+        let value2 = extract_value(&response, &ValuePath::Body(vec!["1".to_string()])).unwrap();
         assert_eq!(value2, AssertValue::String("second".to_string()));
     }
 
     #[test]
     fn test_extract_nested_array_index() {
-        let response = create_test_response(200, r#"{"items": [{"name": "item_a"}, {"name": "item_b"}]}"#);
+        let response = create_test_response(
+            200,
+            r#"{"items": [{"name": "item_a"}, {"name": "item_b"}]}"#,
+        );
         let value = extract_value(
             &response,
-            &ValuePath::Body(vec!["items".to_string(), "1".to_string(), "name".to_string()]),
+            &ValuePath::Body(vec![
+                "items".to_string(),
+                "1".to_string(),
+                "name".to_string(),
+            ]),
         )
         .unwrap();
         assert_eq!(value, AssertValue::String("item_b".to_string()));

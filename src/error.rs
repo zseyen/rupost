@@ -36,10 +36,7 @@ pub enum RupostError {
     CyclicDependency(String),
 
     #[error("找不到依赖文件: {missing_dep} (声明在文件: {file})")]
-    DependencyNotFound {
-        file: String,
-        missing_dep: String,
-    },
+    DependencyNotFound { file: String, missing_dep: String },
 
     #[error("{0}")]
     Other(String),

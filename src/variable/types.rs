@@ -48,8 +48,7 @@ impl VariableContext {
     pub fn get(&self, key: &str) -> Option<String> {
         if key.starts_with("global.") {
             self.global.read().ok()?.get(key).cloned()
-        } else if key.starts_with("env.") {
-            let env_name = &key["env.".len()..];
+        } else if let Some(env_name) = key.strip_prefix("env.") {
             std::env::var(env_name).ok()
         } else {
             self.variables.get(key).cloned()

@@ -32,7 +32,6 @@ impl DirectoryScanner {
         Ok(files)
     }
 
-
     fn scan_dir(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         let read_dir = std::fs::read_dir(dir)?;
         for entry in read_dir {

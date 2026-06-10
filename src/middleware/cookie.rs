@@ -150,7 +150,7 @@ impl CookieMiddleware {
     pub fn export_cookie_state(&self) -> Result<serde_json::Value> {
         let store = self.store.lock().unwrap();
         let mut buffer = Vec::new();
-        save_incl_expired_and_nonpersistent(&*store, &mut buffer)
+        save_incl_expired_and_nonpersistent(&store, &mut buffer)
             .map_err(|e| anyhow::anyhow!("Failed to serialize cookie store: {}", e))?;
         let value = serde_json::from_slice(&buffer)?;
         Ok(value)
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn test_export_and_import_cookie_state() {
         let middleware = CookieMiddleware::new_ephemeral();
-        
+
         // 往里面塞一个 cookie 测试
         {
             let mut store = middleware.store.lock().unwrap();

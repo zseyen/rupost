@@ -141,7 +141,10 @@ token = "${PROD_TOKEN}"
 
         // 测试 dev 环境
         let context = ConfigLoader::build_context(&config, Some("dev"), &[]);
-        assert_eq!(context.get("base_url").as_deref(), Some("http://localhost:8080"));
+        assert_eq!(
+            context.get("base_url").as_deref(),
+            Some("http://localhost:8080")
+        );
         assert_eq!(context.get("token").as_deref(), Some("dev-token"));
 
         // 测试 CLI 覆盖

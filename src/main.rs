@@ -8,7 +8,10 @@ use rupost::history::selector::{self, SelectionStrategy};
 use rupost::history::storage::get_storage;
 use rupost::middleware::resolve_cookie_path;
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
-use rupost::runner::{BatchExecutor, DirectoryScanner, TestExecutor, TestReporter, WorkflowGraph};
+use rupost::runner::{
+    BatchExecutor, BatchMode, BatchRunRequest, DirectoryScanner, TestExecutor, TestReporter,
+    WorkflowGraph,
+};
 use rupost::variable::{ConfigLoader, VariableContext};
 use std::collections::HashMap;
 use std::fs;
@@ -181,17 +184,23 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
         .map(|(k, v)| (k.clone(), v.depends_on.clone()))
         .collect();
 
-    let batch_results = batch_executor
-        .execute_batch(
-            execution_order,
-            dependencies,
-            files_map,
-            &mut var_context,
-            options.mode,
-            options.concurrency,
-            options.fail_fast,
-        )
-        .await?;
+    let batch_mode = if options.mode == "parallel" {
+        BatchMode::Parallel
+    } else {
+        BatchMode::Serial
+    };
+
+    let batch_request = BatchRunRequest {
+        execution_order,
+        dependencies,
+        files_map,
+        context: &mut var_context,
+        mode: batch_mode,
+        concurrency: options.concurrency,
+        fail_fast: options.fail_fast,
+    };
+
+    let batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
 
     // 7. 渲染与汇报结果

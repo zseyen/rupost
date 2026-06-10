@@ -1,186 +1,87 @@
 use crate::Result;
 use crate::parser::ParsedFile;
 use crate::runner::executor::TestExecutor;
-use crate::runner::path::display_path;
+use crate::runner::parallel::ParallelScheduler;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tokio::task::JoinSet;
 
+/// 批量执行运行模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchMode {
+    /// 顺序串行执行
+    Serial,
+    /// 拓扑并行执行
+    Parallel,
+}
+
+/// 批量测试运行请求参数防腐层
+pub struct BatchRunRequest<'a> {
+    /// 解析排好序的文件路径列表
+    pub execution_order: Vec<PathBuf>,
+    /// 节点的依赖映射图
+    pub dependencies: HashMap<PathBuf, Vec<PathBuf>>,
+    /// 所有的解析文件数据
+    pub files_map: HashMap<PathBuf, ParsedFile>,
+    /// 变量上下文引用
+    pub context: &'a mut VariableContext,
+    /// 执行模式
+    pub mode: BatchMode,
+    /// 并行时的并发度
+    pub concurrency: usize,
+    /// 失败时是否立刻中断
+    pub fail_fast: bool,
+}
+
+/// 批量测试执行器
 pub struct BatchExecutor {
     executor: TestExecutor,
 }
 
 impl BatchExecutor {
+    /// 创建批量执行器
     pub fn new(executor: TestExecutor) -> Self {
         Self { executor }
     }
 
+    /// 执行批处理测试
     pub async fn execute_batch(
         &self,
-        execution_order: Vec<PathBuf>,
-        dependencies: HashMap<PathBuf, Vec<PathBuf>>,
-        mut files_map: HashMap<PathBuf, ParsedFile>,
-        context: &mut VariableContext,
-        mode: &str,
-        concurrency: usize,
-        fail_fast: bool,
+        mut request: BatchRunRequest<'_>,
     ) -> Result<Vec<(PathBuf, Vec<TestResult>)>> {
         let mut results = Vec::new();
 
-        if mode == "parallel" {
-            let mut join_set = JoinSet::new();
-            let semaphore = Arc::new(Semaphore::new(concurrency));
-            let has_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-            // 1. 为每个节点建立一个 watch 通道以传递完成状态。初始化为 None (未完成)
-            let mut senders = HashMap::new();
-            let mut receivers = HashMap::new();
-            for file_path in &execution_order {
-                let (tx, rx) = tokio::sync::watch::channel::<Option<bool>>(None);
-                senders.insert(file_path.clone(), tx);
-                receivers.insert(file_path.clone(), rx);
+        match request.mode {
+            BatchMode::Parallel => {
+                let scheduler = ParallelScheduler::new(
+                    &self.executor,
+                    request.execution_order.clone(),
+                    request.dependencies,
+                    request.files_map,
+                    request.context,
+                    request.concurrency,
+                    request.fail_fast,
+                );
+                results = scheduler.run().await?;
             }
+            BatchMode::Serial => {
+                for file_path in &request.execution_order {
+                    if let Some(parsed_file) = request.files_map.remove(file_path) {
+                        let res = self.executor.execute_all(parsed_file, request.context).await?;
+                        let has_failure = res.iter().any(|r| !r.success);
+                        results.push((file_path.clone(), res));
 
-            for file_path in &execution_order {
-                if let Some(parsed_file) = files_map.remove(file_path) {
-                    let mut worker_executor = if self.executor.has_cookies() {
-                        TestExecutor::with_ephemeral_cookies()
-                    } else {
-                        TestExecutor::new()
-                    };
-                    worker_executor.debug = self.executor.debug;
-                    worker_executor.debug_on_failure = self.executor.debug_on_failure;
-
-                    let worker_executor = Arc::new(worker_executor);
-                    let file_path = file_path.clone();
-                    let sem = Arc::clone(&semaphore);
-                    let has_failed_clone = Arc::clone(&has_failed);
-                    let mut worker_context = context.clone();
-
-                    // 找出当前节点所依赖的所有前置节点的 Receiver
-                    let mut dep_receivers = Vec::new();
-                    if let Some(deps) = dependencies.get(&file_path) {
-                        for dep in deps {
-                            if let Some(rx) = receivers.get(dep) {
-                                dep_receivers.push(rx.clone());
-                            }
+                        if has_failure && request.fail_fast {
+                            break;
                         }
-                    }
-
-                    // 获取自己的 Sender，以广播结果状态给后续节点
-                    let my_sender = senders.remove(&file_path).unwrap();
-
-                    join_set.spawn(async move {
-                        // 2. 异步等待所有前置依赖项成功运行完成
-                        for mut rx in dep_receivers {
-                            loop {
-                                let current_val = *rx.borrow();
-                                match current_val {
-                                    Some(true) => {
-                                        break; // 依赖成功，检查下一个
-                                    }
-                                    Some(false) => {
-                                        // 前置依赖失败，级联跳过，当前节点也宣告失败并退出
-                                        let _ = my_sender.send(Some(false));
-                                        return (file_path, Vec::new(), true);
-                                    }
-                                    None => {
-                                        // 还没有数据，等待变更
-                                        if rx.changed().await.is_err() {
-                                            // 管道关闭，代表崩溃/取消，视作失败
-                                            let _ = my_sender.send(Some(false));
-                                            return (file_path, Vec::new(), true);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // 3. 检查全局的 fail_fast 中断
-                        if fail_fast && has_failed_clone.load(std::sync::atomic::Ordering::Relaxed)
-                        {
-                            let _ = my_sender.send(Some(false));
-                            return (file_path, Vec::new(), true);
-                        }
-
-                        // 获取并发信号量许可
-                        let _permit = sem.acquire().await.unwrap();
-
-                        // 4. 执行真正的测试
-                        let res = worker_executor
-                            .execute_all(parsed_file, &mut worker_context)
-                            .await;
-                        let mut success = true;
-                        let results_val = match res {
-                            Ok(res_list) => {
-                                if res_list.iter().any(|r| !r.success) {
-                                    success = false;
-                                }
-                                res_list
-                            }
-                            Err(e) => {
-                                success = false;
-                                vec![TestResult::error(
-                                    1,
-                                    None,
-                                    "BATCH".to_string(),
-                                    display_path(&file_path),
-                                    e.to_string(),
-                                    std::time::Duration::from_secs(0),
-                                )]
-                            }
-                        };
-
-                        // 5. 更新并广播自己的结果状态
-                        let _ = my_sender.send(Some(success));
-
-                        if !success && fail_fast {
-                            has_failed_clone.store(true, std::sync::atomic::Ordering::Relaxed);
-                        }
-
-                        (file_path, results_val, false)
-                    });
-                }
-            }
-
-            while let Some(res) = join_set.join_next().await {
-                match res {
-                    Ok((path, run_results, aborted)) => {
-                        if aborted {
-                            continue;
-                        }
-                        if fail_fast && run_results.iter().any(|r| !r.success) {
-                            join_set.abort_all();
-                        }
-                        results.push((path, run_results));
-                    }
-                    Err(e) => {
-                        return Err(crate::error::RupostError::Other(format!(
-                            "任务执行 Join 失败: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-        } else {
-            for file_path in &execution_order {
-                if let Some(parsed_file) = files_map.remove(file_path) {
-                    let res = self.executor.execute_all(parsed_file, context).await?;
-                    let has_failure = res.iter().any(|r| !r.success);
-                    results.push((file_path.clone(), res));
-
-                    if has_failure && fail_fast {
-                        break;
                     }
                 }
             }
         }
 
-        let order_map: HashMap<PathBuf, usize> = execution_order
+        // 最终按照原定的拓扑顺序排序，以保持稳定输出
+        let order_map: HashMap<PathBuf, usize> = request.execution_order
             .iter()
             .enumerate()
             .map(|(i, p)| (p.clone(), i))

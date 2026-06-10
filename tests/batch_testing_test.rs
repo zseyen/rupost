@@ -5,7 +5,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use rupost::parser::HttpFileParser;
 use rupost::runner::executor::TestExecutor;
-use rupost::runner::{BatchExecutor, DirectoryScanner, WorkflowGraph};
+use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest, DirectoryScanner, WorkflowGraph};
 use rupost::variable::VariableContext;
 
 #[test]
@@ -194,7 +194,15 @@ async fn test_batch_parallel_concurrency_and_cookie_isolation() {
     let deps = std::collections::HashMap::new();
     // 运行 parallel 模式
     let results = batch_executor
-        .execute_batch(order, deps, files_map, &mut context, "parallel", 2, false)
+        .execute_batch(BatchRunRequest {
+            execution_order: order,
+            dependencies: deps,
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Parallel,
+            concurrency: 2,
+            fail_fast: false,
+        })
         .await
         .unwrap();
 
@@ -233,7 +241,15 @@ async fn test_batch_report_json() {
     let deps = std::collections::HashMap::new();
 
     let results = batch_executor
-        .execute_batch(order, deps, files_map, &mut context, "sequential", 1, false)
+        .execute_batch(BatchRunRequest {
+            execution_order: order,
+            dependencies: deps,
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Serial,
+            concurrency: 1,
+            fail_fast: false,
+        })
         .await
         .unwrap();
 
@@ -343,7 +359,15 @@ async fn test_batch_parallel_global_variable_sharing() {
 
     // 运行 parallel 模式，以并发执行
     let results = batch_executor
-        .execute_batch(order, deps, files_map, &mut context, "parallel", 2, false)
+        .execute_batch(BatchRunRequest {
+            execution_order: order,
+            dependencies: deps,
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Parallel,
+            concurrency: 2,
+            fail_fast: false,
+        })
         .await
         .unwrap();
 

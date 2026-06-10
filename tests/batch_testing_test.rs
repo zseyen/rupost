@@ -44,19 +44,24 @@ fn test_scanner_discovery() {
     let scanned = DirectoryScanner::scan(&paths).unwrap();
 
     // 因为是 canonicalize 的，我们先把 scanned 转成相对于 root 的相对路径
-    let mut relative_paths: Vec<String> = scanned
+    let mut relative_paths: Vec<std::path::PathBuf> = scanned
         .iter()
-        .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().to_string())
+        .map(|p| p.strip_prefix(&root).unwrap().to_path_buf())
         .collect();
 
     // 默认按字母顺序进行隐式基础排序（深度遍历或扁平之后做 sort）
-    // 预期是：["dir1/a.http", "dir1/b.http", "dir2/c.md"]
     relative_paths.sort(); // 确保断言不受底层文件系统遍历顺序的影响，但实际上 Scanner 本身应该排序
 
     assert_eq!(relative_paths.len(), 3);
-    assert_eq!(relative_paths[0], "dir1/a.http");
-    assert_eq!(relative_paths[1], "dir1/b.http");
-    assert_eq!(relative_paths[2], "dir2/c.md");
+    assert_eq!(
+        relative_paths[0],
+        std::path::Path::new("dir1").join("a.http")
+    );
+    assert_eq!(
+        relative_paths[1],
+        std::path::Path::new("dir1").join("b.http")
+    );
+    assert_eq!(relative_paths[2], std::path::Path::new("dir2").join("c.md"));
 }
 
 #[test]

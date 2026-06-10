@@ -381,4 +381,167 @@ async fn test_batch_parallel_global_variable_sharing() {
     }
 }
 
+#[tokio::test]
+async fn test_batch_parallel_local_variable_cascade() {
+    let mock_server = MockServer::start().await;
 
+    // mock task1.http 登录并返回 json
+    Mock::given(method("GET"))
+        .and(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "local_token": "my-local-secret-jwt"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // mock task2.http 验证 Authorization
+    use wiremock::matchers::header;
+    Mock::given(method("GET"))
+        .and(path("/profile"))
+        .and(header("Authorization", "Bearer my-local-secret-jwt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("success"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path().canonicalize().unwrap();
+
+    let file_1 = root.join("task1.http");
+    fs::write(
+        &file_1,
+        format!(
+            "### Task 1\nGET {}/login\n@capture local_token from body.local_token",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let file_2 = root.join("task2.http");
+    fs::write(
+        &file_2,
+        format!(
+            "### @depends-on task1.http\n### Task 2\nGET {}/profile\nAuthorization: Bearer {{{{local_token}}}}",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let parsed_1 = HttpFileParser::parse_file(&file_1).unwrap();
+    let parsed_2 = HttpFileParser::parse_file(&file_2).unwrap();
+
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(file_1.clone(), parsed_1);
+    files_map.insert(file_2.clone(), parsed_2);
+
+    let order = vec![file_1.clone(), file_2.clone()];
+
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = VariableContext::new();
+
+    let mut deps = std::collections::HashMap::new();
+    deps.insert(file_2.clone(), vec![file_1.clone()]);
+
+    let results = batch_executor
+        .execute_batch(BatchRunRequest {
+            execution_order: order,
+            dependencies: deps,
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Parallel,
+            concurrency: 2,
+            fail_fast: false,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    for (_path, run_results) in &results {
+        assert!(!run_results.is_empty());
+        for r in run_results {
+            assert!(r.success, "请求应该成功: {:?}", r.error);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_batch_parallel_cookie_cascade() {
+    let mock_server = MockServer::start().await;
+
+    // mock set cookie
+    Mock::given(method("GET"))
+        .and(path("/cookie/set"))
+        .respond_with(ResponseTemplate::new(200).insert_header("Set-Cookie", "my_session=secret_value; Domain=127.0.0.1; Path=/"))
+        .mount(&mock_server)
+        .await;
+
+    // mock check cookie
+    use wiremock::matchers::header;
+    Mock::given(method("GET"))
+        .and(path("/cookie/check"))
+        .and(header("Cookie", "my_session=secret_value"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("cookie verified"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path().canonicalize().unwrap();
+
+    let file_1 = root.join("task1.http");
+    fs::write(
+        &file_1,
+        format!(
+            "### Task 1\nGET {}/cookie/set",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let file_2 = root.join("task2.http");
+    fs::write(
+        &file_2,
+        format!(
+            "### @depends-on task1.http\n### Task 2\nGET {}/cookie/check",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let parsed_1 = HttpFileParser::parse_file(&file_1).unwrap();
+    let parsed_2 = HttpFileParser::parse_file(&file_2).unwrap();
+
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(file_1.clone(), parsed_1);
+    files_map.insert(file_2.clone(), parsed_2);
+
+    let order = vec![file_1.clone(), file_2.clone()];
+
+    // 启用 Cookie 支持
+    let executor = TestExecutor::with_ephemeral_cookies();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = VariableContext::new();
+
+    let mut deps = std::collections::HashMap::new();
+    deps.insert(file_2.clone(), vec![file_1.clone()]);
+
+    let results = batch_executor
+        .execute_batch(BatchRunRequest {
+            execution_order: order,
+            dependencies: deps,
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Parallel,
+            concurrency: 2,
+            fail_fast: false,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    for (_path, run_results) in &results {
+        assert!(!run_results.is_empty());
+        for r in run_results {
+            assert!(r.success, "并行 Cookie 级联传递校验失败: {:?}", r.error);
+        }
+    }
+}

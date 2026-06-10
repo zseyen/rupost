@@ -3,9 +3,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteSegment {
     Literal(String),
-    Param(String),      // id in :id
-    Wildcard,           // *
-    MultiWildcard,      // **
+    Param(String), // id in :id
+    Wildcard,      // *
+    MultiWildcard, // **
 }
 
 impl RouteSegment {
@@ -51,12 +51,13 @@ impl<T> TrieNode<T> {
         let first = segments[0];
         let segment_type = RouteSegment::parse(first);
 
-        let child_idx = if let Some(idx) = self.children.iter().position(|c| c.segment == segment_type) {
-            idx
-        } else {
-            self.children.push(TrieNode::new(segment_type));
-            self.children.len() - 1
-        };
+        let child_idx =
+            if let Some(idx) = self.children.iter().position(|c| c.segment == segment_type) {
+                idx
+            } else {
+                self.children.push(TrieNode::new(segment_type));
+                self.children.len() - 1
+            };
 
         self.children[child_idx].insert_segments(&segments[1..], data);
     }
@@ -71,7 +72,11 @@ impl<T> TrieNode<T> {
         }
     }
 
-    fn match_segments(&self, segments: &[&str], params: &mut HashMap<String, String>) -> Option<&T> {
+    fn match_segments(
+        &self,
+        segments: &[&str],
+        params: &mut HashMap<String, String>,
+    ) -> Option<&T> {
         if segments.is_empty() {
             return self.data.as_ref();
         }
@@ -80,12 +85,11 @@ impl<T> TrieNode<T> {
 
         // 1. Literal 精确匹配
         for child in &self.children {
-            if let RouteSegment::Literal(ref lit) = child.segment {
-                if lit == first {
-                    if let Some(res) = child.match_segments(&segments[1..], params) {
-                        return Some(res);
-                    }
-                }
+            if let RouteSegment::Literal(ref lit) = child.segment
+                && lit == first
+                && let Some(res) = child.match_segments(&segments[1..], params)
+            {
+                return Some(res);
             }
         }
 
@@ -107,19 +111,19 @@ impl<T> TrieNode<T> {
 
         // 3. Wildcard 单段通配符匹配 (如 *)
         for child in &self.children {
-            if matches!(child.segment, RouteSegment::Wildcard) {
-                if let Some(res) = child.match_segments(&segments[1..], params) {
-                    return Some(res);
-                }
+            if matches!(child.segment, RouteSegment::Wildcard)
+                && let Some(res) = child.match_segments(&segments[1..], params)
+            {
+                return Some(res);
             }
         }
 
         // 4. MultiWildcard 多段通配符匹配 (如 **)
         for child in &self.children {
-            if matches!(child.segment, RouteSegment::MultiWildcard) {
-                if let Some(ref data) = child.data {
-                    return Some(data);
-                }
+            if matches!(child.segment, RouteSegment::MultiWildcard)
+                && let Some(ref data) = child.data
+            {
+                return Some(data);
             }
         }
 
@@ -197,7 +201,7 @@ mod tests {
 
         let res3 = root.match_path("/static/logo.png");
         assert!(res3.is_some());
-        
+
         let res4 = root.match_path("/api/static/logo.png");
         assert!(res4.is_none());
     }

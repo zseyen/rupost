@@ -1,6 +1,6 @@
-use std::sync::Arc;
-use crate::mock::matcher::MockMatcher;
 use crate::Result;
+use crate::mock::matcher::MockMatcher;
+use std::sync::Arc;
 
 #[allow(async_fn_in_trait)]
 pub trait MockServer: Send + Sync {

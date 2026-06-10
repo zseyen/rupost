@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::Result;
+use crate::error::RupostError;
+use crate::mock::matcher::{MockMatcher, MockRequest};
+use crate::mock::server::MockServer;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
-use axum::Router;
-use crate::mock::matcher::{MockMatcher, MockRequest};
-use crate::mock::server::MockServer;
-use crate::Result;
-use crate::error::RupostError;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use colored::Colorize;
 
@@ -63,7 +63,11 @@ async fn handle_mock_request(
     let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
-            println!("  {} {}", "Status:".bold().white(), "400 Bad Request".bold().red());
+            println!(
+                "  {} {}",
+                "Status:".bold().white(),
+                "400 Bad Request".bold().red()
+            );
             return (StatusCode::BAD_REQUEST, "Failed to read request body").into_response();
         }
     };
@@ -83,7 +87,10 @@ async fn handle_mock_request(
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        let matched_pattern = mock_resp.matched_pattern.clone().unwrap_or_else(|| "unknown".to_string());
+        let matched_pattern = mock_resp
+            .matched_pattern
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         println!(
             "  {} {} | {} {} | {}",
             "Status:".bold().white(),
@@ -94,7 +101,7 @@ async fn handle_mock_request(
         );
 
         let mut response = status.into_response();
-        
+
         let headers_mut = response.headers_mut();
         for (k, v) in mock_resp.headers {
             if let (Ok(h_name), Ok(h_val)) = (

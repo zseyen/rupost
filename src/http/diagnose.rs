@@ -1,13 +1,13 @@
-use std::time::{Duration, Instant};
+use colored::Colorize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use url::Url;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpStream, lookup_host};
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use url::Url;
 use x509_parser::prelude::*;
-use serde::{Serialize, Deserialize};
-use colored::Colorize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CertInfo {
@@ -35,16 +35,16 @@ pub struct DiagnosticsReport {
 
 /// 解析 X509 证书的 DER 裸字节
 pub fn parse_x509_der(der: &[u8]) -> Result<CertInfo, String> {
-    let (_, x509) = parse_x509_certificate(der)
-        .map_err(|e| format!("X509 parse error: {:?}", e))?;
+    let (_, x509) =
+        parse_x509_certificate(der).map_err(|e| format!("X509 parse error: {:?}", e))?;
 
     let subject = x509.subject().to_string();
     let issuer = x509.issuer().to_string();
 
     let not_after = x509.validity().not_after;
     let not_after_timestamp = not_after.timestamp();
-    let validity_not_after = chrono::DateTime::from_timestamp(not_after_timestamp, 0)
-        .unwrap_or_else(|| chrono::Utc::now());
+    let validity_not_after =
+        chrono::DateTime::from_timestamp(not_after_timestamp, 0).unwrap_or_else(chrono::Utc::now);
 
     let now = chrono::Utc::now();
     let days_remaining = validity_not_after.signed_duration_since(now).num_days();
@@ -88,10 +88,14 @@ fn parse_http_response_header(bytes: &[u8]) -> Option<(u16, String)> {
 pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     let start_all = Instant::now();
     let url = Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
-    let host = url.host_str().ok_or_else(|| "Missing host in URL".to_string())?;
-    
+    let host = url
+        .host_str()
+        .ok_or_else(|| "Missing host in URL".to_string())?;
+
     // 解析端口或默认端口
-    let port = url.port_or_known_default().unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+    let port = url
+        .port_or_known_default()
+        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
     let is_https = url.scheme() == "https";
 
     // 1. DNS 诊断
@@ -103,7 +107,8 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
 
     let addrs_vec: Vec<std::net::SocketAddr> = addrs_iter.collect();
     let resolved_ips: Vec<String> = addrs_vec.iter().map(|addr| addr.ip().to_string()).collect();
-    let target_addr = resolved_ips.first()
+    let target_addr = resolved_ips
+        .first()
         .ok_or_else(|| "No IP addresses resolved".to_string())?
         .clone();
 
@@ -123,15 +128,11 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     if is_https {
         // 3. TLS 握手诊断
         let mut root_store = RootCertStore::empty();
-        root_store.extend(
-            webpki_roots::TLS_SERVER_ROOTS
-                .iter()
-                .cloned()
-        );
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-        let config = ClientConfig::builder_with_provider(
-            Arc::new(tokio_rustls::rustls::crypto::ring::default_provider())
-        )
+        let config = ClientConfig::builder_with_provider(Arc::new(
+            tokio_rustls::rustls::crypto::ring::default_provider(),
+        ))
         .with_safe_default_protocol_versions()
         .map_err(|e| format!("Failed to set TLS protocol versions: {:?}", e))?
         .with_root_certificates(root_store)
@@ -142,17 +143,18 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
             .map_err(|e| format!("Invalid server name '{}': {}", host, e))?;
 
         let tls_start = Instant::now();
-        let mut tls_stream = connector.connect(server_name, tcp_stream)
+        let mut tls_stream = connector
+            .connect(server_name, tcp_stream)
             .await
             .map_err(|e| format!("TLS handshake failed: {}", e))?;
         tls_handshake_duration = Some(tls_start.elapsed());
 
         // 获取对端证书链
         let (_, connection) = tls_stream.get_ref();
-        if let Some(certs) = connection.peer_certificates() {
-            if let Some(first_cert) = certs.first() {
-                cert_info = parse_x509_der(first_cert.as_ref()).ok();
-            }
+        if let Some(certs) = connection.peer_certificates()
+            && let Some(first_cert) = certs.first()
+        {
+            cert_info = parse_x509_der(first_cert.as_ref()).ok();
         }
 
         // 4. HTTP TTFB (HTTPS)
@@ -162,23 +164,25 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
             url.path(),
             host
         );
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
-        tls_stream.write_all(request_payload.as_bytes())
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tls_stream
+            .write_all(request_payload.as_bytes())
             .await
             .map_err(|e| format!("Failed to send HTTP request over TLS: {}", e))?;
         tls_stream.flush().await.ok();
 
         let mut buffer = [0u8; 1024];
-        let n = tls_stream.read(&mut buffer)
+        let n = tls_stream
+            .read(&mut buffer)
             .await
             .map_err(|e| format!("Failed to read HTTP response over TLS: {}", e))?;
         ttfb = Some(ttfb_start.elapsed());
 
-        if n > 0 {
-            if let Some((status, version)) = parse_http_response_header(&buffer[..n]) {
-                http_status = Some(status);
-                http_version = Some(version);
-            }
+        if n > 0
+            && let Some((status, version)) = parse_http_response_header(&buffer[..n])
+        {
+            http_status = Some(status);
+            http_version = Some(version);
         }
     } else {
         // 4. HTTP TTFB (HTTP)
@@ -188,24 +192,26 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
             url.path(),
             host
         );
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tcp_stream;
-        stream.write_all(request_payload.as_bytes())
+        stream
+            .write_all(request_payload.as_bytes())
             .await
             .map_err(|e| format!("Failed to send HTTP request: {}", e))?;
         stream.flush().await.ok();
 
         let mut buffer = [0u8; 1024];
-        let n = stream.read(&mut buffer)
+        let n = stream
+            .read(&mut buffer)
             .await
             .map_err(|e| format!("Failed to read HTTP response: {}", e))?;
         ttfb = Some(ttfb_start.elapsed());
 
-        if n > 0 {
-            if let Some((status, version)) = parse_http_response_header(&buffer[..n]) {
-                http_status = Some(status);
-                http_version = Some(version);
-            }
+        if n > 0
+            && let Some((status, version)) = parse_http_response_header(&buffer[..n])
+        {
+            http_status = Some(status);
+            http_version = Some(version);
         }
     }
 
@@ -228,13 +234,31 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
 
 /// 极致美学格式化输出诊断报告
 pub fn print_diagnose_report(report: &DiagnosticsReport) {
-    println!("\n{}", "=========================================".cyan().bold());
+    println!(
+        "\n{}",
+        "=========================================".cyan().bold()
+    );
     println!("      {}", "RuPost Network Diagnostics".cyan().bold());
-    println!("{}\n", "=========================================".cyan().bold());
-    
+    println!(
+        "{}\n",
+        "=========================================".cyan().bold()
+    );
+
     println!("{:<14}: {}", "Target URL", report.url);
-    println!("{:<14}: {}", "Scheme", if report.is_https { "HTTPS".green().bold() } else { "HTTP".yellow().bold() });
-    println!("{:<14}: [{}]", "Resolved IPs", report.resolved_ips.join(", ").blue());
+    println!(
+        "{:<14}: {}",
+        "Scheme",
+        if report.is_https {
+            "HTTPS".green().bold()
+        } else {
+            "HTTP".yellow().bold()
+        }
+    );
+    println!(
+        "{:<14}: [{}]",
+        "Resolved IPs",
+        report.resolved_ips.join(", ").blue()
+    );
     println!();
 
     println!("{}", "⏱️  Latency Breakdown (Waterfall)".bold());
@@ -242,7 +266,9 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
 
     let dns_ms = report.dns_lookup_duration.as_secs_f64() * 1000.0;
     let tcp_ms = report.tcp_connect_duration.as_secs_f64() * 1000.0;
-    let tls_ms = report.tls_handshake_duration.map(|d| d.as_secs_f64() * 1000.0);
+    let tls_ms = report
+        .tls_handshake_duration
+        .map(|d| d.as_secs_f64() * 1000.0);
     let ttfb_ms = report.ttfb.map(|d| d.as_secs_f64() * 1000.0);
     let total_ms = report.total_duration.as_secs_f64() * 1000.0;
 
@@ -262,14 +288,34 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     }
 
     let max_ms = total_ms;
-    
-    println!("{:<14} : {} {:>6.1} ms", "DNS Lookup", get_bar(dns_ms, max_ms).blue(), dns_ms);
-    println!("{:<14} : {} {:>6.1} ms", "TCP Connect", get_bar(tcp_ms, max_ms).green(), tcp_ms);
+
+    println!(
+        "{:<14} : {} {:>6.1} ms",
+        "DNS Lookup",
+        get_bar(dns_ms, max_ms).blue(),
+        dns_ms
+    );
+    println!(
+        "{:<14} : {} {:>6.1} ms",
+        "TCP Connect",
+        get_bar(tcp_ms, max_ms).green(),
+        tcp_ms
+    );
     if let Some(tls) = tls_ms {
-        println!("{:<14} : {} {:>6.1} ms", "TLS Handshake", get_bar(tls, max_ms).magenta(), tls);
+        println!(
+            "{:<14} : {} {:>6.1} ms",
+            "TLS Handshake",
+            get_bar(tls, max_ms).magenta(),
+            tls
+        );
     }
     if let Some(ttfb) = ttfb_ms {
-        println!("{:<14} : {} {:>6.1} ms", "HTTP TTFB", get_bar(ttfb, max_ms).yellow(), ttfb);
+        println!(
+            "{:<14} : {} {:>6.1} ms",
+            "HTTP TTFB",
+            get_bar(ttfb, max_ms).yellow(),
+            ttfb
+        );
     }
     println!("{:<14} : {:>6.1} ms", "Total Latency", total_ms);
     println!();
@@ -281,7 +327,7 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
             println!("{:<14}: {}", "Subject (SAN)", cert.subject.blue());
             println!("{:<14}: {}", "Issuer", cert.issuer);
             println!("{:<14}: {}", "Valid Until", cert.validity_not_after);
-            
+
             let days = cert.days_remaining;
             let days_str = format!("{} days", days);
             let (status_str, days_colored) = if days <= 0 {
@@ -313,5 +359,8 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     if let Some(version) = &report.http_version {
         println!("{:<14}: {}", "HTTP Version", version);
     }
-    println!("{}", "=========================================\n".cyan().bold());
+    println!(
+        "{}",
+        "=========================================\n".cyan().bold()
+    );
 }

@@ -24,7 +24,10 @@ impl EnvFileParser {
 
                 // 如果值被单引号或双引号包裹，则剥离外层引号
                 let temp_val;
-                if ((val.starts_with('"') && val.ends_with('"')) || (val.starts_with('\'') && val.ends_with('\''))) && val.len() >= 2 {
+                if ((val.starts_with('"') && val.ends_with('"'))
+                    || (val.starts_with('\'') && val.ends_with('\'')))
+                    && val.len() >= 2
+                {
                     temp_val = val[1..val.len() - 1].to_string();
                     val = &temp_val;
                 }

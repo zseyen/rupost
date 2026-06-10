@@ -355,7 +355,10 @@ async fn test_env_file_loader_integration() {
 
     // 4. 构建变量上下文并传入临时 .env 路径
     let mut context = ConfigLoader::build_context(&config, Some("dev"), &[], Some(&temp_path));
-    assert_eq!(context.get("base_url"), Some(mock_server.uri().as_str()));
+    assert_eq!(
+        context.get("base_url").as_deref(),
+        Some(mock_server.uri().as_str())
+    );
 
     // 5. 使用 TestExecutor 发送请求
     let executor = rupost::runner::TestExecutor::new();

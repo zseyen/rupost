@@ -11,7 +11,7 @@ use rupost::runner::{
     BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
     TestReporter, WorkflowGraph,
 };
-use rupost::variable::{ConfigLoader, VariableContext};
+use rupost::variable::ConfigLoader;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -75,17 +75,15 @@ async fn main() -> Result<()> {
                 rupost::history::printer::list_history(limit, reverse)?;
             }
         },
-        Some(Commands::Diagnose { url }) => {
-            match rupost::http::diagnose_url(&url).await {
-                Ok(report) => {
-                    rupost::http::print_diagnose_report(&report);
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+        Some(Commands::Diagnose { url }) => match rupost::http::diagnose_url(&url).await {
+            Ok(report) => {
+                rupost::http::print_diagnose_report(&report);
             }
-        }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        },
         Some(Commands::Generate(args)) => {
             let storage = get_storage();
 
@@ -114,10 +112,12 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Mock { file, port }) => {
             use colored::Colorize;
-            use rupost::mock::matcher::{TrieRouteMatcher, MockRouteConfig};
-            use rupost::mock::server::{MockServer, AxumMockServer};
-            use rupost::mock::variant::{MockVariant, VariantCondition, ConditionSource, CompareOp};
             use rupost::history::model::SnapshotEntry;
+            use rupost::mock::matcher::{MockRouteConfig, TrieRouteMatcher};
+            use rupost::mock::server::{AxumMockServer, MockServer};
+            use rupost::mock::variant::{
+                CompareOp, ConditionSource, MockVariant, VariantCondition,
+            };
             use std::sync::Arc;
 
             println!(
@@ -136,7 +136,10 @@ async fn main() -> Result<()> {
             }
 
             let file_config: MockFileConfig = serde_json::from_str(&content).map_err(|e| {
-                rupost::error::RupostError::ParseError(format!("Failed to parse JSON configuration: {}", e))
+                rupost::error::RupostError::ParseError(format!(
+                    "Failed to parse JSON configuration: {}",
+                    e
+                ))
             })?;
 
             let mut matcher = TrieRouteMatcher::new();
@@ -173,9 +176,10 @@ async fn main() -> Result<()> {
                     for s in snapshots {
                         let path = extract_path(&s.request.url);
                         let method = s.request.method.to_uppercase();
-                        
+
                         let condition = if let Ok(parsed) = url::Url::parse(&s.request.url) {
-                            let query_pairs: Vec<(String, String)> = parsed.query_pairs().into_owned().collect();
+                            let query_pairs: Vec<(String, String)> =
+                                parsed.query_pairs().into_owned().collect();
                             if let Some((k, v)) = query_pairs.first() {
                                 Some(VariantCondition {
                                     source: ConditionSource::Query,

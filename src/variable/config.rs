@@ -225,9 +225,15 @@ sys_var = local-sys
 
         // 6. 验证级联优先级：
         // CLI > 系统变量 > .env > toml
-        assert_eq!(context.get("api_key"), Some("cli-override-key")); // CLI 覆盖了 toml 与 .env
-        assert_eq!(context.get("sys_var"), Some("system-override-val")); // 系统变量覆盖了 .env
-        assert_eq!(context.get("base_url"), Some("http://localhost:8081")); // .env 覆盖了 toml 中的 base_url
+        assert_eq!(context.get("api_key").as_deref(), Some("cli-override-key")); // CLI 覆盖了 toml 与 .env
+        assert_eq!(
+            context.get("sys_var").as_deref(),
+            Some("system-override-val")
+        ); // 系统变量覆盖了 .env
+        assert_eq!(
+            context.get("base_url").as_deref(),
+            Some("http://localhost:8081")
+        ); // .env 覆盖了 toml 中的 base_url
     }
 
     #[test]
@@ -250,8 +256,11 @@ api_key = "prod-global-key"
         let _ = fs::remove_file(".env.prod");
 
         // 验证特定环境文件级联覆盖成功
-        assert_eq!(context.get("base_url"), Some("https://api.local-prod-proxy.com"));
-        assert_eq!(context.get("api_key"), Some("prod-global-key")); // 未在 .env.prod 覆盖的依然保持 toml 中定义
+        assert_eq!(
+            context.get("base_url").as_deref(),
+            Some("https://api.local-prod-proxy.com")
+        );
+        assert_eq!(context.get("api_key").as_deref(), Some("prod-global-key")); // 未在 .env.prod 覆盖的依然保持 toml 中定义
     }
 
     #[test]
@@ -270,7 +279,10 @@ base_url = "http://localhost:8080"
             Some("non_existent_file_path_123.env"),
         );
 
-        assert_eq!(context.get("base_url"), Some("http://localhost:8080"));
+        assert_eq!(
+            context.get("base_url").as_deref(),
+            Some("http://localhost:8080")
+        );
     }
 
     #[test]

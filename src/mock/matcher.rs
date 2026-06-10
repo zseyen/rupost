@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::mock::trie::TrieNode;
 use crate::mock::variant::MockVariant;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct MockRequest {

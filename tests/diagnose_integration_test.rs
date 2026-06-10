@@ -16,13 +16,19 @@ async fn test_diagnose_local_http_success() {
     // 2. 对本地 mock 进行连通性诊断
     let result = diagnose_url(&mock_server.uri()).await;
     assert!(result.is_ok(), "Local HTTP diagnostics should succeed");
-    
+
     let report = result.unwrap();
-    assert_eq!(report.is_https, false);
-    assert!(!report.resolved_ips.is_empty(), "Should resolve localhost IP");
+    assert!(!report.is_https);
+    assert!(
+        !report.resolved_ips.is_empty(),
+        "Should resolve localhost IP"
+    );
     assert!(report.dns_lookup_duration.as_nanos() > 0);
     assert!(report.tcp_connect_duration.as_nanos() > 0);
-    assert!(report.tls_handshake_duration.is_none(), "HTTP should have no TLS duration");
+    assert!(
+        report.tls_handshake_duration.is_none(),
+        "HTTP should have no TLS duration"
+    );
     assert!(report.cert_info.is_none(), "HTTP should have no cert info");
     assert_eq!(report.http_status, Some(200));
     assert_eq!(report.http_version, Some("HTTP/1.1".to_string()));
@@ -41,19 +47,22 @@ async fn test_diagnose_public_https_best_effort() {
     match result {
         Ok(report) => {
             println!("\n=== Public HTTPS Diagnostics Success ===");
-            assert_eq!(report.is_https, true);
+            assert!(report.is_https);
             assert!(!report.resolved_ips.is_empty());
             assert!(report.dns_lookup_duration.as_nanos() > 0);
             assert!(report.tcp_connect_duration.as_nanos() > 0);
-            assert!(report.tls_handshake_duration.is_some(), "HTTPS must have TLS duration");
+            assert!(
+                report.tls_handshake_duration.is_some(),
+                "HTTPS must have TLS duration"
+            );
             assert!(report.cert_info.is_some(), "HTTPS must parse cert info");
-            
+
             let cert = report.cert_info.as_ref().unwrap();
             assert!(!cert.subject.is_empty());
             assert!(!cert.issuer.is_empty());
-            
+
             assert!(report.http_status.is_some());
-            
+
             // 打印报告
             print_diagnose_report(&report);
         }

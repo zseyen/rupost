@@ -25,6 +25,21 @@ impl TestExecutor {
         self.cookie_middleware.is_some()
     }
 
+    /// 导出当前执行器的 Cookie 状态为 JSON Value (如果启用了 Cookie)
+    pub fn export_cookie_state(&self) -> Option<serde_json::Value> {
+        self.cookie_middleware
+            .as_ref()
+            .and_then(|mw| mw.export_cookie_state().ok())
+    }
+
+    /// 将 Cookie 状态导入到当前的执行器中
+    pub fn import_cookie_state(&self, state: serde_json::Value) -> Result<()> {
+        if let Some(ref mw) = self.cookie_middleware {
+            mw.import_cookie_state(state)?;
+        }
+        Ok(())
+    }
+
     /// Create a new executor without cookie support.
     pub fn new() -> Self {
         Self {

@@ -145,6 +145,27 @@ impl CookieMiddleware {
         tracing::debug!("Saved cookies to: {:?}", path);
         Ok(())
     }
+
+    /// 导出当前 CookieStore 的序列化状态为 JSON Value (包含 Session Cookies)
+    pub fn export_cookie_state(&self) -> Result<serde_json::Value> {
+        let store = self.store.lock().unwrap();
+        let mut buffer = Vec::new();
+        save_incl_expired_and_nonpersistent(&*store, &mut buffer)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize cookie store: {}", e))?;
+        let value = serde_json::from_slice(&buffer)?;
+        Ok(value)
+    }
+
+    /// 从 JSON Value 中导入 CookieStore 状态 (包含 Session Cookies)
+    pub fn import_cookie_state(&self, state: serde_json::Value) -> Result<()> {
+        let bytes = serde_json::to_vec(&state)?;
+        let reader = std::io::BufReader::new(&bytes[..]);
+        let new_store = load_all(reader)
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize cookie store: {}", e))?;
+        let mut store = self.store.lock().unwrap();
+        *store = new_store;
+        Ok(())
+    }
 }
 
 impl Middleware for CookieMiddleware {
@@ -209,5 +230,35 @@ mod tests {
         // Load again
         let middleware = CookieMiddleware::new_with_persistence(path).unwrap();
         assert!(middleware.store.lock().unwrap().iter_any().count() == 0);
+    }
+
+    #[test]
+    fn test_export_and_import_cookie_state() {
+        let middleware = CookieMiddleware::new_ephemeral();
+        
+        // 往里面塞一个 cookie 测试
+        {
+            let mut store = middleware.store.lock().unwrap();
+            let cookie = cookie::Cookie::build(("session", "123456"))
+                .domain("example.com")
+                .path("/")
+                .build();
+            let url = url::Url::parse("https://example.com/").unwrap();
+            store.insert_raw(&cookie, &url).unwrap();
+        }
+
+        // 导出
+        let state = middleware.export_cookie_state().unwrap();
+
+        // 创建一个新的，导入状态
+        let middleware2 = CookieMiddleware::new_ephemeral();
+        middleware2.import_cookie_state(state).unwrap();
+
+        // 验证导入成功
+        let store2 = middleware2.store.lock().unwrap();
+        let cookies: Vec<_> = store2.iter_any().collect();
+        assert_eq!(cookies.len(), 1);
+        assert_eq!(cookies[0].name(), "session");
+        assert_eq!(cookies[0].value(), "123456");
     }
 }

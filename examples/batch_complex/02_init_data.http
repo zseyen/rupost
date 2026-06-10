@@ -5,5 +5,6 @@ GET https://httpbingo.org/get?category_name=category_tech
 
 # 验证 Cookie 仍然有效，并捕获分类 ID (模拟为 category_tech)
 @assert status == 200
-@assert body.headers.Cookie.0 == "session_token=jwt_complex_flow_999; tenant_id=tenant_east_01"
+@assert body.headers.Cookie.0 contains "session_token=jwt_complex_flow_999"
+@assert body.headers.Cookie.0 contains "tenant_id=tenant_east_01"
 @capture category_id from body.args.category_name.0

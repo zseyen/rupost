@@ -1,0 +1,8 @@
+### 5. 并发分支 C：单独查询分类详情，验证租户 tenant
+# @depends-on 02_init_data.http
+# @name GetCategory
+GET https://httpbingo.org/get?tenant={{tenant}}
+
+@assert status == 200
+@assert body.args.tenant.0 == "tenant_east_01"
+@assert body.headers.Cookie.0 == "session_token=jwt_complex_flow_999; tenant_id=tenant_east_01"

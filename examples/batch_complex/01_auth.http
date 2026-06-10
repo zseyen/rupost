@@ -1,0 +1,6 @@
+### 1. 登录鉴权，获取 Session Cookie 与全局租户变量
+# @name Auth
+GET https://httpbingo.org/cookies/set?session_token=jwt_complex_flow_999&tenant_id=tenant_east_01
+
+@assert status == 200
+@capture tenant from body.cookies.tenant_id

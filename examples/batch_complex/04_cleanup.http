@@ -1,0 +1,11 @@
+### 6. 收敛清理：同时依赖并行的 PublishPostA 和 PublishPostB，合并它们的数据做清理
+# @depends-on 03_publish_post_1.http
+# @depends-on 03_publish_post_2.http
+# @name Cleanup
+GET https://httpbingo.org/get?delete_a={{post_id_a}}&delete_b={{post_id_b}}
+
+# 这里展示了从两个独立并行分支上汇聚并合并变量（post_id_a 和 post_id_b）的强大级联能力
+@assert status == 200
+@assert body.args.delete_a.0 == "article_rust_async"
+@assert body.args.delete_b.0 == "article_rust_tui"
+@assert body.headers.Cookie.0 == "session_token=jwt_complex_flow_999; tenant_id=tenant_east_01"

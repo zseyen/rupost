@@ -1,0 +1,10 @@
+### 4. 并发分支 B：在 category_id 下发布文章 B
+# @depends-on 02_init_data.http
+# @name PublishPostB
+GET https://httpbingo.org/get?post_title=article_rust_tui&category={{category_id}}
+
+# 验证继承了 category_id 和 Cookie，并捕获文章 B 的 ID (模拟为 article_rust_tui)
+@assert status == 200
+@assert body.args.category.0 == "category_tech"
+@assert body.headers.Cookie.0 == "session_token=jwt_complex_flow_999; tenant_id=tenant_east_01"
+@capture post_id_b from body.args.post_title.0

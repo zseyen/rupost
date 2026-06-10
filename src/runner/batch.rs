@@ -68,7 +68,10 @@ impl BatchExecutor {
             BatchMode::Serial => {
                 for file_path in &request.execution_order {
                     if let Some(parsed_file) = request.files_map.remove(file_path) {
-                        let res = self.executor.execute_all(parsed_file, request.context).await?;
+                        let res = self
+                            .executor
+                            .execute_all(parsed_file, request.context)
+                            .await?;
                         let has_failure = res.iter().any(|r| !r.success);
                         results.push((file_path.clone(), res));
 
@@ -81,7 +84,8 @@ impl BatchExecutor {
         }
 
         // 最终按照原定的拓扑顺序排序，以保持稳定输出
-        let order_map: HashMap<PathBuf, usize> = request.execution_order
+        let order_map: HashMap<PathBuf, usize> = request
+            .execution_order
             .iter()
             .enumerate()
             .map(|(i, p)| (p.clone(), i))

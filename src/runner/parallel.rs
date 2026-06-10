@@ -11,8 +11,8 @@ use crate::variable::VariableContext;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::watch;
 use tokio::sync::Semaphore;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 /// 节点运行完成后的输出数据，包括状态、新变量和 Cookie
@@ -82,7 +82,7 @@ impl<'a> ParallelScheduler<'a> {
                 let file_path = file_path.clone();
                 let sem = Arc::clone(&semaphore);
                 let has_failed_clone = Arc::clone(&has_failed);
-                
+
                 // 获取主执行器的配置
                 let has_cookies = self.executor.has_cookies();
                 let debug = self.executor.debug;
@@ -107,7 +107,9 @@ impl<'a> ParallelScheduler<'a> {
 
                 join_set.spawn(async move {
                     // 2. 异步等待所有前置依赖项成功运行完成，并获取其传来的变量和 Cookie 状态
-                    let Some((dep_vars, dep_cookie_state)) = Self::wait_for_deps(dep_receivers, my_sender.clone()).await else {
+                    let Some((dep_vars, dep_cookie_state)) =
+                        Self::wait_for_deps(dep_receivers, my_sender.clone()).await
+                    else {
                         return (file_path, Vec::new(), true);
                     };
 
@@ -193,7 +195,7 @@ impl<'a> ParallelScheduler<'a> {
                     if self.fail_fast && run_results.iter().any(|r| !r.success) {
                         join_set.abort_all();
                     }
-                    
+
                     results.push((path, run_results));
                 }
                 Err(e) => {
@@ -205,7 +207,7 @@ impl<'a> ParallelScheduler<'a> {
             }
         }
 
-        // 我们在通道中也提取接收最终的各节点变量合并到 self.context 
+        // 我们在通道中也提取接收最终的各节点变量合并到 self.context
         // 这一步在 run 结束时可以把并行的捕获写回主环境以保持环境变量干净
         for rx in receivers.values() {
             if let Some(output) = &*rx.borrow() {
@@ -311,7 +313,7 @@ mod tests {
 
         let mut after = before.clone();
         after.insert("b", "modified"); // 修改的
-        after.insert("c", "3");        // 新加的
+        after.insert("c", "3"); // 新加的
 
         let diff = ParallelScheduler::extract_changed_vars(&before, &after);
         assert_eq!(diff.len(), 2);
@@ -322,7 +324,7 @@ mod tests {
     #[test]
     fn test_build_executor_with_cookie_state() {
         let base_executor = TestExecutor::with_ephemeral_cookies();
-        
+
         // 模拟一个带 Cookie 的状态 Value
         let middleware = crate::middleware::CookieMiddleware::new_ephemeral();
         {
@@ -344,7 +346,7 @@ mod tests {
             base_executor.debug_on_failure,
             Some(cookie_state),
         );
-        
+
         assert!(executor.has_cookies());
         let current_state = executor.export_cookie_state().unwrap();
         // 应该能重新导出来

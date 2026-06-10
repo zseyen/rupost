@@ -514,7 +514,10 @@ Authorization: Bearer {{{{token}}}}
     assert!(results[1].success); // Get User Info success (implies token was captured and used)
 
     // 验证变量上下文是否已更新
-    assert_eq!(context.get("token").as_deref(), Some("secret-access-token-123"));
+    assert_eq!(
+        context.get("token").as_deref(),
+        Some("secret-access-token-123")
+    );
     assert_eq!(context.get("uid").as_deref(), Some("42"));
 }
 

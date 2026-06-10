@@ -290,7 +290,10 @@ fn test_workflow_missing_dependency() {
 
     assert!(result.is_err());
     let err = result.err().unwrap();
-    assert!(matches!(err, rupost::error::RupostError::DependencyNotFound { .. }));
+    assert!(matches!(
+        err,
+        rupost::error::RupostError::DependencyNotFound { .. }
+    ));
     let err_str = err.to_string();
     assert!(err_str.contains("找不到依赖文件"));
     assert!(err_str.contains("non_existent.http"));
@@ -471,7 +474,10 @@ async fn test_batch_parallel_cookie_cascade() {
     // mock set cookie
     Mock::given(method("GET"))
         .and(path("/cookie/set"))
-        .respond_with(ResponseTemplate::new(200).insert_header("Set-Cookie", "my_session=secret_value; Domain=127.0.0.1; Path=/"))
+        .respond_with(ResponseTemplate::new(200).insert_header(
+            "Set-Cookie",
+            "my_session=secret_value; Domain=127.0.0.1; Path=/",
+        ))
         .mount(&mock_server)
         .await;
 
@@ -490,10 +496,7 @@ async fn test_batch_parallel_cookie_cascade() {
     let file_1 = root.join("task1.http");
     fs::write(
         &file_1,
-        format!(
-            "### Task 1\nGET {}/cookie/set",
-            mock_server.uri()
-        ),
+        format!("### Task 1\nGET {}/cookie/set", mock_server.uri()),
     )
     .unwrap();
 

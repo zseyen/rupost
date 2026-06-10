@@ -58,12 +58,18 @@ timeout = "60"
 
     // 构建 dev 环境上下文
     let context = ConfigLoader::build_context(&config, Some("dev"), &[]);
-    assert_eq!(context.get("base_url").as_deref(), Some("http://localhost:3000"));
+    assert_eq!(
+        context.get("base_url").as_deref(),
+        Some("http://localhost:3000")
+    );
     assert_eq!(context.get("timeout").as_deref(), Some("30"));
 
     // 构建 staging 环境上下文
     let context = ConfigLoader::build_context(&config, Some("staging"), &[]);
-    assert_eq!(context.get("base_url").as_deref(), Some("http://staging.example.com"));
+    assert_eq!(
+        context.get("base_url").as_deref(),
+        Some("http://staging.example.com")
+    );
     assert_eq!(context.get("timeout").as_deref(), Some("60"));
 }
 
@@ -90,7 +96,10 @@ api_key = "config-key"
 
     // CLI 变量应该覆盖配置文件中的值
     assert_eq!(context.get("api_key").as_deref(), Some("cli-override-key"));
-    assert_eq!(context.get("base_url").as_deref(), Some("http://localhost:3000"));
+    assert_eq!(
+        context.get("base_url").as_deref(),
+        Some("http://localhost:3000")
+    );
 }
 
 /// 测试环境变量解析

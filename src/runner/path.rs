@@ -17,9 +17,7 @@ pub fn is_supported_file(path: &Path) -> bool {
     path.extension()
         .map(|ext| {
             let ext_lower = ext.to_string_lossy().to_lowercase();
-            SUPPORTED_EXTENSIONS
-                .iter()
-                .any(|&s| s == ext_lower.as_str())
+            SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str())
         })
         .unwrap_or(false)
 }
@@ -56,7 +54,11 @@ pub fn resolve_dep_path(base_file: &Path, dep: &str) -> PathBuf {
 pub fn display_path(path: &Path) -> String {
     std::env::current_dir()
         .ok()
-        .and_then(|cwd| path.strip_prefix(&cwd).ok().map(|p| p.to_string_lossy().into_owned()))
+        .and_then(|cwd| {
+            path.strip_prefix(&cwd)
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 

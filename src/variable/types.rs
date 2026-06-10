@@ -72,6 +72,11 @@ impl VariableContext {
     pub fn is_empty(&self) -> bool {
         self.variables.is_empty()
     }
+
+    /// 获取局部变量映射表引用
+    pub fn variables(&self) -> &HashMap<String, String> {
+        &self.variables
+    }
 }
 
 /// 环境配置

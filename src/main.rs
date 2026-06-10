@@ -7,10 +7,9 @@ use rupost::generator::http::HttpGenerator;
 use rupost::history::selector::{self, SelectionStrategy};
 use rupost::history::storage::get_storage;
 use rupost::middleware::resolve_cookie_path;
-use rupost::parser::{HttpFileParser, MarkdownFileParser};
 use rupost::runner::{
-    BatchExecutor, BatchMode, BatchRunRequest, DirectoryScanner, TestExecutor, TestReporter,
-    WorkflowGraph,
+    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
+    TestReporter, WorkflowGraph,
 };
 use rupost::variable::{ConfigLoader, VariableContext};
 use std::collections::HashMap;
@@ -126,20 +125,15 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
         return Ok(());
     }
 
-    // 2. 解析所有文件
-    let mut files_map = HashMap::new();
-    let mut parse_pairs = Vec::new();
-    for path in scanned_files {
-        let parsed = if path.extension().and_then(|s| s.to_str()) == Some("md") {
-            MarkdownFileParser::parse_file(&path)?
-        } else {
-            HttpFileParser::parse_file(&path)?
-        };
-        files_map.insert(path.clone(), parsed.clone());
-        parse_pairs.push((path, parsed));
-    }
+    // 2. 递归自动补全加载所有依赖（带安全沙箱限制）
+    let sandbox_root = std::env::current_dir()?;
+    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
 
     // 3. 拓扑排序解析依赖
+    let parse_pairs: Vec<_> = files_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     let graph = WorkflowGraph::new(&parse_pairs);
     let execution_order = graph.resolve_execution_order()?;
 

@@ -18,8 +18,8 @@
 | **统一 JSONPath 评估引擎** | 统一断言端与 Mock 端的 JSONPath 提取与分词解析逻辑，支持点号、中括号数组定位与根数组解析 | 已完成 | `src/utils/jsonpath.rs` |
 | **标准化 None (空值) 语义** | 统一并泛化 `None`, `null`, `nil`, `undefined`, `NULL` 语义，实现断言防崩溃 PathNotFound 拦截与 Mock 匹配无缝支持 | 已完成 | `src/assertion/types.rs`, `src/assertion/parser.rs`, `src/assertion/evaluator.rs`, `src/mock/variant.rs` |
 | **Sprint 3: 高级特性与脚本引擎** | @loop 循环, @skip-if 条件运行, 前后置 Javascript/Rust 脚本支持 | 未开始 | - |
-| **Sprint 4: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
-
+| **Sprint 4: 大模型流式调试与模板命令** | 自动规整 `stream.llm.content`、非阻塞物理文件增量同步（`@stream_to`）、内置 Mock 大模型服务（`MockLlmServer`）、路由改写与密钥扫描、一键生成 SSE/LLM 模板命令（`rupost template`）支持 `.http` 与 `.md` 后缀自适应。 | 已完成 | `src/template/`, `src/http/llm_adapter.rs`, `src/runner/file_sync.rs`, `src/middleware/routing.rs`, `tests/template_test.rs`, `tests/llm_mvp_test.rs` |
+| **Sprint 5: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
 ---
 
@@ -42,8 +42,6 @@
 6.  **JSON Path 数组数值下标提取支持**：支持以点号跟数字的形式直接从 JSON 数组中按数值索引定位元素，解决 `body.headers.Cookie.0` 类路径取值失败的问题。
 7.  **批量并发复杂测试场景验证（DAG）**：构建并跑通了包含 Fork 与 Join 等多维依赖拓扑的批量并发集成用例集（`examples/batch_complex`），针对 Cookie 字段顺序随机抖动进行 `contains` 断言优化，成功实现高并发下无感级联。
 
-4.  **结构化 JSON 报告与批汇总**：支持 `--report json` 格式的控制台或文件输出；支持终端高颜值批测试摘要输出。
-
 ### 生产调试：生产环境调试与排障模式 (阶段 1 & 2 & 7)
 1. **本地局部变量覆盖 (阶段 1)**：
    * **解析器实现**：支持对本地被 git 忽略的 `.env` 环境变量文件进行高健壮度解析，自动剥离引号、忽略行内注释与前导/尾随空格。
@@ -56,7 +54,7 @@
    * **可插拔 Axum 适配器**：将底层网络通信（Axum 服务端）与匹配调度引擎核心剥离，网络框架成为可插拔插件，彻底遵循 Clean Architecture。
    * **Trie 树模糊匹配**：自主实现 Trie 匹配树，完全支持精确匹配、路径参数捕获（如 `:id` 自动提取至 Context）和通配符匹配（`*`, `**`），实现复杂路由映射。
    * **多路分支条件匹配 (Variant)**：基于同一路由支持多个 `MockVariant`，并支持通过 Header、Query、Body 内 JSONPath 的 Equals/Contains/Exists 条件自动计算路由变体分发，且支持变量占位符的动态渲染。
-    * **CLI 集成与终端高亮访问日志**：新增 `rupost mock start <file> --port <port>` 命令行工具，智能解析反序列化格式（`untagged` 兼容自定义 JSON 配置与快照包），在控制台以高雅彩色打印实时流量访问与匹配命中信息。
+   * **CLI 集成与终端高亮访问日志**：新增 `rupost mock start <file> --port <port>` 命令行工具，智能解析反序列化格式（`untagged` 兼容自定义 JSON 配置与快照包），在控制台以高雅彩色打印实时流量访问与匹配命中信息。
 
 ### Clean Architecture 架构重构 (解耦 Parser)
 1. **物理依赖完全清除**：彻底消除 `src/parser/` 对 `src/http/` 和 `src/mock/` 目录的任何反向引用 (`use crate::http::*` 或 `use crate::mock::*`)，使 Parser 只依赖核心 AST 实体与标准库。
@@ -79,4 +77,13 @@
 2. **防崩溃路径缺失校验**：在断言求值器 `evaluate_assertion` 中，针对 `extract_value` 提取失败返回 `PathNotFound` 的场景，若断言期望值是 `None` 或 `null`，则主动将其拦截并纠正为 `AssertValue::None` 进行比较，从而使 `@assert body.password == null` 类型的字段缺失校验能优雅通过。
 3. **Mock 变体匹配泛化**：引入 `is_none_value` 判定辅助函数并泛化至 `Header`/`Query`/`Body`。例如 `@mock-when $.headers.X-Auth exists None` 或 `@mock-when $.body.user exists null` 会在相应键不存在或为 `null` 时正确命中。
 
-
+### Sprint 4: 大模型流式调试与模板命令
+1.  **大模型格式抽象规整与通用流断言**：开发 `LlmStreamAdapter`，规整 OpenAI 与 Anthropic 流式事件帧至虚拟对象。支持对 `stream.llm.content` 的直接断言，非大模型流自动降级为 Generic 格式累加。
+2.  **增量文件物理同步 (`@stream_to`)**：使用异步非阻塞 `FileSyncWriter` 增量追加/覆写流 Token 到物理文件，完美支持 IDE 分屏实时阅读。
+3.  **内置 Mock 调试服务器**：内置 `MockLlmServer` 响应流测试，且提供本地零外部配置的测试闭环。
+4.  **路由中间件与密钥泄露审计**：利用 `RoutingMiddleware` 安全重写外部大模型 host 为本地 mock 服务，且内置静态 API Key 泄露审计扫描，发现明文 Key 立即阻断。
+5.  **模板快速建立命令 (`rupost template`)**：增加 `rupost template` 子命令：
+    -   **格式自适应**：当输出为 `.md`/`.markdown` 扩展名时输出带 ` ```http ` 封装的 Markdown 测试文档；其余默认输出标准的 `.http` 格式文件。
+    -   **安全保护**：具备防误覆盖冲突拦截机制，可用 `--force` 强制覆盖。
+    -   **双管齐下**：生成主模板文件的同时，自动创建并伴随生成一份 `.env.example` 环境变量配置文件。
+    -   **自编译打包**：采用 `include_str!` 在编译期内置托管模板，单二进制文件开箱即用，无任何物理资产文件查找及系统依赖。

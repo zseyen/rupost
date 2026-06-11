@@ -56,6 +56,13 @@ RuPost 提供了直观的命令行界面：
   rupost g new_test.http --interactive
   ```
 
+- **生成 SSE/LLM 调试模板**:
+  ```bash
+  rupost template sse -o my_sse.http
+  # 或者自适应生成 Markdown 格式的模板
+  rupost template sse -o my_sse.md
+  ```
+
 - **类 curl 调用**:
   ```bash
   rupost GET http://httpbin.org/get -H "Authorization: Bearer token"

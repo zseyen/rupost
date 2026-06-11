@@ -3,7 +3,7 @@
 ## 当前状态
 
 - **Clean Architecture 架构重构已 100% 完成并全面验证**：
-  - **Milestone 2（解耦 Parser 和 HTTP）**：已成功将 HTTP 请求转换逻辑从 `src/parser/converter.rs` 迁移至 `src/http/request_builder.rs`，并完成了相应单元测试的迁移。
+  - **Milestone 2（解耦 Parser 和 HTTP）**：已成功将 HTTP 请求转换逻辑从 `src/parser/converter.rs` 迁移至 `src/http/request_builder.rs`，并完成了相应单元测试 of 迁移。
   - **Milestone 3（解耦 Parser 和 Mock）**：
     - 已成功将 `MockCompiler` 结构体、`compile` 和 `parse_condition_expression` 方法，以及单元测试 `test_mock_compiler_compile` 从 `src/parser/converter.rs` 迁移到新文件 `src/mock/compiler.rs`。
     - 完全删除了已变为空文件的 `src/parser/converter.rs`。
@@ -18,7 +18,7 @@
     - **端到端测试与单元测试通过（E2E tests pass）**：经 `cargo test` 确认，所有 163 个单元测试、回归测试及端到端 (E2E) 集成测试全部通过，无任何失败，零警告。
 
 - **全面完成 Sprint 4 MVP：大模型 API 调试与请求转发功能**：
-  1. **大模型流式规整与统一断言**：在 `LlmStreamAdapter` 中实现对 OpenAI、Anthropic 以及 Generic SSE 格式响应流的增量 Token 解析提取，并在流结束后的 `final_response` 中统一注入虚拟 Header `x-sse-llm-content`。使得原有的测试断言与捕获引擎能 100% 复用。
+  1. **大模型流式规整与统一断言**：在 `LlmStreamAdapter` 中实现对 OpenAI、Anthropic 以及 Generic SSE 格式响应流 of 增量 Token 解析提取，并在流结束后的 `final_response` 中统一注入虚拟 Header `x-sse-llm-content`。使得原有的测试断言与捕获引擎能 100% 复用。
   2. **非阻塞物理文件增量同步**：实现 `FileSyncWriter` 增量物理文件写入，通过 Tokio 的 `tokio::fs::File` 进行非阻塞物理写入，支持覆写与追加模式，覆写模式下自动写入 Markdown 调试报告标题头，满足 `@stream_to` 解析与流式分屏调试需求。
   3. **全局代理路由与密钥注入**：在 `RoutingMiddleware` 中实现 `before_request` 拦截。当 host 与 rules 匹配时，热插拔改写 host/port、自动将连接协议强制降级为非 TLS 的 `http`（避免本地 Mock HTTPS 握手失败），并隐式安全解析和注入环境变量中的 API Key。
   4. **静态安全密钥泄露扫描**：实现 `run_security_lint` 安全扫描器，基于 Regex 解析匹配明文大模型 API 密钥（如以 `sk-` 开头的敏感串），对泄露明文密钥的代码进行拦截并抛出带 `[SECURITY ALERT]` 警报的安全错误。
@@ -34,6 +34,18 @@
   8. **回归并调优批量并发测试集**：创建并跑通了包含 6 个复杂 DAG 依赖关系并发运行的测试集（`examples/batch_complex`），针对 HTTP 服务端 Cookie 乱序的问题，将其 `@assert` 优化为了 `contains` 校验，实现并发模式 100% 稳定运行。
   9. 全量跑通了 **212+** 个测试，无任何编译警告或运行期 Panic。
 
+- **新增大模型 SSE 模板生成命令 (`rupost template`)**：
+  1. **双文件自适应检测**：根据用户输出路径后缀（`.md`/`.markdown`）自动识别并输出带有 http 块包裹的 Markdown 测试模板，其余后缀则默认输出标准的 `.http` 测试模板。
+  2. **伴随生成环境模板**：生成模板的同时，在同级目录下自动创建并伴随生成一份 `.env.example` 环境变量配置文件，指引用户安全配置 API Key 等。
+  3. **安全防误覆盖机制**：实现了对目标模板文件和 `.env.example` 文件的物理存在性校验。非 `--force` 模式下如果检测到任一冲突，报错并拒绝覆盖，从而防止用户自写的文件被无意清除。
+  4. **静态物理文件嵌入**：采用 `include_str!` 编译期加载根目录下 `templates/` 的物理资产，既享有开发期高亮排版的便利，又保障了运行期各平台的分发零依赖（单二进制安全执行）。
+  5. **跨平台兼容写入**：基于标准库 `std::path::PathBuf` 解析，彻底解决了 Windows 与 Unix 系统路径斜杠不一致的兼容隐患。
+
+- **高标准 TDD 验证与 Clippy 清洁度**：
+  1. 新增 `tests/template_test.rs` 包含 7 大集成测试场景（自适应生成、安全覆盖校验、强制覆盖、多级父目录自创、无效类型阻断等）， 100% 通过。
+  2. 运行 `cargo fmt -- --check` 保证格式完美；运行 `cargo clippy --all-targets` 无任何代码警告。
+  3. 累计 239 个测试 point 100% 绿灯。
+
 - **JJ 代码版本化原子提交记录**：
   - `feat(cookie): add serialization import/export support for CookieMiddleware` (oqyznrnm)
   - `feat(runner): implement recursive DependencyResolver with sandbox checks` (kzkoxwmz)
@@ -47,9 +59,16 @@
   - `feat(llm): implement LlmStreamAdapter, stream normalization, and FileSyncWriter` (sssylssn)
   - `feat(middleware): implement RoutingMiddleware for proxy rewrite and API Key injection` (tpnsrnps)
   - `refactor: finalize Clean Architecture decoupling of parser from http and mock`
+  - `feat(template): add physical template assets for sse` (xlxuznmx)
+  - `feat(cli): add force and list flags to template command` (oylyplnn)
+  - `feat(template): implement TemplateStrategy trait and SseTemplate` (xvkzytwu)
+  - `feat(template): implement template engine mechanism and routing in main` (ploqunos)
+  - `test(template): add e2e integration tests and resolve formatting/clippy warnings` (rzrlsvot)
 
 - **文档与事实同步**：
-  - 更新了 progress_summary.md、README.md 的并发模式和安全沙箱说明，以及 walkthrough.md。
+  - 更新了 `README.md` 的快速上手模块，将 SSE 模板命令加入。
+  - 更新了 `doc/progress_summary.md` 表格与详细交付明细。
+  - 编写了独立的 `walkthrough.md` 详述模板命令的技术与测试。
 
 ## 下一步
 
@@ -57,3 +76,5 @@
 - 准备开启 Sprint 3 的“高级特性与脚本引擎”开发（包括 `@loop` 循环, `@skip-if` 条件运行以及前置/后置 Javascript 脚本等引擎集成）。
 - 进入 Sprint 4 后续的多文件与文件夹分类执行测试的编码实现。
 - 开始开发 StreamInspector 原始 TCP 诊断日志记录器。
+- 准备开启 Sprint 5 的“HTML 报告与高级表现层”开发。
+- 继续回归并优化多协议 Connection 大并发连接池的复用表现。

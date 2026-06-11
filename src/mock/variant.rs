@@ -67,16 +67,18 @@ impl VariantCondition {
     ) -> bool {
         match self.source {
             ConditionSource::Header => {
-                let val = match headers.get(&self.key) {
+                let val_opt = headers.get(&self.key).or_else(|| {
+                    let lower_key = self.key.to_lowercase();
+                    headers.iter().find(|(k, _)| k.to_lowercase() == lower_key).map(|(_, v)| v)
+                });
+
+                if self.operator == CompareOp::Exists && self.expected_value == "None" {
+                    return val_opt.is_none();
+                }
+
+                let val = match val_opt {
                     Some(v) => v,
-                    None => {
-                        // case-insensitive header fallback
-                        let lower_key = self.key.to_lowercase();
-                        match headers.iter().find(|(k, _)| k.to_lowercase() == lower_key) {
-                            Some((_, v)) => v,
-                            None => return false,
-                        }
-                    }
+                    None => return false,
                 };
 
                 match self.operator {
@@ -86,7 +88,13 @@ impl VariantCondition {
                 }
             }
             ConditionSource::Query => {
-                let val = match query.get(&self.key) {
+                let val_opt = query.get(&self.key);
+
+                if self.operator == CompareOp::Exists && self.expected_value == "None" {
+                    return val_opt.is_none();
+                }
+
+                let val = match val_opt {
                     Some(v) => v,
                     None => return false,
                 };

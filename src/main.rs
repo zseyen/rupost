@@ -126,8 +126,6 @@ async fn main() -> Result<()> {
                 file.cyan()
             );
 
-            let content = fs::read_to_string(&file).map_err(rupost::error::RupostError::IoError)?;
-
             #[derive(serde::Deserialize)]
             #[serde(untagged)]
             enum MockFileConfig {
@@ -135,12 +133,19 @@ async fn main() -> Result<()> {
                 Snapshots(Vec<SnapshotEntry>),
             }
 
-            let file_config: MockFileConfig = serde_json::from_str(&content).map_err(|e| {
-                rupost::error::RupostError::ParseError(format!(
-                    "Failed to parse JSON configuration: {}",
-                    e
-                ))
-            })?;
+            let file_config = if file.ends_with(".md") {
+                let parsed = rupost::parser::MarkdownFileParser::parse_file(&file)?;
+                let routes = rupost::parser::MockCompiler::compile(&parsed);
+                MockFileConfig::Routes(routes)
+            } else {
+                let content = fs::read_to_string(&file).map_err(rupost::error::RupostError::IoError)?;
+                serde_json::from_str(&content).map_err(|e| {
+                    rupost::error::RupostError::ParseError(format!(
+                        "Failed to parse JSON configuration: {}",
+                        e
+                    ))
+                })?
+            };
 
             let mut matcher = TrieRouteMatcher::new();
             let route_count;

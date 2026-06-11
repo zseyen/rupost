@@ -5,7 +5,7 @@ pub mod metadata;
 pub mod types;
 
 // Re-export commonly used types
-pub use converter::to_request;
+pub use converter::{to_request, MockCompiler};
 pub use http_file::HttpFileParser;
 pub use markdown_file::MarkdownFileParser;
 pub use types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata, FileMetadata, ParsedMockVariant};

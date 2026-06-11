@@ -184,7 +184,7 @@ impl HttpFileParser {
     }
 
     /// 解析请求行（方法 + URL）
-    fn parse_request_line(
+    pub(crate) fn parse_request_line(
         line: &str,
         line_number: usize,
         request: &mut ParsedRequest,
@@ -228,7 +228,7 @@ impl HttpFileParser {
     }
 
     /// 解析 header 行
-    fn parse_header(line: &str) -> Option<(&str, &str)> {
+    pub(crate) fn parse_header(line: &str) -> Option<(&str, &str)> {
         if let Some(colon_pos) = line.find(':') {
             let key = line[..colon_pos].trim();
             let value = line[colon_pos + 1..].trim();

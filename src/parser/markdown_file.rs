@@ -1,7 +1,15 @@
 use crate::parser::http_file::HttpFileParser;
-use crate::parser::types::{ParseResult, ParsedFile};
+use crate::parser::types::{ParseResult, ParsedFile, FileMetadata, ParsedMockVariant, ParsedRequest};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use std::path::Path;
+
+#[derive(Debug, PartialEq, Eq)]
+enum ParseState {
+    RequestLineAndHeaders,
+    ExpectVariant,
+    VariantHeaders,
+    VariantBody,
+}
 
 /// Markdown 文件解析器
 pub struct MarkdownFileParser;
@@ -17,28 +25,157 @@ impl MarkdownFileParser {
 
     /// 从字符串内容解析
     pub fn parse_content(content: &str) -> ParseResult<ParsedFile> {
-        let code_blocks = Self::extract_code_blocks(content);
-
         let mut parsed_file = ParsedFile::new();
+
+        // 提取 YAML Frontmatter
+        let trimmed_content = content.trim_start();
+        if trimmed_content.starts_with("---") {
+            if let Some(end_pos) = trimmed_content[3..].find("---") {
+                let actual_end = 3 + end_pos;
+                let yaml_str = &trimmed_content[3..actual_end];
+                if let Ok(meta) = serde_yaml::from_str::<FileMetadata>(yaml_str) {
+                    parsed_file.metadata = meta;
+                }
+            }
+        }
+
+        let code_blocks = Self::extract_code_blocks(content);
 
         // 提取依赖
         parsed_file.dependencies = Self::extract_dependencies(content);
 
         for block in code_blocks {
-            // 解析代码块内容为请求
-            let mut block_parsed = HttpFileParser::parse_content(&block.content)?;
-
-            // 为每个请求设置名称（如果没有明确 of @name）
-            for req in &mut block_parsed.requests {
+            let has_mock_variants = block.content.contains("@mock-when") || block.content.contains("@mock-default");
+            
+            if has_mock_variants {
+                let mut req = Self::parse_mock_block(&block.content, 1)?;
                 if req.metadata.name.is_none() {
                     req.metadata.name = block.preceding_header.clone();
                 }
-            }
+                parsed_file.add_request(req);
+            } else {
+                // 解析代码块内容为请求
+                let mut block_parsed = HttpFileParser::parse_content(&block.content)?;
 
-            parsed_file.requests.extend(block_parsed.requests);
+                // 为每个请求设置名称（如果没有明确 of @name）及测试标识
+                let is_test = block.content.contains("@test");
+                for req in &mut block_parsed.requests {
+                    if req.metadata.name.is_none() {
+                        req.metadata.name = block.preceding_header.clone();
+                    }
+                    req.metadata.is_test = is_test;
+                }
+
+                parsed_file.requests.extend(block_parsed.requests);
+            }
         }
 
         Ok(parsed_file)
+    }
+
+    fn parse_mock_block(block_content: &str, start_line: usize) -> ParseResult<ParsedRequest> {
+        let mut request = ParsedRequest::new(start_line);
+        let mut state = ParseState::RequestLineAndHeaders;
+        
+        let mut current_variant: Option<ParsedMockVariant> = None;
+        let mut current_body_lines = Vec::new();
+
+        for (line_idx, line) in block_content.lines().enumerate() {
+            let current_line_num = start_line + line_idx;
+            let trimmed = line.trim();
+
+            match state {
+                ParseState::RequestLineAndHeaders => {
+                    if trimmed.starts_with("@mock-when") || trimmed.starts_with("@mock-default") {
+                        state = ParseState::ExpectVariant;
+                        Self::process_variant_line(trimmed, &mut current_variant, &mut request, &mut current_body_lines);
+                        state = ParseState::VariantHeaders;
+                    } else if trimmed.starts_with('@') {
+                        if let Some(meta) = crate::parser::metadata::parse_metadata(trimmed)? {
+                            crate::parser::metadata::apply_metadata(&meta, &mut request.metadata);
+                        }
+                    } else if request.url.is_empty() {
+                        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                            HttpFileParser::parse_request_line(trimmed, current_line_num, &mut request)?;
+                        }
+                    } else if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("//") {
+                        if let Some((k, v)) = HttpFileParser::parse_header(trimmed) {
+                            request.headers.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                }
+                ParseState::ExpectVariant => {
+                    Self::process_variant_line(trimmed, &mut current_variant, &mut request, &mut current_body_lines);
+                    state = ParseState::VariantHeaders;
+                }
+                ParseState::VariantHeaders => {
+                    if trimmed.is_empty() {
+                        state = ParseState::VariantBody;
+                    } else if trimmed.starts_with("HTTP/1.1") || trimmed.starts_with("HTTP/2") {
+                        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            if let Ok(code) = parts[1].parse::<u16>() {
+                                if let Some(ref mut var) = current_variant {
+                                    var.status = code;
+                                }
+                            }
+                        }
+                    } else if let Some((k, v)) = HttpFileParser::parse_header(trimmed) {
+                        if let Some(ref mut var) = current_variant {
+                            var.headers.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                }
+                ParseState::VariantBody => {
+                    if trimmed.starts_with("@mock-when") || trimmed.starts_with("@mock-default") {
+                        state = ParseState::ExpectVariant;
+                        Self::process_variant_line(trimmed, &mut current_variant, &mut request, &mut current_body_lines);
+                        state = ParseState::VariantHeaders;
+                    } else {
+                        current_body_lines.push(line);
+                    }
+                }
+            }
+        }
+
+        if let Some(mut var) = current_variant {
+            var.body = Some(current_body_lines.join("\n"));
+            request.metadata.mock_variants.push(var);
+        }
+
+        request.metadata.is_test = block_content.contains("@test");
+
+        Ok(request)
+    }
+
+    fn process_variant_line(
+        trimmed: &str,
+        current_variant: &mut Option<ParsedMockVariant>,
+        request: &mut ParsedRequest,
+        current_body_lines: &mut Vec<&str>,
+    ) {
+        if let Some(mut var) = current_variant.take() {
+            var.body = Some(current_body_lines.join("\n"));
+            request.metadata.mock_variants.push(var);
+            current_body_lines.clear();
+        }
+
+        if trimmed.starts_with("@mock-when") {
+            let cond = trimmed["@mock-when".len()..].trim().to_string();
+            *current_variant = Some(ParsedMockVariant {
+                condition_expr: Some(cond),
+                status: 200,
+                headers: Vec::new(),
+                body: None,
+            });
+        } else if trimmed.starts_with("@mock-default") {
+            *current_variant = Some(ParsedMockVariant {
+                condition_expr: None,
+                status: 200,
+                headers: Vec::new(),
+                body: None,
+            });
+        }
     }
 
     /// 从 Markdown 文件内容中解析并提取该文件声明的全局拓扑依赖文件。

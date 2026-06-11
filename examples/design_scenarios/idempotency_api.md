@@ -50,3 +50,74 @@ Content-Type: application/json
   "duplicated": false
 }
 ```
+
+## @test 验证支付与交易幂等性
+下面是自动化检测支付核心幂等校验与无头拒绝流程的测试用例：
+
+```http
+@name test-payment-missing-idempotency-key
+@test
+POST http://localhost:9000/api/v1/payments
+Content-Type: application/json
+
+@assert status == 400
+@assert body.error contains Idempotency-Key header is required
+
+@name test-payment-idempotency-duplicate
+@test
+POST http://localhost:9000/api/v1/payments
+Idempotency-Key: repeat_key_12345
+Content-Type: application/json
+
+@assert status == 200
+@assert body.duplicated == true
+@assert body.transaction_id == tx_888999
+
+@name test-payment-first-time-success
+@test
+POST http://localhost:9000/api/v1/payments
+Idempotency-Key: fresh_key_77777
+Content-Type: application/json
+
+@assert status == 201
+@assert body.duplicated == false
+@assert body.status == success
+```
+
+---
+
+## 📖 使用说明与场景运行
+
+本文件（`idempotency_api.md`）定义了支付和资金交易中的幂等性校验规则与 Mock 联调设计。
+
+### 1. 启动幂等性 Mock 服务器
+在后台启动 9000 端口上的 Mock 服务器：
+```bash
+rupost mock examples/design_scenarios/idempotency_api.md --port 9000
+```
+
+### 2. 通过 Curl 手动模拟幂等流程
+- **不带 Idempotency-Key（网关拦截）**：
+  ```bash
+  curl -i -X POST http://localhost:9000/api/v1/payments
+  # 返回 400 Bad Request
+  ```
+
+- **正常首次支付请求**：
+  ```bash
+  curl -i -X POST -H "Idempotency-Key: fresh_key_77777" http://localhost:9000/api/v1/payments
+  # 返回 201 Created，包含 "duplicated": false
+  ```
+
+- **重试相同请求（命中幂等缓存）**：
+  ```bash
+  curl -i -X POST -H "Idempotency-Key: repeat_key_12345" http://localhost:9000/api/v1/payments
+  # 返回 200 OK，包含 "duplicated": true，模拟防止二次扣款
+  ```
+
+### 3. 一键执行自动化幂等回归测试
+在 9000 端口 Mock 运行中，执行下述命令：
+```bash
+rupost test examples/design_scenarios/idempotency_api.md
+```
+系统将会依次验证缺省头拦截、重复请求幂等命中、以及首次调用正常创建的断言行为。

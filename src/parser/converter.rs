@@ -82,7 +82,6 @@ pub fn to_request(parsed: ParsedRequest) -> Result<Request> {
 
 use crate::mock::matcher::MockRouteConfig;
 use crate::mock::variant::{MockVariant, VariantCondition, ConditionSource, CompareOp};
-use crate::parser::types::ParsedMockVariant;
 use std::collections::HashMap;
 
 /// 契约/Mock 编译器
@@ -188,6 +187,7 @@ use crate::parser::types::ParsedFile;
 mod tests {
     use super::*;
     use crate::parser::ParsedRequest;
+    use crate::parser::types::ParsedMockVariant;
 
     #[test]
     fn test_convert_simple_get() {

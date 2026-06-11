@@ -109,6 +109,7 @@ pub enum Metadata {
     Timeout(Duration),
     Assert(String),
     Capture { var_name: String, source: String },
+    Test,
 }
 
 /// 整个文件的解析结果

@@ -135,17 +135,13 @@ async fn main() -> Result<()> {
 
             let file_config = if file.ends_with(".md") {
                 let scanned_files = rupost::runner::DirectoryScanner::scan(&[file.clone()])?;
-                let mut files_map = std::collections::HashMap::new();
-                let mut parse_pairs = Vec::new();
-                for p in scanned_files {
-                    let parsed = if p.extension().and_then(|s| s.to_str()) == Some("md") {
-                        rupost::parser::MarkdownFileParser::parse_file(&p)?
-                    } else {
-                        rupost::parser::HttpFileParser::parse_file(&p)?
-                    };
-                    files_map.insert(p.clone(), parsed.clone());
-                    parse_pairs.push((p, parsed));
-                }
+                let sandbox_root = std::env::current_dir()?;
+                let files_map = rupost::runner::DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
+
+                let parse_pairs: Vec<_> = files_map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
 
                 let graph = rupost::runner::WorkflowGraph::new(&parse_pairs);
                 let execution_order = graph.resolve_execution_order()?;

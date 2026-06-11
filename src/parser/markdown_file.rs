@@ -6,7 +6,6 @@ use std::path::Path;
 #[derive(Debug, PartialEq, Eq)]
 enum ParseState {
     RequestLineAndHeaders,
-    ExpectVariant,
     VariantHeaders,
     VariantBody,
 }
@@ -87,7 +86,6 @@ impl MarkdownFileParser {
             match state {
                 ParseState::RequestLineAndHeaders => {
                     if trimmed.starts_with("@mock-when") || trimmed.starts_with("@mock-default") {
-                        state = ParseState::ExpectVariant;
                         Self::process_variant_line(trimmed, &mut current_variant, &mut request, &mut current_body_lines);
                         state = ParseState::VariantHeaders;
                     } else if trimmed.starts_with('@') {
@@ -103,10 +101,6 @@ impl MarkdownFileParser {
                             request.headers.push((k.to_string(), v.to_string()));
                         }
                     }
-                }
-                ParseState::ExpectVariant => {
-                    Self::process_variant_line(trimmed, &mut current_variant, &mut request, &mut current_body_lines);
-                    state = ParseState::VariantHeaders;
                 }
                 ParseState::VariantHeaders => {
                     if trimmed.is_empty() {
@@ -128,7 +122,6 @@ impl MarkdownFileParser {
                 }
                 ParseState::VariantBody => {
                     if trimmed.starts_with("@mock-when") || trimmed.starts_with("@mock-default") {
-                        state = ParseState::ExpectVariant;
                         Self::process_variant_line(trimmed, &mut current_variant, &mut request, &mut current_body_lines);
                         state = ParseState::VariantHeaders;
                     } else {

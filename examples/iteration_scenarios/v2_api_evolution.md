@@ -67,3 +67,81 @@ Content-Type: application/json
   "error": "Bad Request: Missing or invalid X-App-Version. Upgrade required."
 }
 ```
+
+## @test 验证 V2 网关演进兼容性
+下面是用以自动化校验 V2 版本网关向前兼容逻辑与拦截策略的回归测试用例。
+
+```http
+@name test-v2-legacy-compat-query
+@test
+GET http://localhost:9000/api/v1/orders/102?status=completed
+@assert status == 200
+@assert body.compat_mode == true
+@assert body.payment_method == legacy
+
+@name test-v2-create-order-upgrade-needed
+@test
+POST http://localhost:9000/api/v2/orders
+Content-Type: application/json
+
+{
+  "amount": 199.0,
+  "payment_method": "alipay"
+}
+
+@assert status == 400
+@assert body.error contains Upgrade required
+
+@name test-v2-create-order-success
+@test
+POST http://localhost:9000/api/v2/orders
+X-App-Version: 2.0.0
+Content-Type: application/json
+
+{
+  "amount": 199.0,
+  "payment_method": "alipay"
+}
+
+@assert status == 201
+@assert body.x_app_validated == true
+@assert body.order_id == 999
+```
+
+---
+
+## 📖 使用说明与场景运行
+
+本文件（`v2_api_evolution.md`）定义了 V2 演进版接口的网关校验拦截与旧客户端平滑兼容逻辑。
+
+### 1. 启动演进契约的 Mock 服务
+在独立终端运行以下命令开启 9000 端口上的 Mock 服务器：
+```bash
+rupost mock examples/iteration_scenarios/v2_api_evolution.md --port 9000
+```
+
+### 2. 通过 Curl 进行手工验证
+- **测试 V1 接口平滑升级（已合并 V2 补丁字段）**：
+  ```bash
+  curl -i "http://localhost:9000/api/v1/orders/102?status=completed"
+  # 返回 200 OK，且字段中带有 "compat_mode": true
+  ```
+
+- **测试 V2 新写操作被网关强校验拦截**：
+  ```bash
+  curl -i -X POST http://localhost:9000/api/v2/orders
+  # 返回 400 Bad Request，并提示 "Upgrade required"
+  ```
+
+- **测试带上正确版本参数放行**：
+  ```bash
+  curl -i -X POST -H "X-App-Version: 2.0.0" http://localhost:9000/api/v2/orders
+  # 返回 201 Created，且包含 "x_app_validated": true
+  ```
+
+### 3. 一键回归集成用例
+确保 Mock 服务器在后台 9000 端口运行，使用下述命令执行回归自动化测试：
+```bash
+rupost test examples/iteration_scenarios/v2_api_evolution.md
+```
+系统将对 V1 兼容模式、V2 缺少版本头拒绝以及 V2 创建成功这三大场景进行全套断言回归检验。

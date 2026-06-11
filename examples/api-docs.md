@@ -235,7 +235,7 @@ GET https://httpbingo.org/stream/10
 
 1. **测试单个请求**:
    ```bash
-   rupost run "GET https://httpbingo.org/get"
+   rupost test "GET https://httpbingo.org/get"
    ```
 
 2. **运行整个文档**:

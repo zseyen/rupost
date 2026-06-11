@@ -68,7 +68,7 @@ graph TD
 ### 4.1 CLI 参数支持
 ```bash
 # 从文件加载 cookie，并把新 cookie 存回该文件
-rupost run api.http --cookie-jar ./my-cookies.txt
+rupost test api.http --cookie-jar ./my-cookies.txt
 ```
 
 ### 4.2 隐私安全 (Security)

@@ -1,5 +1,27 @@
 use std::path::PathBuf;
 use std::time::Duration;
+use std::collections::HashMap;
+
+/// 全局设计元数据 (API 知识库)
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct FileMetadata {
+    pub title: Option<String>,
+    pub version: Option<String>,
+    pub base_path: Option<String>,
+    pub rules: Option<String>,
+    pub security: Option<serde_json::Value>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// 解析出来的 Mock 分支响应
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedMockVariant {
+    pub condition_expr: Option<String>,
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<String>,
+}
 
 /// 单个解析后的 HTTP 请求
 #[derive(Debug, Clone, PartialEq)]
@@ -71,6 +93,12 @@ pub struct RequestMetadata {
 
     /// 变量捕获列表（@capture）
     pub captures: Vec<VariableCapture>,
+
+    /// 新增：是否是测试用例
+    pub is_test: bool,
+
+    /// 新增：关联的 Mock 响应变体分支
+    pub mock_variants: Vec<ParsedMockVariant>,
 }
 
 /// 解析出的元数据指令（中间状态）
@@ -94,6 +122,9 @@ pub struct ParsedFile {
 
     /// 文件级别的依赖声明 (### @depends-on <filename>)
     pub dependencies: Vec<String>,
+
+    /// 新增：全局设计元数据规则
+    pub metadata: FileMetadata,
 }
 
 impl ParsedFile {
@@ -103,6 +134,7 @@ impl ParsedFile {
             requests: Vec::new(),
             source_path: None,
             dependencies: Vec::new(),
+            metadata: FileMetadata::default(),
         }
     }
 

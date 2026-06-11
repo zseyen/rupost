@@ -1,4 +1,4 @@
-use rupost::parser::{ParsedFile, ParsedRequest, RequestMetadata};
+use rupost::parser::{ParsedFile, ParsedRequest, RequestMetadata, FileMetadata};
 use rupost::runner::TestExecutor;
 use rupost::variable::VariableContext;
 use std::fs;
@@ -41,6 +41,7 @@ async fn test_history_recording() {
         requests: vec![parsed_request],
         source_path: None,
         dependencies: Vec::new(),
+        metadata: FileMetadata::default(),
     };
     let mut context = VariableContext::new();
 

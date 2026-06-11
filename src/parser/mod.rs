@@ -8,7 +8,7 @@ pub mod types;
 pub use converter::to_request;
 pub use http_file::HttpFileParser;
 pub use markdown_file::MarkdownFileParser;
-pub use types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata};
+pub use types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata, FileMetadata, ParsedMockVariant};
 
 /// 从文件路径解析 HTTP 文件
 pub fn parse_file<P: AsRef<std::path::Path>>(path: P) -> ParseResult<ParsedFile> {

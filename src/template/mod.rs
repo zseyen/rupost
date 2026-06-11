@@ -46,13 +46,11 @@ pub fn run_template(r#type: &str, output: &str, force: bool, list: bool) -> crat
                 output
             )));
         }
-        if let Some(_env_content) = strategy.env_content() {
-            if env_path.exists() {
-                return Err(crate::RupostError::Other(format!(
-                    "File already exists: {}. Use --force to overwrite.",
-                    env_path.display()
-                )));
-            }
+        if strategy.env_content().is_some() && env_path.exists() {
+            return Err(crate::RupostError::Other(format!(
+                "File already exists: {}. Use --force to overwrite.",
+                env_path.display()
+            )));
         }
     }
 
@@ -62,10 +60,7 @@ pub fn run_template(r#type: &str, output: &str, force: bool, list: bool) -> crat
     }
 
     // 6. 根据文件扩展名选取模板内容
-    let ext = http_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let ext = http_path.extension().and_then(|s| s.to_str()).unwrap_or("");
     let is_markdown = ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown");
 
     let template_content = if is_markdown {
@@ -76,7 +71,11 @@ pub fn run_template(r#type: &str, output: &str, force: bool, list: bool) -> crat
 
     // 7. 执行物理写入
     fs::write(http_path, template_content)?;
-    println!("Generated {} test template file: {}", strategy.name(), output);
+    println!(
+        "Generated {} test template file: {}",
+        strategy.name(),
+        output
+    );
 
     if let Some(env_content) = strategy.env_content() {
         fs::write(&env_path, env_content)?;

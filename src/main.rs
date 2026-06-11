@@ -134,9 +134,30 @@ async fn main() -> Result<()> {
             }
 
             let file_config = if file.ends_with(".md") {
-                let parsed = rupost::parser::MarkdownFileParser::parse_file(&file)?;
-                let routes = rupost::parser::MockCompiler::compile(&parsed);
-                MockFileConfig::Routes(routes)
+                let scanned_files = rupost::runner::DirectoryScanner::scan(&[file.clone()])?;
+                let mut files_map = std::collections::HashMap::new();
+                let mut parse_pairs = Vec::new();
+                for p in scanned_files {
+                    let parsed = if p.extension().and_then(|s| s.to_str()) == Some("md") {
+                        rupost::parser::MarkdownFileParser::parse_file(&p)?
+                    } else {
+                        rupost::parser::HttpFileParser::parse_file(&p)?
+                    };
+                    files_map.insert(p.clone(), parsed.clone());
+                    parse_pairs.push((p, parsed));
+                }
+
+                let graph = rupost::runner::WorkflowGraph::new(&parse_pairs);
+                let execution_order = graph.resolve_execution_order()?;
+
+                let mut all_routes = Vec::new();
+                for p in execution_order {
+                    if let Some(parsed) = files_map.get(&p) {
+                        let routes = rupost::parser::MockCompiler::compile(parsed);
+                        all_routes.extend(routes);
+                    }
+                }
+                MockFileConfig::Routes(all_routes)
             } else {
                 let content = fs::read_to_string(&file).map_err(rupost::error::RupostError::IoError)?;
                 serde_json::from_str(&content).map_err(|e| {

@@ -106,7 +106,13 @@ impl VariantCondition {
                 }
             }
             ConditionSource::Body => {
-                let json_val = match resolve_jsonpath(body, &self.key) {
+                let json_val_opt = resolve_jsonpath(body, &self.key);
+
+                if self.operator == CompareOp::Exists && self.expected_value == "None" {
+                    return json_val_opt.is_none() || json_val_opt.unwrap().is_null();
+                }
+
+                let json_val = match json_val_opt {
                     Some(v) => v,
                     None => return false,
                 };

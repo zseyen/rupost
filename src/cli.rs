@@ -117,7 +117,7 @@ pub enum Commands {
     #[command(alias = "i")]
     Init,
 
-    /// Generate a template .http file
+    /// Generate a template file
     Template {
         /// Type of template (e.g., sse)
         #[arg(default_value = "sse")]
@@ -126,6 +126,14 @@ pub enum Commands {
         /// Output file path (default: sse_template.http)
         #[arg(short, long, default_value = "sse_template.http")]
         output: String,
+
+        /// Force overwrite existing files without prompting
+        #[arg(short, long)]
+        force: bool,
+
+        /// List all available templates
+        #[arg(short, long)]
+        list: bool,
     },
 }
 

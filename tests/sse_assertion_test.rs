@@ -123,7 +123,7 @@ Accept: text/event-stream
     }
 
     // 验证变量捕获成功（在第二次事件流时 captured_text 应该是 "world"）
-    assert_eq!(context.get("captured_text"), Some("world"));
+    assert_eq!(context.get("captured_text").as_deref(), Some("world"));
 }
 
 #[tokio::test]

@@ -290,6 +290,74 @@ token = "${PROD_TOKEN}"
                 );
             }
         }
+        Some(Commands::Template { r#type, output }) => {
+            if r#type == "sse" {
+                let template_content = r#"# RuPost SSE & 大模型 API 测试模板
+# 此文件可直接通过 `rupost test <filename>` 运行
+
+# ==========================================
+# 场景一：测试 OpenAI / 兼容格式的流式接口
+# ==========================================
+# @sse 代表开启 Server-Sent Events 流式连接解析
+# @assert 语句在长连接流完全结束后对拼接出来的完整文本进行断言
+# @capture 语句将流拼接结果捕获到变量，供后续的请求使用
+
+###
+@sse
+@assert status == 200
+@assert stream.llm.content contains "Rust"
+@capture accumulated_reply from stream.llm.content
+POST http://127.0.0.1:8080/v1/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "用两句话介绍 Rust 语言。"}],
+  "stream": true
+}
+
+# ==========================================
+# 场景二：测试本地物理文件增量同步
+# ==========================================
+# @stream_to 将大模型吐出的增量 Token 实时同步追加或覆写输出到物理文件中
+# 非常适合在 IDE 中使用分屏渲染功能实时阅读或配合生成报告。
+# 支持 overwrite (覆写) 或 append (追加) 模式
+
+###
+@sse
+@stream_to ./target/prompt_debug.md overwrite
+POST http://127.0.0.1:8080/v1/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "请为我生成一份 Rust 基础教学大纲。"}],
+  "stream": true
+}
+
+# ==========================================
+# 场景三：测试非大模型通用 SSE 接口 (Generic 模式)
+# ==========================================
+# 针对行情流、系统构建日志流，非 json / 非 llm 格式会自动退化为通用数据流，
+# 将每帧 data 信息累加，且依然支持传统的 stream.event / stream.id 断言。
+
+###
+@sse
+@assert stream.event == "build_start"
+@assert stream.llm.content contains "Compiling"
+POST http://127.0.0.1:8080/build-stream
+"#;
+                std::fs::write(&output, template_content)?;
+                println!("Generated SSE test template file: {}", output);
+            } else {
+                return Err(rupost::RupostError::Other(format!(
+                    "Unsupported template type '{}'. Supported types: sse",
+                    r#type
+                )));
+            }
+        }
         None => {
             if cli.args.is_empty() {
                 tracing::error!("No command provided");

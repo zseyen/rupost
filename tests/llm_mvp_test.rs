@@ -147,7 +147,7 @@ async fn test_llm_stream_normalization() {
         res_openai.error
     );
     assert_eq!(
-        context_openai.get("captured_openai"),
+        context_openai.get("captured_openai").as_deref(),
         Some("Rust is perfect.")
     );
 
@@ -169,7 +169,7 @@ async fn test_llm_stream_normalization() {
         res_anthropic.error
     );
     assert_eq!(
-        context_anthropic.get("captured_anthropic"),
+        context_anthropic.get("captured_anthropic").as_deref(),
         Some("Rust is perfect.")
     );
 }

@@ -264,4 +264,91 @@ GET https://api.example.com
         assert_eq!(req.metadata.assertions[0], "status == 200");
         assert!(req.metadata.skip);
     }
+
+    #[test]
+    fn test_parse_frontmatter() {
+        let content = r#"---
+title: User API Specification
+version: 2.1.0
+base_path: /api/v2
+rules: |
+  1. No sensitive plain passwords.
+security:
+  - type: BearerAuth
+---
+
+# User API
+"#;
+        let parsed = MarkdownFileParser::parse_content(content).unwrap();
+        let meta = parsed.metadata;
+        assert_eq!(meta.title.as_deref(), Some("User API Specification"));
+        assert_eq!(meta.version.as_deref(), Some("2.1.0"));
+        assert_eq!(meta.base_path.as_deref(), Some("/api/v2"));
+        assert_eq!(meta.rules.as_deref(), Some("1. No sensitive plain passwords.\n"));
+    }
+
+    #[test]
+    fn test_parse_mock_variants() {
+        let content = r#"
+## Get User Profile
+
+```http
+GET /api/v1/users/:id
+
+@mock-when query.role == admin
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "id": "{{id}}",
+  "name": "Admin"
+}
+
+@mock-default
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "id": "{{id}}",
+  "name": "Default"
+}
+```
+"#;
+        let parsed = MarkdownFileParser::parse_content(content).unwrap();
+        assert_eq!(parsed.requests.len(), 1);
+        let req = &parsed.requests[0];
+        assert!(!req.metadata.is_test);
+        assert_eq!(req.metadata.mock_variants.len(), 2);
+
+        // 验证变体一
+        let var1 = &req.metadata.mock_variants[0];
+        assert_eq!(var1.condition_expr.as_deref(), Some("query.role == admin"));
+        assert_eq!(var1.status, 200);
+        assert!(var1.headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(var1.body.as_ref().unwrap().contains("Admin"));
+
+        // 验证变体二
+        let var2 = &req.metadata.mock_variants[1];
+        assert!(var2.condition_expr.is_none());
+        assert_eq!(var2.status, 200);
+        assert!(var2.body.as_ref().unwrap().contains("Default"));
+    }
+
+    #[test]
+    fn test_distinguish_test_block() {
+        let content = r#"
+## Test admin profile flow
+
+```http
+@name test-admin
+@test
+GET http://localhost:9000/api/v1/users/123?role=admin
+@assert status == 200
+```
+"#;
+        let parsed = MarkdownFileParser::parse_content(content).unwrap();
+        assert_eq!(parsed.requests.len(), 1);
+        let req = &parsed.requests[0];
+        assert!(req.metadata.is_test);
+    }
 }

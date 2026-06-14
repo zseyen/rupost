@@ -87,22 +87,22 @@ else
     exit 1
 fi
 
-# 关闭 Mock 后台服务
-echo -e "${BLUE}[*] 关闭 Mock 服务后台进程 (PID: $MOCK_PID)...${NC}"
-kill $MOCK_PID
-
 # 4. 验证网络诊断工具 (diagnose)
 echo -e "${BLUE}[*] 验证网络高亮诊断 (diagnose)...${NC}"
-# 对 localhost 进行诊断以避免网络不稳定引发故障
-$RUPOST_BIN diagnose http://localhost:9000 > "$TEMP_DIR/diagnose.log" || true
-# 即使端口关闭，也应当输出时延瀑布图
+# 对活动中的 mock 服务进行诊断
+$RUPOST_BIN diagnose http://localhost:9000 > "$TEMP_DIR/diagnose.log"
 cat "$TEMP_DIR/diagnose.log"
 if grep -q "Diagnostics" "$TEMP_DIR/diagnose.log" || grep -q "DNS Lookup" "$TEMP_DIR/diagnose.log"; then
     echo -e "${GREEN}[✓] 网络诊断输出校验成功！${NC}"
 else
     echo -e "${RED}[ERROR] 网络诊断输出校验失败！${NC}"
+    kill $MOCK_PID
     exit 1
 fi
+
+# 关闭 Mock 后台服务
+echo -e "${BLUE}[*] 关闭 Mock 服务后台进程 (PID: $MOCK_PID)...${NC}"
+kill $MOCK_PID
 
 # 5. 验证级联变量覆盖与 DAG 并行执行
 echo -e "${BLUE}[*] 验证变量级联优先级与拓扑并行测试...${NC}"

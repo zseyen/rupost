@@ -95,6 +95,41 @@ cat << 'EOF' > "$MOCK_CONFIG"
         "response_body": "{\"error\":\"Access Denied\"}"
       }
     ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/login",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"token\":\"token-12345\"}"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/user/profile",
+    "variants": [
+      {
+        "condition": {
+          "source": "Header",
+          "key": "Authorization",
+          "operator": "Equals",
+          "expected_value": "Bearer token-12345"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"status\":\"profile-loaded\"}"
+      },
+      {
+        "condition": null,
+        "status": 401,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"error\":\"Unauthorized\"}"
+      }
+    ]
   }
 ]
 EOF
@@ -144,10 +179,6 @@ else
     exit 1
 fi
 
-# 关闭 Mock 后台服务
-echo -e "${BLUE}[*] 关闭 Mock 服务后台进程 (PID: $MOCK_PID)...${NC}"
-kill $MOCK_PID
-
 # 5. 验证级联变量覆盖与 DAG 并行执行
 echo -e "${BLUE}[*] 验证变量级联优先级与拓扑并行测试...${NC}"
 
@@ -155,7 +186,7 @@ echo -e "${BLUE}[*] 验证变量级联优先级与拓扑并行测试...${NC}"
 TOML_CONF="$TEMP_DIR/rupost.toml"
 cat << 'EOF' > "$TOML_CONF"
 [environments.dev]
-base_url = "https://httpbin.org"
+base_url = "http://127.0.0.1:9000"
 test_key = "toml-val"
 EOF
 
@@ -168,19 +199,19 @@ EOF
 # 创建 01_auth.http
 AUTH_HTTP="$TEMP_DIR/01_auth.http"
 cat << 'EOF' > "$AUTH_HTTP"
-POST https://httpbin.org/post
+POST http://127.0.0.1:9000/api/auth/login
 Content-Type: application/json
 
-{ "token": "token-12345" }
+{ "username": "admin" }
 
-@capture auth_token from body.json.token
+@capture auth_token from body.token
 EOF
 
 # 创建 02_profile.http
 PROFILE_HTTP="$TEMP_DIR/02_profile.http"
 cat << 'EOF' > "$PROFILE_HTTP"
 ### @depends-on 01_auth.http
-GET https://httpbin.org/headers
+GET http://127.0.0.1:9000/api/user/profile
 X-Test-Key: {{test_key}}
 Authorization: Bearer {{auth_token}}
 EOF
@@ -205,6 +236,10 @@ echo -e "${BLUE}[*] 执行 DAG 拓扑并行测试 (验证依赖关系与 State C
 $RUPOST_BIN test "$PROFILE_HTTP" --mode parallel --env dev > "$TEMP_DIR/run.log" 2>&1 || true
 
 cat "$TEMP_DIR/run.log"
+
+# 关闭 Mock 后台服务 (完成所有网络请求后关闭)
+echo -e "${BLUE}[*] 关闭 Mock 服务后台进程 (PID: $MOCK_PID)...${NC}"
+kill $MOCK_PID || true
 
 # 检查是否成功运行且 X-Test-Key 使用了 .env 的 "env-val"
 # 并且 02_profile.http 获取到了 01_auth.http 捕获的 token

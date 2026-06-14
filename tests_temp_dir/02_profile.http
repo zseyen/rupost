@@ -1,4 +1,0 @@
-### @depends-on 01_auth.http
-GET https://httpbin.org/headers
-X-Test-Key: {{test_key}}
-Authorization: Bearer {{auth_token}}

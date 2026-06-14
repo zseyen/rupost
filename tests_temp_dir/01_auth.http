@@ -1,6 +1,0 @@
-POST https://httpbin.org/post
-Content-Type: application/json
-
-{ "token": "token-12345" }
-
-@capture auth_token = body.json.token

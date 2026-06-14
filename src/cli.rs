@@ -114,6 +114,10 @@ pub enum Commands {
         #[arg(short, long, default_value = "9000")]
         port: u16,
     },
+
+    /// Initialize a default rupost.toml configuration template in the current directory
+    #[command(alias = "i")]
+    Init,
 }
 
 #[derive(Subcommand)]

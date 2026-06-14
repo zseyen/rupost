@@ -10,6 +10,9 @@ YELLOW='\033[0;33m'
 
 echo -e "${BLUE}[*] 开始执行 RuPost 全特性自动化验证脚本...${NC}"
 
+# 0. 清理可能残留的后台进程
+killall rupost 2>/dev/null || true
+
 # 1. 编译最新的二进制
 echo -e "${BLUE}[*] 正在编译 RuPost 二进制程序...${NC}"
 cargo build --release
@@ -89,8 +92,8 @@ fi
 
 # 4. 验证网络诊断工具 (diagnose)
 echo -e "${BLUE}[*] 验证网络高亮诊断 (diagnose)...${NC}"
-# 对活动中的 mock 服务进行诊断
-$RUPOST_BIN diagnose http://localhost:9000 > "$TEMP_DIR/diagnose.log"
+# 对活动中的 mock 服务进行诊断 (使用 127.0.0.1 避开 macOS 的 localhost IPv6 解析问题)
+$RUPOST_BIN diagnose http://127.0.0.1:9000 > "$TEMP_DIR/diagnose.log"
 cat "$TEMP_DIR/diagnose.log"
 if grep -q "Diagnostics" "$TEMP_DIR/diagnose.log" || grep -q "DNS Lookup" "$TEMP_DIR/diagnose.log"; then
     echo -e "${GREEN}[✓] 网络诊断输出校验成功！${NC}"

@@ -174,13 +174,13 @@ impl CliRunner {
     }
 
     async fn run(self, args: Vec<String>) -> Result<()> {
-        info!("Parsing command line arguments");
+        debug!("Parsing command line arguments");
         let parsed_request = self.parse_args(&args)?;
 
         // Setup empty context for CLI run
         let mut context = VariableContext::new();
 
-        info!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
+        debug!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
 
         // Execute with source="cli"
         let result = self

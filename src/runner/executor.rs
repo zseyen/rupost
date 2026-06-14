@@ -10,7 +10,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{error, info};
+use tracing::{debug, error};
 
 pub struct TestExecutor {
     client: Client,
@@ -261,7 +261,7 @@ impl TestExecutor {
                     ) {
                         Ok(captured_vars) => {
                             for (key, value) in &captured_vars {
-                                info!("Captured variable: {} = '{}'", key, value);
+                                debug!("Captured variable: {} = '{}'", key, value);
                             }
                             context.extend(captured_vars);
                         }

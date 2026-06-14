@@ -30,6 +30,45 @@ rm -rf "$TEMP_DIR"
 mkdir -p "$TEMP_DIR"
 echo -e "${BLUE}[*] 创建临时测试工作区: $TEMP_DIR${NC}"
 
+# 2.5 验证 init 初始化模板命令
+echo -e "${BLUE}[*] 验证 rupost init 初始化模板功能...${NC}"
+(
+    cd "$TEMP_DIR"
+    ABS_RUPOST_BIN=$(pwd)/../target/release/rupost
+    if [ ! -f "$ABS_RUPOST_BIN" ]; then
+        ABS_RUPOST_BIN=$(cd .. && pwd)/target/release/rupost
+    fi
+    
+    $ABS_RUPOST_BIN init
+    
+    if [ ! -f "rupost.toml" ]; then
+        echo -e "${RED}[ERROR] init 命令未能生成 rupost.toml 配置文件模板！${NC}"
+        exit 1
+    fi
+    
+    if ! grep -q "environments.dev" "rupost.toml"; then
+        echo -e "${RED}[ERROR] 生成的 rupost.toml 配置内容不完整或损坏！${NC}"
+        exit 1
+    fi
+    
+    # 验证二次 init 不覆盖现有文件
+    echo "test-flag" >> rupost.toml
+    $ABS_RUPOST_BIN init
+    if ! grep -q "test-flag" "rupost.toml"; then
+         echo -e "${RED}[ERROR] init 命令覆盖了已有的 rupost.toml 配置文件！${NC}"
+         exit 1
+    fi
+    
+    # 清理生成的 toml
+    rm rupost.toml
+)
+if [ $? -ne 0 ]; then
+    echo -e "${RED}[ERROR] init 命令功能验证失败！${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[✓] init 命令模板初始化与防护功能验证成功！${NC}"
+
+
 # 写入临时 mock_config.json
 MOCK_CONFIG="$TEMP_DIR/mock_config.json"
 cat << 'EOF' > "$MOCK_CONFIG"

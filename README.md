@@ -32,6 +32,11 @@ cargo build --release
 
 RuPost 提供了直观的命令行界面：
 
+- **初始化环境配置模板**:
+  ```bash
+  rupost init
+  ```
+
 - **运行测试文件**:
   ```bash
   rupost t examples/basic.http
@@ -135,6 +140,14 @@ base_url = http://localhost:8081
 api_key = my-local-key
 ```
 RuPost 启动时会自动检测并加载 `.env`，从而对 `rupost.toml` 中的同名变量进行级联覆盖。
+
+#### 全局共享变量 (@capture global. & env.)
+- **全局变量**：在并发测试时若想跨文件安全共享数据，可在用例中捕获 `global.` 前缀变量，例如：
+  ```http
+  @capture global.token from body.token
+  ```
+  此时该变量会进入跨线程安全的全局共享区，其他并发运行的测试文件可通过 `{{global.token}}` 实时引用最新值。
+- **系统环境直接映射**：在用例中可直接引用当前进程的环境变量（无需在 `rupost.toml` 中配置），例如：`{{env.USER}}`、`{{env.PATH}}`。
 
 ### 2. 级联覆盖优先级 (Cascading Priority)
 在变量发生冲突时，RuPost 严格遵循以下优先级进行覆盖合并：

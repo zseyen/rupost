@@ -166,6 +166,43 @@ rupost t examples/basic.http -e dev --env-file .env.staging
 
 ---
 
+## 网络诊断工具 (Network Diagnostics)
+
+为了帮助开发者在生产环境或本地开发时快速定位网络、TLS 握手及证书问题，RuPost 提供了一键式的网络诊断工具 `diagnose` (别名 `d`)：
+
+```bash
+rupost diagnose https://httpbin.org/get
+# 或者使用别名
+rupost d https://api.example.com
+```
+
+### 核心特性
+- **细粒度时延瀑布图 (Waterfall)**：基于第一性原理手动连接握手，拆分并可视化输出 **DNS 解析、TCP 握手、TLS 协商及 HTTP TTFB** 的精确耗时表现。
+- **X.509 证书深度健康分析**：展示证书的主体 SAN、颁发者、过期时间以及剩余天数，并针对过期（红色 `[EXPIRED]`）或临期（<= 30 天，黄色 `[WARNING]`）状态进行高亮预警。
+- **网络层解耦**：采用独立子命令，与 HTTP 客户端、测试执行器高度隔离。
+
+---
+
+## 本地 Mock 服务器 (Mock Server)
+
+RuPost 提供了一个独立且高可扩展的轻量级本地 Mock 服务器，让您能够依据接口定义或请求历史快照一键搭建本地 Mock 桩：
+
+```bash
+rupost mock examples/mock_config.json --port 9000
+# 或者使用别名，并指定 Markdown 文档进行编译匹配
+rupost m doc/plans/2026-06-06-mock-server-design.md
+```
+
+### 核心特性
+- **两类数据输入支持 (Untagged Deserialize)**：
+  1. **条件匹配规则集 (Routes)**：支持定义 HTTP 方法、Trie 路由与变体列表。
+  2. **历史请求快照 (Snapshots)**：直接读入 RuPost 生成的历史导出快照包，自动转译为 Mock 规则。
+- **Trie 树模糊路径匹配**：自主实现的 Trie 树路由匹配，支持精确路径、路径参数捕获（如 `/users/:id`，自动提取参数至 Context）和通配符匹配（`*`, `**`）。
+- **多路分支条件匹配 (MockVariant)**：支持在同一路由下配置多个响应变体，按优先级匹配 Headers, Query 参数或 Body 内 JSONPath（支持 Equals/Contains/Exists 判定），并支持返回状态码、自定义响应头与动态变量渲染。
+- **控制台高亮访问日志**：实时以高雅彩色打印请求的解析、路由命中及变体匹配情况。
+
+---
+
 ## 文件格式示例
 
 ### `.http` 文件

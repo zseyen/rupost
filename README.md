@@ -119,7 +119,7 @@ token = "${PROD_TOKEN}" # 支持引用系统环境变量
 ```http
 POST /login
 # ...
-@capture auth_token = body.token
+@capture auth_token from body.token
 ```
 
 #### 通过命令行定义 (--var)
@@ -216,7 +216,7 @@ Authorization: Bearer {{token}}
 
 @assert status == 200
 @assert body.name == "Alice"
-@capture user_id = body.id
+@capture user_id from body.id
 ```
 
 ### `.md` 文件
@@ -238,7 +238,7 @@ Content-Type: application/json
 }
 
 @assert status == 200
-@capture token = body.token
+@capture token from body.token
 ```
 
 ---

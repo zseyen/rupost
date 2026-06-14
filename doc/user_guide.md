@@ -17,8 +17,8 @@ RuPost 设计了一套极简但高抗冲突的变量管理体系，支持静态�
     
     { "username": "admin" }
     
-    @capture auth_token = body.token
-    @capture session_id = headers.set-cookie.0
+    @capture auth_token from body.token
+    @capture session_id from headers.set-cookie.0
     ```
 
 ### 1.2 四层级变量优先级控制 (Cascading Priority)

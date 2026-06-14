@@ -1,0 +1,25 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/users/:id",
+    "variants": [
+      {
+        "condition": {
+          "source": "Header",
+          "key": "X-Role",
+          "operator": "Equals",
+          "expected_value": "Admin"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"status\":\"success\",\"role\":\"admin\",\"user_id\":\"{{id}}\"}"
+      },
+      {
+        "condition": null,
+        "status": 403,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"error\":\"Access Denied\"}"
+      }
+    ]
+  }
+]

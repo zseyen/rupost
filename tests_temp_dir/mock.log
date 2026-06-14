@@ -1,0 +1,9 @@
+[*] Loading configuration from: ./tests_temp_dir/mock_config.json
+[✓] Mock engine initialized with 1 routes.
+[*] Mock server starting on: http://localhost:9000
+  [Incoming] GET /api/users/88
+  Status: 200 | Matched Route: /api/users/:id | Success
+  [Incoming] GET /api/users/88
+  Status: 403 | Matched Route: /api/users/:id | Success
+  [Incoming] GET /
+  Status: 404 Not Found | No Matching Mock Route Found

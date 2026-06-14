@@ -55,7 +55,7 @@ RuPost 维持了极高的测试覆盖质量，所有的核心业务逻辑和网�
         
         { "token": "super-secret-token" }
         
-        @capture auth_token = body.json.token
+        @capture auth_token from body.json.token
         ```
     *   `02_user.http`：
         ```http

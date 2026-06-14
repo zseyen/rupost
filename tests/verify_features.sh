@@ -134,7 +134,7 @@ Content-Type: application/json
 
 { "token": "token-12345" }
 
-@capture auth_token = body.json.token
+@capture auth_token from body.json.token
 EOF
 
 # 创建 02_profile.http

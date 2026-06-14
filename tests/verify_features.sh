@@ -25,7 +25,9 @@ fi
 echo -e "${GREEN}[✓] 编译成功！${NC}"
 
 # 2. 准备临时目录
-TEMP_DIR=$(mktemp -d)
+TEMP_DIR="./tests_temp_dir"
+rm -rf "$TEMP_DIR"
+mkdir -p "$TEMP_DIR"
 echo -e "${BLUE}[*] 创建临时测试工作区: $TEMP_DIR${NC}"
 
 # 写入临时 mock_config.json
@@ -161,7 +163,7 @@ cp "$TOML_CONF" rupost.toml
 cp "$ENV_CONF" .env
 
 echo -e "${BLUE}[*] 执行 DAG 拓扑并行测试 (验证依赖关系与 State Cloning 状态传递)...${NC}"
-$RUPOST_BIN test "$PROFILE_HTTP" --mode parallel --env dev > "$TEMP_DIR/run.log" 2>&1
+$RUPOST_BIN test "$PROFILE_HTTP" --mode parallel --env dev > "$TEMP_DIR/run.log" 2>&1 || true
 
 cat "$TEMP_DIR/run.log"
 

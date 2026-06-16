@@ -51,8 +51,8 @@ Content-Type: application/json
 }
 ```
 
-## @test 验证支付与交易幂等性
-下面是自动化检测支付核心幂等校验与无头拒绝流程的测试用例：
+## @test 验证支付缺失幂等键时被拦截
+写操作接口如果未携带 Idempotency-Key 应被拦截返回 400。
 
 ```http
 @name test-payment-missing-idempotency-key
@@ -62,7 +62,12 @@ Content-Type: application/json
 
 @assert status == 400
 @assert body.error contains Idempotency-Key header is required
+```
 
+## @test 验证重复流水幂等处理
+相同的幂等键请求应返回之前处理的缓存结果，且带有重复标记。
+
+```http
 @name test-payment-idempotency-duplicate
 @test
 POST http://localhost:9000/api/v1/payments
@@ -72,7 +77,12 @@ Content-Type: application/json
 @assert status == 200
 @assert body.duplicated == true
 @assert body.transaction_id == tx_888999
+```
 
+## @test 验证首次交易创建成功
+全新的幂等键请求应成功创建交易，返回 201。
+
+```http
 @name test-payment-first-time-success
 @test
 POST http://localhost:9000/api/v1/payments
@@ -83,6 +93,7 @@ Content-Type: application/json
 @assert body.duplicated == false
 @assert body.status == success
 ```
+
 
 ---
 

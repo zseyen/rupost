@@ -68,8 +68,8 @@ Content-Type: application/json
 }
 ```
 
-## @test 验证 V2 网关演进兼容性
-下面是用以自动化校验 V2 版本网关向前兼容逻辑与拦截策略的回归测试用例。
+## @test 验证 V1 老客户端平滑兼容性
+老设备继续调用 V1 接口，响应带有兼容字段。
 
 ```http
 @name test-v2-legacy-compat-query
@@ -78,7 +78,12 @@ GET http://localhost:9000/api/v1/orders/102?status=completed
 @assert status == 200
 @assert body.compat_mode == true
 @assert body.payment_method == legacy
+```
 
+## @test 验证 V2 客户端版本不匹配时被拒绝
+新设备如果缺少 X-App-Version 头，或者版本不对，应该被 Mock 服务拒绝。
+
+```http
 @name test-v2-create-order-upgrade-needed
 @test
 POST http://localhost:9000/api/v2/orders
@@ -91,7 +96,12 @@ Content-Type: application/json
 
 @assert status == 400
 @assert body.error contains Upgrade required
+```
 
+## @test 验证 V2 正常创建流程
+当携带正确的 X-App-Version 时，允许创建订单。
+
+```http
 @name test-v2-create-order-success
 @test
 POST http://localhost:9000/api/v2/orders
@@ -105,8 +115,9 @@ Content-Type: application/json
 
 @assert status == 201
 @assert body.x_app_validated == true
-@assert body.order_id == 999
+@assert body.order_id == "999"
 ```
+
 
 ---
 

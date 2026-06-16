@@ -56,8 +56,8 @@ Content-Type: application/json
 }
 ```
 
-## @test 验证网关安全与限流防护
-下面是自动化检测网关前置鉴权、过期拦截与频控阻断的测试用例：
+## @test 验证未携带 Token 时被拦截
+网关鉴权失败，返回 401 Unauthorized。
 
 ```http
 @name test-gateway-auth-none
@@ -67,7 +67,12 @@ Content-Type: application/json
 
 @assert status == 401
 @assert body.error contains Missing Authorization
+```
 
+## @test 验证携带过期 Token 时被拦截
+网关鉴权失败，Token 已过期，返回 403 Forbidden。
+
+```http
 @name test-gateway-auth-expired
 @test
 POST http://localhost:9000/api/v1/accounts/reset-password
@@ -76,7 +81,12 @@ Content-Type: application/json
 
 @assert status == 403
 @assert body.error contains expired
+```
 
+## @test 验证触发频控被阻断
+网关限流策略生效，返回 429 Too Many Requests。
+
+```http
 @name test-gateway-ratelimit-block
 @test
 POST http://localhost:9000/api/v1/accounts/reset-password
@@ -86,7 +96,12 @@ Content-Type: application/json
 
 @assert status == 429
 @assert body.error contains Rate limit exceeded
+```
 
+## @test 验证正常完成重置流程
+正常鉴权，限流未触发，重置密码流程成功，返回 200 OK。
+
+```http
 @name test-gateway-normal-flow
 @test
 POST http://localhost:9000/api/v1/accounts/reset-password
@@ -96,6 +111,7 @@ Content-Type: application/json
 @assert status == 200
 @assert body.status == success
 ```
+
 
 ---
 

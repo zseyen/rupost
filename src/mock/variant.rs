@@ -30,32 +30,14 @@ pub struct MockVariant {
     pub response_body: String,
 }
 
+fn is_none_value(val: &str) -> bool {
+    let variants = ["None", "null", "NULL", "nil", "undefined"];
+    variants.contains(&val)
+}
+
 fn resolve_jsonpath(body: &str, path: &str) -> Option<serde_json::Value> {
     let val: serde_json::Value = serde_json::from_str(body).ok()?;
-    if !path.starts_with('$') {
-        return None;
-    }
-
-    let segments: Vec<&str> = path.split('.').skip(1).collect(); // skip '$'
-    let mut current = &val;
-    for seg in segments {
-        // Handle array index shorthand like tags[0]
-        if let Some(open_idx) = seg.find('[')
-            && let Some(close_idx) = seg.find(']')
-        {
-            let field_name = &seg[..open_idx];
-            let index_str = &seg[open_idx + 1..close_idx];
-            let index: usize = index_str.parse().ok()?;
-
-            if !field_name.is_empty() {
-                current = current.get(field_name)?;
-            }
-            current = current.get(index)?;
-        } else {
-            current = current.get(seg)?;
-        }
-    }
-    Some(current.clone())
+    crate::utils::jsonpath::JsonPathResolver::resolve(&val, path).cloned()
 }
 
 impl VariantCondition {
@@ -75,7 +57,7 @@ impl VariantCondition {
                         .map(|(_, v)| v)
                 });
 
-                if self.operator == CompareOp::Exists && self.expected_value == "None" {
+                if self.operator == CompareOp::Exists && is_none_value(&self.expected_value) {
                     return val_opt.is_none();
                 }
 
@@ -93,7 +75,7 @@ impl VariantCondition {
             ConditionSource::Query => {
                 let val_opt = query.get(&self.key);
 
-                if self.operator == CompareOp::Exists && self.expected_value == "None" {
+                if self.operator == CompareOp::Exists && is_none_value(&self.expected_value) {
                     return val_opt.is_none();
                 }
 
@@ -111,7 +93,7 @@ impl VariantCondition {
             ConditionSource::Body => {
                 let json_val_opt = resolve_jsonpath(body, &self.key);
 
-                if self.operator == CompareOp::Exists && self.expected_value == "None" {
+                if self.operator == CompareOp::Exists && is_none_value(&self.expected_value) {
                     return json_val_opt.is_none() || json_val_opt.unwrap().is_null();
                 }
 
@@ -218,5 +200,74 @@ mod tests {
             expected_value: "".to_string(),
         };
         assert!(!cond3.evaluate(&HashMap::new(), &HashMap::new(), body));
+    }
+
+    #[test]
+    fn test_condition_body_jsonpath_array_index() {
+        let body = r#"{"store":{"books":[{"title":"Book A"},{"title":"Book B"}]}}"#;
+
+        // 验证点号数字定位 $.store.books.1.title
+        let cond1 = VariantCondition {
+            source: ConditionSource::Body,
+            key: "$.store.books.1.title".to_string(),
+            operator: CompareOp::Equals,
+            expected_value: "Book B".to_string(),
+        };
+        assert!(cond1.evaluate(&HashMap::new(), &HashMap::new(), body));
+
+        // 验证中括号定位 $.store.books[0].title
+        let cond2 = VariantCondition {
+            source: ConditionSource::Body,
+            key: "$.store.books[0].title".to_string(),
+            operator: CompareOp::Equals,
+            expected_value: "Book A".to_string(),
+        };
+        assert!(cond2.evaluate(&HashMap::new(), &HashMap::new(), body));
+
+        // 验证根数组定位 $[1].name
+        let root_arr_body = r#"[{"name":"Alice"},{"name":"Bob"}]"#;
+        let cond3 = VariantCondition {
+            source: ConditionSource::Body,
+            key: "$[1].name".to_string(),
+            operator: CompareOp::Equals,
+            expected_value: "Bob".to_string(),
+        };
+        assert!(cond3.evaluate(&HashMap::new(), &HashMap::new(), root_arr_body));
+    }
+
+    #[test]
+    fn test_condition_none_and_null_semantics() {
+        // 1. 验证 Header 缺失匹配 (X-Mock-Version exists null/None)
+        let headers_empty = HashMap::new();
+        let cond_header = VariantCondition {
+            source: ConditionSource::Header,
+            key: "X-Mock-Version".to_string(),
+            operator: CompareOp::Exists,
+            expected_value: "null".to_string(), // null 泛化空值
+        };
+        assert!(cond_header.evaluate(&headers_empty, &HashMap::new(), ""));
+
+        // 2. 验证 Query 缺失匹配 (user exists undefined)
+        let query_empty = HashMap::new();
+        let cond_query = VariantCondition {
+            source: ConditionSource::Query,
+            key: "user".to_string(),
+            operator: CompareOp::Exists,
+            expected_value: "undefined".to_string(), // undefined 泛化空值
+        };
+        assert!(cond_query.evaluate(&HashMap::new(), &query_empty, ""));
+
+        // 3. 验证 Body null/undefined 值匹配
+        let body_null = r#"{"user": null}"#;
+        let cond_body_null = VariantCondition {
+            source: ConditionSource::Body,
+            key: "$.user".to_string(),
+            operator: CompareOp::Exists,
+            expected_value: "None".to_string(), // None 泛化空值
+        };
+        assert!(cond_body_null.evaluate(&HashMap::new(), &HashMap::new(), body_null));
+
+        let body_empty = r#"{}"#;
+        assert!(cond_body_null.evaluate(&HashMap::new(), &HashMap::new(), body_empty));
     }
 }

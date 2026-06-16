@@ -15,6 +15,7 @@
 | **生产调试 (阶段 7)** | 模糊路径匹配与条件变体独立 Mock 服务器，支持 Trie 树模糊匹配与多变体分支判断，可插拔的 Axum 网络适配器及高雅控制台高亮访问日志 | 已完成 | `src/mock/`, `src/cli.rs`, `src/main.rs`, `tests/mock_integration_test.rs` |
 | **Clean Architecture 架构重构** | 彻底解耦 `src/parser` 与基础设施层（`src/http`、`src/mock`）的物理依赖，建立由外向内的单向依赖关系 | 已完成 | `src/http/request_builder.rs`, `src/mock/compiler.rs` |
 | **启发式自适应请求拆分** | 智能自适应识别 HTTP / Markdown 代码块中的用例边界，解决因漏写 `###` 分隔符而导致的解析错乱问题 | 已完成 | `src/parser/http_file.rs` |
+| **统一 JSONPath 评估引擎** | 统一断言端与 Mock 端的 JSONPath 提取与分词解析逻辑，支持点号、中括号数组定位与根数组解析 | 已完成 | `src/utils/jsonpath.rs` |
 | **Sprint 3: 高级特性与脚本引擎** | @loop 循环, @skip-if 条件运行, 前后置 Javascript/Rust 脚本支持 | 未开始 | - |
 | **Sprint 4: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
@@ -65,4 +66,9 @@
 1. **状态感知型请求拆分**：重构了 `split_by_separator` 模块，摒弃单纯依赖 `###` 分隔符的做法。通过在扫描时引入 `has_req_line`、`last_req_method` 以及空行感知逻辑，自动并正确切分漏写 `###` 的多用例。
 2. **高强度的 Body 包含 HTTP 谓词容错**：在 POST/PUT 等带 Body 请求的方法中，针对 Body 内部顶格书写 `GET http://...` 等容易误切的边缘场景，利用状态机加以自动识别和规避，实现了极高的工业级容错和精准度。
 3. **元数据关联修正**：将切分元数据的触发词收窄至 `@name` 和 `@test`，确保写在请求末尾的 `@assert`、`@capture` 等指令能够无感且正确关联到其宿主请求，不发生错误切割。
+
+### 统一 JSONPath 评估引擎
+1. **核心 `JsonPathResolver` 抽象**：下沉和抽象出独立的公共模块 `src/utils/jsonpath.rs`，实现统一的分词提取器 `parse_jsonpath_to_segments` 和求值器 `JsonPathResolver::resolve`，彻底消除了断言与 Mock 两端解析行为的不对齐。
+2. **支持点号、中括号与根数组索引混合解析**：支持点号数字索引（`a.0.b`）、中括号索引（`a[0].b`）、单双引号转义剥离键名（`a['first name']`）以及根数组定位（`$[0]`），极大提升了用例表达的灵活性。
+3. **全平台两端逻辑对齐**：通过重构 `src/assertion/parser.rs` 和 `src/mock/variant.rs`，两端底层均调取统一组件。断言端额外获得 `body.items[0]` 语法支持，Mock 端额外获得 `$.items.0` 和根数组匹配支持，双向赋能。
 

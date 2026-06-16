@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
 
 fn bench_parsers(c: &mut Criterion) {

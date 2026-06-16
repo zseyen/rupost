@@ -1,20 +1,21 @@
-# Checkpoint - 2026-06-11
+# Checkpoint - 2026-06-16
 
 ## 当前状态
-- **Markdown API 全生命周期 Mock 开发与依赖自动解析已完成**：
-  1. **状态机解析**：设计并实现了基于四状态行状态机的 Markdown 解析器扩展，完美支持 YAML Frontmatter、多响应 Mock 变体（`@mock-when`、`@mock-default`）以及普通测试用例块（`@test`）的提取与隔离。
-  2. **缺失值判定**：在 Mock 条件评估引擎中扩展了对 `None` 条件的拦截评估。通过将 `== None` 映射到 `CompareOp::Exists` 并触发 Header、Query 或 Body JSONPath 的缺失性校验（`is_none()`），满足安全网关等空字段拦截的模拟需求。
-  3. **依赖拓扑合并**：升级了 `src/main.rs` 中的 `Commands::Mock` 启动逻辑，并修复了先前测试中只传入单文件时未自动分析依赖的 bug。通过在 `tests/mock_integration_test.rs` 和 Mock 服务器启动逻辑中统一引入 `DependencyResolver::resolve_and_parse` 进行沙箱验证与深度优先依赖搜索，再结合 `WorkflowGraph` 拓扑排序完成对依赖链的联合编译加载，避免了 `DependencyNotFound` 错误。
-  4. **全量冒烟测试与 TDD**：在 [tests/mock_integration_test.rs](file:///Users/zsyzzx/project/rust/rupost/tests/mock_integration_test.rs) 增加了完整的多场景集成冒烟测试，包含 V1 变量渲染、网关 Header-None 判定、幂等校验拦截、V2 兼容性校验以及多文件级联依赖合并测试。
-  5. **示例场景扩展与使用说明补充**：针对 5 个核心迭代与设计示例文件（`v1_api.md`, `v2_api_evolution.md`, `migration_test.md`, `security_and_ratelimit.md`, `idempotency_api.md`）添加了详尽的手动调测命令说明与自动化回归 `@test` 用例，并在集成测试中补充了对频控（401/403/429）和支付幂等性（400/200/201）的端到端自动化校验。
-  6. **版本管理与规范**：遵循 `AGENTS.md` 的 Clean Architecture 原则与极致简洁设计，在修复和开发完成后，使用 `jj` 进行了原子的版本控制与语义提交。
-- **全量测试通过**：
-  - 项目下所有单元测试与集成测试全部通过，累计 268 个测试用例，全绿无警告。
+- **Clean Architecture 架构重构已 100% 完成并全面验证**：
+  - **Milestone 2（解耦 Parser 和 HTTP）**：已成功将 HTTP 请求转换逻辑从 `src/parser/converter.rs` 迁移至 `src/http/request_builder.rs`，并完成了相应单元测试的迁移。
+  - **Milestone 3（解耦 Parser 和 Mock）**：
+    - 已成功将 `MockCompiler` 结构体、`compile` 和 `parse_condition_expression` 方法，以及单元测试 `test_mock_compiler_compile` 从 `src/parser/converter.rs` 迁移到新文件 `src/mock/compiler.rs`。
+    - 完全删除了已变为空文件的 `src/parser/converter.rs`。
+    - 更新了 `src/mock/mod.rs` 以注册新子模块 `compiler` 并 re-export `MockCompiler` 作为 `rupost::mock::MockCompiler`。
+    - 更新了 `src/parser/mod.rs`，移外部移除 `converter` 的注册与导出，并解除了对 `MockCompiler` 的任何暴露。
+    - 替换了整个 codebase（如 `src/main.rs` 和 `tests/mock_integration_test.rs`）中对 `MockCompiler` 的引用，全部切换为 `rupost::mock::MockCompiler`。
+    - 确认 `src/parser/` 模块的任何子文件均不再包含对 `crate::mock` 模块内任何数据结构的引用，实现完美的 Clean Architecture 模块单向依赖（Mock -> Parser）。
+  - **Milestone 4（验证与清理）**：
+    - **编译检查（Compilation Check）**：通过 `cargo check` 验证，代码无错误编译通过。
+    - **Clippy 静态检查（Clippy Pass）**：运行 `cargo clippy --all-targets --all-features -- -D warnings`，无任何 lint 警告与错误。
+    - **代码格式化（Formatting Check）**：运行 `cargo fmt --all -- --check` 完美通过。
+    - **端到端测试与单元测试通过（E2E tests pass）**：经 `cargo test` 确认，所有 163 个单元测试、回归测试及端到端 (E2E) 集成测试全部通过，无任何失败，零警告。
+- **已原子提交**：已使用 `jj` 提交代码，提交描述为 `refactor: finalize Clean Architecture decoupling of parser from http and mock`。
 
 ## 下一步
-- 准备开启 Sprint 3 的“高级特性与脚本引擎”开发（包括 `@loop` 循环，`@skip-if` 条件运行以及前置/后置 Javascript 脚本等引擎集成）。
-- 开启**阶段 3：HTTP 请求/响应基础快照录制与原样重放**：
-  - 规划快照文件的序列化结构。
-  - 实现用例执行时自动带入 `--save-snapshot` 参数，将 HTTP 头部和 Body 数据落盘存储。
-  - 实现独立重放命令 `rupost history replay` 原样发送请求。
-- 维护和优化文档一致性，推进 Rupost 的下一迭代生命周期。
+- **继续开展下一阶段的架构设计与高级特性开发**（如 Sprint 3 等的实现）。

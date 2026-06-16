@@ -5,7 +5,7 @@ use rupost::runner::TestExecutor;
 use rupost::utils::{ResponseFormat, ResponseFormatter};
 use rupost::variable::VariableContext;
 use rupost::{Result, RupostError};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

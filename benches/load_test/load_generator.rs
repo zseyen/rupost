@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    
+
     // 简易命令行参数解析，不依赖复杂 cli，保持极致自备
     let mut url = "http://127.0.0.1:9000/api/users/88".to_string();
     let mut connections = 50usize;
@@ -16,17 +16,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--url" => { url = args[i+1].clone(); i += 2; }
-            "-c" | "--connections" => { connections = args[i+1].parse()?; i += 2; }
-            "-d" | "--duration" => { duration_secs = args[i+1].parse()?; i += 2; }
+            "--url" => {
+                url = args[i + 1].clone();
+                i += 2;
+            }
+            "-c" | "--connections" => {
+                connections = args[i + 1].parse()?;
+                i += 2;
+            }
+            "-d" | "--duration" => {
+                duration_secs = args[i + 1].parse()?;
+                i += 2;
+            }
             "-H" | "--header" => {
-                let parts: Vec<&str> = args[i+1].splitn(2, ':').collect();
+                let parts: Vec<&str> = args[i + 1].splitn(2, ':').collect();
                 if parts.len() == 2 {
                     header_opt = Some((parts[0].trim().to_string(), parts[1].trim().to_string()));
                 }
                 i += 2;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
 
@@ -41,10 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client_builder = reqwest::Client::builder()
         .pool_max_idle_per_host(connections)
         .tcp_nodelay(true);
-    
+
     let client = Arc::new(client_builder.build()?);
     let url = Arc::new(url);
-    
+
     let total_ok = Arc::new(AtomicUsize::new(0));
     let total_err = Arc::new(AtomicUsize::new(0));
     let total_latency_ms = Arc::new(AtomicUsize::new(0));

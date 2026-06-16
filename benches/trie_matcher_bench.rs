@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rupost::mock::matcher::{MockMatcher, MockRequest, TrieRouteMatcher};
 use rupost::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
 use std::collections::HashMap;
@@ -7,14 +7,16 @@ fn bench_trie_matcher(c: &mut Criterion) {
     let mut matcher = TrieRouteMatcher::new();
 
     // 1. 精确匹配路由
-    matcher.add_route("GET", "/api/v1/health", vec![
-        MockVariant {
+    matcher.add_route(
+        "GET",
+        "/api/v1/health",
+        vec![MockVariant {
             condition: None,
             status: 200,
             headers: HashMap::new(),
             response_body: "OK".to_string(),
-        }
-    ]);
+        }],
+    );
 
     // 2. 带路径参数和 Header 条件变体匹配路由
     let admin_cond = VariantCondition {
@@ -23,21 +25,25 @@ fn bench_trie_matcher(c: &mut Criterion) {
         operator: CompareOp::Equals,
         expected_value: "Admin".to_string(),
     };
-    
-    matcher.add_route("POST", "/api/v1/users/:id", vec![
-        MockVariant {
-            condition: Some(admin_cond),
-            status: 200,
-            headers: HashMap::new(),
-            response_body: "{\"role\":\"admin\"}".to_string(),
-        },
-        MockVariant {
-            condition: None,
-            status: 403,
-            headers: HashMap::new(),
-            response_body: "{\"error\":\"forbidden\"}".to_string(),
-        }
-    ]);
+
+    matcher.add_route(
+        "POST",
+        "/api/v1/users/:id",
+        vec![
+            MockVariant {
+                condition: Some(admin_cond),
+                status: 200,
+                headers: HashMap::new(),
+                response_body: "{\"role\":\"admin\"}".to_string(),
+            },
+            MockVariant {
+                condition: None,
+                status: 403,
+                headers: HashMap::new(),
+                response_body: "{\"error\":\"forbidden\"}".to_string(),
+            },
+        ],
+    );
 
     // 3. 带 Body JSONPath 变体匹配路由
     let json_cond = VariantCondition {
@@ -46,14 +52,16 @@ fn bench_trie_matcher(c: &mut Criterion) {
         operator: CompareOp::Equals,
         expected_value: "18".to_string(),
     };
-    matcher.add_route("POST", "/api/v1/profile", vec![
-        MockVariant {
+    matcher.add_route(
+        "POST",
+        "/api/v1/profile",
+        vec![MockVariant {
             condition: Some(json_cond),
             status: 200,
             headers: HashMap::new(),
             response_body: "{\"eligible\":true}".to_string(),
-        }
-    ]);
+        }],
+    );
 
     // 准备不同场景的 requests
     let req_simple = MockRequest {

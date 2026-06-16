@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rupost::variable::{VariableContext, VariableResolver};
 
 fn bench_variable_resolver(c: &mut Criterion) {

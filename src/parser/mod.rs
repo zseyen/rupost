@@ -1,14 +1,15 @@
-pub mod converter;
 pub mod http_file;
 pub mod markdown_file;
 pub mod metadata;
 pub mod types;
 
 // Re-export commonly used types
-pub use converter::{to_request, MockCompiler};
 pub use http_file::HttpFileParser;
 pub use markdown_file::MarkdownFileParser;
-pub use types::{ParseError, ParseResult, ParsedFile, ParsedRequest, RequestMetadata, FileMetadata, ParsedMockVariant};
+pub use types::{
+    FileMetadata, ParseError, ParseResult, ParsedFile, ParsedMockVariant, ParsedRequest,
+    RequestMetadata,
+};
 
 /// 从文件路径解析 HTTP 文件
 pub fn parse_file<P: AsRef<std::path::Path>>(path: P) -> ParseResult<ParsedFile> {

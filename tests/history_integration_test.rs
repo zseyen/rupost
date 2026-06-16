@@ -1,4 +1,4 @@
-use rupost::parser::{ParsedFile, ParsedRequest, RequestMetadata, FileMetadata};
+use rupost::parser::{FileMetadata, ParsedFile, ParsedRequest, RequestMetadata};
 use rupost::runner::TestExecutor;
 use rupost::variable::VariableContext;
 use std::fs;

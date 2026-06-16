@@ -69,7 +69,10 @@ impl VariantCondition {
             ConditionSource::Header => {
                 let val_opt = headers.get(&self.key).or_else(|| {
                     let lower_key = self.key.to_lowercase();
-                    headers.iter().find(|(k, _)| k.to_lowercase() == lower_key).map(|(_, v)| v)
+                    headers
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == lower_key)
+                        .map(|(_, v)| v)
                 });
 
                 if self.operator == CompareOp::Exists && self.expected_value == "None" {

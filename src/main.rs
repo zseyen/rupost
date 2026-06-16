@@ -134,9 +134,13 @@ async fn main() -> Result<()> {
             }
 
             let file_config = if file.ends_with(".md") {
-                let scanned_files = rupost::runner::DirectoryScanner::scan(&[file.clone()])?;
+                let scanned_files =
+                    rupost::runner::DirectoryScanner::scan(std::slice::from_ref(&file))?;
                 let sandbox_root = std::env::current_dir()?;
-                let files_map = rupost::runner::DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
+                let files_map = rupost::runner::DependencyResolver::resolve_and_parse(
+                    &scanned_files,
+                    &sandbox_root,
+                )?;
 
                 let parse_pairs: Vec<_> = files_map
                     .iter()
@@ -149,13 +153,14 @@ async fn main() -> Result<()> {
                 let mut all_routes = Vec::new();
                 for p in execution_order {
                     if let Some(parsed) = files_map.get(&p) {
-                        let routes = rupost::parser::MockCompiler::compile(parsed);
+                        let routes = rupost::mock::MockCompiler::compile(parsed);
                         all_routes.extend(routes);
                     }
                 }
                 MockFileConfig::Routes(all_routes)
             } else {
-                let content = fs::read_to_string(&file).map_err(rupost::error::RupostError::IoError)?;
+                let content =
+                    fs::read_to_string(&file).map_err(rupost::error::RupostError::IoError)?;
                 serde_json::from_str(&content).map_err(|e| {
                     rupost::error::RupostError::ParseError(format!(
                         "Failed to parse JSON configuration: {}",
@@ -278,7 +283,7 @@ base_url = "https://api.example.com"
 token = "${PROD_TOKEN}"
 "#;
                 std::fs::write(&target_path, default_toml)
-                    .map_err(|e| rupost::error::RupostError::IoError(e))?;
+                    .map_err(rupost::error::RupostError::IoError)?;
                 println!(
                     "{} 成功在当前目录初始化默认 rupost.toml 模板！",
                     "[✓]".bold().green()

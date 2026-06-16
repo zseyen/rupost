@@ -105,7 +105,8 @@ async fn test_mock_server_integration_flow() {
 
 #[tokio::test]
 async fn test_markdown_api_lifecycle_smoke_tests() {
-    use rupost::parser::{MarkdownFileParser, MockCompiler};
+    use rupost::mock::MockCompiler;
+    use rupost::parser::MarkdownFileParser;
     use rupost::runner::{DependencyResolver, DirectoryScanner, WorkflowGraph};
 
     // 1. 测试用例 1-3: 加载 v2_api_evolution.md，验证 V1 兼容、V2 正常、V2 拦截
@@ -132,7 +133,10 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 
     // 冒烟点 1: 验证 V1 兼容接口返回了 "compat_mode": true
     let resp_v1 = client
-        .get(format!("http://127.0.0.1:{}/api/v1/orders/101?status=completed", port))
+        .get(format!(
+            "http://127.0.0.1:{}/api/v1/orders/101?status=completed",
+            port
+        ))
         .send()
         .await
         .unwrap();
@@ -148,7 +152,13 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .await
         .unwrap();
     assert_eq!(resp_v2_fail.status().as_u16(), 400);
-    assert!(resp_v2_fail.text().await.unwrap().contains("Upgrade required"));
+    assert!(
+        resp_v2_fail
+            .text()
+            .await
+            .unwrap()
+            .contains("Upgrade required")
+    );
 
     // 冒烟点 3: 验证 V2 携带 X-App-Version == 2.0.0 正常放行通过 (返回 201)
     let resp_v2_ok = client
@@ -158,7 +168,13 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .await
         .unwrap();
     assert_eq!(resp_v2_ok.status().as_u16(), 201);
-    assert!(resp_v2_ok.text().await.unwrap().contains(r#""x_app_validated": true"#));
+    assert!(
+        resp_v2_ok
+            .text()
+            .await
+            .unwrap()
+            .contains(r#""x_app_validated": true"#)
+    );
 
     // 2. 测试用例 4: 网关安全与限流 Header-None 判定冒烟
     let sec_file = "examples/design_scenarios/security_and_ratelimit.md";
@@ -182,16 +198,28 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 
     // 冒烟点 4: 不带 Authorization 时匹配 header.Authorization == None 从而返回 401
     let resp_sec_401 = client
-        .post(format!("http://127.0.0.1:{}/api/v1/accounts/reset-password", port_sec))
+        .post(format!(
+            "http://127.0.0.1:{}/api/v1/accounts/reset-password",
+            port_sec
+        ))
         .send()
         .await
         .unwrap();
     assert_eq!(resp_sec_401.status().as_u16(), 401);
-    assert!(resp_sec_401.text().await.unwrap().contains("Missing Authorization"));
+    assert!(
+        resp_sec_401
+            .text()
+            .await
+            .unwrap()
+            .contains("Missing Authorization")
+    );
 
     // 冒烟点 5: 带过期 Token 触发 403
     let resp_sec_403 = client
-        .post(format!("http://127.0.0.1:{}/api/v1/accounts/reset-password", port_sec))
+        .post(format!(
+            "http://127.0.0.1:{}/api/v1/accounts/reset-password",
+            port_sec
+        ))
         .header("Authorization", "Bearer expired_token")
         .send()
         .await
@@ -201,18 +229,30 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 
     // 冒烟点 5b: 触发限流拦截，返回 429
     let resp_sec_429 = client
-        .post(format!("http://127.0.0.1:{}/api/v1/accounts/reset-password", port_sec))
+        .post(format!(
+            "http://127.0.0.1:{}/api/v1/accounts/reset-password",
+            port_sec
+        ))
         .header("Authorization", "Bearer valid_token")
         .header("X-RateLimit-Trigger", "true")
         .send()
         .await
         .unwrap();
     assert_eq!(resp_sec_429.status().as_u16(), 429);
-    assert!(resp_sec_429.text().await.unwrap().contains("Rate limit exceeded"));
+    assert!(
+        resp_sec_429
+            .text()
+            .await
+            .unwrap()
+            .contains("Rate limit exceeded")
+    );
 
     // 冒烟点 5c: 正常鉴权通过，返回 200
     let resp_sec_200 = client
-        .post(format!("http://127.0.0.1:{}/api/v1/accounts/reset-password", port_sec))
+        .post(format!(
+            "http://127.0.0.1:{}/api/v1/accounts/reset-password",
+            port_sec
+        ))
         .header("Authorization", "Bearer valid_token")
         .send()
         .await
@@ -222,7 +262,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 
     // 3. 测试用例 5: 级联多文件依赖 @depends-on 合并加载冒烟
     let test_file = "examples/iteration_scenarios/migration_test.md";
-    
+
     let scanned_files = DirectoryScanner::scan(&[test_file.to_string()]).unwrap();
     let sandbox_root = std::env::current_dir().unwrap();
     let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root).unwrap();
@@ -260,12 +300,21 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 
     // 冒烟点 6: 从联合加载的依赖路由树中，请求来自于 v1_api.md 的接口
     let resp_dep_v1 = client
-        .get(format!("http://127.0.0.1:{}/api/v1/orders/777?status=completed", port_dep))
+        .get(format!(
+            "http://127.0.0.1:{}/api/v1/orders/777?status=completed",
+            port_dep
+        ))
         .send()
         .await
         .unwrap();
     assert_eq!(resp_dep_v1.status().as_u16(), 200);
-    assert!(resp_dep_v1.text().await.unwrap().contains(r#""status": "completed""#));
+    assert!(
+        resp_dep_v1
+            .text()
+            .await
+            .unwrap()
+            .contains(r#""status": "completed""#)
+    );
 
     // 冒烟点 7: 从联合加载的依赖路由树中，请求来自于 v2_api_evolution.md 的新 V2 接口
     let resp_dep_v2 = client
@@ -275,7 +324,13 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .await
         .unwrap();
     assert_eq!(resp_dep_v2.status().as_u16(), 201);
-    assert!(resp_dep_v2.text().await.unwrap().contains(r#""x_app_validated": true"#));
+    assert!(
+        resp_dep_v2
+            .text()
+            .await
+            .unwrap()
+            .contains(r#""x_app_validated": true"#)
+    );
 
     // 4. 测试用例 6: 订单支付幂等性场景校验
     let idemp_file = "examples/design_scenarios/idempotency_api.md";
@@ -304,7 +359,13 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .await
         .unwrap();
     assert_eq!(resp_idemp_400.status().as_u16(), 400);
-    assert!(resp_idemp_400.text().await.unwrap().contains("Idempotency-Key header is required"));
+    assert!(
+        resp_idemp_400
+            .text()
+            .await
+            .unwrap()
+            .contains("Idempotency-Key header is required")
+    );
 
     // 冒烟点 9: 携带重复 Idempotency-Key 触发幂等命中返回 200 (duplicated: true)
     let resp_idemp_200 = client
@@ -332,11 +393,12 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 
 #[tokio::test]
 async fn test_abstract_base_url_scenario() {
-    use rupost::parser::{MarkdownFileParser, MockCompiler};
-    use rupost::runner::TestExecutor;
-    use rupost::variable::VariableContext;
+    use rupost::mock::MockCompiler;
     use rupost::mock::matcher::TrieRouteMatcher;
     use rupost::mock::server::{AxumMockServer, MockServer};
+    use rupost::parser::MarkdownFileParser;
+    use rupost::runner::TestExecutor;
+    use rupost::variable::VariableContext;
     use std::sync::Arc;
 
     // 1. 解析契约文档
@@ -362,23 +424,26 @@ async fn test_abstract_base_url_scenario() {
 
     // 4. 构建包含 base_url 动态参数的变量上下文
     let mut context = VariableContext::new();
-    context.insert("base_url", &format!("http://127.0.0.1:{}", port));
+    context.insert("base_url", format!("http://127.0.0.1:{}", port));
 
     // 5. 实例化 TestExecutor 运行该文件中的回归测试用例
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed_file, &mut context).await.unwrap();
+    let results = executor
+        .execute_all(parsed_file, &mut context)
+        .await
+        .unwrap();
 
     // 6. 验证结果
     // 应该共有 3 个请求（1 个 Mock 契约块, 2 个 @test 回归块）
     // 其中 Mock 契约块（没有标记 @test）在拥有显式测试时，应该被跳过 (skipped == true)
     // 2 个 @test 应该运行成功 (success == true)
     assert_eq!(results.len(), 3);
-    
+
     // 第 1 个是契约块，由于没有标记 @test 且有显式 test，被智能跳过
     assert!(results[0].skipped);
     assert!(results[0].success); // skipped results are successful
     assert!(results[0].error.is_none());
-    
+
     // 验证测试 1: test-roles-admin-success
     let test_1 = &results[1];
     assert_eq!(test_1.name.as_deref(), Some("test-roles-admin-success"));

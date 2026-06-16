@@ -13,6 +13,7 @@
 | **生产调试 (阶段 1)** | 本地局部环境变量级联覆盖与热重载，默认合并 `.env` 且支持 `--env-file` 传递 | 已完成 | `src/variable/env_file.rs`, `src/variable/config.rs` |
 | **生产调试 (阶段 2)** | 网络连通性分析与高亮诊断工具 (`rupost diagnose <url>`)，精确测量 DNS/TCP/TLS/TTFB 时延，支持 X.509 证书解析与状态高亮输出 | 已完成 | `src/http/diagnose.rs`, `src/cli.rs`, `src/main.rs`, `tests/diagnose_integration_test.rs` |
 | **生产调试 (阶段 7)** | 模糊路径匹配与条件变体独立 Mock 服务器，支持 Trie 树模糊匹配与多变体分支判断，可插拔的 Axum 网络适配器及高雅控制台高亮访问日志 | 已完成 | `src/mock/`, `src/cli.rs`, `src/main.rs`, `tests/mock_integration_test.rs` |
+| **Clean Architecture 架构重构** | 彻底解耦 `src/parser` 与基础设施层（`src/http`、`src/mock`）的物理依赖，建立由外向内的单向依赖关系 | 已完成 | `src/http/request_builder.rs`, `src/mock/compiler.rs` |
 | **Sprint 3: 高级特性与脚本引擎** | @loop 循环, @skip-if 条件运行, 前后置 Javascript/Rust 脚本支持 | 未开始 | - |
 | **Sprint 4: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
@@ -51,4 +52,10 @@
    * **可插拔 Axum 适配器**：将底层网络通信（Axum 服务端）与匹配调度引擎核心剥离，网络框架成为可插拔插件，彻底遵循 Clean Architecture。
    * **Trie 树模糊匹配**：自主实现 Trie 匹配树，完全支持精确匹配、路径参数捕获（如 `:id` 自动提取至 Context）和通配符匹配（`*`, `**`），实现复杂路由映射。
    * **多路分支条件匹配 (Variant)**：基于同一路由支持多个 `MockVariant`，并支持通过 Header、Query、Body 内 JSONPath 的 Equals/Contains/Exists 条件自动计算路由变体分发，且支持变量占位符的动态渲染。
-   * **CLI 集成与终端高亮访问日志**：新增 `rupost mock start <file> --port <port>` 命令行工具，智能解析反序列化格式（`untagged` 兼容自定义 JSON 配置与快照包），在控制台以高雅彩色打印实时流量访问与匹配命中信息。
+    * **CLI 集成与终端高亮访问日志**：新增 `rupost mock start <file> --port <port>` 命令行工具，智能解析反序列化格式（`untagged` 兼容自定义 JSON 配置与快照包），在控制台以高雅彩色打印实时流量访问与匹配命中信息。
+
+### Clean Architecture 架构重构 (解耦 Parser)
+1. **物理依赖完全清除**：彻底消除 `src/parser/` 对 `src/http/` 和 `src/mock/` 目录的任何反向引用 (`use crate::http::*` 或 `use crate::mock::*`)，使 Parser 只依赖核心 AST 实体与标准库。
+2. **HTTP 转换逻辑下沉**：将 `TryFrom<ParsedRequest> for Request`、`add_body`、`is_json_like` 和 `to_request` 整体物理下沉至外层基础设施的 `src/http/request_builder.rs`，并在 `src/http/mod.rs` 中重新注册和导出。
+3. **Mock 编译器下沉**：将 `MockCompiler`、条件表达式解析方法 `parse_condition_expression` 及对应单元测试整体物理迁移至外层基础设施的 `src/mock/compiler.rs`。
+4. **全局调用与测试对齐**：修改 `src/main.rs` 和 `tests/mock_integration_test.rs` 中的 `MockCompiler` 调用和导入路径，对齐到 `rupost::mock::MockCompiler`，并通过了全部 163 个单元测试和集成测试校验。

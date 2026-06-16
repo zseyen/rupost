@@ -21,7 +21,8 @@ fn get_default_level() -> &'static str {
 /// - RUST_LOG=debug cargo run
 /// - RUST_LOG=trace cargo run
 pub fn init_logger() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(get_default_level()));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(get_default_level()));
 
     // 使用 try_init 替代 init，防止单元测试并发运行时重复初始化导致 Panic
     let _ = fmt()

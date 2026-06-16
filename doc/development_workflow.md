@@ -119,14 +119,37 @@ graph TD
 
 ### 1. 编码规范与重构
 *   **开闭原则 (OCP)**：新功能的添加（如新增一种元数据指令 `@retry`）应当通过实现特定的 Trait 或者在 Match 匹配分支中进行自然扩展，不应该修改主执行引擎的底层架构。
-*   **Linting 与格式化**：在提交之前，必须运行以下命令，确保无任何 Warn 与 Error：
-    ```bash
-    cargo fmt --all -- --check
-    cargo clippy --all-targets --all-features -- -D warnings
-    ```
+
+> [!IMPORTANT]
+> **每次开发与原子提交前的强制测试要求**：
+> 在开发新功能或修复 Bug 时，必须确保本地的所有测试 100% 跑通。严禁将任何无法通过测试的代码提交或推送到仓库中。在每次提交（使用 `jj` 描述或 `git` 提交）前，请严格执行以下三步测试流程。
+
+#### 步骤 1：静态代码校验与格式化
+在提交前，必须运行以下命令，保证代码格式正确且无任何编译器警告：
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+#### 步骤 2：全量自动化回归测试
+运行所有单元测试和集成测试，确保已存在的核心层与网络层功能不被破坏：
+```bash
+cargo test
+```
+
+#### 步骤 3：示例库回归验证 (Examples Regression)
+如果您修改了解析器（`parser`）、条件判定、或者是发包执行器（`executor`）等核心引擎，必须至少启动一次本地 Mock 并执行如下典型级联演进用例，防止示例库损坏：
+1. 启动级联依赖 Mock 仿真服务：
+   ```bash
+   cargo run --bin rupost -- mock examples/iteration_scenarios/migration_test.md --port 9000
+   ```
+2. 另开终端运行测试，验证 3 个级联文件共 10 个用例是否全部绿灯通过：
+   ```bash
+   cargo run --bin rupost -- test examples/iteration_scenarios/migration_test.md
+   ```
 
 ### 2. Jujutsu (jj) 版本控制与原子提交
-*   **原子提交**：每个 `jj commit` 或 `jj describe` 必须是一个逻辑上独立、且所有测试完全通过的代码单元。
+*   **原子提交**：每个 `jj commit` 或 `jj describe` 必须是一个逻辑上独立、且完成了上述**强制测试流程**的代码单元。
 *   **提交粒度**：完成一个 Trait 的接口声明 -> 提交；完成对应的 `impl` 和单元测试 -> 提交。严禁一次性提交数千行混合了多个功能和 Bug 修复的代码。
 
 ---

@@ -91,8 +91,7 @@ impl HttpFileParser {
             let is_explicit_separator = trimmed.starts_with("###");
 
             // 识别新用例的元数据开始指令 (例如 @name 或 @test)
-            let is_new_case_metadata = trimmed.starts_with("@name")
-                || trimmed.starts_with("@test");
+            let is_new_case_metadata = trimmed.starts_with("@name") || trimmed.starts_with("@test");
 
             let is_req_line = Self::is_valid_request_line(trimmed);
 
@@ -509,10 +508,7 @@ POST http://example.com/2
         assert_eq!(result.requests[1].metadata.name, Some("test-2".to_string()));
         assert_eq!(result.requests[1].method, Some("POST".to_string()));
         assert_eq!(result.requests[1].url, "http://example.com/2");
-        assert_eq!(
-            result.requests[1].body,
-            Some("{\"id\": 1}".to_string())
-        );
+        assert_eq!(result.requests[1].body, Some("{\"id\": 1}".to_string()));
     }
 
     #[test]

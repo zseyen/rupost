@@ -116,6 +116,7 @@ pub enum AssertValue {
     String(String),
     Bool(bool),
     Null,
+    None, // 空值语义（用于表示 None、null、undefined 等缺失或空值）
     Array,
     Object,
 }
@@ -127,6 +128,7 @@ impl fmt::Display for AssertValue {
             AssertValue::String(s) => write!(f, "\"{}\"", s),
             AssertValue::Bool(b) => write!(f, "{}", b),
             AssertValue::Null => write!(f, "null"),
+            AssertValue::None => write!(f, "None"),
             AssertValue::Array => write!(f, "array"),
             AssertValue::Object => write!(f, "object"),
         }
@@ -178,25 +180,31 @@ impl AssertValue {
                 }
             }),
 
-            // Null 比较
-            (AssertValue::Null, AssertValue::Null) => Ok(match op {
+            // Null 与 None 的空值比较对齐
+            (AssertValue::Null, AssertValue::Null)
+            | (AssertValue::None, AssertValue::None)
+            | (AssertValue::Null, AssertValue::None)
+            | (AssertValue::None, AssertValue::Null) => Ok(match op {
                 CompareOp::Equal => true,
                 CompareOp::NotEqual => false,
                 _ => {
                     return Err(AssertError::InvalidOperator(format!(
-                        "Operator {} not supported for null",
+                        "Operator {} not supported for null/None",
                         op
                     )));
                 }
             }),
 
-            // Null 与其他类型
-            (AssertValue::Null, _) | (_, AssertValue::Null) => Ok(match op {
+            // Null 或 None 与其他类型比较
+            (AssertValue::Null, _)
+            | (_, AssertValue::Null)
+            | (AssertValue::None, _)
+            | (_, AssertValue::None) => Ok(match op {
                 CompareOp::Equal => false,
                 CompareOp::NotEqual => true,
                 _ => {
                     return Err(AssertError::InvalidOperator(format!(
-                        "Operator {} not supported for null comparison",
+                        "Operator {} not supported for null/None comparison",
                         op
                     )));
                 }

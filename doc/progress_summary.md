@@ -16,8 +16,10 @@
 | **Clean Architecture 架构重构** | 彻底解耦 `src/parser` 与基础设施层（`src/http`、`src/mock`）的物理依赖，建立由外向内的单向依赖关系 | 已完成 | `src/http/request_builder.rs`, `src/mock/compiler.rs` |
 | **启发式自适应请求拆分** | 智能自适应识别 HTTP / Markdown 代码块中的用例边界，解决因漏写 `###` 分隔符而导致的解析错乱问题 | 已完成 | `src/parser/http_file.rs` |
 | **统一 JSONPath 评估引擎** | 统一断言端与 Mock 端的 JSONPath 提取与分词解析逻辑，支持点号、中括号数组定位与根数组解析 | 已完成 | `src/utils/jsonpath.rs` |
+| **标准化 None (空值) 语义** | 统一并泛化 `None`, `null`, `nil`, `undefined`, `NULL` 语义，实现断言防崩溃 PathNotFound 拦截与 Mock 匹配无缝支持 | 已完成 | `src/assertion/types.rs`, `src/assertion/parser.rs`, `src/assertion/evaluator.rs`, `src/mock/variant.rs` |
 | **Sprint 3: 高级特性与脚本引擎** | @loop 循环, @skip-if 条件运行, 前后置 Javascript/Rust 脚本支持 | 未开始 | - |
 | **Sprint 4: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
+
 
 ---
 
@@ -71,4 +73,10 @@
 1. **核心 `JsonPathResolver` 抽象**：下沉和抽象出独立的公共模块 `src/utils/jsonpath.rs`，实现统一的分词提取器 `parse_jsonpath_to_segments` 和求值器 `JsonPathResolver::resolve`，彻底消除了断言与 Mock 两端解析行为的不对齐。
 2. **支持点号、中括号与根数组索引混合解析**：支持点号数字索引（`a.0.b`）、中括号索引（`a[0].b`）、单双引号转义剥离键名（`a['first name']`）以及根数组定位（`$[0]`），极大提升了用例表达的灵活性。
 3. **全平台两端逻辑对齐**：通过重构 `src/assertion/parser.rs` 和 `src/mock/variant.rs`，两端底层均调取统一组件。断言端额外获得 `body.items[0]` 语法支持，Mock 端额外获得 `$.items.0` 和根数组匹配支持，双向赋能。
+
+### 标准化 None (空值) 语义
+1. **统一空值词汇转换**：在断言语法解析器 `parse_assert_value` 中，将未带引号的 `None`、`undefined`、`nil`、`NULL` 统统映射为新增的 `AssertValue::None`，并与原有 `AssertValue::Null` 做比较矩阵上的对齐（`null == None` 为真），同时区分开带双引号的 `"None"` 普通字符串。
+2. **防崩溃路径缺失校验**：在断言求值器 `evaluate_assertion` 中，针对 `extract_value` 提取失败返回 `PathNotFound` 的场景，若断言期望值是 `None` 或 `null`，则主动将其拦截并纠正为 `AssertValue::None` 进行比较，从而使 `@assert body.password == null` 类型的字段缺失校验能优雅通过。
+3. **Mock 变体匹配泛化**：引入 `is_none_value` 判定辅助函数并泛化至 `Header`/`Query`/`Body`。例如 `@mock-when $.headers.X-Auth exists None` 或 `@mock-when $.body.user exists null` 会在相应键不存在或为 `null` 时正确命中。
+
 

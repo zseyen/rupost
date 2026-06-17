@@ -38,9 +38,7 @@ pub fn parse_jsonpath_to_segments(path: &str) -> Vec<String> {
                 bracket_content.push(chars[i]);
                 i += 1;
             }
-            let trimmed_content = bracket_content.trim()
-                .trim_matches('\'')
-                .trim_matches('"');
+            let trimmed_content = bracket_content.trim().trim_matches('\'').trim_matches('"');
             if !trimmed_content.is_empty() {
                 segments.push(trimmed_content.to_string());
             }
@@ -63,11 +61,9 @@ impl JsonPathResolver {
         let segments = parse_jsonpath_to_segments(path);
         let mut current = val;
         for seg in &segments {
-            if let serde_json::Value::Array(arr) = current {
-                if let Ok(idx) = seg.parse::<usize>() {
-                    current = arr.get(idx)?;
-                    continue;
-                }
+            if let (serde_json::Value::Array(arr), Ok(idx)) = (current, seg.parse::<usize>()) {
+                current = arr.get(idx)?;
+                continue;
             }
             current = current.get(seg)?;
         }
@@ -88,7 +84,10 @@ mod tests {
 
         // 中括号索引
         assert_eq!(parse_jsonpath_to_segments("a[0].b"), vec!["a", "0", "b"]);
-        assert_eq!(parse_jsonpath_to_segments("$.a[10].b"), vec!["a", "10", "b"]);
+        assert_eq!(
+            parse_jsonpath_to_segments("$.a[10].b"),
+            vec!["a", "10", "b"]
+        );
 
         // 点号数字索引
         assert_eq!(parse_jsonpath_to_segments("a.0.b"), vec!["a", "0", "b"]);
@@ -99,8 +98,14 @@ mod tests {
         assert_eq!(parse_jsonpath_to_segments("$[1].name"), vec!["1", "name"]);
 
         // 中括号引号剥离与空格支持
-        assert_eq!(parse_jsonpath_to_segments("a['first name']"), vec!["a", "first name"]);
-        assert_eq!(parse_jsonpath_to_segments("$.a[\"last name\"]"), vec!["a", "last name"]);
+        assert_eq!(
+            parse_jsonpath_to_segments("a['first name']"),
+            vec!["a", "first name"]
+        );
+        assert_eq!(
+            parse_jsonpath_to_segments("$.a[\"last name\"]"),
+            vec!["a", "last name"]
+        );
 
         // 空路径
         assert_eq!(parse_jsonpath_to_segments(""), Vec::<String>::new());
@@ -128,36 +133,75 @@ mod tests {
         });
 
         // 基础解析
-        assert_eq!(JsonPathResolver::resolve(&doc, "$.store.address.city"), Some(&json!("Tokyo")));
-        assert_eq!(JsonPathResolver::resolve(&doc, "store.address.city"), Some(&json!("Tokyo")));
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "$.store.address.city"),
+            Some(&json!("Tokyo"))
+        );
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "store.address.city"),
+            Some(&json!("Tokyo"))
+        );
 
         // 数组中括号定位
-        assert_eq!(JsonPathResolver::resolve(&doc, "$.store.books[0].title"), Some(&json!("Book 1")));
-        assert_eq!(JsonPathResolver::resolve(&doc, "store.books[1].price"), Some(&json!(20.0)));
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "$.store.books[0].title"),
+            Some(&json!("Book 1"))
+        );
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "store.books[1].price"),
+            Some(&json!(20.0))
+        );
 
         // 数组点号数字定位
-        assert_eq!(JsonPathResolver::resolve(&doc, "$.store.books.0.title"), Some(&json!("Book 1")));
-        assert_eq!(JsonPathResolver::resolve(&doc, "store.books.1.price"), Some(&json!(20.0)));
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "$.store.books.0.title"),
+            Some(&json!("Book 1"))
+        );
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "store.books.1.price"),
+            Some(&json!(20.0))
+        );
 
         // 根数组定位
         let root_arr = json!([
             { "name": "Alice" },
             { "name": "Bob" }
         ]);
-        assert_eq!(JsonPathResolver::resolve(&root_arr, "$[0].name"), Some(&json!("Alice")));
-        assert_eq!(JsonPathResolver::resolve(&root_arr, "[1].name"), Some(&json!("Bob")));
+        assert_eq!(
+            JsonPathResolver::resolve(&root_arr, "$[0].name"),
+            Some(&json!("Alice"))
+        );
+        assert_eq!(
+            JsonPathResolver::resolve(&root_arr, "[1].name"),
+            Some(&json!("Bob"))
+        );
 
         // 一维数组值定位
-        assert_eq!(JsonPathResolver::resolve(&doc, "$.tags[1]"), Some(&json!("rust")));
-        assert_eq!(JsonPathResolver::resolve(&doc, "tags.0"), Some(&json!("tech")));
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "$.tags[1]"),
+            Some(&json!("rust"))
+        );
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "tags.0"),
+            Some(&json!("tech"))
+        );
 
         // 多维数组
-        assert_eq!(JsonPathResolver::resolve(&doc, "$.matrix[1][0]"), Some(&json!(3)));
-        assert_eq!(JsonPathResolver::resolve(&doc, "matrix.0.1"), Some(&json!(2)));
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "$.matrix[1][0]"),
+            Some(&json!(3))
+        );
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "matrix.0.1"),
+            Some(&json!(2))
+        );
 
         // 未命中路径
         assert_eq!(JsonPathResolver::resolve(&doc, "$.store.nonexistent"), None);
         assert_eq!(JsonPathResolver::resolve(&doc, "$.store.books[2]"), None);
-        assert_eq!(JsonPathResolver::resolve(&doc, "$.store.books.0.nonexistent"), None);
+        assert_eq!(
+            JsonPathResolver::resolve(&doc, "$.store.books.0.nonexistent"),
+            None
+        );
     }
 }

@@ -13,7 +13,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 pub struct TestExecutor {
     client: Client,

@@ -1,22 +1,22 @@
-# Checkpoint - 2026-06-18
+# Checkpoint - 2026-06-19
 
 ## 当前状态
 
-- **Rebase 至 `main` 已 100% 完成且验证通过**：
-  - 将 `sse-debug-test-first` 开发分支重定基底（rebase）到最新的本地 `main` 分支（`c3bd9f84`）。
-  - 完美解决 `Cargo.toml`、`src/cli.rs`、`src/main.rs`、`src/http/mod.rs`、`src/utils/mod.rs`、`src/parser/metadata.rs`、`src/parser/types.rs` 等文件中的全部合并冲突。
-  - 特别是丢弃了开发分支上临时的、只用于 LLM 测试的 MockLlm 命令行分支，确保与主线生产级 `rupost mock <file>` 功能收敛。
-  - 修复了 `src/runner/executor.rs` 中由于缺失导入 `tracing::info` 导致的编译报错问题。
-  - 修复了类型不匹配导致的集成测试失败问题，在断言处安全采用了 `.as_deref()` 转换。
+- **兼容 JetBrains / VS Code 注释前缀风格元数据已 100% 完成并验证通过**：
+  - 修改了 [src/parser/http_file.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/src/parser/http_file.rs) 中的 `parse_request_block` 逻辑，兼容并能够自动剔除 `#` 和 `//` 注释前缀，使 `# @skip`、`# @name` 以及 `// @assert` 等 VS Code HTTP 插件/JetBrains 标配语法能够被正常识别 and 解析。
+  - 在 [tests/end_to_end_test.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/tests/end_to_end_test.rs) 中修正了因注释前缀断言原本未执行而被隐藏的一个拼写错误（`header` 纠正为 `headers`），使断言顺利通过。
 
-- **高标准测试验证与 Clippy 清洁度**：
-  - 运行 `cargo test` 确认，所有 246 个单元测试、端到端 (E2E) 集成测试全部通过，无任何失败，零警告。
-  - 运行 `cargo fmt -- --check` 保证格式完美；运行 `cargo clippy --all-targets` 无任何代码警告。
+- **完成了 examples 自动化一键测试运行脚本**：
+  - 新增并丰富了 [examples/run_all.sh](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/examples/run_all.sh) 自动化验证脚本。
+  - 通过两阶段 Mock 服务的构建（针对普通的 `api-testing.md` 使用临时配置生成的 Mock，针对契约驱动测试 `iteration_scenarios` 直接使用包含拓扑依赖的契约文件进行联合 Mock），跑通了 examples 目录下的全部用例。
+  - 修改了 `examples/batch/` 下的 `01_login.http`, `02_get_profile.http`, `03_health.http` 的请求目标为 `httpbingo.org`，解决了因外网 `httpbin.org` 频繁超时导致示例运行失败的问题。
+  - 所有 18 组示例测试全部通过（17 组 100% 正确执行，1 组为演示故意失败 404/500 的展示性文件，不计入失败）。
+
+- **测试与格式化保证**：
+  - 运行 `cargo test` 全量通过；运行 `cargo fmt -- --check` 无任何格式化错误。
 
 - **JJ 代码版本化原子提交记录**：
-  - `fix: import tracing::info to resolve compilation error` (68e4663a)
-  - `docs: update README, progress_summary, and checkpoint for template command` (885ec797)
-  - 成功将 `sse-debug-test-first` 书签指引至最新经过测试的干净提交 `68e4663a`。
+  - `fix: support comment prefix metadata parsing and add run_all examples script` (d7397c3b)
 
 ## 下一步
 

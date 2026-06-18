@@ -162,8 +162,18 @@ impl HttpFileParser {
 
         for line in block.lines() {
             let trimmed = line.trim();
-            let metadata = if trimmed.starts_with('@') {
-                metadata::parse_metadata(trimmed)?
+
+            // 支持 `# @directive` 和 `// @directive` 风格的注释元数据（JetBrains/VS Code HTTP 标准写法）
+            let directive_candidate = if let Some(stripped) = trimmed.strip_prefix("//") {
+                stripped.trim()
+            } else if let Some(stripped) = trimmed.strip_prefix('#') {
+                stripped.trim()
+            } else {
+                trimmed
+            };
+
+            let metadata = if directive_candidate.starts_with('@') {
+                metadata::parse_metadata(directive_candidate)?
             } else {
                 None
             };
@@ -548,5 +558,46 @@ This is still body.
             result.requests[0].body.as_deref(),
             Some("GET http://someurl.com/should/not/be/split\nThis is still body.")
         );
+    }
+
+    #[test]
+    fn test_comment_prefix_skip_metadata() {
+        // # @skip 风格（JetBrains HTTP Client 兼容）
+        let content = "# @skip\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert!(result.requests[0].metadata.skip);
+    }
+
+    #[test]
+    fn test_comment_prefix_name_metadata() {
+        // # @name 风格
+        let content = "# @name My API Test\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.name,
+            Some("My API Test".to_string())
+        );
+    }
+
+    #[test]
+    fn test_double_slash_prefix_assert_metadata() {
+        // // @assert 风格
+        let content = "// @assert status == 200\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests[0].metadata.assertions, vec!["status == 200"]);
+    }
+
+    #[test]
+    fn test_mixed_prefix_styles_in_one_block() {
+        // 混合使用 # @ 和 @ 两种风格
+        let content =
+            "# @name Mixed Style\n@assert status == 200\n# @skip\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.name,
+            Some("Mixed Style".to_string())
+        );
+        assert!(result.requests[0].metadata.skip);
+        assert_eq!(result.requests[0].metadata.assertions, vec!["status == 200"]);
     }
 }

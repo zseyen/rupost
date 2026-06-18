@@ -19,6 +19,7 @@
 | **标准化 None (空值) 语义** | 统一并泛化 `None`, `null`, `nil`, `undefined`, `NULL` 语义，实现断言防崩溃 PathNotFound 拦截与 Mock 匹配无缝支持 | 已完成 | `src/assertion/types.rs`, `src/assertion/parser.rs`, `src/assertion/evaluator.rs`, `src/mock/variant.rs` |
 | **Sprint 3: 高级特性与脚本引擎** | @loop 循环, @skip-if 条件运行, 前后置 Javascript/Rust 脚本支持 | 未开始 | - |
 | **Sprint 4: 大模型流式调试与模板命令** | 自动规整 `stream.llm.content`、非阻塞物理文件增量同步（`@stream_to`）、内置 Mock 大模型服务（`MockLlmServer`）、路由改写与密钥扫描、一键生成 SSE/LLM 模板命令（`rupost template`）支持 `.http` 与 `.md` 后缀自适应。 | 已完成 | `src/template/`, `src/http/llm_adapter.rs`, `src/runner/file_sync.rs`, `src/middleware/routing.rs`, `tests/template_test.rs`, `tests/llm_mvp_test.rs` |
+| **元数据注释前缀兼容与运行脚本** | 兼容 `# @` 与 `// @` 风格元数据，编写一键测试 examples 的 run_all.sh 脚本 | 已完成 | `src/parser/http_file.rs`, `examples/run_all.sh` |
 | **Sprint 5: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
 ---
@@ -87,3 +88,7 @@
     -   **安全保护**：具备防误覆盖冲突拦截机制，可用 `--force` 强制覆盖。
     -   **双管齐下**：生成主模板文件的同时，自动创建并伴随生成一份 `.env.example` 环境变量配置文件。
     -   **自编译打包**：采用 `include_str!` 在编译期内置托管模板，单二进制文件开箱即用，无任何物理资产文件查找及系统依赖。
+
+### 元数据注释前缀兼容与运行脚本
+1.  **元数据注释前缀兼容**：重构了 `src/parser/http_file.rs` 的行切分与元数据提取，支持在每行前自动剔除 `#` 和 `//` 等主流注释标记。现在 `# @skip`、`# @name` 以及 `// @assert` 可以完美并安全地生效，对齐 JetBrains HTTP Client / VS Code Rest Client 标准用法。
+2.  **一键运行全量示例脚本 (`examples/run_all.sh`)**：编写了全自动验证脚本，集成构建、变量环境校验，通过两阶段（独立 Mock 启动、多依赖 DAG 有向图拓扑契约 Mock 启动）自动跑通 examples 目录下的全部测试用例，提供完整的 CI 闭环，对超时外网依赖收敛到更为稳定的 `httpbingo.org`。

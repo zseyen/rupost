@@ -5,7 +5,7 @@ use rupost::runner::TestExecutor;
 use rupost::utils::{ResponseFormat, ResponseFormatter};
 use rupost::variable::VariableContext;
 use rupost::{Result, RupostError};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -67,6 +67,10 @@ pub enum Commands {
         #[arg(long, value_name = "KEY=VALUE")]
         var: Vec<String>,
 
+        /// Path to a local environment file (e.g., .env)
+        #[arg(long, value_name = "FILE")]
+        env_file: Option<String>,
+
         /// Show detailed request/response information
         #[arg(short, long)]
         verbose: bool,
@@ -90,6 +94,30 @@ pub enum Commands {
     /// Generate test file from history
     #[command(alias = "g")]
     Generate(GenerateArgs),
+
+    /// Diagnose network connectivity and TLS status for a URL
+    #[command(alias = "d")]
+    Diagnose {
+        /// Target URL to diagnose (e.g. https://example.com)
+        #[arg(required = true)]
+        url: String,
+    },
+
+    /// Start a local Mock server based on a snapshot/config file
+    #[command(alias = "m")]
+    Mock {
+        /// Path to the snapshot or mock configuration JSON file
+        #[arg(required = true, value_name = "FILE")]
+        file: String,
+
+        /// Port to bind the mock server to
+        #[arg(short, long, default_value = "9000")]
+        port: u16,
+    },
+
+    /// Initialize a default rupost.toml configuration template in the current directory
+    #[command(alias = "i")]
+    Init,
 }
 
 #[derive(Subcommand)]
@@ -150,13 +178,13 @@ impl CliRunner {
     }
 
     async fn run(self, args: Vec<String>) -> Result<()> {
-        info!("Parsing command line arguments");
+        debug!("Parsing command line arguments");
         let parsed_request = self.parse_args(&args)?;
 
         // Setup empty context for CLI run
         let mut context = VariableContext::new();
 
-        info!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
+        debug!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
 
         // Execute with source="cli"
         let result = self

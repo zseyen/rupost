@@ -93,7 +93,7 @@ impl CookieMiddleware {
             // Load as JSON using load_all to include session cookies
             let store = match load_all(reader) {
                 Ok(store) => {
-                    tracing::info!("Loaded cookies from: {:?}", path);
+                    tracing::debug!("Loaded cookies from: {:?}", path);
                     store
                 }
                 Err(e) => {

@@ -12,7 +12,17 @@ pub fn evaluate_assertion(assertion: &AssertExpr, response: &Response) -> Assert
             let actual_value = match extract_value(response, left) {
                 Ok(v) => v,
                 Err(e) => {
-                    return AssertionResult::error(raw, e);
+                    if let crate::assertion::types::AssertError::PathNotFound(_) = e {
+                        if right == &crate::assertion::types::AssertValue::None
+                            || right == &crate::assertion::types::AssertValue::Null
+                        {
+                            crate::assertion::types::AssertValue::None
+                        } else {
+                            return AssertionResult::error(raw, e);
+                        }
+                    } else {
+                        return AssertionResult::error(raw, e);
+                    }
                 }
             };
 
@@ -203,5 +213,53 @@ mod tests {
 
         assert!(!result.passed);
         assert!(result.message.is_some());
+    }
+
+    #[test]
+    fn test_evaluate_none_and_null_semantics() {
+        let response_empty = create_test_response(200, r#"{}"#, 100);
+        let response_null = create_test_response(200, r#"{"token": null}"#, 100);
+        let response_value = create_test_response(200, r#"{"token": "abc"}"#, 100);
+
+        // 1. 验证缺失字段 == None
+        let assertion_missing_none = parse_assertion("body.token == None").unwrap();
+        let result = evaluate_assertion(&assertion_missing_none, &response_empty);
+        assert!(result.passed);
+
+        // 2. 验证缺失字段 == null (泛化语义)
+        let assertion_missing_null = parse_assertion("body.token == null").unwrap();
+        let result = evaluate_assertion(&assertion_missing_null, &response_empty);
+        assert!(result.passed);
+
+        // 3. 验证显式 null 字段 == None
+        let result = evaluate_assertion(&assertion_missing_none, &response_null);
+        assert!(result.passed);
+
+        // 4. 验证显式 null 字段 == null
+        let result = evaluate_assertion(&assertion_missing_null, &response_null);
+        assert!(result.passed);
+
+        // 5. 验证非空字段 == None 应该失败
+        let result = evaluate_assertion(&assertion_missing_none, &response_value);
+        assert!(!result.passed);
+
+        // 6. 验证非空字段 != None 应该成功
+        let assertion_not_none = parse_assertion("body.token != None").unwrap();
+        let result = evaluate_assertion(&assertion_not_none, &response_value);
+        assert!(result.passed);
+
+        // 7. 验证缺失字段 != None 应该失败
+        let result = evaluate_assertion(&assertion_not_none, &response_empty);
+        assert!(!result.passed);
+
+        // 8. 验证带双引号的 "None" 仅作普通字符串校验
+        let assertion_quoted_none = parse_assertion("body.token == \"None\"").unwrap();
+        let response_str_none = create_test_response(200, r#"{"token": "None"}"#, 100);
+
+        let result = evaluate_assertion(&assertion_quoted_none, &response_str_none);
+        assert!(result.passed);
+
+        let result = evaluate_assertion(&assertion_quoted_none, &response_empty);
+        assert!(!result.passed);
     }
 }

@@ -57,7 +57,7 @@ timeout = "60"
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 构建 dev 环境上下文
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[]);
+    let context = ConfigLoader::build_context(&config, Some("dev"), &[], None);
     assert_eq!(
         context.get("base_url").as_deref(),
         Some("http://localhost:3000")
@@ -65,7 +65,7 @@ timeout = "60"
     assert_eq!(context.get("timeout").as_deref(), Some("30"));
 
     // 构建 staging 环境上下文
-    let context = ConfigLoader::build_context(&config, Some("staging"), &[]);
+    let context = ConfigLoader::build_context(&config, Some("staging"), &[], None);
     assert_eq!(
         context.get("base_url").as_deref(),
         Some("http://staging.example.com")
@@ -92,7 +92,7 @@ api_key = "config-key"
 
     // 使用 CLI 变量覆盖
     let cli_vars = vec![("api_key".to_string(), "cli-override-key".to_string())];
-    let context = ConfigLoader::build_context(&config, Some("dev"), &cli_vars);
+    let context = ConfigLoader::build_context(&config, Some("dev"), &cli_vars, None);
 
     // CLI 变量应该覆盖配置文件中的值
     assert_eq!(context.get("api_key").as_deref(), Some("cli-override-key"));
@@ -122,7 +122,7 @@ api_key = "${TEST_ENV_VAR}"
 
     // 加载配置
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[]);
+    let context = ConfigLoader::build_context(&config, Some("dev"), &[], None);
 
     let result = VariableResolver::substitute("{{api_key}}", &context);
     assert_eq!(result, "environment-value");
@@ -185,7 +185,7 @@ db_name = "prod_db"
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 测试 dev 环境
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[]);
+    let context = ConfigLoader::build_context(&config, Some("dev"), &[], None);
     assert_eq!(
         VariableResolver::substitute("{{base_url}}", &context),
         "http://localhost:3000"
@@ -196,7 +196,7 @@ db_name = "prod_db"
     );
 
     // 测试 test 环境
-    let context = ConfigLoader::build_context(&config, Some("test"), &[]);
+    let context = ConfigLoader::build_context(&config, Some("test"), &[], None);
     assert_eq!(
         VariableResolver::substitute("{{base_url}}", &context),
         "http://test-server:3000"
@@ -207,7 +207,7 @@ db_name = "prod_db"
     );
 
     // 测试 prod 环境
-    let context = ConfigLoader::build_context(&config, Some("prod"), &[]);
+    let context = ConfigLoader::build_context(&config, Some("prod"), &[], None);
     assert_eq!(
         VariableResolver::substitute("{{base_url}}", &context),
         "https://api.example.com"
@@ -235,7 +235,7 @@ base_url = "http://localhost:3000"
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 不指定环境时，上下文为空
-    let context = ConfigLoader::build_context(&config, None, &[]);
+    let context = ConfigLoader::build_context(&config, None, &[], None);
     assert!(context.is_empty());
 }
 
@@ -326,4 +326,53 @@ async fn test_unconfigured_base_url_camel_case_error() {
     let error_msg = result.error.unwrap();
     assert!(error_msg.contains("使用了 base_url/baseUrl 变量，但是没有在当前环境中配置它"));
     assert!(error_msg.contains("提示: 请在 rupost.toml 对应的环境配置 base_url"));
+}
+
+/// 集成测试：验证使用局部 .env 文件覆盖 base_url 成功打到本地 Mock 服务器
+#[tokio::test]
+async fn test_env_file_loader_integration() {
+    use std::io::Write;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // 1. 启动本地 Mock 服务器
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/cookies"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    // 2. 创建临时局部 .env 覆盖
+    let env_content = format!("base_url = {}", mock_server.uri());
+    let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+    temp_file.write_all(env_content.as_bytes()).unwrap();
+    temp_file.flush().unwrap();
+    let temp_path = temp_file.path().to_string_lossy().to_string();
+
+    // 3. 构造空白配置
+    let config = ConfigLoader::load_from_path(&temp_path).unwrap_or_default();
+
+    // 4. 构建变量上下文并传入临时 .env 路径
+    let mut context = ConfigLoader::build_context(&config, Some("dev"), &[], Some(&temp_path));
+    assert_eq!(
+        context.get("base_url").as_deref(),
+        Some(mock_server.uri().as_str())
+    );
+
+    // 5. 使用 TestExecutor 发送请求
+    let executor = rupost::runner::TestExecutor::new();
+    let mut parsed = rupost::parser::ParsedRequest::new(1);
+    parsed.url = "{{base_url}}/cookies".to_string();
+    parsed.method = Some("GET".to_string());
+
+    let result = executor.execute_one(parsed, 1, &mut context, None).await;
+
+    // 6. 验证请求成功被 .env 中的 base_url 路由并完成测试
+    assert!(result.success, "Request failed: {:?}", result.error);
+    if let Some(resp) = result.response {
+        assert_eq!(resp.status.code(), 200);
+    } else {
+        panic!("Response is missing");
+    }
 }

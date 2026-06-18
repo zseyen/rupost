@@ -10,7 +10,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{error, info};
+use tracing::{debug, error};
 
 pub struct TestExecutor {
     client: Client,
@@ -104,11 +104,17 @@ impl TestExecutor {
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".to_string());
 
+        // 判断该文件是否包含任何显式标记了 @test 的用例块
+        let has_explicit_tests = parsed_file.requests.iter().any(|r| r.metadata.is_test);
+
         for (index, parsed_request) in parsed_file.requests.into_iter().enumerate() {
             let request_number = index + 1;
 
             // 检查是否跳过
-            if parsed_request.should_skip() {
+            let should_skip = parsed_request.should_skip()
+                || (has_explicit_tests && !parsed_request.metadata.is_test);
+
+            if should_skip {
                 results.push(TestResult::skipped(
                     request_number,
                     parsed_request.name().map(|s| s.to_string()),
@@ -255,7 +261,7 @@ impl TestExecutor {
                     ) {
                         Ok(captured_vars) => {
                             for (key, value) in &captured_vars {
-                                info!("Captured variable: {} = '{}'", key, value);
+                                debug!("Captured variable: {} = '{}'", key, value);
                             }
                             context.extend(captured_vars);
                         }

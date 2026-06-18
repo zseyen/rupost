@@ -63,33 +63,92 @@ impl HttpFileParser {
         deps
     }
 
-    /// 按 ### 分隔符分割内容
+    /// 判定是否是合法的请求行 (如 "GET http://example.com")
+    fn is_valid_request_line(line: &str) -> bool {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            return false;
+        }
+        let method = parts[0].to_uppercase();
+        let valid_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+        valid_methods.contains(&method.as_str()) && parts.len() >= 2
+    }
+
+    /// 启发式自适应请求块拆分
     fn split_by_separator(content: &str) -> Vec<(String, usize)> {
         let mut blocks = Vec::new();
         let mut current_block = String::new();
         let mut block_start_line = 1;
+
+        // 用于状态感知型拆分的局部状态变量
+        let mut has_req_line = false;
+        let mut last_req_method: Option<String> = None;
+        let mut has_empty_line_after_req_line = false;
+
         for (current_line, line) in (1..).zip(content.lines()) {
-            if line.trim().starts_with("###") {
-                // 遇到分隔符，保存当前块
-                if !current_block.trim().is_empty() {
-                    blocks.push((current_block.clone(), block_start_line));
+            let trimmed = line.trim();
+
+            let is_explicit_separator = trimmed.starts_with("###");
+
+            // 识别新用例的元数据开始指令 (例如 @name 或 @test)
+            let is_new_case_metadata = trimmed.starts_with("@name") || trimmed.starts_with("@test");
+
+            let is_req_line = Self::is_valid_request_line(trimmed);
+
+            // 判定是否应当切分
+            let mut should_split = is_explicit_separator;
+
+            if !should_split && has_req_line {
+                // 如果当前块中已经包含过请求行了：
+                // 1. 遇到了新用例的元数据开始指令 (比如 @name 或 @test)，说明一定是下一个请求的元数据
+                // 2. 符合请求行特征：
+                //    - 如果在请求行后尚未遇到过空行（Headers 区域连写），切分
+                //    - 如果已遇到空行，但上一个请求是无 Body 的方法 (GET, DELETE, HEAD, OPTIONS)，说明空行后不能 be Body 文本，必须切分
+                if is_new_case_metadata {
+                    should_split = true;
+                } else if is_req_line {
+                    if !has_empty_line_after_req_line {
+                        should_split = true;
+                    } else if let Some(ref method) = last_req_method {
+                        let no_body_methods = ["GET", "DELETE", "HEAD", "OPTIONS"];
+                        if no_body_methods.contains(&method.as_str()) {
+                            should_split = true;
+                        }
+                    }
                 }
+            }
+
+            if should_split && !current_block.trim().is_empty() {
+                blocks.push((current_block.clone(), block_start_line));
                 current_block.clear();
-                block_start_line = current_line + 1;
-            } else {
+                block_start_line = current_line;
+                has_req_line = false;
+                last_req_method = None;
+                has_empty_line_after_req_line = false;
+            }
+
+            if is_req_line {
+                has_req_line = true;
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if !parts.is_empty() {
+                    last_req_method = Some(parts[0].to_uppercase());
+                }
+            }
+
+            // 在请求行之后遇到空行，更新状态
+            if has_req_line && trimmed.is_empty() {
+                has_empty_line_after_req_line = true;
+            }
+
+            // 显式分隔符行本身不需要被加入到请求文本中
+            if !trimmed.starts_with("###") {
                 current_block.push_str(line);
                 current_block.push('\n');
             }
         }
 
-        // 添加最后一个块
         if !current_block.trim().is_empty() {
             blocks.push((current_block, block_start_line));
-        }
-
-        // 如果没有找到分隔符，整个内容作为一个块
-        if blocks.is_empty() && !content.trim().is_empty() {
-            blocks.push((content.to_string(), 1));
         }
 
         blocks
@@ -184,7 +243,7 @@ impl HttpFileParser {
     }
 
     /// 解析请求行（方法 + URL）
-    fn parse_request_line(
+    pub(crate) fn parse_request_line(
         line: &str,
         line_number: usize,
         request: &mut ParsedRequest,
@@ -228,7 +287,7 @@ impl HttpFileParser {
     }
 
     /// 解析 header 行
-    fn parse_header(line: &str) -> Option<(&str, &str)> {
+    pub(crate) fn parse_header(line: &str) -> Option<(&str, &str)> {
         if let Some(colon_pos) = line.find(':') {
             let key = line[..colon_pos].trim();
             let value = line[colon_pos + 1..].trim();
@@ -425,5 +484,69 @@ POST http://example.com
             Some(Duration::from_secs(5))
         );
         assert_eq!(result.requests[0].metadata.assertions.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_multiple_requests_without_separator() {
+        let content = r#"
+@name test-1
+GET http://example.com/1
+
+@name test-2
+POST http://example.com/2
+
+{"id": 1}
+        "#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests.len(), 2);
+
+        assert_eq!(result.requests[0].metadata.name, Some("test-1".to_string()));
+        assert_eq!(result.requests[0].method, Some("GET".to_string()));
+        assert_eq!(result.requests[0].url, "http://example.com/1");
+        assert_eq!(result.requests[0].body, None);
+
+        assert_eq!(result.requests[1].metadata.name, Some("test-2".to_string()));
+        assert_eq!(result.requests[1].method, Some("POST".to_string()));
+        assert_eq!(result.requests[1].url, "http://example.com/2");
+        assert_eq!(result.requests[1].body, Some("{\"id\": 1}".to_string()));
+    }
+
+    #[test]
+    fn test_parse_no_separator_mixed_with_separator() {
+        let content = r#"
+@name test-1
+GET http://example.com/1
+
+###
+
+@name test-2
+POST http://example.com/2
+
+@name test-3
+GET http://example.com/3
+        "#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests.len(), 3);
+        assert_eq!(result.requests[0].url, "http://example.com/1");
+        assert_eq!(result.requests[1].url, "http://example.com/2");
+        assert_eq!(result.requests[2].url, "http://example.com/3");
+    }
+
+    #[test]
+    fn test_parse_body_containing_http_verb() {
+        // 验证 Body 内即便顶格写了以 HTTP 动作开头的文本，也不会被错误截断或误切
+        let content = r#"
+POST http://example.com/api
+Content-Type: text/plain
+
+GET http://someurl.com/should/not/be/split
+This is still body.
+        "#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests.len(), 1);
+        assert_eq!(
+            result.requests[0].body.as_deref(),
+            Some("GET http://someurl.com/should/not/be/split\nThis is still body.")
+        );
     }
 }

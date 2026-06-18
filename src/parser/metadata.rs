@@ -22,6 +22,7 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@timeout" => parse_timeout(content).map(Some),
         "@assert" => parse_assert(content).map(Some),
         "@capture" => parse_capture(content).map(Some),
+        "@test" => Ok(Some(Metadata::Test)),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -46,6 +47,9 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
             target
                 .captures
                 .push(VariableCapture::parse(var_name, source));
+        }
+        Metadata::Test => {
+            target.is_test = true;
         }
     }
 }

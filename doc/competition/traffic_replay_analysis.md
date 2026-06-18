@@ -54,7 +54,7 @@ graph TD
     A[真实流量: 网关/浏览器抓包/HAR/cURL] -->|rupost record/import| B(RuPost 编译器)
     B -->|自动转换 & 结构化整理| C[人类可读的可执行 Markdown 文档]
     C -->|Git 版本控制 / 协作契约| D[Markdown 源码 / 文档]
-    D -->|rupost run/test| E[执行重放测试]
+    D -->|rupost test| E[执行重放测试]
     E -->|失败时提取 Trace ID| F[生产日志/分布式链路 Trace 调试]
 ```
 

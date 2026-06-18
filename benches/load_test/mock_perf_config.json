@@ -1,0 +1,83 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/health",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": { "Content-Type": "text/plain" },
+        "response_body": "OK"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/users/:id",
+    "variants": [
+      {
+        "condition": {
+          "source": "Header",
+          "key": "X-Role",
+          "operator": "Equals",
+          "expected_value": "Admin"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"status\":\"success\",\"role\":\"Admin\",\"user_id\":\"{{id}}\"}"
+      },
+      {
+        "condition": null,
+        "status": 403,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"error\":\"Access Denied\"}"
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/users/:id",
+    "variants": [
+      {
+        "condition": {
+          "source": "Header",
+          "key": "X-Role",
+          "operator": "Equals",
+          "expected_value": "Admin"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"status\":\"success\",\"role\":\"Admin\",\"user_id\":\"{{id}}\"}"
+      },
+      {
+        "condition": null,
+        "status": 403,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"error\":\"Access Denied\"}"
+      }
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/profile",
+    "variants": [
+      {
+        "condition": {
+          "source": "Body",
+          "key": "$.user.profile.age",
+          "operator": "Equals",
+          "expected_value": "18"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"eligible\":true}"
+      },
+      {
+        "condition": null,
+        "status": 400,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"error\":\"Ineligible\"}"
+      }
+    ]
+  }
+]

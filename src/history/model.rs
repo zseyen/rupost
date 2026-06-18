@@ -46,3 +46,25 @@ pub struct ResponseMeta {
     #[serde(with = "serialization::header_map")]
     pub headers: HeaderMap,
 }
+
+/// 单个 HTTP 交互快照
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotEntry {
+    /// 交互唯一 ID
+    pub id: String,
+    /// 关联的请求快照
+    pub request: RequestSnapshot,
+    /// 关联的响应快照 (包含 Body)
+    pub response: ResponseSnapshot,
+}
+
+/// 响应快照 (带 Body)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseSnapshot {
+    pub status: u16,
+
+    #[serde(with = "serialization::header_map")]
+    pub headers: reqwest::header::HeaderMap,
+
+    pub body: String,
+}

@@ -54,7 +54,7 @@
 
 ### 场景一：新员工快速上手
 - **现状**：新员工不知道如何构造复杂的支付测试数据。
-- **需求实现**：执行 `rupost run Payment.skills --mock-user`。AI 自动根据蒸馏出的逻辑，依次调用 Login, CreateOrder, Pay 接口，屏蔽底层参数拼接细节。
+- **需求实现**：执行 `rupost test Payment.skills --mock-user`。AI 自动根据蒸馏出的逻辑，依次调用 Login, CreateOrder, Pay 接口，屏蔽底层参数拼接细节。
 
 ### 场景二：生产环境异常复现
 - **现状**：生产环境报错 500，开发环境调不通。

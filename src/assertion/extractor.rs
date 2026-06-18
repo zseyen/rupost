@@ -192,6 +192,19 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_bracket_syntax() {
+        let response = create_test_response(
+            200,
+            r#"{"users": [{"profile": {"name": "Charlie"}}, {"profile": {"name": "Delta"}}]}"#,
+        );
+        let segments = crate::utils::jsonpath::parse_jsonpath_to_segments("users[1].profile.name");
+        assert_eq!(segments, vec!["users", "1", "profile", "name"]);
+
+        let value = extract_value(&response, &ValuePath::Body(segments)).unwrap();
+        assert_eq!(value, AssertValue::String("Delta".to_string()));
+    }
+
+    #[test]
     fn test_extract_body_path_not_found() {
         let response = create_test_response(200, r#"{"id": 42}"#);
         let result = extract_value(&response, &ValuePath::Body(vec!["missing".to_string()]));

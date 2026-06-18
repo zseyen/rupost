@@ -5,6 +5,7 @@ pub mod history;
 pub mod http;
 pub mod logger;
 pub mod middleware;
+pub mod mock;
 pub mod parser;
 pub mod runner;
 pub mod utils;

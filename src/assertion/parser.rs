@@ -76,7 +76,7 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
     }
 
     if let Some(rest) = input.strip_prefix("body.") {
-        let segments: Vec<String> = rest.split('.').map(|s| s.to_string()).collect();
+        let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(rest);
         if segments.is_empty() {
             return Err(AssertError::InvalidSyntax(
                 "Body path cannot be empty".to_string(),
@@ -98,6 +98,12 @@ fn parse_assert_value(input: &str) -> Result<AssertValue, AssertError> {
     // Null
     if input == "null" {
         return Ok(AssertValue::Null);
+    }
+
+    // 统一空值语义（未包裹引号）
+    let none_variants = ["None", "undefined", "nil", "NULL"];
+    if none_variants.contains(&input) {
+        return Ok(AssertValue::None);
     }
 
     // 布尔值

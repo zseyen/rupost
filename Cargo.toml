@@ -29,6 +29,7 @@ regex = "1.12.2"
 reqwest = { version = "0.13.1", features = ["json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+serde_yaml = "0.9"
 thiserror = "2.0.17"
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.9.11"
@@ -38,10 +39,33 @@ url = "2.5.8"
 uuid = { version = "1.19.0", features = ["v4"] }
 reqwest_cookie_store = "0.10.0"
 cookie_store = "0.22"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+webpki-roots = "0.26"
+x509-parser = "0.16"
+axum = "0.7"
+tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
 cookie = "0.18"
 dirs = "6.0.0"
 tempfile = "3.24.0"
 wiremock = "0.6.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "parser_bench"
+harness = false
+
+[[bench]]
+name = "trie_matcher_bench"
+harness = false
+
+[[bench]]
+name = "variable_resolver_bench"
+harness = false
+
+[[bin]]
+name = "load_generator"
+path = "benches/load_test/load_generator.rs"
 

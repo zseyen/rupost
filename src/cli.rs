@@ -113,19 +113,16 @@ pub enum Commands {
         #[arg(short, long, default_value = "9000")]
         port: u16,
     },
-    /// Initialize a default rupost.toml configuration template in the current directory
-    #[command(alias = "i")]
-    Init,
-
-    /// Generate a template file
-    Template {
-        /// Type of template (e.g., sse)
-        #[arg(default_value = "sse")]
+    /// Initialize configuration or template files in the current directory (aliases: template)
+    #[command(alias = "i", alias = "template")]
+    Init {
+        /// Type of template (e.g., config, sse)
+        #[arg(default_value = "config")]
         r#type: String,
 
-        /// Output file path (default: sse_template.http)
-        #[arg(short, long, default_value = "sse_template.http")]
-        output: String,
+        /// Output file path (default depends on template type)
+        #[arg(short, long)]
+        output: Option<String>,
 
         /// Force overwrite existing files without prompting
         #[arg(short, long)]

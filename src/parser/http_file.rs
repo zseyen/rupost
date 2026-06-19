@@ -584,20 +584,25 @@ This is still body.
         // // @assert 风格
         let content = "// @assert status == 200\nGET http://example.com";
         let result = HttpFileParser::parse_content(content).unwrap();
-        assert_eq!(result.requests[0].metadata.assertions, vec!["status == 200"]);
+        assert_eq!(
+            result.requests[0].metadata.assertions,
+            vec!["status == 200"]
+        );
     }
 
     #[test]
     fn test_mixed_prefix_styles_in_one_block() {
         // 混合使用 # @ 和 @ 两种风格
-        let content =
-            "# @name Mixed Style\n@assert status == 200\n# @skip\nGET http://example.com";
+        let content = "# @name Mixed Style\n@assert status == 200\n# @skip\nGET http://example.com";
         let result = HttpFileParser::parse_content(content).unwrap();
         assert_eq!(
             result.requests[0].metadata.name,
             Some("Mixed Style".to_string())
         );
         assert!(result.requests[0].metadata.skip);
-        assert_eq!(result.requests[0].metadata.assertions, vec!["status == 200"]);
+        assert_eq!(
+            result.requests[0].metadata.assertions,
+            vec!["status == 200"]
+        );
     }
 }

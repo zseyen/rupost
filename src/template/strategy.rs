@@ -6,6 +6,30 @@ pub trait TemplateStrategy {
     fn env_content(&self) -> Option<&'static str>;
 }
 
+pub struct ConfigTemplate;
+
+impl TemplateStrategy for ConfigTemplate {
+    fn name(&self) -> &'static str {
+        "config"
+    }
+
+    fn description(&self) -> &'static str {
+        "Initialize default rupost.toml configuration"
+    }
+
+    fn http_content(&self) -> &'static str {
+        include_str!("../../templates/config/rupost.toml")
+    }
+
+    fn markdown_content(&self) -> &'static str {
+        include_str!("../../templates/config/rupost.toml")
+    }
+
+    fn env_content(&self) -> Option<&'static str> {
+        None
+    }
+}
+
 pub struct SseTemplate;
 
 impl TemplateStrategy for SseTemplate {

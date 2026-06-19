@@ -260,43 +260,13 @@ async fn main() -> Result<()> {
             let server = AxumMockServer;
             server.start(port, Arc::new(matcher)).await?;
         }
-        Some(Commands::Init) => {
-            use colored::Colorize;
-            let target_path = std::path::PathBuf::from("rupost.toml");
-            if target_path.exists() {
-                println!(
-                    "{} rupost.toml 已经存在于当前目录，跳过初始化。",
-                    "[!]".bold().yellow()
-                );
-            } else {
-                let default_toml = r#"# RuPost 共享变量与环境配置文件 (Config Template)
-
-# 全局环境配置示例，可通过 -e/--env 选用
-[environments.dev]
-base_url = "https://httpbin.org"
-user_agent = "rupost-dev/1.0"
-api_timeout = "3000ms"
-
-[environments.prod]
-base_url = "https://api.example.com"
-# 支持从当前终端的系统环境中引用值，防止敏感凭证写死在代码仓库中
-token = "${PROD_TOKEN}"
-"#;
-                std::fs::write(&target_path, default_toml)
-                    .map_err(rupost::error::RupostError::IoError)?;
-                println!(
-                    "{} 成功在当前目录初始化默认 rupost.toml 模板！",
-                    "[✓]".bold().green()
-                );
-            }
-        }
-        Some(Commands::Template {
+        Some(Commands::Init {
             r#type,
             output,
             force,
             list,
         }) => {
-            rupost::template::run_template(&r#type, &output, force, list)?;
+            rupost::template::run_template(&r#type, output.as_deref(), force, list)?;
         }
         None => {
             if cli.args.is_empty() {

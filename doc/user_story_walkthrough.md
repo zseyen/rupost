@@ -58,7 +58,7 @@
 *   **场景**：作为平台集成者，我希望可以通过开放的 JS/Rust API 开发服务端插件，并通过命令行进行安装/卸载。同时插件必须经过签名校验，防止非官方插件注入安全后门。
 
 ### 📖 US 10: 数据的物理脱敏与企业级合规审计 (WBS 14.0, 15.0)
-*   **场景**：作为一名企业安全合规官，我希望 RuPost 的持久化历史和命令行报告中，手机号、API-Key 等敏感信息能够被自动按照规则脱敏。且所有测试运行均生成带有时间戳、身份识别的行为审计日志以备审查。
+*   **场景**：作为一名企业安全合规官，我希望 RuPost 的持久化历史 and 命令行报告中，手机号、API-Key 等敏感信息能够被自动按照规则脱敏。且所有测试运行均生成带有时间戳、身份识别的行为审计日志以备审查。
 
 ### 📖 US 11: API 设计先行与契约 Mock 变体服务 (WBS 9.0)
 *   **场景**：我希望用同一个 Markdown 文件（如 `api-docs.md`）定义 API 规范，它既能直接被测试执行，也能作为契约直接启动 Mock 服务。在 Mock 过程中，支持根据不同的 Body 属性匹配不同的响应变体分支，甚至能配置模拟网络延迟（`delay`），模拟弱网以验证客户端的稳定性。
@@ -78,7 +78,7 @@
 | :--- | :--- | :--- | :--- |
 | **US 1, US 2** | `ParsedFile` 仅包含扁平的 `requests: Vec<ParsedRequest>`，缺失“请求块”之间的拓扑依赖声明（`depends_on` 属性）；此外多文件依赖排序局限在文件级。 | `TestExecutor::execute_all` 只支持按顺序执行单文件请求。缺少跨文件参数共享、跨文件逻辑流转的核心 API。 | **控制流与编排层缺失**：无法在单个文件内或跨文件执行精细的 DAG（有向无环图）拓扑级条件跳转。 |
 | **US 3, US 4, US 5** | `VariableCapture` 不支持从流式 SSE 的分片包中聚合提取；缺少针对大模型 SSE 结束时以及特定事件触发时的生命周期定义。 | 流式输出处理只有全局的 `stream_to` 写盘，缺乏对流式数据的增量断言及 Token 提取。 | **流式变量捕获与生命周期缺失**：引擎没有向外层脚本/变量捕获组件暴露出 SSE 结束帧的挂载钩子。 |
-| **US 6** | `Request` 只有 HTTP 的 method, url, headers, body。缺少 WebSocket 消息包结构（`WsMessage`）和 MQTT 相关的 `Topic/Payload` 数据模型。 | `Client::execute` 采用的是单次 request-response 异步阻塞模型。缺少 WebSocket 握手后的长连接会话管道句柄（Channel Handler）以及中转拦截队列。 | **通信协议模型过窄**：底层引擎只支持 HTTP 协议家族，没有为长连接和流协议留出底层 socket 控制权。 |
+| **US 6** | `Request` 只有 HTTP 的 method, url, headers, body。缺少 WebSocket 消息包结构（`WsMessage`）和 MQTT 相关的 `Topic/Payload` 数据模型。 | `Client::execute` 采用的是单次 request-response 异步阻塞模型。缺少 WebSocket 握手后的长连接会话管道句柄（Channel Handler）以及中转拦截队列。 | **通信协议模型过窄**：底层引擎只支持 HTTP 协议家族，没有为长连接和流协议留出底层 socket控制权。 |
 | **US 7** | `RequestSnapshot` 只记录了最基础的 HTTP 请求。对于 WebSocket 数据流（带时间戳的消息回放序列），没有支持录制和持久化的数据结构。 | 缺少日志解析器（Log Parser）API，无法实现生产 HTTP 日志到 `ParsedRequest` 的逆向工程还原。 | **流式数据录制结构缺失**：不支持时间戳关联的消息回放和日志逆向解析。 |
 | **US 9** | 现有 `TestExecutor` 中的 `Middleware` 是静态绑定的 Rust Trait。没有运行时动态分发的插件驱动（Plugin Driver）机制。 | 缺少 Plugin 管理器，没有任何与动态执行语言沙箱（如 WASM 或 JS 引擎）对接的 API。 | **动态插件加载器缺失**：不支持运行时热拔插的动态插件。 |
 | **US 10** | `Request` 和 `Response` 没有加密、混淆或掩码字段。`history.jsonl` 保存的完全是明文敏感内容。 | 没有数据脱敏过滤器（DataMasker）挂载机制。没有向外输出企业级合规日志的审计拦截器（Auditor）。 | **合规隔离机制缺失**：持久化数据和控制台输出没有经过混淆脱敏，无行为审计切面。 |

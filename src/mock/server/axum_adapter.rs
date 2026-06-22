@@ -100,20 +100,55 @@ async fn handle_mock_request(
             "Success".bold().green()
         );
 
+        let is_sse = mock_resp.headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type") && v.contains("text/event-stream")
+        });
+
         let mut response = status.into_response();
 
         let headers_mut = response.headers_mut();
-        for (k, v) in mock_resp.headers {
+        for (k, v) in &mock_resp.headers {
             if let (Ok(h_name), Ok(h_val)) = (
                 HeaderName::from_bytes(k.as_bytes()),
-                HeaderValue::from_str(&v),
+                HeaderValue::from_str(v),
             ) {
                 headers_mut.insert(h_name, h_val);
             }
         }
 
-        *response.body_mut() = Body::from(mock_resp.body);
+        if is_sse {
+            use futures_util::stream;
+            use std::convert::Infallible;
+            use std::time::Duration;
+
+            let chunks: Vec<String> = mock_resp
+                .body
+                .split('\n')
+                .map(|s| format!("{}\n", s))
+                .collect();
+
+            let stream = stream::unfold((chunks, 0), |(chunks, index)| async move {
+                if index >= chunks.len() {
+                    None
+                } else {
+                    if index > 0 {
+                        tokio::time::sleep(Duration::from_millis(40)).await;
+                    }
+                    let chunk = chunks[index].clone();
+                    Some((
+                        Ok::<_, Infallible>(axum::body::Bytes::from(chunk)),
+                        (chunks, index + 1),
+                    ))
+                }
+            });
+
+            *response.body_mut() = Body::from_stream(stream);
+        } else {
+            *response.body_mut() = Body::from(mock_resp.body);
+        }
+
         response
+
     } else {
         println!(
             "  {} {} | {}",

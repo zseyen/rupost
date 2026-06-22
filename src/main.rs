@@ -133,7 +133,11 @@ async fn main() -> Result<()> {
                 Snapshots(Vec<SnapshotEntry>),
             }
 
-            let file_config = if file.ends_with(".md") {
+            let is_doc = file.ends_with(".md")
+                || file.ends_with(".markdown")
+                || file.ends_with(".http");
+
+            let file_config = if is_doc {
                 let scanned_files =
                     rupost::runner::DirectoryScanner::scan(std::slice::from_ref(&file))?;
                 let sandbox_root = std::env::current_dir()?;
@@ -141,6 +145,7 @@ async fn main() -> Result<()> {
                     &scanned_files,
                     &sandbox_root,
                 )?;
+
 
                 let parse_pairs: Vec<_> = files_map
                     .iter()

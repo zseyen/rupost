@@ -38,7 +38,7 @@ impl TemplateStrategy for SseTemplate {
     }
 
     fn description(&self) -> &'static str {
-        "Server-Sent Events & LLM Stream testing template"
+        "Server-Sent Events generic testing template"
     }
 
     fn http_content(&self) -> &'static str {
@@ -50,6 +50,31 @@ impl TemplateStrategy for SseTemplate {
     }
 
     fn env_content(&self) -> Option<&'static str> {
-        Some(include_str!("../../templates/sse/env.example"))
+        None
     }
 }
+
+pub struct LlmTemplate;
+
+impl TemplateStrategy for LlmTemplate {
+    fn name(&self) -> &'static str {
+        "llm"
+    }
+
+    fn description(&self) -> &'static str {
+        "Large Language Model (LLM) stream testing template"
+    }
+
+    fn http_content(&self) -> &'static str {
+        include_str!("../../templates/llm/template.http")
+    }
+
+    fn markdown_content(&self) -> &'static str {
+        include_str!("../../templates/llm/template.md")
+    }
+
+    fn env_content(&self) -> Option<&'static str> {
+        Some(include_str!("../../templates/llm/env.example"))
+    }
+}
+

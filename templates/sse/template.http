@@ -1,85 +1,40 @@
-# RuPost SSE & 大模型 API 测试模板
+# RuPost 通用 Server-Sent Events (SSE) 接口测试模板
 #
 # 配置说明:
-# 1. 本模板中使用了环境变量 `{{env.API_KEY}}`。
-# 2. 我们已经在同目录下为您生成了 `.env.example` 环境变量模板文件。
-# 3. 请将 `.env.example` 复制或重命名为 `.env`，并填写您的真实 API Key。
-# 4. RuPost 在运行时会自动从同级目录或父级目录的 `.env` 文件加载环境变量。
+# 1. 本模板展示了针对行情推送、构建日志流等非 JSON/非大模型通用流的测试方法。
+# 2. 我们提供了本地 Mock 服务支持，让您无需任何外部网络依赖即可完成联调。
 #
 # 运行方法:
-# 1. 零配置本地联调测试（推荐先跑这个验证功能）：
-#    第一步：在终端启动 mock 服务：`rupost mock --port 8080`
-#    第二步：在新终端运行：`rupost test <本文件名>`
-# 2. 真实大模型测试：
-#    配置好 `.env` 中的 API_KEY 后，取消场景二的注释并运行：`rupost test <本文件名>`
+# 1. 本地仿真调试：
+#    第一步：启动 Mock 服务：`rupost mock <本文件名> --port 8080`
+#    第二步：运行测试：`rupost test <本文件名>`
 
 # ==========================================
-# 场景一：零门槛本地闭环测试 (Local Mock)
+# 场景一：零门槛本地闭环测试 (Local Generic SSE Mock)
 # ==========================================
-# 开启本地 `rupost mock --port 8080` 服务后，此请求可直接运行通过
+# 开启本地 `rupost mock <本文件名> --port 8080` 服务后，此请求可直接运行通过
 ###
-@sse
-@assert status == 200
-@assert stream.llm.content contains "Rust is perfect."
-POST http://127.0.0.1:8080/v1/chat/completions
+# @sse
+# @assert status == 200
+# @assert stream.event == "build_start"
+# @assert stream.llm.content contains "Compiling"
+POST http://127.0.0.1:8080/build-stream
 Content-Type: application/json
 
 {
-  "model": "mock",
-  "messages": [{"role": "user", "content": "hello"}],
   "stream": true
 }
 
 # ==========================================
-# 场景二：测试 OpenAI / 兼容格式的真实流式接口
+# 场景二：流式响应实时增量保存到物理文件
 # ==========================================
-# @sse 代表开启 Server-Sent Events 流式连接解析
-# @assert 语句在长连接流完全结束后对拼接出来的完整文本进行断言
-# @capture 语句将流拼接结果捕获到变量，供后续的请求使用
-#
-# ###
+# @stream_to 可以将接收到的 SSE 事件流内容实时追加或覆盖写入本地物理文件中。
+###
 # @sse
-# @assert status == 200
-# @assert stream.llm.content contains "Rust"
-# @capture accumulated_reply from stream.llm.content
-# POST http://127.0.0.1:8080/v1/chat/completions
-# Content-Type: application/json
-# Authorization: Bearer {{env.API_KEY}}
-#
-# {
-#   "model": "gpt-4",
-#   "messages": [{"role": "user", "content": "用两句话介绍 Rust 语言。"}],
-#   "stream": true
-# }
+# @stream_to ./target/build_log.txt overwrite
+POST http://127.0.0.1:8080/build-stream
+Content-Type: application/json
 
-# ==========================================
-# 场景三：测试本地物理文件实时同步保存
-# ==========================================
-# @stream_to 将大模型吐出的增量 Token 实时同步追加或覆写输出到物理文件中
-# 非常适合在 IDE 中使用分屏渲染功能实时阅读或配合生成报告。
-# 支持 overwrite (覆写) 或 append (追加) 模式
-#
-# ###
-# @sse
-# @stream_to ./target/prompt_debug.md overwrite
-# POST http://127.0.0.1:8080/v1/chat/completions
-# Content-Type: application/json
-# Authorization: Bearer {{env.API_KEY}}
-#
-# {
-#   "model": "gpt-4",
-#   "messages": [{"role": "user", "content": "请为我生成一份 Rust 基础教学大纲。"}],
-#   "stream": true
-# }
-
-# ==========================================
-# 场景四：测试非大模型通用 SSE 接口 (Generic 模式)
-# ==========================================
-# 针对行情流、系统构建日志流，非 json / 非 llm 格式会自动退化为通用数据流，
-# 将每帧 data 信息累加，且依然支持传统的 stream.event / stream.id 断言。
-#
-# ###
-# @sse
-# @assert stream.event == "build_start"
-# @assert stream.llm.content contains "Compiling"
-# POST http://127.0.0.1:8080/build-stream
+{
+  "stream": true
+}

@@ -1,0 +1,69 @@
+# RuPost 大模型 (LLM) 接口测试与联调模板
+#
+# 使用与测试快速指引:
+# 1. 复制同目录下的环境变量模板并重命名为 `.env`：
+#    cp .env.example .env
+# 2. 修改其中的 `API_KEY` 为您的大模型服务密钥，修改 `BASE_URL` 为模型服务的地址。
+# 3. 运行测试：
+#    rupost test <本文件名>
+# 4. 指定特定模型：
+#    本模板使用环境变量 `{{env.MODEL_NAME}}`。若要指定或对比不同的模型，可以直接在各个请求体 JSON
+#    中将 `"model": "{{env.MODEL_NAME}}"` 修改为具体的模型名称（例如 `"model": "gpt-4o"`）。
+#
+# 本地仿真闭环调试 (无需 API_KEY)：
+# 1. 启动本文件附带的 Mock 服务：
+#    rupost mock <本文件名> --port 8080
+# 2. 在新终端运行测试（基准路径自动指向本地 Mock 服务）：
+#    rupost test <本文件名> --env local (或者修改 .env 中的 BASE_URL=http://127.0.0.1:8080)
+
+# =====================================================================
+# 场景一：本地大模型流式联调 (Local LLM - Ollama / vLLM)
+# =====================================================================
+###
+# @sse
+# @assert status == 200
+# @assert stream.llm.content contains "Rust"
+POST {{env.BASE_URL}}/chat/completions
+Content-Type: application/json
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言的优势。"}],
+  "stream": true
+}
+
+# =====================================================================
+# 场景二：云端大模型 API 测试与 Token 物理同步 (Cloud LLM API)
+# =====================================================================
+# @stream_to 指令可把大模型流式响应的增量 Token 实时同步写入物理文件中，便于分屏查看。
+###
+# @sse
+# @assert status == 200
+# @stream_to ./target/cloud_prompt.md overwrite
+POST {{env.BASE_URL}}/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "请为我生成一份 Rust 核心特性教学大纲。"}],
+  "stream": true
+}
+
+# =====================================================================
+# 场景三：大模型令牌转接与网关代理 (Token Relay / Gateway Proxy)
+# =====================================================================
+# @capture 自动将流式响应的完整拼接文本捕获为临时变量，可用于后续的请求链中。
+###
+# @sse
+# @assert status == 200
+# @capture gateway_reply from stream.llm.content
+POST {{env.BASE_URL}}/chat/completions
+Content-Type: application/json
+Authorization: Bearer {{env.RELAY_TOKEN}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "你好，请打个招呼。"}],
+  "stream": true
+}

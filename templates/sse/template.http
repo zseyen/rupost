@@ -9,11 +9,11 @@
 #    第一步：启动 Mock 服务：`rupost mock <本文件名> --port 8080`
 #    第二步：运行测试：`rupost test <本文件名>`
 
+###
 # ==========================================
 # 场景一：零门槛本地闭环测试 (Local Generic SSE Mock)
 # ==========================================
 # 开启本地 `rupost mock <本文件名> --port 8080` 服务后，此请求可直接运行通过
-###
 # @sse
 # @assert status == 200
 # @assert stream.event == "build_start"
@@ -25,11 +25,11 @@ Content-Type: application/json
   "stream": true
 }
 
+###
 # ==========================================
 # 场景二：流式响应实时增量保存到物理文件
 # ==========================================
-# @stream_to 可以将接收到的 SSE 事件流内容实时追加或覆盖写入本地物理文件中。
-###
+# 使用 @stream_to 可以将接收到的 SSE 事件流内容实时追加或覆盖写入本地物理文件中。
 # @sse
 # @stream_to ./target/build_log.txt overwrite
 POST http://127.0.0.1:8080/build-stream

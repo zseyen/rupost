@@ -16,10 +16,10 @@
 # 2. 在新终端运行测试（基准路径自动指向本地 Mock 服务）：
 #    rupost test <本文件名> --env local (或者修改 .env 中的 BASE_URL=http://127.0.0.1:8080)
 
+###
 # =====================================================================
 # 场景一：本地大模型流式联调 (Local LLM - Ollama / vLLM)
 # =====================================================================
-###
 # @sse
 # @assert status == 200
 # @assert stream.llm.content contains "Rust"
@@ -28,15 +28,15 @@ Content-Type: application/json
 
 {
   "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言的优势。"}],
+  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言 the 优势。"}],
   "stream": true
 }
 
+###
 # =====================================================================
 # 场景二：云端大模型 API 测试与 Token 物理同步 (Cloud LLM API)
 # =====================================================================
-# @stream_to 指令可把大模型流式响应的增量 Token 实时同步写入物理文件中，便于分屏查看。
-###
+# 使用 @stream_to 指令可把大模型流式响应的增量 Token 实时同步写入物理文件中，便于分屏查看。
 # @sse
 # @assert status == 200
 # @stream_to ./target/cloud_prompt.md overwrite
@@ -50,11 +50,11 @@ Authorization: Bearer {{env.API_KEY}}
   "stream": true
 }
 
+###
 # =====================================================================
 # 场景三：大模型令牌转接与网关代理 (Token Relay / Gateway Proxy)
 # =====================================================================
-# @capture 自动将流式响应的完整拼接文本捕获为临时变量，可用于后续的请求链中。
-###
+# 使用 @capture 自动将流式响应的完整拼接文本捕获为临时变量，可用于后续的请求链中。
 # @sse
 # @assert status == 200
 # @capture gateway_reply from stream.llm.content

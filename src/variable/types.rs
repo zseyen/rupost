@@ -49,10 +49,13 @@ impl VariableContext {
         if key.starts_with("global.") {
             self.global.read().ok()?.get(key).cloned()
         } else if let Some(env_name) = key.strip_prefix("env.") {
-            std::env::var(env_name).ok()
+            std::env::var(env_name)
+                .ok()
+                .or_else(|| self.variables.get(env_name).cloned())
         } else {
             self.variables.get(key).cloned()
         }
+
     }
 
     /// 批量插入变量

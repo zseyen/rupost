@@ -168,6 +168,30 @@ impl TestExecutor {
         // 替换 URL
         parsed.url = VariableResolver::resolve(&parsed.url, context);
 
+        // 如果解析后的 URL 是相对路径（以 '/' 开头），自动拼装基础路径
+        if parsed.url.starts_with('/') {
+            if let Some(base) = context.get("base_url").or_else(|| context.get("baseUrl")) {
+                let mut final_base = base.trim().to_string();
+                if final_base.ends_with('/') {
+                    final_base.pop();
+                }
+
+                let file_base = parsed.base_path.as_deref().unwrap_or("").trim().trim_start_matches('/').trim_end_matches('/');
+                let mut joined_path = if file_base.is_empty() {
+                    String::new()
+                } else {
+                    format!("/{}", file_base)
+                };
+
+                let relative_url = parsed.url.trim_start_matches('/');
+                if !relative_url.is_empty() {
+                    joined_path = format!("{}/{}", joined_path, relative_url);
+                }
+
+                parsed.url = format!("{}{}", final_base, joined_path);
+            }
+        }
+
         let method = parsed.method_or_default().to_string();
         let url = parsed.url.clone();
         let name = parsed.name().map(|s| s.to_string());

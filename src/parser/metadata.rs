@@ -28,6 +28,7 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@sse_max_events" => parse_sse_max_events(content).map(Some),
         "@stream_to" => parse_stream_to(content).map(Some),
         "@forward_to" => parse_forward_to(content).map(Some),
+        "@base_path" => parse_base_path(content).map(Some),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -72,6 +73,7 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         Metadata::ForwardTo(url) => {
             target.forward_to = Some(url.clone());
         }
+        Metadata::BasePath(_) => {}
     }
 }
 
@@ -182,6 +184,16 @@ fn parse_forward_to(content: &str) -> ParseResult<Metadata> {
         });
     }
     Ok(Metadata::ForwardTo(content.to_string()))
+}
+
+fn parse_base_path(content: &str) -> ParseResult<Metadata> {
+    if content.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: "@base_path cannot be empty".to_string(),
+        });
+    }
+    Ok(Metadata::BasePath(content.to_string()))
 }
 
 /// 解析时间字符串（支持 "5s", "1000ms", "2m"）

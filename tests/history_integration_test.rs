@@ -35,6 +35,7 @@ async fn test_history_recording() {
         body: Some(r#"{"test": "data"}"#.to_string()),
         metadata: RequestMetadata::default(),
         line_number: 1,
+        base_path: None,
     };
 
     let parsed_file = ParsedFile {

@@ -21,6 +21,10 @@ impl HttpFileParser {
         // 提取依赖
         file.dependencies = Self::extract_dependencies(content);
 
+        // 提取全局基础路径
+        let base_path = Self::extract_base_path(content);
+        file.metadata.base_path = base_path.clone();
+
         // 按 ### 分割请求块
         let blocks = Self::split_by_separator(content);
 
@@ -29,7 +33,8 @@ impl HttpFileParser {
         }
 
         for (block, start_line) in blocks {
-            if let Some(request) = Self::parse_request_block(&block, start_line)? {
+            if let Some(mut request) = Self::parse_request_block(&block, start_line)? {
+                request.base_path = base_path.clone();
                 file.add_request(request);
             }
         }
@@ -61,6 +66,34 @@ impl HttpFileParser {
             }
         }
         deps
+    }
+
+    /// 提取全局基础路径
+    fn extract_base_path(content: &str) -> Option<String> {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            let mut directive = trimmed;
+            if let Some(stripped) = trimmed.strip_prefix("//") {
+                directive = stripped.trim();
+            } else if let Some(stripped) = trimmed.strip_prefix('#') {
+                directive = stripped.trim();
+            }
+            if directive.starts_with("@base_path") {
+                let parts: Vec<&str> = directive.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    return Some(parts[1].to_string());
+                }
+            }
+            // 扫到第一个非空且不是注释和元数据的行就停止，防止误匹配 body 里的内容
+            if !trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with('@')
+            {
+                break;
+            }
+        }
+        None
     }
 
     /// 判定是否是合法的请求行 (如 "GET http://example.com")
@@ -604,5 +637,18 @@ This is still body.
             result.requests[0].metadata.assertions,
             vec!["status == 200"]
         );
+    }
+
+    #[test]
+    fn test_parse_base_path_metadata() {
+        let content = r#"
+# @base_path /v1/chat/completions
+@name Test Base Path
+POST /
+Content-Type: application/json
+"#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.metadata.base_path, Some("/v1/chat/completions".to_string()));
+        assert_eq!(result.requests[0].base_path, Some("/v1/chat/completions".to_string()));
     }
 }

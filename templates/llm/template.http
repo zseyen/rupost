@@ -1,3 +1,4 @@
+# @base_path /v1/chat/completions
 # RuPost 大模型 (LLM) 接口测试与联调模板
 #
 # 使用与测试快速指引:
@@ -23,7 +24,7 @@
 # @sse
 # @assert status == 200
 # @assert stream.llm.content contains "Rust"
-POST {{env.BASE_URL}}/chat/completions
+POST /
 Content-Type: application/json
 
 {
@@ -34,13 +35,11 @@ Content-Type: application/json
 
 ###
 # =====================================================================
-# 场景二：云端大模型 API 测试与 Token 物理同步 (Cloud LLM API)
+# 场景二：云端大模型 API 测试 (Cloud LLM API)
 # =====================================================================
-# 使用 @stream_to 指令可把大模型流式响应的增量 Token 实时同步写入物理文件中，便于分屏查看。
 # @sse
 # @assert status == 200
-# @stream_to ./target/cloud_prompt.md overwrite
-POST {{env.BASE_URL}}/chat/completions
+POST /
 Content-Type: application/json
 Authorization: Bearer {{env.API_KEY}}
 
@@ -58,7 +57,7 @@ Authorization: Bearer {{env.API_KEY}}
 # @sse
 # @assert status == 200
 # @capture gateway_reply from stream.llm.content
-POST {{env.BASE_URL}}/chat/completions
+POST /
 Content-Type: application/json
 Authorization: Bearer {{env.RELAY_TOKEN}}
 

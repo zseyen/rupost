@@ -1,3 +1,7 @@
+---
+base_path: /v1/chat/completions
+---
+
 # RuPost 大模型 (LLM) 接口测试与联调示例
 
 本 Markdown 文件可以直接通过 `rupost test <本文件名>` 运行。
@@ -12,7 +16,7 @@ RuPost 会自动解析并执行其中包含在 ` ```http ` 语法块中的 API �
 # @sse
 # @assert status == 200
 # @assert stream.llm.content contains "Rust"
-POST {{env.BASE_URL}}/chat/completions
+POST /
 Content-Type: application/json
 
 {
@@ -22,16 +26,12 @@ Content-Type: application/json
 }
 ```
 
-## 场景二：云端大模型 API 测试与 Token 物理同步 (Cloud LLM API)
-
-`@stream_to` 将大模型流式响应的增量 Token 实时同步追加或覆写输出到指定的物理文件中。非常适合在 IDE 中使用分屏渲染功能实时阅读或配合生成报告。
+## 场景二：云端大模型 API 测试 (Cloud LLM API)
 
 ```http
-# @test
 # @sse
 # @assert status == 200
-# @stream_to ./target/cloud_prompt_demo.md overwrite
-POST {{env.BASE_URL}}/chat/completions
+POST /
 Content-Type: application/json
 Authorization: Bearer {{env.API_KEY}}
 
@@ -51,7 +51,7 @@ Authorization: Bearer {{env.API_KEY}}
 # @sse
 # @assert status == 200
 # @capture gateway_reply from stream.llm.content
-POST {{env.BASE_URL}}/chat/completions
+POST /
 Content-Type: application/json
 Authorization: Bearer {{env.RELAY_TOKEN}}
 

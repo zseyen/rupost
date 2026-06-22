@@ -18,7 +18,8 @@ fn test_template_generation_http() {
 
     let http_content = fs::read_to_string(&http_path).unwrap();
     assert!(http_content.contains("# RuPost 大模型 (LLM) 接口测试与联调模板"));
-    assert!(http_content.contains("POST {{env.BASE_URL}}"));
+    assert!(http_content.contains("@base_path /v1/chat/completions"));
+    assert!(http_content.contains("POST /"));
 
     let env_content = fs::read_to_string(&env_path).unwrap();
     assert!(env_content.contains("API_KEY="));

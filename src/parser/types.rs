@@ -43,6 +43,9 @@ pub struct ParsedRequest {
 
     /// 请求在文件中的起始行号（用于错误报告）
     pub line_number: usize,
+
+    /// 接口的基础总体路径前缀（来自文件级别的 @base_path 或 YAML Frontmatter）
+    pub base_path: Option<String>,
 }
 
 impl ParsedRequest {
@@ -55,6 +58,7 @@ impl ParsedRequest {
             body: None,
             metadata: RequestMetadata::default(),
             line_number,
+            base_path: None,
         }
     }
 
@@ -132,6 +136,7 @@ pub enum Metadata {
     SseMaxEvents(usize),
     StreamTo { path: String, append: bool },
     ForwardTo(String),
+    BasePath(String),
 }
 
 /// 整个文件的解析结果

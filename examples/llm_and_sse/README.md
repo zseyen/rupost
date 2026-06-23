@@ -77,6 +77,18 @@ Mock 服务启动后会开始监听 `http://localhost:8080`，并自动注册 `/
 
 ---
 
+## ☁️ 一键验证云端连接性 (Cloud Connection Verification)
+
+由于默认的 `llm_demo.md` 中包含了“场景一（本地大模型）”和“场景三（中转网关代理）”等不需要或使用 mock 密钥的本地调试场景，当您将 `.env` 配置文件修改为真实的云端大模型密钥与地址并直接测试该文件时，那些本地场景在云端由于无授权访问会引发 401 报错。
+
+为了能够一键、无干扰地验证云端大模型的连接性，我们专门提供了一个专用于云端真实联调的 `.http` 文件：
+```bash
+rupost test --env-file examples/llm_and_sse/.env examples/llm_and_sse/llm_cloud_test.http --verbose
+```
+**运行效果**：仅单独执行并验证云端大模型用例，过滤并避开其他本地环境用例，若您的 `API_KEY` 与模型配置有效，测试结果将直接以 100% 成功（绿勾）通过。
+
+---
+
 ## 🛠️ 命令行参数覆盖基础路径 (CLI Override)
 如果在云端 CI/CD 或特定测试环境里，您可以通过命令行参数动态地覆盖 `.env` 文件中的 `BASE_URL`，自动拼接出新路径下的完整端点，例如：
 ```bash

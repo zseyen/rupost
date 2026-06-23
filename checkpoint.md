@@ -1,22 +1,20 @@
-# Checkpoint - 2026-06-19
+# Checkpoint - 2026-06-23
 
 ## 当前状态
 
-- **兼容 JetBrains / VS Code 注释前缀风格元数据已 100% 完成并验证通过**：
-  - 修改了 [src/parser/http_file.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/src/parser/http_file.rs) 中的 `parse_request_block` 逻辑，兼容并能够自动剔除 `#` 和 `//` 注释前缀，使 `# @skip`、`# @name` 以及 `// @assert` 等 VS Code HTTP 插件/JetBrains 标配语法能够被正常识别 and 解析。
-  - 在 [tests/end_to_end_test.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/tests/end_to_end_test.rs) 中修正了因注释前缀断言原本未执行而被隐藏的一个拼写错误（`header` 纠正为 `headers`），使断言顺利通过。
+- **已完成路由自适应拼接配置优化与大模型测试指引规范**：
+  - 明确并规范了相对路径 `POST /` 与顶部元数据 `# @base_path /v1/chat/completions` (或 Frontmatter 中的 `base_path`) 的自适应拼接工作。
+  - 重新设计并优化了环境变量配置模版 [templates/llm/env.example](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/templates/llm/env.example) 与示例 [examples/llm_and_sse/env.example](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/examples/llm_and_sse/env.example)。在注释中加入了详尽的“URL 智能自适应拼接规则”和配置指引，规范并指导使用者在 `base_path` 指向具体 API 时，`BASE_URL` 应当只写到域名/网关基本路径，不应当包含 "/v1" 路由后缀。
+  - 修改了 [examples/llm_and_sse/.env](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/examples/llm_and_sse/.env) 的云端阿里 DashScope 测试的 `BASE_URL` 为符合公式要求的 `https://dashscope.aliyuncs.com/compatible-mode`，消除了因重复前缀拼装出 `/v1/v1/` 导致 404 的问题。
 
-- **完成了 examples 自动化一键测试运行脚本**：
-  - 新增并丰富了 [examples/run_all.sh](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/sse-debug-test-first/examples/run_all.sh) 自动化验证脚本。
-  - 通过两阶段 Mock 服务的构建（针对普通的 `api-testing.md` 使用临时配置生成的 Mock，针对契约驱动测试 `iteration_scenarios` 直接使用包含拓扑依赖的契约文件进行联合 Mock），跑通了 examples 目录下的全部用例。
-  - 修改了 `examples/batch/` 下的 `01_login.http`, `02_get_profile.http`, `03_health.http` 的请求目标为 `httpbingo.org`，解决了因外网 `httpbin.org` 频繁超时导致示例运行失败的问题。
-  - 所有 18 组示例测试全部通过（17 组 100% 正确执行，1 组为演示故意失败 404/500 的展示性文件，不计入失败）。
+- **成功通过了真实的云端大模型 SSE 流式接口测试**：
+  - 使用规范化配置后的 `.env` 文件，手动启用场景二并成功访问阿里 DashScope 真实大模型 API 接口，用例在 28.7 秒的流式返回下全部断言 `status == 200` 绿色通过，且无任何 404 重复路径错误。
 
 - **测试与格式化保证**：
-  - 运行 `cargo test` 全量通过；运行 `cargo fmt -- --check` 无任何格式化错误。
+  - 全量 `cargo test` 测试用例全部 100% 正确执行，未受影响。
 
 - **JJ 代码版本化原子提交记录**：
-  - `fix: support comment prefix metadata parsing and add run_all examples script` (d7397c3b)
+  - `fix(examples): correct BASE_URL in env configuration to avoid duplicate path prefix and add detailed guide` (9de7cbd9)
 
 ## 下一步
 

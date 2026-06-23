@@ -1,0 +1,47 @@
+# @base_path /v1/chat/completions
+# RuPost 大模型 (LLM) 相对路由与自适应拼接示例 (.http 格式)
+
+###
+# 场景一：本地大模型流式联调 (Local LLM - Ollama / vLLM)
+# @test
+# @sse
+# @assert status == 200
+# @assert stream.llm.content contains "Rust"
+POST /
+Content-Type: application/json
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言的优势。"}],
+  "stream": true
+}
+
+###
+# 场景二：云端大模型 API 测试 (Cloud LLM API)
+# @sse
+# @assert status == 200
+POST /
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "请为我生成一份 Rust 基础教学大纲。"}],
+  "stream": true
+}
+
+###
+# 场景三：大模型令牌转接与网关代理 (Token Relay / Gateway Proxy)
+# @test
+# @sse
+# @assert status == 200
+# @capture gateway_reply from stream.llm.content
+POST /
+Content-Type: application/json
+Authorization: Bearer {{env.RELAY_TOKEN}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "你好。"}],
+  "stream": true
+}

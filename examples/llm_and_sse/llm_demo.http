@@ -1,22 +1,68 @@
 # @base_path /v1/chat/completions
 # RuPost 大模型 (LLM) 测试与 Mock 快速起步模板 (.http 格式)
 
-### 📋 模板一：真实大模型接口流式测试 (LLM Test Template)
+### 📋 模板一：基础大模型流式连接测试 (Basic Connection)
 # @test
 # @sse
 # @assert status == 200
-# @assert stream.llm.content contains "Rust"
 POST /
 Content-Type: application/json
 Authorization: Bearer {{env.API_KEY}}
 
 {
   "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言的优势。"}],
+  "messages": [{"role": "user", "content": "Say hello."}],
   "stream": true
 }
 
-### 📋 模板二：大模型流式接口本地仿真 Mock (LLM Mock Template)
+### 📋 模板二：复杂语言与格式健壮性测试 (Unicode & Formatting)
+# @test
+# @sse
+# @assert status == 200
+# @assert stream.llm.content contains "Rust"
+# @assert stream.llm.content contains "语言"
+# @assert stream.llm.content contains "😊"
+POST /
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [
+    {
+      "role": "user",
+      "content": "请用中文写一句话赞美 Rust 语言，必须包含“Rust”和“语言”这两个词，结尾加上 😊 符号。"
+    }
+  ],
+  "stream": true
+}
+
+### 📋 模板三：流式响应本地落盘与下游传参 (Data Storage & Capture Relay)
+# @test
+# @sse
+# @stream_to ./target/llm_stream_output.txt overwrite
+# @capture llm_reply from stream.llm.content
+POST /
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "请为我写一份 100 字的 Rust 入门简介。"}],
+  "stream": true
+}
+
+### 下游请求：将捕获到的 LLM 文本在业务接口中进行流转
+# @test
+POST https://httpbingo.org/post
+Content-Type: application/json
+
+{
+  "doc_content": "{{llm_reply}}",
+  "saved_by": "rupost-chain-tester"
+}
+
+### 📋 模板四：大模型流式接口本地仿真 Mock (LLM Mock Contract)
 # 此块没有声明 @test 标记，测试时会自动跳过 (skipped)，仅用于 Mock 服务契约定义。
 POST /v1/chat/completions
 Content-Type: application/json

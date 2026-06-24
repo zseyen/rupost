@@ -70,17 +70,18 @@ pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValu
             let value = response.headers.get("x-sse-llm-content").ok_or_else(|| {
                 AssertError::PathNotFound("stream.llm.content not found".to_string())
             })?;
-            Ok(AssertValue::String(
-                value
-                    .to_str()
-                    .map_err(|e| {
-                        AssertError::ExtractionError(format!(
-                            "Failed to convert stream.llm.content value to string: {}",
-                            e
-                        ))
-                    })?
-                    .to_string(),
-            ))
+            let value_str = value
+                .to_str()
+                .map_err(|e| {
+                    AssertError::ExtractionError(format!(
+                        "Failed to convert stream.llm.content value to string: {}",
+                        e
+                    ))
+                })?;
+            let decoded = url::form_urlencoded::parse(value_str.as_bytes())
+                .map(|(key, _)| key)
+                .collect::<String>();
+            Ok(AssertValue::String(decoded))
         }
     }
 }

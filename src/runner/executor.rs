@@ -773,10 +773,11 @@ impl TestExecutor {
         let total_duration = start_time.elapsed();
         let transfer = total_duration.saturating_sub(ttfb);
 
+        let encoded_llm_content = url::form_urlencoded::byte_serialize(accumulated_llm_content.as_bytes()).collect::<String>();
         let mut final_headers = headers.clone();
         final_headers.insert(
             "x-sse-llm-content",
-            HeaderValue::from_str(&accumulated_llm_content)
+            HeaderValue::from_str(&encoded_llm_content)
                 .unwrap_or_else(|_| HeaderValue::from_static("")),
         );
 

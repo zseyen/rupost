@@ -2,14 +2,15 @@
 base_path: /v1/chat/completions
 ---
 
-# RuPost 大模型 (LLM) 接口测试与联调示例
+# RuPost 大模型 (LLM) 测试与 Mock 快速起步模板
 
-本 Markdown 文件可以直接通过 `rupost test <本文件名>` 运行。
-RuPost 会自动解析并执行其中包含在 ` ```http ` 语法块中的 API 请求。
+本文件提供可以直接复制的 LLM 测试和 Mock 服务模板。
 
 ---
 
-## 场景一：本地大模型流式联调 (Local LLM - Ollama / vLLM)
+## 📋 模板一：真实大模型接口流式测试 (LLM Test Template)
+
+复制并修改以下代码块以快速建立你自己的真实大模型接口测试：
 
 ```http
 # @test
@@ -18,55 +19,32 @@ RuPost 会自动解析并执行其中包含在 ` ```http ` 语法块中的 API �
 # @assert stream.llm.content contains "Rust"
 POST /
 Content-Type: application/json
-
-{
-  "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言的优势。"}],
-  "stream": true
-}
-```
-
-## 场景二：云端大模型 API 测试 (Cloud LLM API)
-
-```http
-# @sse
-# @assert status == 200
-POST /
-Content-Type: application/json
 Authorization: Bearer {{env.API_KEY}}
 
 {
   "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "请为我生成一份 Rust 基础教学大纲。"}],
+  "messages": [
+    {
+      "role": "user",
+      "content": "请用一句话概括 Rust 语言的优势。"
+    }
+  ],
   "stream": true
 }
 ```
 
-## 场景三：大模型令牌转接与网关代理 (Token Relay / Gateway Proxy)
-
-`@capture` 自动将流式响应的拼接文本捕获为临时变量，可用于后续的请求链（例如将回复存入数据库或在后续请求中作为历史上下文传入）。
-
-```http
-# @test
-# @sse
-# @assert status == 200
-# @capture gateway_reply from stream.llm.content
-POST /
-Content-Type: application/json
-Authorization: Bearer {{env.RELAY_TOKEN}}
-
-{
-  "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "你好。"}],
-  "stream": true
-}
-```
+*   **运行测试命令**：
+    `rupost test examples/llm_and_sse/llm_demo.md`
+*   **关键规则说明**：
+    *   必须带有 `# @test` 标记，否则运行时该用例会被跳过 (skipped)。
+    *   必须带有 `# @sse` 标记，指示 RuPost 启动 Server-Sent Events 流式解析。
+    *   `stream.llm.content` 会自动提取大模型流式响应的 `choices[0].delta.content` 并拼接为完整文本，可以直接对其做 `contains` 校验。
 
 ---
 
-## 场景四：本地大模型接口仿真 Mock 契约 (Mock Server Specification)
+## 📋 模板二：大模型流式接口本地仿真 Mock (LLM Mock Template)
 
-以下块不带任何 `@test` 断言，当在本地使用 `rupost mock <本文件名>` 启动 Mock 服务时，它会被自动识别并编译为 Mock 路由。配合 Mock 引擎的流式模拟输出，能够为客户端提供高度逼真的本地流式响应仿真。
+复制以下代码块并修改返回的数据帧，可以在本地仿真出大模型接口的打字机流式响应：
 
 ```http
 POST /v1/chat/completions
@@ -75,14 +53,26 @@ Content-Type: application/json
 @mock-default
 HTTP/1.1 200 OK
 Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
 
 data: {"choices":[{"delta":{"content":"Rust"}}]}
 
-data: {"choices":[{"delta":{"content":" is"}}]}
+data: {"choices":[{"delta":{"content":" 是一种"}}]}
 
-data: {"choices":[{"delta":{"content":" perfect"}}]}
+data: {"choices":[{"delta":{"content":" 安全"}}]}
 
-data: {"choices":[{"delta":{"content":"!"}}]}
+data: {"choices":[{"delta":{"content":"、高效的"}}]}
+
+data: {"choices":[{"delta":{"content":" 系统级"}}]}
+
+data: {"choices":[{"delta":{"content":" 编程语言。"}}]}
 
 data: [DONE]
 ```
+
+*   **启动 Mock 服务命令**：
+    `rupost mock examples/llm_and_sse/llm_demo.md --port 8080`
+*   **关键规则说明**：
+    *   **无 `# @test` 不执行**：此语法块中没有 `# @test` 声明，因此在执行 `rupost test` 时它将被跳过 (skipped)，保证测试的纯净性。
+    *   **大模型流式返回格式**：上述 Response Body 中手写的 `data: {"choices":[{"delta":{"content":"..."}}]}` 即为大模型 SSE 流式接口返回的标准报文格式。

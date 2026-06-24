@@ -1,14 +1,14 @@
 # @base_path /v1/chat/completions
-# RuPost 大模型 (LLM) 相对路由与自适应拼接示例 (.http 格式)
+# RuPost 大模型 (LLM) 测试与 Mock 快速起步模板 (.http 格式)
 
-###
-# 场景一：本地大模型流式联调 (Local LLM - Ollama / vLLM)
+### 📋 模板一：真实大模型接口流式测试 (LLM Test Template)
 # @test
 # @sse
 # @assert status == 200
 # @assert stream.llm.content contains "Rust"
 POST /
 Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
 
 {
   "model": "{{env.MODEL_NAME}}",
@@ -16,32 +16,27 @@ Content-Type: application/json
   "stream": true
 }
 
-###
-# 场景二：云端大模型 API 测试 (Cloud LLM API)
-# @sse
-# @assert status == 200
-POST /
+### 📋 模板二：大模型流式接口本地仿真 Mock (LLM Mock Template)
+# 此块没有声明 @test 标记，测试时会自动跳过 (skipped)，仅用于 Mock 服务契约定义。
+POST /v1/chat/completions
 Content-Type: application/json
-Authorization: Bearer {{env.API_KEY}}
 
-{
-  "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "请为我生成一份 Rust 基础教学大纲。"}],
-  "stream": true
-}
+@mock-default
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
 
-###
-# 场景三：大模型令牌转接与网关代理 (Token Relay / Gateway Proxy)
-# @test
-# @sse
-# @assert status == 200
-# @capture gateway_reply from stream.llm.content
-POST /
-Content-Type: application/json
-Authorization: Bearer {{env.RELAY_TOKEN}}
+data: {"choices":[{"delta":{"content":"Rust"}}]}
 
-{
-  "model": "{{env.MODEL_NAME}}",
-  "messages": [{"role": "user", "content": "你好。"}],
-  "stream": true
-}
+data: {"choices":[{"delta":{"content":" 是一种"}}]}
+
+data: {"choices":[{"delta":{"content":" 安全"}}]}
+
+data: {"choices":[{"delta":{"content":"、高效的"}}]}
+
+data: {"choices":[{"delta":{"content":" 系统级"}}]}
+
+data: {"choices":[{"delta":{"content":" 编程语言。"}}]}
+
+data: [DONE]

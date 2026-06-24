@@ -128,10 +128,19 @@ pub fn capture_from_response(
                     )));
                 }
             }
-            CaptureSource::Header(name) => response_headers
-                .get(name)
-                .map(|v| String::from_utf8_lossy(v.as_bytes()).to_string())
-                .ok_or_else(|| RupostError::Other(format!("Header '{}' not found", name)))?,
+            CaptureSource::Header(name) => {
+                let raw_val = response_headers
+                    .get(name)
+                    .map(|v| String::from_utf8_lossy(v.as_bytes()).to_string())
+                    .ok_or_else(|| RupostError::Other(format!("Header '{}' not found", name)))?;
+                if name == "x-sse-llm-content" {
+                    url::form_urlencoded::parse(raw_val.as_bytes())
+                        .map(|(key, _)| key)
+                        .collect::<String>()
+                } else {
+                    raw_val
+                }
+            }
             CaptureSource::Regex(pattern) => {
                 let re = regex::Regex::new(pattern).map_err(|e| {
                     RupostError::ParseError(format!("Invalid regex pattern '{}': {}", pattern, e))

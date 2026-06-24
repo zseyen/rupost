@@ -170,7 +170,10 @@ impl TestExecutor {
 
         // 如果解析后的 URL 是相对路径（以 '/' 开头），自动拼装基础路径
         if parsed.url.starts_with('/') {
-            if let Some(base) = context.get("base_url").or_else(|| context.get("baseUrl")) {
+            if let Some(base) = context.get("base_url")
+                .or_else(|| context.get("baseUrl"))
+                .or_else(|| context.get("BASE_URL"))
+            {
                 let mut final_base = base.trim().to_string();
                 if final_base.ends_with('/') {
                     final_base.pop();
@@ -821,8 +824,13 @@ impl TestExecutor {
                 &final_response.headers,
                 &final_captures,
             );
-            if let Ok(captured_vars) = captured_res {
-                context.extend(captured_vars);
+            match captured_res {
+                Ok(captured_vars) => {
+                    context.extend(captured_vars);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to capture stream variables: {:?}. headers: {:?}", e, final_response.headers);
+                }
             }
         }
 

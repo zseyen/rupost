@@ -130,8 +130,7 @@ pub fn capture_from_response(
             }
             CaptureSource::Header(name) => response_headers
                 .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(String::from)
+                .map(|v| String::from_utf8_lossy(v.as_bytes()).to_string())
                 .ok_or_else(|| RupostError::Other(format!("Header '{}' not found", name)))?,
             CaptureSource::Regex(pattern) => {
                 let re = regex::Regex::new(pattern).map_err(|e| {

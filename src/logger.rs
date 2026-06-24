@@ -6,7 +6,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 /// - 在 Release 模式下默认使用 warn 级别
 fn get_default_level() -> &'static str {
     if cfg!(debug_assertions) {
-        "debug"
+        "warn,rupost=debug"
     } else {
         "warn"
     }
@@ -15,7 +15,7 @@ fn get_default_level() -> &'static str {
 /// 初始化日志系统
 ///
 /// 支持通过 RUST_LOG 环境变量控制日志级别。
-/// 默认级别依据编译模式自适应：Debug 模式下为 debug，Release 模式下为 warn。
+/// 默认级别依据编译模式自适应：Debug 模式下为 warn,rupost=debug，Release 模式下为 warn。
 ///
 /// 示例:
 /// - RUST_LOG=debug cargo run
@@ -45,7 +45,7 @@ mod tests {
     fn test_get_default_level() {
         let level = get_default_level();
         #[cfg(debug_assertions)]
-        assert_eq!(level, "debug");
+        assert_eq!(level, "warn,rupost=debug");
         #[cfg(not(debug_assertions))]
         assert_eq!(level, "warn");
     }

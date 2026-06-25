@@ -40,7 +40,7 @@ fn test_template_generation_markdown() {
     assert!(env_path.exists());
 
     let md_content = fs::read_to_string(&md_path).unwrap();
-    assert!(md_content.contains("# RuPost 大模型 (LLM) 接口测试与联调模板 (Markdown 格式)"));
+    assert!(md_content.contains("# RuPost 大模型 (LLM) 接口测试与联调模板 (Markdown)"));
     assert!(md_content.contains("```http"));
 
     let env_content = fs::read_to_string(&env_path).unwrap();

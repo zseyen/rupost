@@ -94,7 +94,6 @@ pub enum Commands {
     /// Generate test file from history
     #[command(alias = "g")]
     Generate(GenerateArgs),
-
     /// Diagnose network connectivity and TLS status for a URL
     #[command(alias = "d")]
     Diagnose {
@@ -114,10 +113,25 @@ pub enum Commands {
         #[arg(short, long, default_value = "9000")]
         port: u16,
     },
+    /// Initialize configuration or template files in the current directory (aliases: template)
+    #[command(alias = "i", alias = "template")]
+    Init {
+        /// Type of template (e.g., config, sse)
+        #[arg(default_value = "config")]
+        r#type: String,
 
-    /// Initialize a default rupost.toml configuration template in the current directory
-    #[command(alias = "i")]
-    Init,
+        /// Output file path (default depends on template type)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Force overwrite existing files without prompting
+        #[arg(short, long)]
+        force: bool,
+
+        /// List all available templates
+        #[arg(short, long)]
+        list: bool,
+    },
 }
 
 #[derive(Subcommand)]

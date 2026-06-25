@@ -45,6 +45,8 @@ impl MarkdownFileParser {
         // 提取依赖
         parsed_file.dependencies = Self::extract_dependencies(content);
 
+        let base_path = parsed_file.metadata.base_path.clone();
+
         for block in code_blocks {
             let has_mock_variants =
                 block.content.contains("@mock-when") || block.content.contains("@mock-default");
@@ -54,6 +56,7 @@ impl MarkdownFileParser {
                 if req.metadata.name.is_none() {
                     req.metadata.name = block.preceding_header.clone();
                 }
+                req.base_path = base_path.clone();
                 parsed_file.add_request(req);
             } else {
                 // 解析代码块内容为请求
@@ -66,6 +69,9 @@ impl MarkdownFileParser {
                         req.metadata.name = block.preceding_header.clone();
                     }
                     req.metadata.is_test = is_test;
+                    if req.base_path.is_none() {
+                        req.base_path = base_path.clone();
+                    }
                 }
 
                 parsed_file.requests.extend(block_parsed.requests);

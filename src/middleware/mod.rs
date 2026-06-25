@@ -4,8 +4,10 @@
 //! and responses after execution.
 
 mod cookie;
+pub mod routing;
 
 pub use cookie::{CookieMiddleware, CookieMode, resolve_cookie_path};
+pub use routing::{RoutingMiddleware, RoutingRule};
 use std::future::Future;
 
 use crate::Result;

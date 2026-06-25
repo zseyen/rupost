@@ -207,7 +207,7 @@ async fn test_assertion_integration() {
 ### Check Status
 # @assert status == 200
 # @assert body.status == "healthy"
-# @assert header.X-Request-ID exists
+# @assert headers.X-Request-ID exists
 # @assert body.uptime > 10000
 GET {}/api/status
 

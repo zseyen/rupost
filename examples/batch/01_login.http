@@ -1,7 +1,7 @@
 ### 用户登录获取 token
 @name login
 @capture global.token from body.json.password
-POST https://httpbin.org/post
+POST https://httpbingo.org/post
 Content-Type: application/json
 
 {

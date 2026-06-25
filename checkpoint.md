@@ -1,21 +1,28 @@
-# Checkpoint - 2026-06-16
+# Checkpoint - 2026-06-25
 
 ## 当前状态
-- **Clean Architecture 架构重构已 100% 完成并全面验证**：
-  - **Milestone 2（解耦 Parser 和 HTTP）**：已成功将 HTTP 请求转换逻辑从 `src/parser/converter.rs` 迁移至 `src/http/request_builder.rs`，并完成了相应单元测试的迁移。
-  - **Milestone 3（解耦 Parser 和 Mock）**：
-    - 已成功将 `MockCompiler` 结构体、`compile` 和 `parse_condition_expression` 方法，以及单元测试 `test_mock_compiler_compile` 从 `src/parser/converter.rs` 迁移到新文件 `src/mock/compiler.rs`。
-    - 完全删除了已变为空文件的 `src/parser/converter.rs`。
-    - 更新了 `src/mock/mod.rs` 以注册新子模块 `compiler` 并 re-export `MockCompiler` 作为 `rupost::mock::MockCompiler`。
-    - 更新了 `src/parser/mod.rs`，移外部移除 `converter` 的注册与导出，并解除了对 `MockCompiler` 的任何暴露。
-    - 替换了整个 codebase（如 `src/main.rs` 和 `tests/mock_integration_test.rs`）中对 `MockCompiler` 的引用，全部切换为 `rupost::mock::MockCompiler`。
-    - 确认 `src/parser/` 模块的任何子文件均不再包含对 `crate::mock` 模块内任何数据结构的引用，实现完美的 Clean Architecture 模块单向依赖（Mock -> Parser）。
-  - **Milestone 4（验证与清理）**：
-    - **编译检查（Compilation Check）**：通过 `cargo check` 验证，代码无错误编译通过。
-    - **Clippy 静态检查（Clippy Pass）**：运行 `cargo clippy --all-targets --all-features -- -D warnings`，无任何 lint 警告与错误。
-    - **代码格式化（Formatting Check）**：运行 `cargo fmt --all -- --check` 完美通过。
-    - **端到端测试与单元测试通过（E2E tests pass）**：经 `cargo test` 确认，所有 163 个单元测试、回归测试及端到端 (E2E) 集成测试全部通过，无任何失败，零警告。
-- **已原子提交**：已使用 `jj` 提交代码，提交描述为 `refactor: finalize Clean Architecture decoupling of parser from http and mock`。
+
+- **已完成大模型与通用 SSE 模板的规范化打磨**：
+  - 对 `templates/llm` 和 `templates/sse` 目录下的 Markdown 与 HTTP 模板进行了对称化与去表情符号的重构。
+  - 在通用 SSE 模板中，将不合理的大模型 `stream.llm.content` 断言修正为更为普适的通用 `stream.body.<path>` 断言（即断言 `stream.body.status` 字段），并配合 `# @sse_max_events 1` 限制器以防止后续不同事件帧到达时发生断言冲突。
+  - 补齐了 `template.http` 格式模板中缺失的 `@mock-default` 本地仿真场景，实现了完全等价的场景支持与对称设计。
+  - 给所有的测试用例块加上了 `# @test` 标记，使得运行 `rupost test` 时能够自动过滤并跳过无测试断言的 Mock 契约块。
+  - 在 `.env.example` 中移除了所有 emoji，细化了 `BASE_URL` 自适应拼接说明。
+
+- **成功通过了 init 脚手架命令的测试与闭环联调验证**：
+  - 通过 `rupost init llm` 和 `rupost init sse` 在独立沙盒目录生成了全部四套模板，文件格式干净、正确。
+  - 启动对应的本地 Mock 仿真服务，成功跑通了初始化模板的流式测试，断言通过率为 100%，skipped 过滤逻辑完美执行。
+
+- **静态校验与代码格式化**：
+  - 执行 `cargo fmt --all` 对全量代码文件进行了就地格式化，规范了格式。
+  - 针对 stable 编译兼容性折叠 collapsible_if 所引发的警告，在 `src/runner/executor.rs` 的自适应 URL 拼接中添加了 `#[allow(clippy::collapsible_if)]`。
+  - `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo test` 100% 通过。
+
+- **JJ 代码版本化原子提交记录**：
+  - `refact: generalize templates and align http/md mock specs without emojis` (9c3ed68d)
+  - `style: run cargo fmt and allow clippy collapsible_if warning` (7f3549be)
 
 ## 下一步
-- **继续开展下一阶段的架构设计与高级特性开发**（如 Sprint 3 等的实现）。
+
+- **进入下一阶段的高级特性开发**：
+  - 按照开发周期开展下一步 Sprint 工作。

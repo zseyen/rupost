@@ -28,6 +28,59 @@ pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValu
         ValuePath::Body(segments) => extract_from_json_body(&response.body, segments),
 
         ValuePath::ResponseTime => Ok(AssertValue::Number(response.duration.as_millis() as f64)),
+
+        ValuePath::StreamEvent => {
+            let value = response
+                .headers
+                .get("x-sse-event")
+                .ok_or_else(|| AssertError::PathNotFound("stream.event not found".to_string()))?;
+            Ok(AssertValue::String(
+                value
+                    .to_str()
+                    .map_err(|e| {
+                        AssertError::ExtractionError(format!(
+                            "Failed to convert stream.event value to string: {}",
+                            e
+                        ))
+                    })?
+                    .to_string(),
+            ))
+        }
+
+        ValuePath::StreamId => {
+            let value = response
+                .headers
+                .get("x-sse-id")
+                .ok_or_else(|| AssertError::PathNotFound("stream.id not found".to_string()))?;
+            Ok(AssertValue::String(
+                value
+                    .to_str()
+                    .map_err(|e| {
+                        AssertError::ExtractionError(format!(
+                            "Failed to convert stream.id value to string: {}",
+                            e
+                        ))
+                    })?
+                    .to_string(),
+            ))
+        }
+
+        ValuePath::StreamBody(segments) => extract_from_json_body(&response.body, segments),
+        ValuePath::StreamLlmContent => {
+            let value = response.headers.get("x-sse-llm-content").ok_or_else(|| {
+                AssertError::PathNotFound("stream.llm.content not found".to_string())
+            })?;
+            let value_str = value.to_str().map_err(|e| {
+                AssertError::ExtractionError(format!(
+                    "Failed to convert stream.llm.content value to string: {}",
+                    e
+                ))
+            })?;
+            let decoded = url::form_urlencoded::parse(value_str.as_bytes())
+                .map(|(key, _)| key)
+                .collect::<String>();
+            Ok(AssertValue::String(decoded))
+        }
     }
 }
 
@@ -209,5 +262,30 @@ mod tests {
         let response = create_test_response(200, r#"{"id": 42}"#);
         let result = extract_value(&response, &ValuePath::Body(vec!["missing".to_string()]));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_stream_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-sse-event", "chat".parse().unwrap());
+        headers.insert("x-sse-id", "msg-123".parse().unwrap());
+        let response = Response {
+            status: Status::new(200).unwrap(),
+            headers,
+            body: r#"{"text": "hello"}"#.to_string(),
+            duration: Duration::from_millis(0),
+            ttfb: Duration::from_millis(0),
+            transfer: Duration::from_millis(0),
+        };
+
+        let val = extract_value(&response, &ValuePath::StreamEvent).unwrap();
+        assert_eq!(val, AssertValue::String("chat".to_string()));
+
+        let val = extract_value(&response, &ValuePath::StreamId).unwrap();
+        assert_eq!(val, AssertValue::String("msg-123".to_string()));
+
+        let val =
+            extract_value(&response, &ValuePath::StreamBody(vec!["text".to_string()])).unwrap();
+        assert_eq!(val, AssertValue::String("hello".to_string()));
     }
 }

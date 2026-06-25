@@ -8,6 +8,7 @@ pub mod middleware;
 pub mod mock;
 pub mod parser;
 pub mod runner;
+pub mod template;
 pub mod utils;
 pub mod variable;
 

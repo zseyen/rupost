@@ -51,7 +51,7 @@ impl Client {
         }
     }
 
-    pub async fn execute(&self, request: Request) -> Result<Response> {
+    pub async fn execute_raw(&self, request: Request) -> Result<(reqwest::Response, Duration)> {
         let url = if request.query_params.is_empty() {
             reqwest::Url::parse(&request.url.to_string())?
         } else {
@@ -75,7 +75,12 @@ impl Client {
         let start = std::time::Instant::now();
         let response = req.send().await?;
         let ttfb = start.elapsed();
+        Ok((response, ttfb))
+    }
 
+    pub async fn execute(&self, request: Request) -> Result<Response> {
+        let start = std::time::Instant::now();
+        let (response, ttfb) = self.execute_raw(request).await?;
         let status = response.status().as_u16();
         let headers = response.headers().clone();
         let body = response.text().await?;

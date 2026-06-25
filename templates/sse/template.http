@@ -1,0 +1,66 @@
+# RuPost 通用 Server-Sent Events (SSE) 接口测试模板 (HTTP 格式)
+#
+# 使用与测试快速指引:
+# 1. 启动本地 Mock 仿真服务：
+#    rupost mock <本文件名> --port 8080
+# 2. 在新终端运行本文件以触发流式请求及断言测试：
+#    rupost test <本文件名>
+#
+# 提示：如果需要测试或仿真标准大模型接口（如 OpenAI、DeepSeek 等），
+# 请参考大模型专用模板：templates/llm/template.http
+
+###
+# ==========================================
+# 场景一：零门槛本地闭环测试 (Local Generic SSE Mock)
+# ==========================================
+# @test
+# @sse
+# @sse_max_events 1
+# @assert status == 200
+# @assert stream.event == "build_start"
+# @assert stream.body.status contains "Compiling"
+POST http://127.0.0.1:8080/build-stream
+Content-Type: application/json
+
+{
+  "stream": true
+}
+
+###
+# ==========================================
+# 场景二：流式响应实时增量保存到物理文件
+# ==========================================
+# 使用 @stream_to 可以将接收到的 SSE 事件流内容实时追加或覆盖写入本地物理文件中。
+# @test
+# @sse
+# @sse_max_events 1
+# @stream_to ./target/build_log.txt overwrite
+POST http://127.0.0.1:8080/build-stream
+Content-Type: application/json
+
+{
+  "stream": true
+}
+
+###
+# ==========================================
+# 场景三：本地通用 SSE 接口仿真 Mock 契约 (Mock Server Specification)
+# ==========================================
+# 以下块不带任何测试指令（如 @test 或 @assert），当运行 `rupost mock <本文件名>` 时会被注册为 Mock 路由。
+POST /build-stream
+Content-Type: application/json
+
+@mock-default
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+
+event: build_start
+data: {"status": "Compiling rupost v0.2.0..."}
+
+event: build_progress
+data: {"status": "Compiling crates/rupost-ai v0.2.0..."}
+
+event: build_complete
+data: {"status": "Finished build!"}

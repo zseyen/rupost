@@ -43,6 +43,9 @@ pub struct ParsedRequest {
 
     /// 请求在文件中的起始行号（用于错误报告）
     pub line_number: usize,
+
+    /// 接口的基础总体路径前缀（来自文件级别的 @base_path 或 YAML Frontmatter）
+    pub base_path: Option<String>,
 }
 
 impl ParsedRequest {
@@ -55,6 +58,7 @@ impl ParsedRequest {
             body: None,
             metadata: RequestMetadata::default(),
             line_number,
+            base_path: None,
         }
     }
 
@@ -94,11 +98,28 @@ pub struct RequestMetadata {
     /// 变量捕获列表（@capture）
     pub captures: Vec<VariableCapture>,
 
+    /// 是否为 SSE 请求（@sse）
+    pub sse: bool,
+
+    /// SSE 请求超时时间（@sse_timeout，可选）
+    pub sse_timeout: Option<Duration>,
+
+    /// SSE 最大事件数限制（@sse_max_events，可选）
+    pub sse_max_events: Option<usize>,
     /// 新增：是否是测试用例
     pub is_test: bool,
 
     /// 新增：关联的 Mock 响应变体分支
     pub mock_variants: Vec<ParsedMockVariant>,
+
+    /// 流同步输出文件路径（@stream_to，可选）
+    pub stream_to: Option<String>,
+
+    /// 是否追加流内容到同步文件（@stream_to 路径 append）
+    pub stream_to_append: bool,
+
+    /// 请求重定向转发 URL（@forward_to，可选）
+    pub forward_to: Option<String>,
 }
 
 /// 解析出的元数据指令（中间状态）
@@ -110,6 +131,12 @@ pub enum Metadata {
     Assert(String),
     Capture { var_name: String, source: String },
     Test,
+    Sse(bool),
+    SseTimeout(Duration),
+    SseMaxEvents(usize),
+    StreamTo { path: String, append: bool },
+    ForwardTo(String),
+    BasePath(String),
 }
 
 /// 整个文件的解析结果

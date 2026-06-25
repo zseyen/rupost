@@ -71,6 +71,18 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
         return Ok(ValuePath::ResponseTime);
     }
 
+    if input == "stream.event" {
+        return Ok(ValuePath::StreamEvent);
+    }
+
+    if input == "stream.id" {
+        return Ok(ValuePath::StreamId);
+    }
+
+    if input == "stream.llm.content" {
+        return Ok(ValuePath::StreamLlmContent);
+    }
+
     if let Some(rest) = input.strip_prefix("headers.") {
         return Ok(ValuePath::Header(rest.to_string()));
     }
@@ -85,8 +97,18 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
         return Ok(ValuePath::Body(segments));
     }
 
+    if let Some(rest) = input.strip_prefix("stream.body.") {
+        let segments: Vec<String> = rest.split('.').map(|s| s.to_string()).collect();
+        if segments.is_empty() {
+            return Err(AssertError::InvalidSyntax(
+                "Stream body path cannot be empty".to_string(),
+            ));
+        }
+        return Ok(ValuePath::StreamBody(segments));
+    }
+
     Err(AssertError::InvalidSyntax(format!(
-        "Invalid value path: {}. Must start with 'status', 'headers.', 'body.', or 'response.time'",
+        "Invalid value path: {}. Must start with 'status', 'headers.', 'body.', 'response.time', or 'stream.'",
         input
     )))
 }
@@ -271,6 +293,45 @@ mod tests {
                         "email".to_string()
                     ])
                 );
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_parse_stream_assertions() {
+        let expr = parse_assertion("stream.event == \"chat\"").unwrap();
+        match expr {
+            AssertExpr::Compare { left, op, right } => {
+                assert_eq!(left, ValuePath::StreamEvent);
+                assert_eq!(op, CompareOp::Equal);
+                assert_eq!(right, AssertValue::String("chat".to_string()));
+            }
+            _ => panic!(),
+        }
+
+        let expr = parse_assertion("stream.id exists").unwrap();
+        match expr {
+            AssertExpr::Exists { path } => {
+                assert_eq!(path, ValuePath::StreamId);
+            }
+            _ => panic!(),
+        }
+
+        let expr = parse_assertion("stream.body.choices.0.delta.content == \"Hello\"").unwrap();
+        match expr {
+            AssertExpr::Compare { left, op, right } => {
+                assert_eq!(
+                    left,
+                    ValuePath::StreamBody(vec![
+                        "choices".to_string(),
+                        "0".to_string(),
+                        "delta".to_string(),
+                        "content".to_string()
+                    ])
+                );
+                assert_eq!(op, CompareOp::Equal);
+                assert_eq!(right, AssertValue::String("Hello".to_string()));
             }
             _ => panic!(),
         }

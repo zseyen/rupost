@@ -21,6 +21,10 @@ impl HttpFileParser {
         // 提取依赖
         file.dependencies = Self::extract_dependencies(content);
 
+        // 提取全局基础路径
+        let base_path = Self::extract_base_path(content);
+        file.metadata.base_path = base_path.clone();
+
         // 按 ### 分割请求块
         let blocks = Self::split_by_separator(content);
 
@@ -29,7 +33,8 @@ impl HttpFileParser {
         }
 
         for (block, start_line) in blocks {
-            if let Some(request) = Self::parse_request_block(&block, start_line)? {
+            if let Some(mut request) = Self::parse_request_block(&block, start_line)? {
+                request.base_path = base_path.clone();
                 file.add_request(request);
             }
         }
@@ -61,6 +66,34 @@ impl HttpFileParser {
             }
         }
         deps
+    }
+
+    /// 提取全局基础路径
+    fn extract_base_path(content: &str) -> Option<String> {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            let mut directive = trimmed;
+            if let Some(stripped) = trimmed.strip_prefix("//") {
+                directive = stripped.trim();
+            } else if let Some(stripped) = trimmed.strip_prefix('#') {
+                directive = stripped.trim();
+            }
+            if directive.starts_with("@base_path") {
+                let parts: Vec<&str> = directive.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    return Some(parts[1].to_string());
+                }
+            }
+            // 扫到第一个非空且不是注释和元数据的行就停止，防止误匹配 body 里的内容
+            if !trimmed.is_empty()
+                && !trimmed.starts_with('#')
+                && !trimmed.starts_with("//")
+                && !trimmed.starts_with('@')
+            {
+                break;
+            }
+        }
+        None
     }
 
     /// 判定是否是合法的请求行 (如 "GET http://example.com")
@@ -162,8 +195,18 @@ impl HttpFileParser {
 
         for line in block.lines() {
             let trimmed = line.trim();
-            let metadata = if trimmed.starts_with('@') {
-                metadata::parse_metadata(trimmed)?
+
+            // 支持 `# @directive` 和 `// @directive` 风格的注释元数据（JetBrains/VS Code HTTP 标准写法）
+            let directive_candidate = if let Some(stripped) = trimmed.strip_prefix("//") {
+                stripped.trim()
+            } else if let Some(stripped) = trimmed.strip_prefix('#') {
+                stripped.trim()
+            } else {
+                trimmed
+            };
+
+            let metadata = if directive_candidate.starts_with('@') {
+                metadata::parse_metadata(directive_candidate)?
             } else {
                 None
             };
@@ -547,6 +590,71 @@ This is still body.
         assert_eq!(
             result.requests[0].body.as_deref(),
             Some("GET http://someurl.com/should/not/be/split\nThis is still body.")
+        );
+    }
+
+    #[test]
+    fn test_comment_prefix_skip_metadata() {
+        // # @skip 风格（JetBrains HTTP Client 兼容）
+        let content = "# @skip\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert!(result.requests[0].metadata.skip);
+    }
+
+    #[test]
+    fn test_comment_prefix_name_metadata() {
+        // # @name 风格
+        let content = "# @name My API Test\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.name,
+            Some("My API Test".to_string())
+        );
+    }
+
+    #[test]
+    fn test_double_slash_prefix_assert_metadata() {
+        // // @assert 风格
+        let content = "// @assert status == 200\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.assertions,
+            vec!["status == 200"]
+        );
+    }
+
+    #[test]
+    fn test_mixed_prefix_styles_in_one_block() {
+        // 混合使用 # @ 和 @ 两种风格
+        let content = "# @name Mixed Style\n@assert status == 200\n# @skip\nGET http://example.com";
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.requests[0].metadata.name,
+            Some("Mixed Style".to_string())
+        );
+        assert!(result.requests[0].metadata.skip);
+        assert_eq!(
+            result.requests[0].metadata.assertions,
+            vec!["status == 200"]
+        );
+    }
+
+    #[test]
+    fn test_parse_base_path_metadata() {
+        let content = r#"
+# @base_path /v1/chat/completions
+@name Test Base Path
+POST /
+Content-Type: application/json
+"#;
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(
+            result.metadata.base_path,
+            Some("/v1/chat/completions".to_string())
+        );
+        assert_eq!(
+            result.requests[0].base_path,
+            Some("/v1/chat/completions".to_string())
         );
     }
 }

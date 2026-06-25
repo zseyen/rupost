@@ -1,0 +1,51 @@
+# @base_path /v1/chat/completions
+# RuPost 大模型 (LLM) 云端 API 连接性与高级输出处理测试专用用例 (.http)
+#
+# 💡 运行方法：
+# 1. 确保您的 `.env` 配置文件中配置了有效的云端大模型服务地址（如 DashScope 兼容接口，不能带 /v1 后缀）：
+#    BASE_URL=https://dashscope.aliyuncs.com/compatible-mode
+#    API_KEY=sk-your-real-key
+# 2. 运行本用例：
+#    rupost test --env-file examples/llm_and_sse/.env examples/llm_and_sse/llm_cloud_test.http --verbose
+#
+# 3. 【配置方式三（自动历史记录功能）】：
+#    无需进行任何配置！RuPost 每次运行，都会自动在当前目录的 `.rupost/history/` 下生成最新的
+#    JSON 历史归档报表，包含本次请求的所有网络数据、SSE 每一帧以及最终拼接正文。
+
+###
+# =====================================================================
+# 步骤一：大模型调用测试 & 物理文档落盘 (@stream_to) & 内存变量提取 (@capture)
+# =====================================================================
+# @test
+# @sse
+# @assert status == 200
+#
+# 1. 【配置方式一】@stream_to：实时将大模型返回的内容直接写入并覆盖到指定的本地物理文件中
+# @stream_to ./target/cloud_prompt_reply.txt overwrite
+#
+# 2. 【配置方式二】@capture：大模型流式传输完毕后，将拼接完成的文本提取并赋给全局变量 `my_llm_reply`
+# @capture my_llm_reply from stream.llm.content
+POST /
+Content-Type: application/json
+Authorization: Bearer {{env.API_KEY}}
+
+{
+  "model": "{{env.MODEL_NAME}}",
+  "messages": [{"role": "user", "content": "请用一句话概括 Rust 语言的优势。"}],
+  "stream": true
+}
+
+###
+# =====================================================================
+# 步骤二：下游接口引用捕获到的变量（演示大模型输出文档在请求链中的传递与流转）
+# =====================================================================
+# 我们调用公共测试接口 https://httpbingo.org/post 模拟将大模型的回复作为参数发送给您的后台业务 API。
+# RuPost 会自动把上一步捕获的 `{{my_llm_reply}}` 替换为完整的文本内容。
+# @test
+POST https://httpbingo.org/post
+Content-Type: application/json
+
+{
+  "saved_content": "{{my_llm_reply}}",
+  "source": "rupost-llm-chain-test"
+}

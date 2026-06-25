@@ -1,0 +1,12 @@
+# RuPost 共享变量与环境配置文件 (Config Template)
+
+# 全局环境配置示例，可通过 -e/--env 选用
+[environments.dev]
+base_url = "https://httpbin.org"
+user_agent = "rupost-dev/1.0"
+api_timeout = "3000ms"
+
+[environments.prod]
+base_url = "https://api.example.com"
+# 支持从当前终端的系统环境中引用值，防止敏感凭证写死在代码仓库中
+token = "${PROD_TOKEN}"

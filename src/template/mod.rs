@@ -14,7 +14,6 @@ pub fn get_templates() -> Vec<Box<dyn TemplateStrategy>> {
     ]
 }
 
-
 /// 执行模板生成命令的机制层主逻辑
 pub fn run_template(
     r#type: &str,

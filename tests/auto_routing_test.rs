@@ -7,9 +7,11 @@ async fn test_auto_routing_and_stitching() {
     let mock_server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/chat/completions"))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "choices": [{"message": {"content": "hello"}}]
-        })))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "hello"}}]
+            })),
+        )
         .mount(&mock_server)
         .await;
 
@@ -27,8 +29,11 @@ Content-Type: application/json
 "#;
     let parsed_file = HttpFileParser::parse_content(http_content).unwrap();
     let executor = TestExecutor::new();
-    
-    let results = executor.execute_all(parsed_file, &mut context).await.unwrap();
+
+    let results = executor
+        .execute_all(parsed_file, &mut context)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0].success, "Error: {:?}", results[0].error);
     assert_eq!(results[0].url, format!("{}/v1/chat/completions", mock_uri));
@@ -52,7 +57,10 @@ GET /users
 "#;
     let parsed_file = HttpFileParser::parse_content(http_content).unwrap();
     let executor = TestExecutor::new();
-    let results = executor.execute_all(parsed_file, &mut context).await.unwrap();
+    let results = executor
+        .execute_all(parsed_file, &mut context)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0].success);
     assert_eq!(results[0].url, format!("{}/v1/users", mock_uri));

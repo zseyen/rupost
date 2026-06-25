@@ -148,7 +148,6 @@ async fn handle_mock_request(
         }
 
         response
-
     } else {
         println!(
             "  {} {} | {}",

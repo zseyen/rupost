@@ -55,7 +55,6 @@ impl VariableContext {
         } else {
             self.variables.get(key).cloned()
         }
-
     }
 
     /// 批量插入变量

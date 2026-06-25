@@ -77,4 +77,3 @@ impl TemplateStrategy for LlmTemplate {
         Some(include_str!("../../templates/llm/env.example"))
     }
 }
-

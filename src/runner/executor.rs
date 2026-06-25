@@ -169,8 +169,10 @@ impl TestExecutor {
         parsed.url = VariableResolver::resolve(&parsed.url, context);
 
         // 如果解析后的 URL 是相对路径（以 '/' 开头），自动拼装基础路径
+        #[allow(clippy::collapsible_if)]
         if parsed.url.starts_with('/') {
-            if let Some(base) = context.get("base_url")
+            if let Some(base) = context
+                .get("base_url")
                 .or_else(|| context.get("baseUrl"))
                 .or_else(|| context.get("BASE_URL"))
             {
@@ -179,7 +181,13 @@ impl TestExecutor {
                     final_base.pop();
                 }
 
-                let file_base = parsed.base_path.as_deref().unwrap_or("").trim().trim_start_matches('/').trim_end_matches('/');
+                let file_base = parsed
+                    .base_path
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches('/')
+                    .trim_end_matches('/');
                 let mut joined_path = if file_base.is_empty() {
                     String::new()
                 } else {
@@ -773,7 +781,9 @@ impl TestExecutor {
         let total_duration = start_time.elapsed();
         let transfer = total_duration.saturating_sub(ttfb);
 
-        let encoded_llm_content = url::form_urlencoded::byte_serialize(accumulated_llm_content.as_bytes()).collect::<String>();
+        let encoded_llm_content =
+            url::form_urlencoded::byte_serialize(accumulated_llm_content.as_bytes())
+                .collect::<String>();
         let mut final_headers = headers.clone();
         final_headers.insert(
             "x-sse-llm-content",
@@ -830,7 +840,11 @@ impl TestExecutor {
                     context.extend(captured_vars);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to capture stream variables: {:?}. headers: {:?}", e, final_response.headers);
+                    tracing::error!(
+                        "Failed to capture stream variables: {:?}. headers: {:?}",
+                        e,
+                        final_response.headers
+                    );
                 }
             }
         }

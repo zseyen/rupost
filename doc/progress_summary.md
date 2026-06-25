@@ -13,7 +13,7 @@
 | **生产调试 (阶段 1)** | 本地局部环境变量级联覆盖与热重载，默认合并 `.env` 且支持 `--env-file` 传递 | 已完成 | `src/variable/env_file.rs`, `src/variable/config.rs` |
 | **生产调试 (阶段 2)** | 网络连通性分析与高亮诊断工具 (`rupost diagnose <url>`)，精确测量 DNS/TCP/TLS/TTFB 时延，支持 X.509 证书解析与状态高亮输出 | 已完成 | `src/http/diagnose.rs`, `src/cli.rs`, `src/main.rs`, `tests/diagnose_integration_test.rs` |
 | **生产调试 (阶段 7)** | 模糊路径匹配与条件变体独立 Mock 服务器，支持 Trie 树模糊匹配与多变体分支判断，可插拔的 Axum 网络适配器及高雅控制台高亮访问日志 | 已完成 | `src/mock/`, `src/cli.rs`, `src/main.rs`, `tests/mock_integration_test.rs` |
-| **Clean Architecture 架构重构** | 彻底解耦 `src/parser` 与�| **Sprint 4: 大模型流式调试与初始化脚手架命令** | 自动规整 `stream.llm.content`、非阻塞物理文件增量同步（`@stream_to`）、内置 Mock 大模型服务（`MockLlmServer`）、路由改写与密钥扫描、一键项目与模板初始化命令（`rupost init`，支持别名 `template`/`i`），支持 `.http` 与 `.md` 后缀自适应与安全覆盖预警。 | 已完成 | `src/template/`, `src/http/llm_adapter.rs`, `src/runner/file_sync.rs`, `src/middleware/routing.rs`, `tests/template_test.rs`, `tests/llm_mvp_test.rs`, `templates/config/rupost.toml` |
+| **Clean Architecture 架构重构** | 彻底解耦 `src/parser` 与| **Sprint 4: 大模型流式调试与初始化脚手架命令** | 自动规整 `stream.llm.content`、非阻塞物理文件增量同步（`@stream_to`）、内置 Mock 大模型服务（`MockLlmServer`）、路由改写与密钥扫描、一键项目与模板初始化命令（`rupost init`，支持别名 `template`/`i`），支持 `.http` 与 `.md` 后缀自适应与安全覆盖预警。 | 已完成 | `src/template/`, `src/http/llm_adapter.rs`, `src/runner/file_sync.rs`, `src/middleware/routing.rs`, `tests/template_test.rs`, `tests/llm_mvp_test.rs`, `templates/config/rupost.toml` |
 | **元数据注释前缀兼容与运行脚本** | 兼容 `# @` 与 `// @` 风格元数据，编写一键测试 examples 的 run_all.sh 脚本 | 已完成 | `src/parser/http_file.rs`, `examples/run_all.sh` |
 | **Sprint 5: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
@@ -117,6 +117,7 @@
     -   **安全保护**：具备防误覆盖冲突拦截机制，可用 `--force` 强制覆盖。
     -   **双管齐下**：生成主模板文件的同时，自动创建并伴随生成一份 `.env.example` 环境变量配置文件。
     -   **自编译打包**：采用 `include_str!` 在编译期内置托管模板，单二进制文件开箱即用，无任何物理资产文件查找及系统依赖。
+6.  **大模型与通用 SSE 模板规范化打磨**：对 `templates/llm` 与 `templates/sse` 下的 Markdown 和 HTTP 模板进行重构。移除了所有表情符号（Emoji）以符合极简美学；补齐了 HTTP 格式下缺失的 Mock 仿真契约实现，达成格式间的场景对称；在通用 SSE 模板中将错误的 LLM 专属断言重构为普适的 `stream.body` 断言，并配合 `@sse_max_events 1` 解决多帧断言失败的问题；建立了清晰的跨文件引导与自适应拼接环境变量说明。
 
 ### 元数据注释前缀兼容与运行脚本
 1.  **元数据注释前缀兼容**：重构了 `src/parser/http_file.rs` 的行切分与元数据提取，支持在每行前自动剔除 `#` 和 `//` 等主流注释标记。现在 `# @skip`、`# @name` 以及 `// @assert` 可以完美并安全地生效，对齐 JetBrains HTTP Client / VS Code Rest Client 标准用法。

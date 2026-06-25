@@ -648,7 +648,13 @@ POST /
 Content-Type: application/json
 "#;
         let result = HttpFileParser::parse_content(content).unwrap();
-        assert_eq!(result.metadata.base_path, Some("/v1/chat/completions".to_string()));
-        assert_eq!(result.requests[0].base_path, Some("/v1/chat/completions".to_string()));
+        assert_eq!(
+            result.metadata.base_path,
+            Some("/v1/chat/completions".to_string())
+        );
+        assert_eq!(
+            result.requests[0].base_path,
+            Some("/v1/chat/completions".to_string())
+        );
     }
 }

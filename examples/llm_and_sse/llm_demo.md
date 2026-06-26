@@ -124,7 +124,7 @@ data: {"choices":[{"delta":{"content":"、高效的"}}]}
 
 data: {"choices":[{"delta":{"content":" 系统级"}}]}
 
-data: {"choices":[{"delta":{"content":" 编程语言。"}}]}
+data: {"choices":[{"delta":{"content":" 编程语言。😊"}}]}
 
 data: [DONE]
 ```

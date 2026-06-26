@@ -6,6 +6,7 @@ pub mod path;
 pub mod reporter;
 pub mod resolver;
 pub mod scanner;
+pub mod sse_runner;
 pub mod types;
 pub mod workflow;
 
@@ -16,5 +17,7 @@ pub use path::display_path;
 pub use reporter::TestReporter;
 pub use resolver::DependencyResolver;
 pub use scanner::DirectoryScanner;
+pub use sse_runner::{SseRunner, SseRunnerOptions};
 pub use types::{TestResult, TestSummary};
 pub use workflow::WorkflowGraph;
+

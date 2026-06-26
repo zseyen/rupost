@@ -1,4 +1,4 @@
-use crate::assertion::{AssertionResult, evaluate_assertion, parse_assertion};
+use crate::assertion::AssertionResult;
 use crate::history::model::RequestSnapshot;
 use crate::http::{Client, Request, SseParser};
 use crate::middleware::{CookieMiddleware, Middleware};
@@ -9,7 +9,7 @@ use crate::variable::{
 };
 use crate::{Result, RupostError};
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -198,24 +198,7 @@ impl TestExecutor {
         let captures_to_eval = parsed.metadata.captures.clone();
 
         // [History] 创建请求快照 (在 parsed 被 move 之前)
-        let request_snapshot = {
-            let mut headers = HeaderMap::new();
-            for (k, v) in &parsed.headers {
-                if let (Ok(n), Ok(v)) = (
-                    HeaderName::from_bytes(k.as_bytes()),
-                    HeaderValue::from_str(v),
-                ) {
-                    headers.insert(n, v);
-                }
-            }
-
-            RequestSnapshot {
-                method: method.clone(),
-                url: url.clone(),
-                headers,
-                body: parsed.body.clone(),
-            }
-        };
+        let request_snapshot = RequestSnapshot::from_parsed(&parsed);
 
         // 转换为 Request
         let mut request = match Request::try_from(parsed) {
@@ -334,22 +317,11 @@ impl TestExecutor {
                 VariableCapture::capture_normal(&captures_to_eval, &response_obj.body, &response_obj.headers, context);
 
                 // 3. 执行断言求值
-                let mut assertion_results = Vec::new();
-
-                for assertion_str in &assertions_to_eval {
-                    let resolved_assertion = VariableResolver::resolve(assertion_str, context);
-
-                    match parse_assertion(&resolved_assertion) {
-                        Ok(assertion_expr) => {
-                            let result = evaluate_assertion(&assertion_expr, &response_obj);
-                            assertion_results.push(result);
-                        }
-                        Err(e) => {
-                            assertion_results
-                                .push(AssertionResult::error(assertion_str.clone(), e));
-                        }
-                    }
-                }
+                let resolved_assertions: Vec<String> = assertions_to_eval
+                    .iter()
+                    .map(|a| VariableResolver::resolve(a, context))
+                    .collect();
+                let assertion_results = crate::assertion::evaluate_assertions(&resolved_assertions, &response_obj);
 
                 // 创建成功的测试结果
                 let mut test_result =
@@ -361,14 +333,12 @@ impl TestExecutor {
                 }
 
                 let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
-                if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
-                    test_result.timing = Some(crate::http::timing::RequestTiming {
-                        dns_lookup: dns,
-                        tcp_connect: tcp,
-                        ttfb: response_obj.ttfb,
-                        transfer: response_obj.transfer,
-                    });
-                }
+                test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
+                    probe_result,
+                    response_obj.ttfb,
+                    response_obj.transfer,
+                    need_timing,
+                );
 
                 test_result
             }
@@ -383,14 +353,12 @@ impl TestExecutor {
                 );
 
                 let need_timing = self.debug || self.debug_on_failure;
-                if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
-                    test_result.timing = Some(crate::http::timing::RequestTiming {
-                        dns_lookup: dns,
-                        tcp_connect: tcp,
-                        ttfb: Duration::from_millis(0),
-                        transfer: Duration::from_millis(0),
-                    });
-                }
+                test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
+                    probe_result,
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    need_timing,
+                );
 
                 test_result
             }
@@ -454,20 +422,16 @@ impl TestExecutor {
         )
         .unwrap();
 
-        for assertion_str in assertions_to_eval {
-            if !assertion_str.contains("stream.") {
-                let resolved_assertion = VariableResolver::resolve(assertion_str, context);
-                match parse_assertion(&resolved_assertion) {
-                    Ok(assertion_expr) => {
-                        let result = evaluate_assertion(&assertion_expr, &handshake_response);
-                        assertion_results.push(result);
-                    }
-                    Err(e) => {
-                        assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
-                    }
-                }
-            }
-        }
+        let resolved_assertions: Vec<String> = assertions_to_eval
+            .iter()
+            .map(|a| VariableResolver::resolve(a, context))
+            .collect();
+
+        let handshake_assertions = crate::assertion::evaluate_sse_handshake_assertions(
+            &resolved_assertions,
+            &handshake_response,
+        );
+        assertion_results.extend(handshake_assertions);
 
         let timeout_duration = sse_timeout.unwrap_or(Duration::from_secs(30));
         let sleep_timer = tokio::time::sleep(timeout_duration);
@@ -514,11 +478,12 @@ impl TestExecutor {
                                     println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
                                 }
 
-                                if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
-                                    accumulated_llm_content.push_str(&delta);
-                                    if let Some(ref mut w) = file_writer {
-                                        let _ = w.write_delta(&delta, &format!("{:?}", llm_provider)).await;
+                                if let Some(ref mut w) = file_writer {
+                                    if let Ok(Some(delta)) = w.write_sse_event(&event.data, llm_provider).await {
+                                        accumulated_llm_content.push_str(&delta);
                                     }
+                                } else if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
+                                    accumulated_llm_content.push_str(&delta);
                                 }
 
                                 // 构造虚拟响应帧以供 capture & assertions
@@ -551,20 +516,12 @@ impl TestExecutor {
                                 );
 
                                 // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
-                                for assertion_str in assertions_to_eval {
-                                    if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
-                                        let resolved_assertion = VariableResolver::resolve(assertion_str, context);
-                                        match parse_assertion(&resolved_assertion) {
-                                            Ok(assertion_expr) => {
-                                                let result = evaluate_assertion(&assertion_expr, &virtual_response);
-                                                assertion_results.push(result.with_stream_index(event_count));
-                                            }
-                                            Err(e) => {
-                                                assertion_results.push(AssertionResult::error(assertion_str.clone(), e).with_stream_index(event_count));
-                                            }
-                                        }
-                                    }
-                                }
+                                let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
+                                    &resolved_assertions,
+                                    &virtual_response,
+                                    event_count,
+                                );
+                                assertion_results.extend(frame_assertions);
 
                                 if sse_max_events.is_some_and(|max| event_count >= max) {
                                     break;
@@ -586,11 +543,12 @@ impl TestExecutor {
                                     println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
                                 }
 
-                                if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
-                                    accumulated_llm_content.push_str(&delta);
-                                    if let Some(ref mut w) = file_writer {
-                                        let _ = w.write_delta(&delta, &format!("{:?}", llm_provider)).await;
+                                if let Some(ref mut w) = file_writer {
+                                    if let Ok(Some(delta)) = w.write_sse_event(&event.data, llm_provider).await {
+                                        accumulated_llm_content.push_str(&delta);
                                     }
+                                } else if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
+                                    accumulated_llm_content.push_str(&delta);
                                 }
 
                                 let mut sse_headers = HeaderMap::new();
@@ -622,20 +580,12 @@ impl TestExecutor {
                                 );
 
                                 // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
-                                for assertion_str in assertions_to_eval {
-                                    if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
-                                        let resolved_assertion = VariableResolver::resolve(assertion_str, context);
-                                        match parse_assertion(&resolved_assertion) {
-                                            Ok(assertion_expr) => {
-                                                let result = evaluate_assertion(&assertion_expr, &virtual_response);
-                                                assertion_results.push(result.with_stream_index(event_count));
-                                            }
-                                            Err(e) => {
-                                                assertion_results.push(AssertionResult::error(assertion_str.clone(), e).with_stream_index(event_count));
-                                            }
-                                        }
-                                    }
-                                }
+                                let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
+                                    &resolved_assertions,
+                                    &virtual_response,
+                                    event_count,
+                                );
+                                assertion_results.extend(frame_assertions);
                             }
                             break;
                         }
@@ -668,20 +618,11 @@ impl TestExecutor {
         .unwrap();
 
         // 3. 评估包含 stream.llm.content 的断言
-        for assertion_str in assertions_to_eval {
-            if assertion_str.contains("stream.llm.content") {
-                let resolved_assertion = VariableResolver::resolve(assertion_str, context);
-                match parse_assertion(&resolved_assertion) {
-                    Ok(assertion_expr) => {
-                        let result = evaluate_assertion(&assertion_expr, &final_response);
-                        assertion_results.push(result);
-                    }
-                    Err(e) => {
-                        assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
-                    }
-                }
-            }
-        }
+        let final_assertions = crate::assertion::evaluate_sse_llm_content_assertions(
+            &resolved_assertions,
+            &final_response,
+        );
+        assertion_results.extend(final_assertions);
 
         // 4. 评估包含 stream.llm.content 的捕获
         VariableCapture::capture_sse_llm_content(
@@ -705,14 +646,12 @@ impl TestExecutor {
         }
 
         let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
-        if let (true, Some((dns, tcp))) = (need_timing, probe_result) {
-            test_result.timing = Some(crate::http::timing::RequestTiming {
-                dns_lookup: dns,
-                tcp_connect: tcp,
-                ttfb: final_response.ttfb,
-                transfer: final_response.transfer,
-            });
-        }
+        test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
+            probe_result,
+            final_response.ttfb,
+            final_response.transfer,
+            need_timing,
+        );
 
         test_result
     }

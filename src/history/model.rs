@@ -68,3 +68,50 @@ pub struct ResponseSnapshot {
 
     pub body: String,
 }
+
+impl RequestSnapshot {
+    /// 从解析实例化后的 `ParsedRequest` 构建请求历史记录快照
+    pub fn from_parsed(parsed: &crate::parser::ParsedRequest) -> Self {
+        use reqwest::header::{HeaderName, HeaderValue};
+        let mut headers = HeaderMap::new();
+        for (k, v) in &parsed.headers {
+            if let (Ok(n), Ok(v)) = (
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(v),
+            ) {
+                headers.insert(n, v);
+            }
+        }
+
+        Self {
+            method: parsed.method_or_default().to_string(),
+            url: parsed.url.clone(),
+            headers,
+            body: parsed.body.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ParsedRequest;
+
+    #[test]
+    fn test_request_snapshot_from_parsed() {
+        let mut parsed = ParsedRequest::new(1);
+        parsed.method = Some("POST".to_string());
+        parsed.url = "http://example.com".to_string();
+        parsed.headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        parsed.body = Some("{}".to_string());
+
+        let snapshot = RequestSnapshot::from_parsed(&parsed);
+        assert_eq!(snapshot.method, "POST");
+        assert_eq!(snapshot.url, "http://example.com");
+        assert_eq!(
+            snapshot.headers.get("Content-Type").unwrap().to_str().unwrap(),
+            "application/json"
+        );
+        assert_eq!(snapshot.body, Some("{}".to_string()));
+    }
+}

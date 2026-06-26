@@ -262,4 +262,145 @@ mod tests {
         let result = evaluate_assertion(&assertion_quoted_none, &response_empty);
         assert!(!result.passed);
     }
+
+    #[test]
+    fn test_evaluate_assertions_batch() {
+        let response = create_test_response(200, r#"{"id": 42}"#, 100);
+        let resolved = vec!["status == 200".to_string(), "body.id > 0".to_string()];
+        let results = evaluate_assertions(&resolved, &response);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.passed));
+    }
+
+    #[test]
+    fn test_evaluate_sse_handshake_assertions() {
+        let response = create_test_response(200, "{}", 100);
+        let resolved = vec![
+            "status == 200".to_string(),
+            "stream.event == \"message\"".to_string(),
+        ];
+        let results = evaluate_sse_handshake_assertions(&resolved, &response);
+        assert_eq!(results.len(), 1); // 应该过滤掉包含 stream. 的断言
+        assert!(results[0].passed);
+    }
+
+    #[test]
+    fn test_evaluate_sse_event_assertions() {
+        let response = create_test_response(200, r#"{"data": "stream-delta"}"#, 100);
+        let resolved = vec![
+            "status == 200".to_string(), // 不包含 stream. 不应该在此处理
+            "stream.data == \"stream-delta\"".to_string(),
+            "stream.llm.content == \"hello\"".to_string(), // 包含 llm.content 不应该在此处理
+        ];
+        let results = evaluate_sse_event_assertions(&resolved, &response, 5);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].passed);
+        assert_eq!(results[0].stream_event_index, Some(5));
+    }
+
+    #[test]
+    fn test_evaluate_sse_llm_content_assertions() {
+        let response = create_test_response(200, r#"{"reply": "hello"}"#, 100);
+        let resolved = vec![
+            "status == 200".to_string(),
+            "stream.llm.content == \"hello\"".to_string(), // 应该匹配
+        ];
+        let results = evaluate_sse_llm_content_assertions(&resolved, &response);
+        assert_eq!(results.len(), 1);
+        // 因为我们只是匹配断言字符串包含 "stream.llm.content"，实际评估时它会在 response (比如虚拟响应) 上求值
+        // 这里的测试只是为了验证断言过滤
+    }
 }
+
+use crate::assertion::parser::parse_assertion;
+
+/// 评估常规的非流式断言
+pub fn evaluate_assertions(
+    resolved_assertions: &[String],
+    response: &Response,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        match parse_assertion(assertion_str) {
+            Ok(assertion_expr) => {
+                let result = evaluate_assertion(&assertion_expr, response);
+                assertion_results.push(result);
+            }
+            Err(e) => {
+                assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+            }
+        }
+    }
+    assertion_results
+}
+
+/// 评估 SSE 握手断言 (过滤掉以 "stream." 开头的断言)
+pub fn evaluate_sse_handshake_assertions(
+    resolved_assertions: &[String],
+    handshake_response: &Response,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        if !assertion_str.contains("stream.") {
+            match parse_assertion(assertion_str) {
+                Ok(assertion_expr) => {
+                    let result = evaluate_assertion(&assertion_expr, handshake_response);
+                    assertion_results.push(result);
+                }
+                Err(e) => {
+                    assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+                }
+            }
+        }
+    }
+    assertion_results
+}
+
+/// 评估实时流事件断言 (包含 "stream." 但排除 "stream.llm.content")
+pub fn evaluate_sse_event_assertions(
+    resolved_assertions: &[String],
+    virtual_response: &Response,
+    event_count: usize,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
+            match parse_assertion(assertion_str) {
+                Ok(assertion_expr) => {
+                    let result = evaluate_assertion(&assertion_expr, virtual_response);
+                    assertion_results.push(result.with_stream_index(event_count));
+                }
+                Err(e) => {
+                    assertion_results.push(
+                        AssertionResult::error(assertion_str.clone(), e)
+                            .with_stream_index(event_count),
+                    );
+                }
+            }
+        }
+    }
+    assertion_results
+}
+
+/// 评估包含 "stream.llm.content" 的断言
+pub fn evaluate_sse_llm_content_assertions(
+    resolved_assertions: &[String],
+    final_response: &Response,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        if assertion_str.contains("stream.llm.content") {
+            match parse_assertion(assertion_str) {
+                Ok(assertion_expr) => {
+                    let result = evaluate_assertion(&assertion_expr, final_response);
+                    assertion_results.push(result);
+                }
+                Err(e) => {
+                    assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+                }
+            }
+        }
+    }
+    assertion_results
+}
+

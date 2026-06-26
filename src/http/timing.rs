@@ -48,4 +48,24 @@ impl DiagnosticsProber {
         // 探测完成后，连接自动释放
         Ok((dns_lookup, tcp_connect))
     }
+
+    /// 根据诊断探测结果和实际请求耗时解析并生成 RequestTiming 结构
+    pub fn resolve_timing(
+        probe_result: Option<(Duration, Duration)>,
+        ttfb: Duration,
+        transfer: Duration,
+        need_timing: bool,
+    ) -> Option<RequestTiming> {
+        if need_timing {
+            if let Some((dns, tcp)) = probe_result {
+                return Some(RequestTiming {
+                    dns_lookup: dns,
+                    tcp_connect: tcp,
+                    ttfb,
+                    transfer,
+                });
+            }
+        }
+        None
+    }
 }

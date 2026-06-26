@@ -9,6 +9,7 @@ pub mod scanner;
 pub mod sse_runner;
 pub mod types;
 pub mod workflow;
+pub mod ws_runner;
 
 pub use batch::{BatchExecutor, BatchMode, BatchRunRequest};
 pub use executor::TestExecutor;
@@ -20,4 +21,5 @@ pub use scanner::DirectoryScanner;
 pub use sse_runner::{SseRunner, SseRunnerOptions};
 pub use types::{TestResult, TestSummary};
 pub use workflow::WorkflowGraph;
+pub use ws_runner::WsRunner;
 

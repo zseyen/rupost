@@ -109,9 +109,8 @@ async fn start_sys_log_mock_server() -> (String, tokio::task::JoinHandle<()>) {
 #[tokio::test]
 async fn test_llm_stream_with_builtin_mock() {
     // 启动内置模拟服务器
-    let port = 9091;
-    let mock = MockLlmServer::new(port);
-    mock.start().await.unwrap();
+    let mock = MockLlmServer::new(0);
+    let port = mock.start().await.unwrap();
 
     let executor = TestExecutor::new();
     let content = format!("@sse\nPOST http://127.0.0.1:{}/v1/chat/completions\n", port);
@@ -123,9 +122,8 @@ async fn test_llm_stream_with_builtin_mock() {
 
 #[tokio::test]
 async fn test_llm_stream_normalization() {
-    let port = 9092;
-    let mock = MockLlmServer::new(port);
-    mock.start().await.unwrap();
+    let mock = MockLlmServer::new(0);
+    let port = mock.start().await.unwrap();
 
     let executor = TestExecutor::new();
 
@@ -176,9 +174,8 @@ async fn test_llm_stream_normalization() {
 
 #[tokio::test]
 async fn test_file_sync_output() {
-    let port = 9093;
-    let mock = MockLlmServer::new(port);
-    mock.start().await.unwrap();
+    let mock = MockLlmServer::new(0);
+    let port = mock.start().await.unwrap();
 
     let temp_dir = tempfile::TempDir::new().unwrap();
     let sync_file_path = temp_dir.path().join("test_out.md");

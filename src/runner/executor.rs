@@ -4,6 +4,7 @@ use crate::http::{Client, Request, Response, SseParser};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
+use crate::runner::ws_runner::WsRunner;
 use crate::variable::{
     VariableContext, VariableResolver, capture::VariableCapture,
 };
@@ -193,6 +194,10 @@ impl TestExecutor {
 
         // 1. 变量替换
         VariableResolver::resolve_parsed_request(&mut parsed, context);
+
+        if parsed.metadata.websocket {
+            return WsRunner::execute(parsed, request_number, context).await;
+        }
 
         let method = parsed.method_or_default().to_string();
         let url = parsed.url.clone();

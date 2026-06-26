@@ -289,7 +289,7 @@ mod tests {
         let response = create_test_response(200, r#"{"data": "stream-delta"}"#, 100);
         let resolved = vec![
             "status == 200".to_string(), // 不包含 stream. 不应该在此处理
-            "stream.data == \"stream-delta\"".to_string(),
+            "stream.body.data == \"stream-delta\"".to_string(),
             "stream.llm.content == \"hello\"".to_string(), // 包含 llm.content 不应该在此处理
         ];
         let results = evaluate_sse_event_assertions(&resolved, &response, 5);

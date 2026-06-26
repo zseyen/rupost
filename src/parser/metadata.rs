@@ -29,6 +29,8 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@stream_to" => parse_stream_to(content).map(Some),
         "@forward_to" => parse_forward_to(content).map(Some),
         "@base_path" => parse_base_path(content).map(Some),
+        "@websocket" => parse_websocket(content).map(Some),
+        "@decoder" => parse_decoder(content).map(Some),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -74,6 +76,12 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
             target.forward_to = Some(url.clone());
         }
         Metadata::BasePath(_) => {}
+        Metadata::Websocket(ws) => {
+            target.websocket = *ws;
+        }
+        Metadata::Decoder(decoder) => {
+            target.decoder = Some(decoder.clone());
+        }
     }
 }
 
@@ -226,6 +234,25 @@ pub fn parse_duration(s: &str) -> ParseResult<Duration> {
     }
 }
 
+fn parse_websocket(content: &str) -> ParseResult<Metadata> {
+    let value = if content.is_empty() {
+        true
+    } else {
+        content.parse::<bool>().unwrap_or(true)
+    };
+    Ok(Metadata::Websocket(value))
+}
+
+fn parse_decoder(content: &str) -> ParseResult<Metadata> {
+    if content.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: "@decoder value cannot be empty".to_string(),
+        });
+    }
+    Ok(Metadata::Decoder(content.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,5 +363,17 @@ mod tests {
     fn test_parse_unrecognized() {
         let result = parse_metadata("@unknown directive").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_websocket_and_decoder() {
+        let result = parse_metadata("@websocket").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Websocket(true)));
+
+        let result = parse_metadata("@websocket false").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Websocket(false)));
+
+        let result = parse_metadata("@decoder messagepack").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Decoder(ref s) if s == "messagepack"));
     }
 }

@@ -30,17 +30,19 @@ pub struct WsClient {
 impl WsClient {
     /// 发起连接并初始化后台 Worker
     pub async fn connect(config: WsClientConfig) -> Result<Self, String> {
-        let mut request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
-            .method("GET")
-            .uri(&config.url);
+                use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = config.url.as_str().into_client_request()
+            .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
 
+        let headers_mut = request.headers_mut();
         for (k, v) in &config.headers {
-            request = request.header(k.as_str(), v.as_str());
+            if let (Ok(name), Ok(val)) = (
+                tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(k.as_bytes()),
+                tokio_tungstenite::tungstenite::http::HeaderValue::from_str(v)
+            ) {
+                headers_mut.insert(name, val);
+            }
         }
-
-        let request = request
-            .body(())
-            .map_err(|e| format!("Failed to build handshake request: {}", e))?;
 
         // 建立网络连接
         let (ws_stream, response) = tokio::time::timeout(
@@ -208,5 +210,61 @@ impl WsClient {
         // 尝试关闭连接
         let _ = ws_sink.close().await;
         info!("WebSocket background worker stopped.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use crate::ws::frame::WsFrameType;
+
+    #[tokio::test]
+    async fn test_ws_client_mock() {
+        // 1. 启动本地监听
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        let ws_url = format!("ws://{}", local_addr);
+
+        // 2. 派生一个服务端 Mock 协程
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
+                    // 读取客户端发来的第一条消息并回传
+                    if let Some(Ok(Message::Text(msg))) = ws_stream.next().await {
+                        let _ = ws_stream.send(Message::Text(format!("echo: {}", msg))).await;
+                    }
+                    // 接收 Ping 帧并回复 Pong
+                    if let Some(Ok(Message::Ping(payload))) = ws_stream.next().await {
+                        let _ = ws_stream.send(Message::Pong(payload)).await;
+                    }
+                }
+            }
+        });
+
+        // 3. 客户端发起连接
+        let config = WsClientConfig {
+            url: ws_url,
+            headers: Vec::new(),
+            ping_interval: Duration::from_millis(100),
+            handshake_timeout: Duration::from_secs(2),
+        };
+
+        let client = WsClient::connect(config).await.unwrap();
+        let mut rx = client.subscribe();
+
+        // 4. 发送测试数据
+        let test_frame = WsFrame::new(
+            FrameDirection::Outbound,
+            WsFrameType::Text,
+            "hello".to_string().into_bytes(),
+            0,
+        );
+        client.send_frame(test_frame).await.unwrap();
+
+        // 5. 验证是否收到 echo 回传帧
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.frame_type, WsFrameType::Text);
+        assert_eq!(received.payload_as_string(), "echo: hello");
     }
 }

@@ -47,6 +47,69 @@ impl VariableResolver {
         let with_env = Self::resolve_env_vars(text);
         Self::substitute(&with_env, context)
     }
+
+    /// 渲染并实例化一个 `ParsedRequest`：解析其 URL, Headers, Body 中的所有占位符和环境变量；
+    /// 并处理 Base URL 的自动拼接以及全局 User-Agent 的注入。
+    pub fn resolve_parsed_request(parsed: &mut crate::parser::ParsedRequest, context: &mut VariableContext) {
+        // 1. 替换 URL
+        parsed.url = Self::resolve(&parsed.url, context);
+
+        // 如果解析后的 URL 是相对路径（以 '/' 开头），自动拼装基础路径
+        #[allow(clippy::collapsible_if)]
+        if parsed.url.starts_with('/') {
+            if let Some(base) = context
+                .get("base_url")
+                .or_else(|| context.get("baseUrl"))
+                .or_else(|| context.get("BASE_URL"))
+            {
+                let mut final_base = base.trim().to_string();
+                if final_base.ends_with('/') {
+                    final_base.pop();
+                }
+
+                let file_base = parsed
+                    .base_path
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches('/')
+                    .trim_end_matches('/');
+                let mut joined_path = if file_base.is_empty() {
+                    String::new()
+                } else {
+                    format!("/{}", file_base)
+                };
+
+                let relative_url = parsed.url.trim_start_matches('/');
+                if !relative_url.is_empty() {
+                    joined_path = format!("{}/{}", joined_path, relative_url);
+                }
+
+                parsed.url = format!("{}{}", final_base, joined_path);
+            }
+        }
+
+        // 2. 替换 Headers
+        for (_key, value) in &mut parsed.headers {
+            *value = Self::resolve(value, context);
+        }
+
+        // 3. 检查全局变量 context 中是否提供了 user_agent，如果是且请求中没有显式设置，则追加
+        if let Some(ua) = context.get("user_agent") {
+            let has_ua = parsed
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
+            if !has_ua {
+                parsed.headers.push(("User-Agent".to_string(), ua));
+            }
+        }
+
+        // 4. 替换 Body
+        if let Some(body) = &mut parsed.body {
+            *body = Self::resolve(body, context);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -189,5 +252,35 @@ mod tests {
         unsafe {
             std::env::remove_var("TEST_PLACEHOLDER");
         }
+    }
+
+    #[test]
+    fn test_resolve_parsed_request() {
+        let mut ctx = VariableContext::new();
+        ctx.insert("host", "example.com");
+        ctx.insert("user_id", "456");
+        ctx.insert("base_url", "https://api.test.com/");
+        ctx.insert("user_agent", "CustomTestAgent/1.0");
+
+        let mut parsed = crate::parser::ParsedRequest::new(1);
+        parsed.url = "/users/{{user_id}}".to_string();
+        parsed.base_path = Some("v1".to_string());
+        parsed.headers = vec![
+            ("Host".to_string(), "{{host}}".to_string()),
+        ];
+        parsed.body = Some("hello {{user_id}}".to_string());
+
+        VariableResolver::resolve_parsed_request(&mut parsed, &mut ctx);
+
+        // 验证 URL 渲染和 baseUrl 拼接
+        assert_eq!(parsed.url, "https://api.test.com/v1/users/456");
+        
+        // 验证 Headers 渲染和 user_agent 自动注入
+        assert_eq!(parsed.headers.len(), 2);
+        assert_eq!(parsed.headers[0], ("Host".to_string(), "example.com".to_string()));
+        assert_eq!(parsed.headers[1], ("User-Agent".to_string(), "CustomTestAgent/1.0".to_string()));
+
+        // 验证 Body 渲染
+        assert_eq!(parsed.body.unwrap(), "hello 456");
     }
 }

@@ -5,7 +5,7 @@ use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::variable::{
-    VariableContext, VariableResolver, capture::VariableCapture, capture_from_response,
+    VariableContext, VariableResolver, capture::VariableCapture,
 };
 use crate::{Result, RupostError};
 use futures_util::StreamExt;
@@ -13,7 +13,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub struct TestExecutor {
     client: Client,
@@ -165,43 +165,7 @@ impl TestExecutor {
         let start = Instant::now();
 
         // 1. 变量替换
-        // 替换 URL
-        parsed.url = VariableResolver::resolve(&parsed.url, context);
-
-        // 如果解析后的 URL 是相对路径（以 '/' 开头），自动拼装基础路径
-        #[allow(clippy::collapsible_if)]
-        if parsed.url.starts_with('/') {
-            if let Some(base) = context
-                .get("base_url")
-                .or_else(|| context.get("baseUrl"))
-                .or_else(|| context.get("BASE_URL"))
-            {
-                let mut final_base = base.trim().to_string();
-                if final_base.ends_with('/') {
-                    final_base.pop();
-                }
-
-                let file_base = parsed
-                    .base_path
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_start_matches('/')
-                    .trim_end_matches('/');
-                let mut joined_path = if file_base.is_empty() {
-                    String::new()
-                } else {
-                    format!("/{}", file_base)
-                };
-
-                let relative_url = parsed.url.trim_start_matches('/');
-                if !relative_url.is_empty() {
-                    joined_path = format!("{}/{}", joined_path, relative_url);
-                }
-
-                parsed.url = format!("{}{}", final_base, joined_path);
-            }
-        }
+        VariableResolver::resolve_parsed_request(&mut parsed, context);
 
         let method = parsed.method_or_default().to_string();
         let url = parsed.url.clone();
@@ -217,28 +181,6 @@ impl TestExecutor {
                 RupostError::BaseUrlNotConfigured.to_user_friendly_string(),
                 start.elapsed(),
             );
-        }
-
-        // 替换 Headers
-        for (_key, value) in &mut parsed.headers {
-            *value = VariableResolver::resolve(value, context);
-            // header key 通常不需要替换，也可以根据需求支持
-        }
-
-        // 检查全局变量 context 中是否提供了 user_agent，如果是且请求中没有显式设置，则追加
-        if let Some(ua) = context.get("user_agent") {
-            let has_ua = parsed
-                .headers
-                .iter()
-                .any(|(k, _)| k.eq_ignore_ascii_case("user-agent"));
-            if !has_ua {
-                parsed.headers.push(("User-Agent".to_string(), ua));
-            }
-        }
-
-        // 替换 Body
-        if let Some(body) = &mut parsed.body {
-            *body = VariableResolver::resolve(body, context);
         }
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
@@ -389,23 +331,7 @@ impl TestExecutor {
                 record_history(request_snapshot, &response_obj, source);
 
                 // 2. 变量捕获
-                if !captures_to_eval.is_empty() {
-                    match capture_from_response(
-                        &response_obj.body,
-                        &response_obj.headers,
-                        &captures_to_eval,
-                    ) {
-                        Ok(captured_vars) => {
-                            for (key, value) in &captured_vars {
-                                debug!("Captured variable: {} = '{}'", key, value);
-                            }
-                            context.extend(captured_vars);
-                        }
-                        Err(e) => {
-                            error!("Failed to capture variables: {}", e);
-                        }
-                    }
-                }
+                VariableCapture::capture_normal(&captures_to_eval, &response_obj.body, &response_obj.headers, context);
 
                 // 3. 执行断言求值
                 let mut assertion_results = Vec::new();
@@ -617,42 +543,12 @@ impl TestExecutor {
                                 ).unwrap();
 
                                 // 1. 实时变量捕获
-                                let mut stream_captures = Vec::new();
-                                for cap in captures_to_eval {
-                                    if let crate::variable::capture::CaptureSource::Body(ref path) = cap.source {
-                                        if let Some(rest) = path.strip_prefix("stream.body.") {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Body(rest.to_string());
-                                            stream_captures.push(new_cap);
-                                        } else if path == "stream.event" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
-                                            stream_captures.push(new_cap);
-                                        } else if path == "stream.id" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
-                                            stream_captures.push(new_cap);
-                                        }
-                                    } else if let crate::variable::capture::CaptureSource::Header(ref name) = cap.source {
-                                        if name == "stream.event" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
-                                            stream_captures.push(new_cap);
-                                        } else if name == "stream.id" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
-                                            stream_captures.push(new_cap);
-                                        }
-                                    }
-                                }
-
-                                if let (false, Ok(captured_vars)) = (stream_captures.is_empty(), capture_from_response(
+                                VariableCapture::capture_sse_frame(
+                                    captures_to_eval,
                                     &virtual_response.body,
                                     &virtual_response.headers,
-                                    &stream_captures,
-                                )) {
-                                    context.extend(captured_vars);
-                                }
+                                    context,
+                                );
 
                                 // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
                                 for assertion_str in assertions_to_eval {
@@ -718,42 +614,12 @@ impl TestExecutor {
                                 ).unwrap();
 
                                 // 1. 实时变量捕获
-                                let mut stream_captures = Vec::new();
-                                for cap in captures_to_eval {
-                                    if let crate::variable::capture::CaptureSource::Body(ref path) = cap.source {
-                                        if let Some(rest) = path.strip_prefix("stream.body.") {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Body(rest.to_string());
-                                            stream_captures.push(new_cap);
-                                        } else if path == "stream.event" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
-                                            stream_captures.push(new_cap);
-                                        } else if path == "stream.id" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
-                                            stream_captures.push(new_cap);
-                                        }
-                                    } else if let crate::variable::capture::CaptureSource::Header(ref name) = cap.source {
-                                        if name == "stream.event" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-event".to_string());
-                                            stream_captures.push(new_cap);
-                                        } else if name == "stream.id" {
-                                            let mut new_cap = cap.clone();
-                                            new_cap.source = crate::variable::capture::CaptureSource::Header("x-sse-id".to_string());
-                                            stream_captures.push(new_cap);
-                                        }
-                                    }
-                                }
-
-                                if let (false, Ok(captured_vars)) = (stream_captures.is_empty(), capture_from_response(
+                                VariableCapture::capture_sse_frame(
+                                    captures_to_eval,
                                     &virtual_response.body,
                                     &virtual_response.headers,
-                                    &stream_captures,
-                                )) {
-                                    context.extend(captured_vars);
-                                }
+                                    context,
+                                );
 
                                 // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
                                 for assertion_str in assertions_to_eval {
@@ -818,36 +684,12 @@ impl TestExecutor {
         }
 
         // 4. 评估包含 stream.llm.content 的捕获
-        let mut final_captures = Vec::new();
-        for cap in captures_to_eval {
-            if matches!(&cap.source, crate::variable::capture::CaptureSource::Body(path) if path == "stream.llm.content")
-            {
-                let mut new_cap = cap.clone();
-                new_cap.source = crate::variable::capture::CaptureSource::Header(
-                    "x-sse-llm-content".to_string(),
-                );
-                final_captures.push(new_cap);
-            }
-        }
-        if !final_captures.is_empty() {
-            let captured_res = capture_from_response(
-                &final_response.body,
-                &final_response.headers,
-                &final_captures,
-            );
-            match captured_res {
-                Ok(captured_vars) => {
-                    context.extend(captured_vars);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to capture stream variables: {:?}. headers: {:?}",
-                        e,
-                        final_response.headers
-                    );
-                }
-            }
-        }
+        VariableCapture::capture_sse_llm_content(
+            captures_to_eval,
+            &final_response.body,
+            &final_response.headers,
+            context,
+        );
 
         // [History] 保存历史记录 (Best Effort)
         use crate::history::recorder::record_history;

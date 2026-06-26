@@ -92,6 +92,111 @@ impl VariableCapture {
             source: CaptureSource::TraceHeader,
         }
     }
+
+    /// 提取常规响应的变量，如果存在捕获配置，则将其存入 `VariableContext`
+    pub fn capture_normal(
+        captures: &[VariableCapture],
+        body: &str,
+        headers: &HeaderMap,
+        context: &mut crate::variable::VariableContext,
+    ) {
+        if captures.is_empty() {
+            return;
+        }
+        match capture_from_response(body, headers, captures) {
+            Ok(captured_vars) => {
+                for (key, value) in &captured_vars {
+                    tracing::debug!("Captured variable: {} = '{}'", key, value);
+                }
+                context.extend(captured_vars);
+            }
+            Err(e) => {
+                tracing::error!("Failed to capture variables: {}", e);
+            }
+        }
+    }
+
+    /// 提取 SSE 单帧事件实时捕获，并在 `VariableContext` 中生效
+    pub fn capture_sse_frame(
+        captures: &[VariableCapture],
+        virtual_body: &str,
+        virtual_headers: &HeaderMap,
+        context: &mut crate::variable::VariableContext,
+    ) {
+        let mut stream_captures = Vec::new();
+        for cap in captures {
+            if let CaptureSource::Body(ref path) = cap.source {
+                if let Some(rest) = path.strip_prefix("stream.body.") {
+                    let mut new_cap = cap.clone();
+                    new_cap.source = CaptureSource::Body(rest.to_string());
+                    stream_captures.push(new_cap);
+                } else if path == "stream.event" {
+                    let mut new_cap = cap.clone();
+                    new_cap.source = CaptureSource::Header("x-sse-event".to_string());
+                    stream_captures.push(new_cap);
+                } else if path == "stream.id" {
+                    let mut new_cap = cap.clone();
+                    new_cap.source = CaptureSource::Header("x-sse-id".to_string());
+                    stream_captures.push(new_cap);
+                }
+            } else if let CaptureSource::Header(ref name) = cap.source {
+                if name == "stream.event" {
+                    let mut new_cap = cap.clone();
+                    new_cap.source = CaptureSource::Header("x-sse-event".to_string());
+                    stream_captures.push(new_cap);
+                } else if name == "stream.id" {
+                    let mut new_cap = cap.clone();
+                    new_cap.source = CaptureSource::Header("x-sse-id".to_string());
+                    stream_captures.push(new_cap);
+                }
+            }
+        }
+
+        if !stream_captures.is_empty() {
+            if let Ok(captured_vars) = capture_from_response(
+                virtual_body,
+                virtual_headers,
+                &stream_captures,
+            ) {
+                context.extend(captured_vars);
+            }
+        }
+    }
+
+    /// 提取流结束后针对完整 LLM 内容的捕获 (针对 `stream.llm.content`)
+    pub fn capture_sse_llm_content(
+        captures: &[VariableCapture],
+        final_body: &str,
+        final_headers: &HeaderMap,
+        context: &mut crate::variable::VariableContext,
+    ) {
+        let mut final_captures = Vec::new();
+        for cap in captures {
+            if matches!(&cap.source, CaptureSource::Body(path) if path == "stream.llm.content") {
+                let mut new_cap = cap.clone();
+                new_cap.source = CaptureSource::Header("x-sse-llm-content".to_string());
+                final_captures.push(new_cap);
+            }
+        }
+        if !final_captures.is_empty() {
+            match capture_from_response(
+                final_body,
+                final_headers,
+                &final_captures,
+            ) {
+                Ok(captured_vars) => {
+                    context.extend(captured_vars);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to capture stream variables: {:?}. headers: {:?}",
+                        e,
+                        final_headers
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// 从响应中提取变量
@@ -239,6 +344,7 @@ fn extract_from_json_path(json: &Value, path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::variable::VariableContext;
 
     #[test]
     fn test_from_body() {
@@ -382,5 +488,50 @@ mod tests {
 
         let result = capture_from_response(body, &headers, &captures);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_capture_normal() {
+        let mut ctx = VariableContext::new();
+        let body = r#"{"data": "normal"}"#;
+        let headers = HeaderMap::new();
+        let captures = vec![VariableCapture::from_body("my_var", "data")];
+
+        VariableCapture::capture_normal(&captures, body, &headers, &mut ctx);
+        assert_eq!(ctx.get("my_var").unwrap(), "normal");
+    }
+
+    #[test]
+    fn test_capture_sse_frame() {
+        let mut ctx = VariableContext::new();
+        let virtual_body = r#"{"data": "stream-delta"}"#;
+        let mut virtual_headers = HeaderMap::new();
+        virtual_headers.insert("x-sse-event", "message".parse().unwrap());
+        virtual_headers.insert("x-sse-id", "123".parse().unwrap());
+
+        let captures = vec![
+            VariableCapture::from_body("event_name", "stream.event"),
+            VariableCapture::from_body("id", "stream.id"),
+            VariableCapture::from_body("delta", "stream.body.data"),
+        ];
+
+        VariableCapture::capture_sse_frame(&captures, virtual_body, &virtual_headers, &mut ctx);
+        assert_eq!(ctx.get("event_name").unwrap(), "message");
+        assert_eq!(ctx.get("id").unwrap(), "123");
+        assert_eq!(ctx.get("delta").unwrap(), "stream-delta");
+    }
+
+    #[test]
+    fn test_capture_sse_llm_content() {
+        let mut ctx = VariableContext::new();
+        let final_body = "accumulated body";
+        let mut final_headers = HeaderMap::new();
+        let encoded = url::form_urlencoded::byte_serialize(b"full content").collect::<String>();
+        final_headers.insert("x-sse-llm-content", encoded.parse().unwrap());
+
+        let captures = vec![VariableCapture::from_body("reply", "stream.llm.content")];
+
+        VariableCapture::capture_sse_llm_content(&captures, final_body, &final_headers, &mut ctx);
+        assert_eq!(ctx.get("reply").unwrap(), "full content");
     }
 }

@@ -1,13 +1,10 @@
-use crate::assertion::AssertionResult;
 use crate::history::model::RequestSnapshot;
 use crate::http::{Response, SseParser};
-use crate::middleware::CookieMiddleware;
+use crate::middleware::Middleware;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
-use crate::RupostError;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 
@@ -39,30 +36,27 @@ impl SseRunner {
         source: Option<String>,
         request_snapshot: RequestSnapshot,
         probe_result: Option<(Duration, Duration)>,
-        cookie_middleware: Option<Arc<CookieMiddleware>>,
+        middlewares: Vec<crate::runner::executor::ExecutorMiddleware>,
     ) -> TestResult {
         let status_code = response.status().as_u16();
         let headers = response.headers().clone();
 
-        // [Cookie] Middleware after_response hook (best effort)
-        if let Some(mw) = &cookie_middleware {
-            let handshake_response_tmp = Response::new(
-                status_code,
-                headers.clone(),
-                String::new(),
-                ttfb,
-                ttfb,
-                Duration::from_millis(0),
-            )
-            .unwrap();
-            
-            // 为了能够使用 after_response，我们需要引入 Middleware trait
-            use crate::middleware::Middleware;
+        // [Middleware] after_response hook (best effort)
+        let handshake_response_tmp = Response::new(
+            status_code,
+            headers.clone(),
+            String::new(),
+            ttfb,
+            ttfb,
+            Duration::from_millis(0),
+        )
+        .unwrap();
+        for mw in &middlewares {
             let _ = mw
                 .after_response(&handshake_response_tmp)
                 .await
                 .map_err(|e| {
-                    error!("Cookie middleware error: {}", e);
+                    error!("Middleware error: {}", e);
                 });
         }
 

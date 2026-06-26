@@ -1,6 +1,6 @@
 use crate::assertion::AssertionResult;
 use crate::history::model::RequestSnapshot;
-use crate::http::{Client, Request, SseParser};
+use crate::http::{Client, Request, Response, SseParser};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
@@ -8,17 +8,38 @@ use crate::variable::{
     VariableContext, VariableResolver, capture::VariableCapture,
 };
 use crate::{Result, RupostError};
-use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderValue};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{error, info};
+use tracing::error;
+
+#[derive(Clone)]
+pub enum ExecutorMiddleware {
+    Cookie(Arc<CookieMiddleware>),
+    Routing(Arc<crate::middleware::routing::RoutingMiddleware>),
+}
+
+impl Middleware for ExecutorMiddleware {
+    async fn before_request(&self, req: &mut Request) -> Result<()> {
+        match self {
+            Self::Cookie(mw) => mw.before_request(req).await,
+            Self::Routing(mw) => mw.before_request(req).await,
+        }
+    }
+
+    async fn after_response(&self, resp: &Response) -> Result<()> {
+        match self {
+            Self::Cookie(mw) => mw.after_response(resp).await,
+            Self::Routing(mw) => mw.after_response(resp).await,
+        }
+    }
+}
 
 pub struct TestExecutor {
     client: Client,
     cookie_middleware: Option<Arc<CookieMiddleware>>,
     routing_middleware: Option<Arc<crate::middleware::routing::RoutingMiddleware>>,
+    middlewares: Vec<ExecutorMiddleware>,
     pub debug: bool,
     pub debug_on_failure: bool,
 }
@@ -50,6 +71,7 @@ impl TestExecutor {
             client: Client::new(None),
             cookie_middleware: None,
             routing_middleware: None,
+            middlewares: Vec::new(),
             debug: false,
             debug_on_failure: false,
         }
@@ -59,7 +81,8 @@ impl TestExecutor {
         mut self,
         middleware: Arc<crate::middleware::routing::RoutingMiddleware>,
     ) -> Self {
-        self.routing_middleware = Some(middleware);
+        self.routing_middleware = Some(middleware.clone());
+        self.middlewares.push(ExecutorMiddleware::Routing(middleware));
         self
     }
 
@@ -82,10 +105,12 @@ impl TestExecutor {
     pub fn with_cookies(cookie_file: PathBuf) -> Result<Self> {
         let middleware = CookieMiddleware::new_with_persistence(cookie_file)?;
         let cookie_store = middleware.cookie_store();
+        let cookie_middleware = Arc::new(middleware);
         Ok(Self {
             client: Client::with_cookie_store(cookie_store, None),
-            cookie_middleware: Some(Arc::new(middleware)),
+            cookie_middleware: Some(cookie_middleware.clone()),
             routing_middleware: None,
+            middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
             debug: false,
             debug_on_failure: false,
         })
@@ -95,10 +120,12 @@ impl TestExecutor {
     pub fn with_ephemeral_cookies() -> Self {
         let middleware = CookieMiddleware::new_ephemeral();
         let cookie_store = middleware.cookie_store();
+        let cookie_middleware = Arc::new(middleware);
         Self {
             client: Client::with_cookie_store(cookie_store, None),
-            cookie_middleware: Some(Arc::new(middleware)),
+            cookie_middleware: Some(cookie_middleware.clone()),
             routing_middleware: None,
+            middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
             debug: false,
             debug_on_failure: false,
         }
@@ -215,16 +242,15 @@ impl TestExecutor {
             }
         };
 
-        // 调用路由与 Key 注入中间件
-        if let Some(ref mw) = self.routing_middleware {
-            use crate::middleware::Middleware;
+        // 遍历调用中间件的 before_request 钩子
+        for mw in &self.middlewares {
             if let Err(e) = mw.before_request(&mut request).await {
                 return TestResult::error(
                     request_number,
                     name,
                     method,
                     url,
-                    format!("Routing middleware error: {}", e),
+                    format!("Middleware before_request error: {}", e),
                     start.elapsed(),
                 );
             }
@@ -275,7 +301,7 @@ impl TestExecutor {
                         source,
                         request_snapshot,
                         probe_result,
-                        self.cookie_middleware.clone(),
+                        self.middlewares.clone(),
                     )
                     .await;
                 }
@@ -307,10 +333,10 @@ impl TestExecutor {
                 )
                 .unwrap();
 
-                // [Cookie] Middleware after_response hook (best effort)
-                if let Some(mw) = &self.cookie_middleware {
+                // 遍历调用中间件的 after_response 钩子
+                for mw in &self.middlewares {
                     let _ = mw.after_response(&response_obj).await.map_err(|e| {
-                        error!("Cookie middleware error: {}", e);
+                        error!("Middleware after_response error: {}", e);
                     });
                 }
 

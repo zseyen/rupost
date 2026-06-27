@@ -349,3 +349,76 @@ CLOSE
     // 验证变量被第一步捕获出来，并立刻成功替换到了第二步的 SEND 载荷中
     assert_eq!(context.get("btc_price").as_deref(), Some("62500"));
 }
+
+#[tokio::test]
+async fn test_websocket_reconnect_and_flush_self_healing() {
+    use tokio_tungstenite::tungstenite::Message;
+
+    // 1. 启动第一个 Mock 服务器
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let ws_url = format!("ws://127.0.0.1:{}", port);
+
+    // 服务端只接受连接，然后立刻关闭它（模拟断线）
+    let server_handle1 = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
+                let _ = ws_stream.close(None).await;
+            }
+        }
+    });
+
+    // 2. 客户端建立逻辑 Session
+    use rupost::ws::{WsSession, WsClientConfig, WsFrame, WsFrameType, FrameDirection};
+    let config = WsClientConfig {
+        url: ws_url.clone(),
+        headers: Vec::new(),
+        ping_interval: Duration::from_secs(10),
+        handshake_timeout: Duration::from_secs(2),
+    };
+
+    let session = WsSession::connect(config).await.unwrap();
+    
+    // 等待第一个服务端将 Socket 关掉，触发客户端的 reconnect
+    server_handle1.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 3. 在重连期间，客户端发出一帧 Message A
+    let test_frame = WsFrame::new(
+        FrameDirection::Outbound,
+        WsFrameType::Text,
+        "message_a".to_string().into_bytes(),
+        0,
+    );
+    session.send_frame(test_frame).await.unwrap();
+
+    // 4. 在相同端口重新绑定启动第二个 Mock 服务端（模拟服务器恢复）
+    let next_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await.unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    
+    let _server_handle2 = tokio::spawn(async move {
+        if let Ok((stream, _)) = next_listener.accept().await {
+            if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
+                if let Some(Ok(Message::Text(txt))) = ws_stream.next().await {
+                    let _ = tx.send(txt);
+                    let _ = ws_stream.send(Message::Text("received_ok".to_string())).await;
+                }
+            }
+        }
+    });
+
+    // 监听逻辑广播流
+    let mut client_rx = session.subscribe();
+
+    // 5. 验证：由于指数退避重连，客户端会在约 2 秒内重新连上第二个服务端，并强时序补发 "message_a"！
+    let received_by_server = tokio::time::timeout(Duration::from_secs(5), rx).await.unwrap().unwrap();
+    assert_eq!(received_by_server, "message_a");
+
+    // 客户端也应该收到服务端回传的确认消息 "received_ok"
+    let received_by_client = tokio::time::timeout(Duration::from_secs(5), client_rx.recv()).await.unwrap().unwrap();
+    assert_eq!(received_by_client.payload_as_string(), "received_ok");
+    
+    // 6. 验证滑动历史缓冲区的 push 正常记录
+    let history = session.get_history();
+    assert!(history.len() >= 2, "History should record send and receive frames");
+}

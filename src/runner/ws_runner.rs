@@ -9,7 +9,7 @@ use crate::parser::types::ParsedRequest;
 use crate::runner::types::TestResult;
 use crate::variable::capture::VariableCapture;
 use crate::variable::{VariableContext, VariableResolver};
-use crate::ws::{WsClient, WsClientConfig, WsAction, WsActionParser, WsFrame, WsFrameType, FrameDirection, MsgPackDecoder, PayloadDecoder};
+use crate::ws::{WsSession, WsClientConfig, WsAction, WsActionParser, WsFrame, WsFrameType, FrameDirection, MsgPackDecoder, PayloadDecoder};
 use crate::runner::executor::ExecutorMiddleware;
 use crate::middleware::Middleware;
 
@@ -89,7 +89,7 @@ impl WsRunner {
             handshake_timeout,
         };
 
-        let client = match WsClient::connect(config).await {
+        let client = match WsSession::connect(config).await {
             Ok(c) => c,
             Err(e) => {
                 error!("WebSocket connection failed: {}", e);
@@ -364,7 +364,18 @@ impl WsRunner {
         }
 
         // 1. 如果 condition 是一个合法的 JSON，尝试执行 JSON 子集匹配
-        let msg_str = frame.payload_as_string();
+        let msg_str = if let Some(dec) = decoder {
+            match dec.decode(&frame.payload) {
+                Ok(val) => match val {
+                    Value::String(ref s) => s.clone(),
+                    _ => val.to_string(),
+                },
+                Err(_) => frame.payload_as_string(),
+            }
+        } else {
+            frame.payload_as_string()
+        };
+
         if let (Ok(cond_val), Ok(msg_val)) = (
             serde_json::from_str::<Value>(condition),
             serde_json::from_str::<Value>(&msg_str)

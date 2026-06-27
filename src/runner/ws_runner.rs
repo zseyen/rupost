@@ -135,11 +135,27 @@ impl WsRunner {
                                 match maybe_frame {
                                     Ok(frame) => {
                                         if frame.direction == FrameDirection::Inbound {
-                                            let payload_str = frame.payload_as_string();
+                                            // 自适应解码
+                                            let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                                if let Some(ref dec) = decoder {
+                                                    match dec.decode(&frame.payload) {
+                                                        Ok(val) => val.to_string(),
+                                                        Err(e) => {
+                                                            warn!("Decoder failed during matching: {}. Falling back to hex.", e);
+                                                            format!("0x{}", hex::encode(&frame.payload))
+                                                        }
+                                                    }
+                                                } else {
+                                                    format!("0x{}", hex::encode(&frame.payload))
+                                                }
+                                            } else {
+                                                frame.payload_as_string()
+                                            };
+
                                             // 检查是否能匹配上条件
                                             if Self::matches_condition(&payload_str, &resolved_condition) {
                                                 matched = true;
-                                                last_matching_payload = Some((frame.payload, frame.frame_type));
+                                                last_matching_payload = Some((frame.payload, frame.frame_type, payload_str));
                                                 break;
                                             }
                                         }
@@ -159,24 +175,8 @@ impl WsRunner {
                             resolved_condition
                         ));
                         break;
-                    } else if let Some((payload, frame_type)) = last_matching_payload {
+                    } else if let Some((_payload, _frame_type, decoded_body)) = last_matching_payload {
                         // 5. 匹配成功后，执行变量捕获与断言评估
-                        let decoded_body = if frame_type == WsFrameType::Binary {
-                            if let Some(ref dec) = decoder {
-                                match dec.decode(&payload) {
-                                    Ok(val) => val.to_string(),
-                                    Err(e) => {
-                                        warn!("Decoder failed: {}. Falling back to hex string.", e);
-                                        format!("0x{}", hex::encode(&payload))
-                                    }
-                                }
-                            } else {
-                                format!("0x{}", hex::encode(&payload))
-                            }
-                        } else {
-                            String::from_utf8_lossy(&payload).into_owned()
-                        };
-
                         info!("WS [MATCHED #{}] Decoded Body: {}", action_idx, decoded_body);
 
                         // 构造虚拟 Response

@@ -11,8 +11,10 @@
   - 编写了 `tests/websocket_integration_test.rs` 真实网络下的 E2E 集成测试，验证了高频心跳广播干扰下的 EXPECT 软匹配以及全局变量的 `@capture` 提取与 `@assert` 契约验证。
   - 所有新增的测试套件及原有全量用例在本地离线模式 (`cargo test --offline`) 下全部绿色跑通。
   - 优雅解决了 WebSocket 流式剧本 body 中局部 `@timeout` 与 HTTP 全局元数据解析器的冲突（当处于 WebSocket 用例且跨过空行后，自适应豁免 HTTP 级元数据提取，保留至 body 中）。
+  - **支持并验证了二进制解码匹配**：修复了二进制帧在 EXPECT 条件匹配判定前未提前解码的缺陷，补充了 `test_websocket_e2e_msgpack_binary` 测试，验证了 MsgPack 二进制消息解码匹配与断言提取。
+  - **新增了完整且规范的示例文件**：添加了 `examples/websocket.http`（标准 WS 交互语法）与 `examples/websocket.md`（带 MsgPack 解码的 Markdown 交互大纲），方便上手运行。
 - **版本控制**：
-  - 使用 `jj` 进行了原子级阶段提交，当前工作拷贝包含完备的 WebSocket 调试与测试 MVP 全量逻辑。
+  - 使用 `jj` 进行了多阶段原子化提交，工作拷贝结构整洁清晰。
 
 ## 下一步工作
 - **流量快照录制与双角色回放**：

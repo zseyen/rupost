@@ -16,7 +16,7 @@
 | **Clean Architecture 架构重构** | 彻底解耦 `src/parser` 与核心业务逻辑，下沉 HTTP 转换及 Mock 编译器，符合开闭原则 (OCP) | 已完成 | `src/parser/`, `src/http/request_builder.rs`, `src/mock/compiler.rs` |
 | **Sprint 4: 大模型流式调试与初始化脚手架命令** | 自动规整 `stream.llm.content`、非阻塞物理文件增量同步（`@stream_to`）、内置 Mock 大模型服务（`MockLlmServer`）、路由改写与密钥扫描、一键项目与模板初始化命令（`rupost init`，支持别名 `template`/`i`），支持 `.http` 与 `.md` 后缀自适应与安全覆盖预警。 | 已完成 | `src/template/`, `src/http/llm_adapter.rs`, `src/runner/file_sync.rs`, `src/middleware/routing.rs`, `tests/template_test.rs`, `tests/llm_mvp_test.rs`, `templates/config/rupost.toml` |
 | **元数据注释前缀兼容与运行脚本** | 兼容 `# @` 与 `// @` 风格元数据，编写一键测试 examples 的 run_all.sh 脚本 | 已完成 | `src/parser/http_file.rs`, `examples/run_all.sh` |
-| **Sprint 5: WebSocket 协议测试与调试** | 支持在 `.http`/`.md` 中以 `@websocket` 指令声明长连接，识别 `SEND` / `EXPECT` 流式剧本；提供双层后台心跳保活 Worker 协程，支持 MsgPack 二进制解码断言与级联捕获。 | 已完成 | `src/ws/`, `src/runner/ws_runner.rs`, `tests/websocket_integration_test.rs` |
+| **Sprint 5: WebSocket 协议测试与调试** | 支持在 `.http`/`.md` 中以 `@websocket` 指令声明长连接，识别 `SEND` / `EXPECT` 流式剧本；提供双层后台心跳保活 Worker 协程，支持 MsgPack 二进制解码断言与级联捕获。 | 已完成 | `src/ws/`, `src/runner/ws_runner.rs`, `tests/websocket_integration_test.rs`, `examples/websocket.http`, `examples/websocket.md` |
 | **Sprint 6: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
 ---
@@ -93,5 +93,5 @@
 ### Sprint 5: WebSocket 协议测试与调试
 1. **多路广播长连接底座 (`WsClient`)**：基于 Actor 模式实现统一的 WebSocket 长连接客户端，使用广播信道同步所有帧。配备后台双层 Worker 协程，支持发送 Ping/Pong 保活以及流式业务帧交换。
 2. **动作提取与流式剧本解析 (`WsActionParser`)**：支持行级切分解析 `SEND`、`EXPECT`、`WAIT` 和 `CLOSE` 动作序列。支持在 `.http` 或 `.md` 中以 `@websocket` 声明长连接测试，支持指定 `@decoder` 解码器。
-3. **自适应解码与级联断言匹配**：支持 MsgPack 二进制数据及 JSON 数据的自适应解码。对于匹配的帧支持级联的 `@assert` 断言和 `@capture` 变量提取，通过基于 JSONPath 的软匹配设计，即使在高频广播干扰下也能准确执行断言，无匹配帧雪崩。
+3. **自适应解码与级联断言匹配**：支持 MsgPack 二进制数据及 JSON 数据的自适应解码。对于匹配的帧支持级联的 `@assert` 断言和 `@capture` 变量提取，通过基于 JSONPath 的软匹配设计，即使在高频广播干扰下也能准确执行断言，无匹配帧雪崩。同时，支持在 EXPECT 匹配条件判定前将二进制帧通过转码器解码，从而能够进行子集与字段层面的精确逻辑判定。
 4. **引擎无侵入路由分发 (`WsRunner`)**：为 WebSocket 设计了专用的执行引擎 `WsRunner`，在 `TestExecutor` 中利用 3 行微手术分流，完全契合开闭原则 (OCP)，不侵入已有的 HTTP 和 SSE 架构设计。

@@ -48,6 +48,8 @@ impl WsActionParser {
                 // 2. 预期帧匹配动作
                 let mut condition = trimmed["EXPECT".len()..].trim().to_string();
                 let mut timeout = Duration::from_secs(5); // 默认 5 秒超时
+                let mut assertions = Vec::new();
+                let mut captures = Vec::new();
 
                 if condition.is_empty() {
                     let mut accumulated = String::new();
@@ -58,6 +60,8 @@ impl WsActionParser {
                             || next_trimmed.starts_with("WAIT")
                             || next_trimmed.starts_with("CLOSE")
                             || next_trimmed.starts_with("@timeout")
+                            || next_trimmed.starts_with("@assert")
+                            || next_trimmed.starts_with("@capture")
                         {
                             break;
                         }
@@ -67,28 +71,52 @@ impl WsActionParser {
                     condition = accumulated.trim().to_string();
                 }
 
-                // 检查下一行是否是局部超时的元数据指令 (例如 @timeout = 3s 或 @timeout = 3000)
-                if let Some(next_line) = lines.peek() {
+                // 循环读取紧随 EXPECT 其后的局部指令 (@timeout, @assert, @capture)
+                while let Some(next_line) = lines.peek() {
                     let next_trimmed = next_line.trim();
                     if next_trimmed.starts_with("@timeout") {
-                        let _ = lines.next(); // 消费掉这一行
+                        let _ = lines.next(); // 消费这一行
                         let content = next_trimmed["@timeout".len()..].trim();
+                        let content = content.trim_start_matches('=').trim();
                         if let Ok(d) = crate::parser::metadata::parse_duration(content) {
                             timeout = d;
-                        } else if let Some(pos) = content.find('=') {
-                            let val_str = content[pos + 1..].trim();
-                            if let Ok(d) = crate::parser::metadata::parse_duration(val_str) {
-                                timeout = d;
-                            } else if let Ok(ms) = val_str.parse::<u64>() {
-                                timeout = Duration::from_millis(ms);
-                            }
                         } else if let Ok(ms) = content.parse::<u64>() {
                             timeout = Duration::from_millis(ms);
                         }
+                    } else if next_trimmed.starts_with("@assert") {
+                        let _ = lines.next(); // 消费这一行
+                        let content = next_trimmed["@assert".len()..].trim();
+                        let content = content.trim_start_matches('=').trim().to_string();
+                        if !content.is_empty() {
+                            assertions.push(content);
+                        }
+                    } else if next_trimmed.starts_with("@capture") {
+                        let _ = lines.next(); // 消费这一行
+                        let content = next_trimmed["@capture".len()..].trim();
+                        let content = content.trim_start_matches('=').trim();
+                        let parts: Vec<&str> = content.split_whitespace().collect();
+                        if parts.len() >= 3 && parts[1] == "from" {
+                            let var_name = parts[0];
+                            if let Some(from_idx) = content.find("from") {
+                                let source_str = content[from_idx + 4..].trim();
+                                if !var_name.is_empty() && !source_str.is_empty() {
+                                    captures.push(crate::variable::capture::VariableCapture::parse(var_name, source_str));
+                                }
+                            }
+                        }
+                    } else {
+                        break;
                     }
                 }
 
-                actions.push(WsAction::Expect { condition, timeout });
+                let (segments, _) = precompile_jsonpath(&condition);
+                actions.push(WsAction::Expect {
+                    condition,
+                    segments,
+                    timeout,
+                    assertions,
+                    captures,
+                });
             } else if trimmed.starts_with("WAIT") {
                 // 3. 阻塞等待动作
                 if let Ok(ms) = trimmed["WAIT".len()..].trim().parse::<u64>() {
@@ -132,6 +160,33 @@ impl WsActionParser {
     }
 }
 
+fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>) {
+    let condition = condition.trim();
+    if condition.starts_with('{') || condition.starts_with('[') {
+        return (None, None);
+    }
+
+    if condition.starts_with('$') || condition.contains('.') || condition.contains('[') {
+        let operators = ["==", "!=", "contains"];
+        for op in &operators {
+            if let Some(pos) = condition.find(op) {
+                let path_part = condition[..pos].trim();
+                let val_part = condition[pos + op.len()..].trim();
+                let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
+                if !segments.is_empty() {
+                    return (Some(segments), Some(val_part.to_string()));
+                }
+            }
+        }
+        let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(condition);
+        if !segments.is_empty() {
+            return (Some(segments), None);
+        }
+    }
+
+    (None, None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,7 +211,7 @@ mod tests {
             panic!("Expected Send action");
         }
 
-        if let WsAction::Expect { condition, timeout } = &actions[1] {
+        if let WsAction::Expect { condition, timeout, .. } = &actions[1] {
             assert_eq!(condition, "{\"response\": \"pong\"}");
             assert_eq!(timeout.as_millis(), 3000);
         } else {
@@ -207,6 +262,29 @@ mod tests {
         }
         if let WsAction::Expect { timeout, .. } = &actions[1] {
             assert_eq!(timeout.as_millis(), 500);
+        } else {
+            panic!("Expected Expect action");
+        }
+    }
+
+    #[test]
+    fn test_parse_expect_asserts_and_captures() {
+        let body = r#"
+        EXPECT $.event == "ticker"
+        @timeout = 5s
+        @assert body.price > 100
+        @capture btc_val from body.price
+        "#;
+        let actions = WsActionParser::parse_body(body).unwrap();
+        assert_eq!(actions.len(), 1);
+        if let WsAction::Expect { condition, segments, timeout, assertions, captures } = &actions[0] {
+            assert_eq!(condition, "$.event == \"ticker\"");
+            assert_eq!(segments.as_ref().unwrap(), &vec!["event".to_string()]);
+            assert_eq!(timeout.as_secs(), 5);
+            assert_eq!(assertions.len(), 1);
+            assert_eq!(assertions[0], "body.price > 100");
+            assert_eq!(captures.len(), 1);
+            assert_eq!(captures[0].name, "btc_val");
         } else {
             panic!("Expected Expect action");
         }

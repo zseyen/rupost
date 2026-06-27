@@ -162,7 +162,13 @@ impl WsRunner {
                     info!("WS [WAIT #{}] sleeping for {:?}", action_idx, duration);
                     tokio::time::sleep(duration).await;
                 }
-                WsAction::Expect { condition, timeout } => {
+                WsAction::Expect {
+                    condition,
+                    segments,
+                    timeout,
+                    assertions,
+                    captures,
+                } => {
                     // 动态替换 Expect 中的匹配变量
                     let resolved_condition = VariableResolver::resolve(&condition, context);
                     info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
@@ -182,25 +188,25 @@ impl WsRunner {
                                 match maybe_frame {
                                     Ok(frame) => {
                                         if frame.direction == FrameDirection::Inbound {
-                                            // 自适应解码
-                                            let payload_str = if frame.frame_type == WsFrameType::Binary {
-                                                if let Some(ref dec) = decoder {
-                                                    match dec.decode(&frame.payload) {
-                                                        Ok(val) => val.to_string(),
-                                                        Err(e) => {
-                                                            warn!("Decoder failed during matching: {}. Falling back to hex.", e);
-                                                            format!("0x{}", hex::encode(&frame.payload))
+                                            // 检查是否能匹配上条件
+                                            if Self::matches_condition(&frame, &resolved_condition, &segments, decoder.as_deref()) {
+                                                // 自适应解码出文本用于后续打印与 capture 提取
+                                                let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                                    if let Some(ref dec) = decoder {
+                                                        match dec.decode(&frame.payload) {
+                                                            Ok(val) => val.to_string(),
+                                                            Err(e) => {
+                                                                warn!("Decoder failed during matching: {}. Falling back to hex.", e);
+                                                                format!("0x{}", hex::encode(&frame.payload))
+                                                            }
                                                         }
+                                                    } else {
+                                                        format!("0x{}", hex::encode(&frame.payload))
                                                     }
                                                 } else {
-                                                    format!("0x{}", hex::encode(&frame.payload))
-                                                }
-                                            } else {
-                                                frame.payload_as_string()
-                                            };
+                                                    frame.payload_as_string()
+                                                };
 
-                                            // 检查是否能匹配上条件
-                                            if Self::matches_condition(&payload_str, &resolved_condition) {
                                                 matched = true;
                                                 last_matching_payload = Some((frame.payload, frame.frame_type, payload_str));
                                                 break;
@@ -223,20 +229,42 @@ impl WsRunner {
                         ));
                         break;
                     } else if let Some((_payload, _frame_type, decoded_body)) = last_matching_payload {
-                        // 5. 匹配成功后，执行变量捕获与断言评估
                         info!("WS [MATCHED #{}] Decoded Body: {}", action_idx, decoded_body);
 
-                        // 构造虚拟 Response
+                        // 构造虚拟 Response 用于提取与断言评估
                         let virtual_response = Response::new(
                             200,
                             HeaderMap::new(),
-                            decoded_body,
+                            decoded_body.clone(),
                             Duration::from_millis(0),
                             Duration::from_millis(0),
                             Duration::from_millis(0),
                         ).unwrap();
 
-                        // 运行变量捕获
+                        // 1. 运行步骤级局部捕获 (Stage 4)
+                        if !captures.is_empty() {
+                            VariableCapture::capture_normal(
+                                &captures,
+                                &virtual_response.body,
+                                &virtual_response.headers,
+                                context,
+                            );
+                        }
+
+                        // 2. 运行步骤级局部断言 (Stage 4)
+                        if !assertions.is_empty() {
+                            let resolved_local_assertions: Vec<String> = assertions
+                                .iter()
+                                .map(|a| VariableResolver::resolve(a, context))
+                                .collect();
+                            let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
+                            for mut r in local_assert_results {
+                                r.stream_event_index = Some(action_idx);
+                                assertion_results.push(r);
+                            }
+                        }
+
+                        // 3. 运行全局变量捕获（对最后一个匹配帧适用，保持向后兼容）
                         VariableCapture::capture_normal(
                             &captures_to_eval,
                             &virtual_response.body,
@@ -244,7 +272,7 @@ impl WsRunner {
                             context,
                         );
 
-                        // 评估断言
+                        // 4. 评估全局断言（对最后一个匹配帧适用，保持向后兼容）
                         let resolved_assertions: Vec<String> = assertions_to_eval
                             .iter()
                             .map(|a| VariableResolver::resolve(a, context))
@@ -307,22 +335,46 @@ impl WsRunner {
     }
 
     /// 判定接收帧内容是否匹配 Expect 条件
-    fn matches_condition(msg_str: &str, condition: &str) -> bool {
+    fn matches_condition(
+        frame: &WsFrame,
+        condition: &str,
+        segments: &Option<Vec<String>>,
+        decoder: Option<&dyn crate::ws::PayloadDecoder>,
+    ) -> bool {
+        use crate::ws::matcher::{FrameMatcher, JsonPathMatcher, TextContainsMatcher};
+
         let condition = condition.trim();
         if condition.is_empty() {
             return true;
         }
 
+        // 如果有预编译的 segments，使用 JsonPathMatcher (Stage 3)
+        if let Some(segs) = segments {
+            let expected_value = if let Some(pos) = condition.find("==") {
+                Some(condition[pos + 2..].trim().to_string())
+            } else if let Some(pos) = condition.find("!=") {
+                Some(condition[pos + 2..].trim().to_string())
+            } else if let Some(pos) = condition.find("contains") {
+                Some(condition[pos + "contains".len()..].trim().to_string())
+            } else {
+                None
+            };
+            let matcher = JsonPathMatcher::new(segs.clone(), expected_value);
+            return matcher.matches(frame, decoder);
+        }
+
         // 1. 如果 condition 是一个合法的 JSON，尝试执行 JSON 子集匹配
+        let msg_str = frame.payload_as_string();
         if let (Ok(cond_val), Ok(msg_val)) = (
             serde_json::from_str::<Value>(condition),
-            serde_json::from_str::<Value>(msg_str)
+            serde_json::from_str::<Value>(&msg_str)
         ) {
             return Self::match_json_subset(&cond_val, &msg_val);
         }
 
-        // 2. 否则，降级使用子字符串包含校验
-        msg_str.contains(condition)
+        // 2. 否则，降级使用子字符串包含匹配器
+        let matcher = TextContainsMatcher { pattern: condition.to_string() };
+        matcher.matches(frame, decoder)
     }
 
     /// 检查 pattern 是否为 target 的子集

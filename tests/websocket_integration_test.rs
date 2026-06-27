@@ -299,3 +299,53 @@ CLOSE
     assert_eq!(results.len(), 1);
     assert!(results[0].success, "WebSocket upgrade handshake should inherit HTTP session cookie");
 }
+
+#[tokio::test]
+async fn test_websocket_step_assertions_and_captures() {
+    let (ws_url, _server_handle) = start_ws_mock_server().await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let http_file = temp_dir.path().join("ws_step_asserts.http");
+    
+    let content = format!(
+        r#"
+### WS Step Assertions & Variable Cascade test
+@websocket
+GET {}
+
+SEND {{ "action": "subscribe" }}
+EXPECT {{"event": "ticker"}}
+@timeout = 3s
+@assert body.price > 60000
+@assert body.symbol == "BTC"
+@capture btc_price from body.price
+
+SEND {{ "action": "log_price", "last_price": "{{btc_price}}" }}
+EXPECT {{"event": "ticker"}}
+@timeout = 3s
+CLOSE
+"#,
+        ws_url
+    );
+    std::fs::write(&http_file, content).unwrap();
+
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+    assert_eq!(results.len(), 1);
+
+    let res = &results[0];
+    assert!(res.success, "WS Step Assertions & Captures E2E should pass. Error: {:?}", res.error);
+
+    // 验证局部断言结果已经被合并到了结果断言集中，且带有了 stream_event_index 标记！
+    assert!(res.assertions.len() >= 2, "Should contain step level assertions");
+    for assert in &res.assertions {
+        assert!(assert.passed, "Step level assertion failed: {}", assert.raw);
+        assert_eq!(assert.stream_event_index, Some(2)); // 它发生在第 2 个动作（EXPECT，1-based 动作顺序中：1是SEND，2是EXPECT）
+    }
+
+    // 验证变量被第一步捕获出来，并立刻成功替换到了第二步的 SEND 载荷中
+    assert_eq!(context.get("btc_price").as_deref(), Some("62500"));
+}

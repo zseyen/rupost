@@ -66,8 +66,14 @@ pub enum WsAction {
     Expect {
         /// 匹配条件 (如 JSONPath 或普通文本包含)
         condition: String,
+        /// 预编译好的 JSONPath segments
+        segments: Option<Vec<String>>,
         /// 匹配的超时时限
         timeout: Duration,
+        /// 步骤级局部断言列表
+        assertions: Vec<String>,
+        /// 步骤级局部变量捕获列表
+        captures: Vec<crate::variable::capture::VariableCapture>,
     },
     /// 主动断开连接
     Close,

@@ -67,15 +67,23 @@ impl WsActionParser {
                     condition = accumulated.trim().to_string();
                 }
 
-                // 检查下一行是否是局部超时的元数据指令 (例如 @timeout = 3000)
+                // 检查下一行是否是局部超时的元数据指令 (例如 @timeout = 3s 或 @timeout = 3000)
                 if let Some(next_line) = lines.peek() {
                     let next_trimmed = next_line.trim();
                     if next_trimmed.starts_with("@timeout") {
-                        let timeout_line = lines.next().unwrap();
-                        if let Some(pos) = timeout_line.find('=') {
-                            if let Ok(ms) = timeout_line[pos + 1..].trim().parse::<u64>() {
+                        let _ = lines.next(); // 消费掉这一行
+                        let content = next_trimmed["@timeout".len()..].trim();
+                        if let Ok(d) = crate::parser::metadata::parse_duration(content) {
+                            timeout = d;
+                        } else if let Some(pos) = content.find('=') {
+                            let val_str = content[pos + 1..].trim();
+                            if let Ok(d) = crate::parser::metadata::parse_duration(val_str) {
+                                timeout = d;
+                            } else if let Ok(ms) = val_str.parse::<u64>() {
                                 timeout = Duration::from_millis(ms);
                             }
+                        } else if let Ok(ms) = content.parse::<u64>() {
+                            timeout = Duration::from_millis(ms);
                         }
                     }
                 }
@@ -179,6 +187,28 @@ mod tests {
             assert!(frame.payload_as_string().contains("implicit"));
         } else {
             panic!("Expected implicit Send action");
+        }
+    }
+
+    #[test]
+    fn test_parse_duration_units() {
+        let body = r#"
+        EXPECT {"response": "pong"}
+        @timeout = 3s
+        EXPECT {"response": "pong2"}
+        @timeout 500ms
+        "#;
+        let actions = WsActionParser::parse_body(body).unwrap();
+        assert_eq!(actions.len(), 2);
+        if let WsAction::Expect { timeout, .. } = &actions[0] {
+            assert_eq!(timeout.as_secs(), 3);
+        } else {
+            panic!("Expected Expect action");
+        }
+        if let WsAction::Expect { timeout, .. } = &actions[1] {
+            assert_eq!(timeout.as_millis(), 500);
+        } else {
+            panic!("Expected Expect action");
         }
     }
 }

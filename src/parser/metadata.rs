@@ -204,9 +204,10 @@ fn parse_base_path(content: &str) -> ParseResult<Metadata> {
     Ok(Metadata::BasePath(content.to_string()))
 }
 
-/// 解析时间字符串（支持 "5s", "1000ms", "2m"）
+/// 解析时间字符串（支持 "5s", "1000ms", "2m" 以及带等号的 "= 3s", "= 100ms"）
 pub fn parse_duration(s: &str) -> ParseResult<Duration> {
     let s = s.trim();
+    let s = s.strip_prefix('=').unwrap_or(s).trim();
 
     if let Some(ms) = s.strip_suffix("ms") {
         let millis: u64 = ms.parse().map_err(|_| ParseError::InvalidMetadata {
@@ -276,6 +277,14 @@ mod tests {
     fn test_parse_timeout() {
         let result = parse_metadata("@timeout 5s").unwrap().unwrap();
         assert!(matches!(result, Metadata::Timeout(d) if d == Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn test_parse_duration_with_equals() {
+        let d = parse_duration("= 3s").unwrap();
+        assert_eq!(d, Duration::from_secs(3));
+        let d = parse_duration("=100ms").unwrap();
+        assert_eq!(d, Duration::from_millis(100));
     }
 
     #[test]

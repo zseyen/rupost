@@ -22,6 +22,8 @@ pub struct CertInfo {
 pub struct DiagnosticsReport {
     pub url: String,
     pub is_https: bool,
+    pub is_websocket: bool,
+    pub ws_upgrade_success: Option<bool>,
     pub resolved_ips: Vec<String>,
     pub dns_lookup_duration: Duration,
     pub tcp_connect_duration: Duration,
@@ -92,11 +94,15 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
         .host_str()
         .ok_or_else(|| "Missing host in URL".to_string())?;
 
+    // 协议识别
+    let orig_scheme = url.scheme().to_lowercase();
+    let is_websocket = orig_scheme == "ws" || orig_scheme == "wss";
+    let is_https = orig_scheme == "https" || orig_scheme == "wss";
+
     // 解析端口或默认端口
     let port = url
         .port_or_known_default()
-        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
-    let is_https = url.scheme() == "https";
+        .unwrap_or(if is_https { 443 } else { 80 });
 
     // 1. DNS 诊断
     let dns_start = Instant::now();
@@ -124,6 +130,26 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     let mut http_status = None;
     let mut http_version = None;
     let mut ttfb = None;
+
+    // 根据是否是 WebSocket，自适应组装 Upgrade 握手或常规 HTTP 请求
+    let request_payload = if is_websocket {
+        format!(
+            "GET {} HTTP/1.1\r\n\
+             Host: {}\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n\r\n",
+            url.path(),
+            host
+        )
+    } else {
+        format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            url.path(),
+            host
+        )
+    };
 
     if is_https {
         // 3. TLS 握手诊断
@@ -159,23 +185,18 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
 
         // 4. HTTP TTFB (HTTPS)
         let ttfb_start = Instant::now();
-        let request_payload = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            url.path(),
-            host
-        );
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         tls_stream
             .write_all(request_payload.as_bytes())
             .await
-            .map_err(|e| format!("Failed to send HTTP request over TLS: {}", e))?;
+            .map_err(|e| format!("Failed to send request over TLS: {}", e))?;
         tls_stream.flush().await.ok();
 
         let mut buffer = [0u8; 1024];
         let n = tls_stream
             .read(&mut buffer)
             .await
-            .map_err(|e| format!("Failed to read HTTP response over TLS: {}", e))?;
+            .map_err(|e| format!("Failed to read response over TLS: {}", e))?;
         ttfb = Some(ttfb_start.elapsed());
 
         if n > 0
@@ -187,24 +208,19 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     } else {
         // 4. HTTP TTFB (HTTP)
         let ttfb_start = Instant::now();
-        let request_payload = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            url.path(),
-            host
-        );
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tcp_stream;
         stream
             .write_all(request_payload.as_bytes())
             .await
-            .map_err(|e| format!("Failed to send HTTP request: {}", e))?;
+            .map_err(|e| format!("Failed to send request: {}", e))?;
         stream.flush().await.ok();
 
         let mut buffer = [0u8; 1024];
         let n = stream
             .read(&mut buffer)
             .await
-            .map_err(|e| format!("Failed to read HTTP response: {}", e))?;
+            .map_err(|e| format!("Failed to read response: {}", e))?;
         ttfb = Some(ttfb_start.elapsed());
 
         if n > 0
@@ -216,10 +232,18 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     }
 
     let total_duration = start_all.elapsed();
+    
+    let ws_upgrade_success = if is_websocket {
+        Some(http_status == Some(101))
+    } else {
+        None
+    };
 
     Ok(DiagnosticsReport {
         url: url_str.to_string(),
         is_https,
+        is_websocket,
+        ws_upgrade_success,
         resolved_ips,
         dns_lookup_duration,
         tcp_connect_duration,
@@ -245,15 +269,14 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     );
 
     println!("{:<14}: {}", "Target URL", report.url);
-    println!(
-        "{:<14}: {}",
-        "Scheme",
-        if report.is_https {
-            "HTTPS".green().bold()
-        } else {
-            "HTTP".yellow().bold()
-        }
-    );
+    
+    let scheme_str = if report.is_websocket {
+        if report.is_https { "WSS".magenta().bold() } else { "WS".cyan().bold() }
+    } else {
+        if report.is_https { "HTTPS".green().bold() } else { "HTTP".yellow().bold() }
+    };
+    println!("{:<14}: {}", "Scheme", scheme_str);
+    
     println!(
         "{:<14}: [{}]",
         "Resolved IPs",
@@ -344,20 +367,47 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
         println!();
     }
 
-    println!("{}", "🌐  HTTP Protocol Info".bold());
-    println!("{}", "-----------------------------------------".cyan());
-    if let Some(status) = report.http_status {
-        let status_colored = if status >= 400 {
-            status.to_string().red().bold()
-        } else {
-            status.to_string().green().bold()
-        };
-        println!("{:<14}: {}", "Status Code", status_colored);
+    if report.is_websocket {
+        println!("{}", "🔌  WebSocket Handshake Info".bold());
+        println!("{}", "-----------------------------------------".cyan());
+        match report.ws_upgrade_success {
+            Some(true) => {
+                println!(
+                    "{} {}",
+                    "🟢 [WS UPGRADE SUCCESS]".green().bold(),
+                    "WebSocket Upgrade completed successfully (101 Switching Protocols)".white()
+                );
+            }
+            Some(false) | None => {
+                println!(
+                    "{} {}",
+                    "❌ [WS UPGRADE FAILED]".red().bold(),
+                    "WebSocket Upgrade handshake failed!".red()
+                );
+                println!(
+                    "{}",
+                    "💡 Hint: Did not return 101 Switching Protocols. Check if your Nginx/Gateway\n   is missing 'Upgrade' and 'Connection' headers configuration!"
+                        .yellow()
+                );
+            }
+        }
+        println!();
     } else {
-        println!("{:<14}: {}", "Status Code", "Failed to get response".red());
-    }
-    if let Some(version) = &report.http_version {
-        println!("{:<14}: {}", "HTTP Version", version);
+        println!("{}", "🌐  HTTP Protocol Info".bold());
+        println!("{}", "-----------------------------------------".cyan());
+        if let Some(status) = report.http_status {
+            let status_colored = if status >= 400 {
+                status.to_string().red().bold()
+            } else {
+                status.to_string().green().bold()
+            };
+            println!("{:<14}: {}", "Status Code", status_colored);
+        } else {
+            println!("{:<14}: {}", "Status Code", "Failed to get response".red());
+        }
+        if let Some(version) = &report.http_version {
+            println!("{:<14}: {}", "HTTP Version", version);
+        }
     }
     println!(
         "{}",

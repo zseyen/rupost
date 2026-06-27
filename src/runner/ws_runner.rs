@@ -259,7 +259,7 @@ impl WsRunner {
                                 .collect();
                             let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
                             for mut r in local_assert_results {
-                                r.stream_event_index = Some(action_idx);
+                                r.stream_event_index = Some(action_idx + 1);
                                 assertion_results.push(r);
                             }
                         }

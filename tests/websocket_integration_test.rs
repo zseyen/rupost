@@ -47,7 +47,7 @@ async fn start_ws_mock_server() -> (String, tokio::task::JoinHandle<()>) {
                                         let bin = rmp_serde::to_vec_named(&ticker).unwrap();
                                         let ticker_msg = Message::Binary(bin);
                                         let _ = ws_stream.send(ticker_msg).await;
-                                    } else if txt.contains("subscribe") {
+                                    } else if txt.contains("subscribe") || txt.contains("log_price") {
                                         // 延迟发送预期的订阅通知帧
                                         tokio::time::sleep(Duration::from_millis(200)).await;
                                         let ticker_msg = Message::Text(r#"{"event":"ticker","symbol":"BTC","price":62500}"#.to_string());
@@ -359,11 +359,11 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     let port = listener.local_addr().unwrap().port();
     let ws_url = format!("ws://127.0.0.1:{}", port);
 
-    // 服务端只接受连接，然后立刻关闭它（模拟断线）
+    // 服务端只接受连接，然后立刻物理断开（模拟断网物理断线而非发送优雅 Close 帧）
     let server_handle1 = tokio::spawn(async move {
         if let Ok((stream, _)) = listener.accept().await {
-            if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
-                let _ = ws_stream.close(None).await;
+            if let Ok(ws_stream) = tokio_tungstenite::accept_async(stream).await {
+                drop(ws_stream);
             }
         }
     });

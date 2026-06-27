@@ -196,7 +196,7 @@ impl TestExecutor {
         VariableResolver::resolve_parsed_request(&mut parsed, context);
 
         if parsed.metadata.websocket {
-            return WsRunner::execute(parsed, request_number, context).await;
+            return WsRunner::execute(parsed, request_number, context, self.middlewares.clone()).await;
         }
 
         let method = parsed.method_or_default().to_string();

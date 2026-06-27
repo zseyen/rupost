@@ -4,41 +4,89 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 
 use crate::assertion::{evaluate_assertions, AssertionResult};
-use crate::http::Response;
+use crate::http::{Request, Response};
 use crate::parser::types::ParsedRequest;
 use crate::runner::types::TestResult;
 use crate::variable::capture::VariableCapture;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::ws::{WsClient, WsClientConfig, WsAction, WsActionParser, WsFrame, WsFrameType, FrameDirection, MsgPackDecoder, PayloadDecoder};
+use crate::runner::executor::ExecutorMiddleware;
+use crate::middleware::Middleware;
 
 pub struct WsRunner;
 
 impl WsRunner {
     /// 执行 WebSocket 流式剧本用例
     pub async fn execute(
-        request: ParsedRequest,
+        parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
+        middlewares: Vec<ExecutorMiddleware>,
     ) -> TestResult {
         let start_time = Instant::now();
-        let name = request.name().map(|s| s.to_string());
+        let name = parsed.name().map(|s| s.to_string());
+        let initial_url = parsed.url.clone();
         
-        // 1. 变量解析 URL 与 Headers
-        let resolved_url = VariableResolver::resolve(&request.url, context);
+        // 保存断言、捕获列表与超时/Body信息
+        let assertions_to_eval = parsed.metadata.assertions.clone();
+        let captures_to_eval = parsed.metadata.captures.clone();
+        let decoder_name = parsed.metadata.decoder.clone();
+        let handshake_timeout = parsed.metadata.timeout.unwrap_or(Duration::from_secs(5));
+        let body_content = parsed.body.clone().unwrap_or_default();
+
+        // 1. 构建临时的 HTTP Request 升级握手，用于流经中间件管道（注入 Cookie 与安全头）
+        let mut temp_req = match Request::try_from(parsed) {
+            Ok(req) => req,
+            Err(e) => {
+                return TestResult::error(
+                    request_number,
+                    name,
+                    "GET".to_string(),
+                    initial_url,
+                    format!("Request build failed for middleware pipeline: {}", e),
+                    start_time.elapsed(),
+                );
+            }
+        };
+
+        // 2. 调用所有中间件的 before_request 拦截与追加逻辑
+        for mw in &middlewares {
+            if let Err(e) = mw.before_request(&mut temp_req).await {
+                return TestResult::error(
+                    request_number,
+                    name,
+                    "GET".to_string(),
+                    temp_req.url.to_string(),
+                    format!("Middleware before_request error: {}", e),
+                    start_time.elapsed(),
+                );
+            }
+        }
+
+        // 3. 提取修改后的 URL，自适应协议转写为 ws:// 或 wss://
+        let mut resolved_url = temp_req.url.to_string();
+        if resolved_url.starts_with("https://") {
+            resolved_url = resolved_url.replace("https://", "wss://");
+        } else if resolved_url.starts_with("http://") {
+            resolved_url = resolved_url.replace("http://", "ws://");
+        }
+
+        // 提取修改后的 Headers
         let mut resolved_headers = Vec::new();
-        for (k, v) in &request.headers {
-            let resolved_val = VariableResolver::resolve(v, context);
-            resolved_headers.push((k.clone(), resolved_val));
+        for (k, v) in temp_req.headers.iter() {
+            if let Ok(v_str) = v.to_str() {
+                resolved_headers.push((k.as_str().to_string(), v_str.to_string()));
+            }
         }
 
         info!("Starting WebSocket session to {}", resolved_url);
 
-        // 2. 建立 WebSocket 连接
+        // 4. 建立 WebSocket 连接
         let config = WsClientConfig {
             url: resolved_url.clone(),
             headers: resolved_headers,
             ping_interval: Duration::from_secs(10), // 默认 10 秒自动心跳保活
-            handshake_timeout: request.metadata.timeout.unwrap_or(Duration::from_secs(5)),
+            handshake_timeout,
         };
 
         let client = match WsClient::connect(config).await {
@@ -56,9 +104,8 @@ impl WsRunner {
             }
         };
 
-        // 3. 解析 Body 文本为 WsAction 流
-        let body_content = request.body.as_deref().unwrap_or("");
-        let actions = match WsActionParser::parse_body(body_content) {
+        // 5. 解析 Body 文本为 WsAction 流
+        let actions = match WsActionParser::parse_body(&body_content) {
             Ok(act) => act,
             Err(e) => {
                 error!("Failed to parse WsActions from body: {}", e);
@@ -78,7 +125,7 @@ impl WsRunner {
         let mut final_error = None;
 
         // 获取解码器适配器
-        let decoder: Option<Box<dyn PayloadDecoder>> = match request.metadata.decoder.as_deref() {
+        let decoder: Option<Box<dyn PayloadDecoder>> = match decoder_name.as_deref() {
             Some("messagepack") => Some(Box::new(MsgPackDecoder)),
             Some(other) => {
                 warn!("Unsupported decoder: {}, falling back to None", other);
@@ -87,7 +134,7 @@ impl WsRunner {
             None => None,
         };
 
-        // 4. 驱动 WsAction 执行流
+        // 6. 驱动 WsAction 执行流
         for (action_idx, action) in actions.into_iter().enumerate() {
             match action {
                 WsAction::Connect { .. } => {
@@ -191,14 +238,14 @@ impl WsRunner {
 
                         // 运行变量捕获
                         VariableCapture::capture_normal(
-                            &request.metadata.captures,
+                            &captures_to_eval,
                             &virtual_response.body,
                             &virtual_response.headers,
                             context,
                         );
 
                         // 评估断言
-                        let resolved_assertions: Vec<String> = request.metadata.assertions
+                        let resolved_assertions: Vec<String> = assertions_to_eval
                             .iter()
                             .map(|a| VariableResolver::resolve(a, context))
                             .collect();
@@ -239,7 +286,7 @@ impl WsRunner {
             let summary_response = Response::new(
                 200,
                 HeaderMap::new(),
-                format!("WebSocket Session Completed Successfully. Run {} actions.", action_idx_count(body_content)),
+                format!("WebSocket Session Completed Successfully. Run {} actions.", action_idx_count(&body_content)),
                 duration,
                 Duration::from_millis(0),
                 Duration::from_millis(0),

@@ -107,12 +107,12 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 协作流程与规则
 
-在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/development_workflow.md)。该流程规范由以下核心环节构成：
+在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_workflow.md)。该流程规范由以下核心环节构成：
 
 1. **功能分析与架构设计 (Stage 0 & 1)**：所有新功能或重大变更必须先由 **架构师** 通过 `brainstorming` 流程输出 PRD 与设计文档（存放在 `doc/plans/`），并确保设计符合 **Clean Architecture** 规范。
 2. **关键代码与单元测试 (Stage 2 & 3)**：在动工前先设计核心 Trait 与数据模型，单元测试必须在 `mod tests` 编写，并通过 Mock 隔离外部网络与文件 IO。
 3. **具体实现与 E2E 校验 (Stage 4 & 5)**：极致简洁实现，利用 `jj` 命令进行原子化提交，并在 `tests/` 下编写真实环境的 E2E 校验。
-4. **进度归档与文档更新 (Stage 6)**：将已完成功能记录到唯一的进度事实来源 [progress_summary.md](file:///Users/zsyzzx/project/rust/rupost/doc/progress_summary.md) 中，并同步更新 [README.md](file:///Users/zsyzzx/project/rust/rupost/README.md) 与 `checkpoint.md`。
+4. **进度归档与文档更新 (Stage 6)**：将已完成功能记录到唯一的进度事实来源 [progress_summary.md](file:///Users/zsyzzx/project/rust/rupost/doc/plans/progress_summary.md) 中，并同步更新 [README.md](file:///Users/zsyzzx/project/rust/rupost/README.md) 与 `checkpoint.md`。
 
 ---
 

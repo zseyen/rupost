@@ -1,0 +1,54 @@
+### 1. HTTP 模拟用户登录，动态获取 JWT Token
+# @name UserLogin
+POST https://api.chat.com/auth/login
+Content-Type: application/json
+
+{
+  "username": "frontend_trader",
+  "password": "secure_password_123"
+}
+
+# 动态提取登录成功后返回的 token
+@capture user_token from body.token
+
+### 2. WebSocket 升级握手，继承 Token 与 Cookie 会话
+# @name WS_Interaction_Session
+# @websocket
+# @assert body.connection == "established"
+# 握手时自动带上第一步捕获的 Token，并继承 CookieStore 里的 session_id
+GET wss://api.chat.com/v1/ws?token={{user_token}}
+
+# 第三步：模拟前端点击“加入房间 501”的指令交互 (Command-Ack)
+SEND {
+  "action": "join_room",
+  "room_id": "room_501",
+  "timestamp": 1719590400
+}
+
+# EXPECT 锁：忽略期间一切高频心跳，精准匹配 join_ok 事件，并捕获会话流水号
+EXPECT $.event == "join_ok"
+@timeout = 3000
+@assert body.room_id == "room_501"
+@capture session_flow_id from body.flow_id
+
+# 第四步：模拟前端在聊天室中发送弹幕，引用刚才捕获的流水号，并附带变量
+SEND {
+  "action": "send_bullet",
+  "flow_id": "{{session_flow_id}}",
+  "content": "BTC to the moon!",
+  "device": "WebChrome"
+}
+
+# 验证单播 ACK 回执
+EXPECT $.event == "bullet_ack"
+@timeout = 3000
+@assert body.status == "delivered"
+@capture bullet_msg_id from body.msg_id
+
+# 第五步：验证组播广播，检验包含运算符
+EXPECT $.content contains "to the moon"
+@timeout = 3000
+@assert body.sender == "frontend_trader"
+
+# 第六步：主动优雅 CLOSE 连接
+CLOSE

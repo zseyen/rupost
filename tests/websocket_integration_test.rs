@@ -476,3 +476,26 @@ CLOSE
         "Actual body: {}", resp.body
     );
 }
+
+#[tokio::test]
+async fn test_websocket_wss_handshake_crypto_provider() {
+    // 1. 初始化 Rustls CryptoProvider (即使在测试环境中)
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    use rupost::ws::{WsSession, WsClientConfig};
+    let config = WsClientConfig {
+        url: "wss://127.0.0.1:54321".to_string(),
+        headers: Vec::new(),
+        ping_interval: Duration::from_secs(10),
+        handshake_timeout: Duration::from_secs(1),
+    };
+
+    // 2. 尝试向无监听的加密地址建连。若 CryptoProvider 初始化成功，会返回普通的 ConnectRefused 或 TimedOut 错误；
+    //    若未初始化或配置失败，则会在此行发生 panic。
+    let result = WsSession::connect(config).await;
+    assert!(result.is_err(), "WSS connect to dead port should fail");
+    let err_str = format!("{:?}", result.err().unwrap());
+    
+    // 3. 校验返回的是正常网络 IO/Handshake 失败，而非 CryptoProvider 丢失 panic。
+    assert!(!err_str.contains("CryptoProvider"), "Should not complain about missing CryptoProvider");
+}

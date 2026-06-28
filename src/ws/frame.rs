@@ -68,6 +68,10 @@ pub enum WsAction {
         condition: String,
         /// 预编译好的 JSONPath segments
         segments: Option<Vec<String>>,
+        /// 预编译出的期望值模板
+        expected_value: Option<String>,
+        /// 解析出的匹配运算符（如 "==", "!=", "contains"）
+        operator: Option<String>,
         /// 匹配的超时时限
         timeout: Duration,
         /// 步骤级局部断言列表

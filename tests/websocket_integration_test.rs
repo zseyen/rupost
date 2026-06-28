@@ -422,3 +422,57 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     let history = session.get_history();
     assert!(history.len() >= 2, "History should record send and receive frames");
 }
+
+#[tokio::test]
+async fn test_websocket_e2e_jsonpath_operators() {
+    let (ws_url, _server_handle) = start_ws_mock_server().await;
+
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let http_file = temp_dir.path().join("ws_operators_test.http");
+
+    let content = format!(
+        r#"
+### WebSocket E2E JSONPath operators test
+@websocket
+@assert body.price == 62500
+GET {}
+
+SEND {{ "action": "subscribe" }}
+EXPECT $.event == "ticker"
+@timeout = 3000
+
+SEND {{ "action": "log_price" }}
+EXPECT $.symbol contains "BT"
+@timeout = 3000
+
+SEND {{ "action": "log_price" }}
+EXPECT $.price != 1000
+@timeout = 3000
+CLOSE
+"#,
+        ws_url
+    );
+    std::fs::write(&http_file, content).unwrap();
+
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+    assert_eq!(results.len(), 1);
+
+    let res = &results[0];
+    assert!(
+        res.success,
+        "WebSocket Operators TestResult should be success. Error: {:?}",
+        res.error
+    );
+
+    // 统计：3个SEND，3个EXPECT，1个CLOSE，总计 7 个 actions 步。
+    assert!(res.response.is_some());
+    let resp = res.response.as_ref().unwrap();
+    assert!(
+        resp.body.contains("Run 7 actions."),
+        "Actual body: {}", resp.body
+    );
+}

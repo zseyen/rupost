@@ -20,8 +20,10 @@
   - 实现了 `BoundedFrameBuffer`（容量上限 1000 帧），融入会话收发帧历史记录中，避免高频广播行情调试时的内存膨胀。
 - **质量保证与版本控制**：
   - 新增了 `test_websocket_reconnect_and_flush_self_healing` 等高价值 E2E 集成测试，验证了断线自愈、补发、环形历史区及步骤级变量 Cascade 流转。
-  - 全量 208 个集成与单元测试 100% 绿灯跑通。
-  - 使用 `jj` 进行了原子化版本提交（Revision `pontnnrk 94be0461`）。
+  - 进行了 WebSocket Code Review，全面修复了 `JsonPathMatcher` 操作符匹配反转、重连队列时序漏洞、Action 执行计数不准等边界情况。
+  - 在 `matcher.rs`、`session.rs` 和 `action_parser.rs` 中为上述核心逻辑补充了全方位的单元测试，并在 `websocket_integration_test.rs` 中新增了 `test_websocket_e2e_jsonpath_operators` 集成测试。
+  - 全量 212 个集成与单元测试 100% 绿灯跑通。
+  - 使用 `jj` 进行了原子化版本提交。
 
 ## 下一步工作
 - **Sprint 6: HTML 报告与高级表现层 (下阶段启动)**：

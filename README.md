@@ -203,6 +203,59 @@ rupost d https://api.example.com
 
 ---
 
+## WebSocket 协议测试与调试 (WebSocket Testing & Debugging)
+
+RuPost 原生支持纯 WebSocket 协议的长连接测试、订阅与会话级调试。
+
+### 1. 快速示例
+
+在 `.http` 或 `.md` 代码块中，使用 `@websocket` 元数据指令标识 WebSocket 会话剧本：
+
+```http
+### 订阅 BTC 实时成交价
+# @name WebSocket Basic Demo
+# @websocket
+# @assert body.price > 60000
+# @capture btc_price from body.price
+GET ws://localhost:8080/v1/market
+
+# 1. 订阅动作发送 (默认发送 Outbound Text 帧)
+SEND { "action": "subscribe", "topic": "ticker.btc" }
+
+# 2. 阻塞式软匹配预期帧，支持 ==, !=, contains 运算符与变量引用
+EXPECT $.event == "ticker"
+@timeout = 3000
+
+# 3. 混合匹配与包含运算符测试
+EXPECT $.symbol contains "BT"
+@timeout = 3000
+
+# 4. 阻塞等待 500 毫秒后再进行下一步
+WAIT 500
+
+# 5. 主动优雅断开 WebSocket 连接
+CLOSE
+```
+
+### 2. 剧本指令说明
+
+* **`@websocket`**：声明当前请求块为 WebSocket 会话剧本。请求的方法必须是 `GET`，URL 协议必须是 `ws://` 或 `wss://`。
+* **`SEND <payload>`**：向服务器发送一帧消息（默认为 Text 帧）。Payload 支持跨多行书写，也支持 JSON 结构的隐式发送。
+* **`EXPECT <condition>`**：阻塞式等待入站帧，直到有帧能匹配上条件或等待超时（默认 5 秒超时，可用 `@timeout = <Duration>` 局部控制）。
+  - **JSONPath 匹配**：例如 `EXPECT $.event == "ticker"`、`EXPECT $.price != 100` 或 `EXPECT $.message contains "hello"`。
+  - **JSON 子集匹配**：例如 `EXPECT {"status": "ok"}`。
+  - **文本子串匹配**：退化为模糊包含匹配（如 `EXPECT pong`）。
+* **`WAIT <ms>`**：阻塞等待特定毫秒数。
+* **`CLOSE`**：客户端主动优雅断开连接。
+
+### 3. 高级特性
+
+* **MessagePack 二进制解码**：通过在头部指定 `# @decoder messagepack`，客户端能自动将接收到的 Binary 帧通过 MessagePack 解码为 JSON 结构，使 `@assert` 和 `@capture` 对二进制消息同样完美生效。
+* **重连自愈与强时序 Flush**：网络物理断开时，代理层后台会在约 30 秒内进行指数退避自动重连。重连期间发送的消息将暂存于 `pending_send_queue` 缓存区（限额 100 帧），重连成功后以 `push_front` 强时序 Flush 补发，保障消息时序零丢失。
+* **滑动历史缓冲区**：历史帧缓冲区容量限制为 1000 帧，防止调试行情高频推送时内存膨胀（OOM）。
+
+---
+
 ## 本地 Mock 服务器 (Mock Server)
 
 RuPost 提供了一个独立且高可扩展的轻量级本地 Mock 服务器，让您能够依据接口定义或请求历史快照一键搭建本地 Mock 桩：

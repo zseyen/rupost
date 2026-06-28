@@ -134,8 +134,11 @@ impl WsRunner {
             None => None,
         };
 
+        let mut executed_actions_count = 0;
+
         // 6. 驱动 WsAction 执行流
         for (action_idx, action) in actions.into_iter().enumerate() {
+            executed_actions_count = action_idx + 1;
             match action {
                 WsAction::Connect { .. } => {
                     // Connect 已在初始化时执行，跳过
@@ -165,6 +168,8 @@ impl WsRunner {
                 WsAction::Expect {
                     condition,
                     segments,
+                    expected_value,
+                    operator,
                     timeout,
                     assertions,
                     captures,
@@ -172,6 +177,11 @@ impl WsRunner {
                     // 动态替换 Expect 中的匹配变量
                     let resolved_condition = VariableResolver::resolve(&condition, context);
                     info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
+
+                    // 预先对期望值模板执行变量替换，避免在高频收发帧循环中重复计算
+                    let resolved_expected_value = expected_value.as_ref().map(|ev| {
+                        VariableResolver::resolve(ev, context)
+                    });
 
                     let expect_timer = tokio::time::sleep(timeout);
                     tokio::pin!(expect_timer);
@@ -189,7 +199,14 @@ impl WsRunner {
                                     Ok(frame) => {
                                         if frame.direction == FrameDirection::Inbound {
                                             // 检查是否能匹配上条件
-                                            if Self::matches_condition(&frame, &resolved_condition, &segments, decoder.as_deref()) {
+                                            if Self::matches_condition(
+                                                &frame,
+                                                &resolved_condition,
+                                                &segments,
+                                                &resolved_expected_value,
+                                                &operator,
+                                                decoder.as_deref()
+                                            ) {
                                                 // 自适应解码出文本用于后续打印与 capture 提取
                                                 let payload_str = if frame.frame_type == WsFrameType::Binary {
                                                     if let Some(ref dec) = decoder {
@@ -314,7 +331,7 @@ impl WsRunner {
             let summary_response = Response::new(
                 200,
                 HeaderMap::new(),
-                format!("WebSocket Session Completed Successfully. Run {} actions.", action_idx_count(&body_content)),
+                format!("WebSocket Session Completed Successfully. Run {} actions.", executed_actions_count),
                 duration,
                 Duration::from_millis(0),
                 Duration::from_millis(0),
@@ -339,6 +356,8 @@ impl WsRunner {
         frame: &WsFrame,
         condition: &str,
         segments: &Option<Vec<String>>,
+        expected_value: &Option<String>,
+        operator: &Option<String>,
         decoder: Option<&dyn crate::ws::PayloadDecoder>,
     ) -> bool {
         use crate::ws::matcher::{FrameMatcher, JsonPathMatcher, TextContainsMatcher};
@@ -350,16 +369,7 @@ impl WsRunner {
 
         // 如果有预编译的 segments，使用 JsonPathMatcher (Stage 3)
         if let Some(segs) = segments {
-            let expected_value = if let Some(pos) = condition.find("==") {
-                Some(condition[pos + 2..].trim().to_string())
-            } else if let Some(pos) = condition.find("!=") {
-                Some(condition[pos + 2..].trim().to_string())
-            } else if let Some(pos) = condition.find("contains") {
-                Some(condition[pos + "contains".len()..].trim().to_string())
-            } else {
-                None
-            };
-            let matcher = JsonPathMatcher::new(segs.clone(), expected_value);
+            let matcher = JsonPathMatcher::new(segs.clone(), expected_value.clone(), operator.clone());
             return matcher.matches(frame, decoder);
         }
 
@@ -415,16 +425,6 @@ impl WsRunner {
             (p, t) => p == t,
         }
     }
-}
-
-/// 辅助统计 action 数量的局部函数
-fn action_idx_count(body: &str) -> usize {
-    body.lines()
-        .filter(|line| {
-            let t = line.trim();
-            !t.is_empty() && !t.starts_with('#') && !t.starts_with("//")
-        })
-        .count()
 }
 
 /// 简单的 Hex 辅助实现 (防 hex 依赖版本冲突，使用内置格式化实现)

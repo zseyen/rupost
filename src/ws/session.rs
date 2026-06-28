@@ -177,7 +177,7 @@ impl SessionManager {
                                             warn!("Physical send failed: {}. Triggering reconnect.", e);
                                             // 物理发送失败，压入队列头部以待重连后补发
                                             if self.pending_send_queue.len() < 100 {
-                                                self.pending_send_queue.push_back(frame);
+                                                self.pending_send_queue.push_front(frame);
                                             }
                                             self.transition_to_reconnecting();
                                             break;
@@ -306,5 +306,57 @@ impl SessionManager {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ws::frame::FrameDirection;
+    use crate::ws::WsFrameType;
+
+    #[test]
+    fn test_bounded_frame_buffer() {
+        let mut buf = BoundedFrameBuffer::new(3);
+        
+        let f1 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![1], 0);
+        let f2 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![2], 0);
+        let f3 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![3], 0);
+        let f4 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![4], 0);
+
+        buf.push(f1);
+        buf.push(f2);
+        buf.push(f3);
+        assert_eq!(buf.len(), 3);
+        
+        // 应该顶替掉第一个
+        buf.push(f4);
+        assert_eq!(buf.len(), 3);
+        
+        let history = buf.get_all();
+        assert_eq!(history[0].payload, vec![2]);
+        assert_eq!(history[1].payload, vec![3]);
+        assert_eq!(history[2].payload, vec![4]);
+    }
+
+    #[test]
+    fn test_pending_send_queue_ordering() {
+        let mut queue = VecDeque::new();
+        
+        let f1 = WsFrame::new(FrameDirection::Outbound, WsFrameType::Text, b"msg1".to_vec(), 0);
+        let f2 = WsFrame::new(FrameDirection::Outbound, WsFrameType::Text, b"msg2".to_vec(), 0);
+        
+        // 模拟 Connected 时发送 f1 失败，压入头部
+        queue.push_front(f1);
+        
+        // 模拟重连期间外部又发送了 f2，入队到尾部
+        queue.push_back(f2);
+        
+        // 验证出队顺序是 f1 然后 f2，确保时序未反转
+        let popped1 = queue.pop_front().unwrap();
+        assert_eq!(popped1.payload, b"msg1".to_vec());
+        
+        let popped2 = queue.pop_front().unwrap();
+        assert_eq!(popped2.payload, b"msg2".to_vec());
     }
 }

@@ -109,10 +109,12 @@ impl WsActionParser {
                     }
                 }
 
-                let (segments, _) = precompile_jsonpath(&condition);
+                let (segments, expected_value, operator) = precompile_jsonpath(&condition);
                 actions.push(WsAction::Expect {
                     condition,
                     segments,
+                    expected_value,
+                    operator,
                     timeout,
                     assertions,
                     captures,
@@ -160,10 +162,10 @@ impl WsActionParser {
     }
 }
 
-fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>) {
+fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>, Option<String>) {
     let condition = condition.trim();
     if condition.starts_with('{') || condition.starts_with('[') {
-        return (None, None);
+        return (None, None, None);
     }
 
     if condition.starts_with('$') || condition.contains('.') || condition.contains('[') {
@@ -174,17 +176,17 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>)
                 let val_part = condition[pos + op.len()..].trim();
                 let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
                 if !segments.is_empty() {
-                    return (Some(segments), Some(val_part.to_string()));
+                    return (Some(segments), Some(val_part.to_string()), Some(op.to_string()));
                 }
             }
         }
         let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(condition);
         if !segments.is_empty() {
-            return (Some(segments), None);
+            return (Some(segments), None, None);
         }
     }
 
-    (None, None)
+    (None, None, None)
 }
 
 #[cfg(test)]
@@ -277,14 +279,48 @@ mod tests {
         "#;
         let actions = WsActionParser::parse_body(body).unwrap();
         assert_eq!(actions.len(), 1);
-        if let WsAction::Expect { condition, segments, timeout, assertions, captures } = &actions[0] {
+        if let WsAction::Expect { condition, segments, expected_value, operator, timeout, assertions, captures } = &actions[0] {
             assert_eq!(condition, "$.event == \"ticker\"");
             assert_eq!(segments.as_ref().unwrap(), &vec!["event".to_string()]);
+            assert_eq!(expected_value.as_deref(), Some("\"ticker\""));
+            assert_eq!(operator.as_deref(), Some("=="));
             assert_eq!(timeout.as_secs(), 5);
             assert_eq!(assertions.len(), 1);
             assert_eq!(assertions[0], "body.price > 100");
             assert_eq!(captures.len(), 1);
             assert_eq!(captures[0].name, "btc_val");
+        } else {
+            panic!("Expected Expect action");
+        }
+    }
+
+    #[test]
+    fn test_parse_expect_operators() {
+        let body = r#"
+        EXPECT $.event != "ticker"
+        EXPECT $.msg contains "hello"
+        EXPECT $.data
+        "#;
+        let actions = WsActionParser::parse_body(body).unwrap();
+        assert_eq!(actions.len(), 3);
+
+        if let WsAction::Expect { expected_value, operator, .. } = &actions[0] {
+            assert_eq!(operator.as_deref(), Some("!="));
+            assert_eq!(expected_value.as_deref(), Some("\"ticker\""));
+        } else {
+            panic!("Expected Expect action");
+        }
+
+        if let WsAction::Expect { expected_value, operator, .. } = &actions[1] {
+            assert_eq!(operator.as_deref(), Some("contains"));
+            assert_eq!(expected_value.as_deref(), Some("\"hello\""));
+        } else {
+            panic!("Expected Expect action");
+        }
+
+        if let WsAction::Expect { expected_value, operator, .. } = &actions[2] {
+            assert_eq!(*operator, None);
+            assert_eq!(*expected_value, None);
         } else {
             panic!("Expected Expect action");
         }

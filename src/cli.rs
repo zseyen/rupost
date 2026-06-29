@@ -225,26 +225,46 @@ impl CliRunner {
     }
 
     fn parse_args(&self, args: &[String]) -> Result<ParsedRequest> {
-        let args = if args.first().map(|s| s == "curl").unwrap_or(false) {
+        let mut filtered_args = Vec::new();
+        let mut is_sse_forced = false;
+        let mut is_ws_forced = false;
+
+        for arg in args {
+            if arg == "--sse" {
+                is_sse_forced = true;
+            } else if arg == "--ws" || arg == "--websocket" {
+                is_ws_forced = true;
+            } else {
+                filtered_args.push(arg.clone());
+            }
+        }
+
+        let mut parsed_request = if filtered_args.first().map(|s| s == "curl").unwrap_or(false) {
             debug!("Detected curl-style command");
-            args[1..].to_vec()
-        } else if args.first().map(|s| s == "http").unwrap_or(false) {
+            self.parse_curl(filtered_args[1..].to_vec())?
+        } else if filtered_args.first().map(|s| s == "http").unwrap_or(false) {
             debug!("Detected httpie-style command");
-            args[1..].to_vec()
+            self.parse_httpie(filtered_args[1..].to_vec())?
         } else {
-            args.to_vec()
+            // 根据参数特征判断是 curl 风格还是 httpie 风格
+            let is_curl = filtered_args.iter().any(|a| a.starts_with('-'));
+            if is_curl {
+                debug!("Using curl parser");
+                self.parse_curl(filtered_args)?
+            } else {
+                debug!("Using httpie parser");
+                self.parse_httpie(filtered_args)?
+            }
         };
 
-        // 根据参数特征判断是 curl 风格还是 httpie 风格
-        let is_curl = args.iter().any(|a| a.starts_with('-'));
-
-        if is_curl {
-            debug!("Using curl parser");
-            self.parse_curl(args)
-        } else {
-            debug!("Using httpie parser");
-            self.parse_httpie(args)
+        if is_sse_forced {
+            parsed_request.metadata.sse = true;
         }
+        if is_ws_forced || parsed_request.url.starts_with("ws://") || parsed_request.url.starts_with("wss://") {
+            parsed_request.metadata.websocket = true;
+        }
+
+        Ok(parsed_request)
     }
     fn parse_curl(&self, args: Vec<String>) -> Result<ParsedRequest> {
         let mut method = String::from("GET");

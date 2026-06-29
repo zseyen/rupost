@@ -1,0 +1,14 @@
+### 测试 Postman 公共安全加密 WSS 回显服务
+# @name Postman_WSS_Echo
+# @websocket
+GET wss://ws.postman-echo.com/raw
+
+# 1. 模拟前端向服务端发送一条 Text 数据帧
+SEND Hello RuPost Secure WSS!
+
+# 2. 阻塞式 EXPECT 等待，直到拿到相同的回显内容
+EXPECT Hello RuPost Secure WSS!
+@timeout = 5000
+
+# 3. 优雅主动 CLOSE 长连接
+CLOSE

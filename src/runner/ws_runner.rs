@@ -136,179 +136,233 @@ impl WsRunner {
 
         let mut executed_actions_count = 0;
 
-        // 6. 驱动 WsAction 执行流
-        for (action_idx, action) in actions.into_iter().enumerate() {
-            executed_actions_count = action_idx + 1;
-            match action {
-                WsAction::Connect { .. } => {
-                    // Connect 已在初始化时执行，跳过
-                }
-                WsAction::Send(frame) => {
-                    // 对发送的 Payload 执行变量替换
-                    let payload_str = frame.payload_as_string();
-                    let resolved_payload = VariableResolver::resolve(&payload_str, context);
-                    
-                    info!("WS [SEND #{}] Payload: {}", action_idx, resolved_payload);
-                    let outbound_frame = WsFrame::new(
-                        FrameDirection::Outbound,
-                        frame.frame_type,
-                        resolved_payload.into_bytes(),
-                        0,
-                    );
-
-                    if let Err(e) = client.send_frame(outbound_frame).await {
-                        final_error = Some(format!("Send failed: {}", e));
+        if actions.is_empty() {
+            // CLI 直接测试模式：如果有 body 则发包，然后持续打印 5 秒的入站流
+            if !body_content.trim().is_empty() {
+                let resolved_payload = VariableResolver::resolve(&body_content, context);
+                info!("WS [SEND] Payload: {}", resolved_payload);
+                let outbound_frame = WsFrame::new(
+                    FrameDirection::Outbound,
+                    WsFrameType::Text,
+                    resolved_payload.into_bytes(),
+                    0,
+                );
+                let _ = client.send_frame(outbound_frame).await;
+                executed_actions_count += 1;
+            }
+            
+            use colored::Colorize;
+            info!("WS Entering live monitoring mode for 5 seconds. Listening for incoming frames...");
+            let monitor_timer = tokio::time::sleep(Duration::from_secs(5));
+            tokio::pin!(monitor_timer);
+            
+            loop {
+                tokio::select! {
+                    _ = &mut monitor_timer => {
+                        info!("WS 5 seconds monitoring finished.");
                         break;
                     }
-                }
-                WsAction::Wait(duration) => {
-                    info!("WS [WAIT #{}] sleeping for {:?}", action_idx, duration);
-                    tokio::time::sleep(duration).await;
-                }
-                WsAction::Expect {
-                    condition,
-                    segments,
-                    expected_value,
-                    operator,
-                    timeout,
-                    assertions,
-                    captures,
-                } => {
-                    // 动态替换 Expect 中的匹配变量
-                    let resolved_condition = VariableResolver::resolve(&condition, context);
-                    info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
-
-                    // 预先对期望值模板执行变量替换，避免在高频收发帧循环中重复计算
-                    let resolved_expected_value = expected_value.as_ref().map(|ev| {
-                        VariableResolver::resolve(ev, context)
-                    });
-
-                    let expect_timer = tokio::time::sleep(timeout);
-                    tokio::pin!(expect_timer);
-
-                    let mut matched = false;
-                    let mut last_matching_payload = None;
-
-                    loop {
-                        tokio::select! {
-                            _ = &mut expect_timer => {
-                                break;
+                    maybe_frame = rx.recv() => {
+                        match maybe_frame {
+                            Ok(frame) => {
+                                if frame.direction == FrameDirection::Inbound {
+                                    let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                        if let Some(ref dec) = decoder {
+                                            dec.decode(&frame.payload).map(|v| v.to_string()).unwrap_or_else(|_| format!("0x{}", hex::encode(&frame.payload)))
+                                        } else {
+                                            format!("0x{}", hex::encode(&frame.payload))
+                                        }
+                                    } else {
+                                        frame.payload_as_string()
+                                    };
+                                    println!("{} [INBOUND] [Type: {:?}] {}", "[WS]".green().bold(), frame.frame_type, payload_str);
+                                    executed_actions_count += 1;
+                                }
                             }
-                            maybe_frame = rx.recv() => {
-                                match maybe_frame {
-                                    Ok(frame) => {
-                                        if frame.direction == FrameDirection::Inbound {
-                                            // 检查是否能匹配上条件
-                                            if Self::matches_condition(
-                                                &frame,
-                                                &resolved_condition,
-                                                &segments,
-                                                &resolved_expected_value,
-                                                &operator,
-                                                decoder.as_deref()
-                                            ) {
-                                                // 自适应解码出文本用于后续打印与 capture 提取
-                                                let payload_str = if frame.frame_type == WsFrameType::Binary {
-                                                    if let Some(ref dec) = decoder {
-                                                        match dec.decode(&frame.payload) {
-                                                            Ok(val) => val.to_string(),
-                                                            Err(e) => {
-                                                                warn!("Decoder failed during matching: {}. Falling back to hex.", e);
-                                                                format!("0x{}", hex::encode(&frame.payload))
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+            
+            // 优雅关闭
+            let close_frame = WsFrame::new(
+                FrameDirection::Outbound,
+                WsFrameType::Close,
+                Vec::new(),
+                0,
+            );
+            let _ = client.send_frame(close_frame).await;
+            executed_actions_count += 1;
+        } else {
+            // 6. 驱动 WsAction 执行流
+            for (action_idx, action) in actions.into_iter().enumerate() {
+                executed_actions_count = action_idx + 1;
+                match action {
+                    WsAction::Connect { .. } => {
+                        // Connect 已在初始化时执行，跳过
+                    }
+                    WsAction::Send(frame) => {
+                        // 对发送的 Payload 执行变量替换
+                        let payload_str = frame.payload_as_string();
+                        let resolved_payload = VariableResolver::resolve(&payload_str, context);
+                        
+                        info!("WS [SEND #{}] Payload: {}", action_idx, resolved_payload);
+                        let outbound_frame = WsFrame::new(
+                            FrameDirection::Outbound,
+                            frame.frame_type,
+                            resolved_payload.into_bytes(),
+                            0,
+                        );
+
+                        if let Err(e) = client.send_frame(outbound_frame).await {
+                            final_error = Some(format!("Send failed: {}", e));
+                            break;
+                        }
+                    }
+                    WsAction::Wait(duration) => {
+                        info!("WS [WAIT #{}] sleeping for {:?}", action_idx, duration);
+                        tokio::time::sleep(duration).await;
+                    }
+                    WsAction::Expect {
+                        condition,
+                        segments,
+                        expected_value,
+                        operator,
+                        timeout,
+                        assertions,
+                        captures,
+                    } => {
+                        // 动态替换 Expect 中的匹配变量
+                        let resolved_condition = VariableResolver::resolve(&condition, context);
+                        info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
+
+                        // 预先对期望值模板执行变量替换，避免在高频收发帧循环中重复计算
+                        let resolved_expected_value = expected_value.as_ref().map(|ev| {
+                            VariableResolver::resolve(ev, context)
+                        });
+
+                        let expect_timer = tokio::time::sleep(timeout);
+                        tokio::pin!(expect_timer);
+
+                        let mut matched = false;
+                        let mut last_matching_payload = None;
+
+                        loop {
+                            tokio::select! {
+                                _ = &mut expect_timer => {
+                                    break;
+                                }
+                                maybe_frame = rx.recv() => {
+                                    match maybe_frame {
+                                        Ok(frame) => {
+                                            if frame.direction == FrameDirection::Inbound {
+                                                // 检查是否能匹配上条件
+                                                if Self::matches_condition(
+                                                    &frame,
+                                                    &resolved_condition,
+                                                    &segments,
+                                                    &resolved_expected_value,
+                                                    &operator,
+                                                    decoder.as_deref()
+                                                ) {
+                                                    // 自适应解码出文本用于后续打印与 capture 提取
+                                                    let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                                        if let Some(ref dec) = decoder {
+                                                            match dec.decode(&frame.payload) {
+                                                                Ok(val) => val.to_string(),
+                                                                Err(e) => {
+                                                                    warn!("Decoder failed during matching: {}. Falling back to hex.", e);
+                                                                    format!("0x{}", hex::encode(&frame.payload))
+                                                                }
                                                             }
+                                                        } else {
+                                                            format!("0x{}", hex::encode(&frame.payload))
                                                         }
                                                     } else {
-                                                        format!("0x{}", hex::encode(&frame.payload))
-                                                    }
-                                                } else {
-                                                    frame.payload_as_string()
-                                                };
+                                                        frame.payload_as_string()
+                                                    };
 
-                                                matched = true;
-                                                last_matching_payload = Some((frame.payload, frame.frame_type, payload_str));
-                                                break;
+                                                    last_matching_payload = Some(payload_str);
+                                                    matched = true;
+                                                    break;
+                                                }
                                             }
                                         }
-                                    }
-                                    Err(e) => {
-                                        final_error = Some(format!("Expect failed due to channel error: {}", e));
-                                        break;
+                                        Err(_) => break,
                                     }
                                 }
                             }
                         }
-                    }
 
-                    if !matched {
-                        final_error = Some(format!(
-                            "Expect timed out. Expected message matching: '{}'",
-                            resolved_condition
-                        ));
-                        break;
-                    } else if let Some((_payload, _frame_type, decoded_body)) = last_matching_payload {
-                        info!("WS [MATCHED #{}] Decoded Body: {}", action_idx, decoded_body);
+                        if !matched {
+                            final_error = Some(format!("Expect match timed out or failed. Condition: {}", resolved_condition));
+                            break;
+                        }
 
-                        // 构造虚拟 Response 用于提取与断言评估
-                        let virtual_response = Response::new(
-                            200,
-                            HeaderMap::new(),
-                            decoded_body.clone(),
-                            Duration::from_millis(0),
-                            Duration::from_millis(0),
-                            Duration::from_millis(0),
-                        ).unwrap();
+                        // 执行对匹配帧的局部断言与捕获 (Stage 4)
+                        if let Some(payload_str) = last_matching_payload {
+                            let virtual_response = Response::new(
+                                200,
+                                HeaderMap::new(),
+                                payload_str,
+                                Duration::from_millis(0),
+                                Duration::from_millis(0),
+                                Duration::from_millis(0),
+                            ).unwrap();
 
-                        // 1. 运行步骤级局部捕获 (Stage 4)
-                        if !captures.is_empty() {
+                            // 1. 运行步骤级局部捕获 (Stage 4)
+                            if !captures.is_empty() {
+                                VariableCapture::capture_normal(
+                                    &captures,
+                                    &virtual_response.body,
+                                    &virtual_response.headers,
+                                    context,
+                                );
+                            }
+
+                            // 2. 运行步骤级局部断言 (Stage 4)
+                            if !assertions.is_empty() {
+                                let resolved_local_assertions: Vec<String> = assertions
+                                    .iter()
+                                    .map(|a| VariableResolver::resolve(a, context))
+                                    .collect();
+                                let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
+                                for mut r in local_assert_results {
+                                    r.stream_event_index = Some(action_idx + 1);
+                                    assertion_results.push(r);
+                                }
+                            }
+
+                            // 3. 运行全局变量捕获（对匹配帧适用，保持向后兼容）
                             VariableCapture::capture_normal(
-                                &captures,
+                                &captures_to_eval,
                                 &virtual_response.body,
                                 &virtual_response.headers,
                                 context,
                             );
-                        }
 
-                        // 2. 运行步骤级局部断言 (Stage 4)
-                        if !assertions.is_empty() {
-                            let resolved_local_assertions: Vec<String> = assertions
+                            // 4. 评估全局断言（对匹配帧适用，保持向后兼容）
+                            let resolved_assertions: Vec<String> = assertions_to_eval
                                 .iter()
                                 .map(|a| VariableResolver::resolve(a, context))
                                 .collect();
-                            let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
-                            for mut r in local_assert_results {
-                                r.stream_event_index = Some(action_idx + 1);
-                                assertion_results.push(r);
-                            }
+
+                            let assertions = evaluate_assertions(&resolved_assertions, &virtual_response);
+                            assertion_results.extend(assertions);
                         }
-
-                        // 3. 运行全局变量捕获（对最后一个匹配帧适用，保持向后兼容）
-                        VariableCapture::capture_normal(
-                            &captures_to_eval,
-                            &virtual_response.body,
-                            &virtual_response.headers,
-                            context,
-                        );
-
-                        // 4. 评估全局断言（对最后一个匹配帧适用，保持向后兼容）
-                        let resolved_assertions: Vec<String> = assertions_to_eval
-                            .iter()
-                            .map(|a| VariableResolver::resolve(a, context))
-                            .collect();
-
-                        let assertions = evaluate_assertions(&resolved_assertions, &virtual_response);
-                        assertion_results.extend(assertions);
                     }
-                }
-                WsAction::Close => {
-                    info!("WS [CLOSE #{}] Active Close connection.", action_idx);
-                    let close_frame = WsFrame::new(
-                        FrameDirection::Outbound,
-                        WsFrameType::Close,
-                        Vec::new(),
-                        0,
-                    );
-                    let _ = client.send_frame(close_frame).await;
-                    break;
+                    WsAction::Close => {
+                        info!("WS [CLOSE #{}] Active Close connection.", action_idx);
+                        let close_frame = WsFrame::new(
+                            FrameDirection::Outbound,
+                            WsFrameType::Close,
+                            Vec::new(),
+                            0,
+                        );
+                        let _ = client.send_frame(close_frame).await;
+                        break;
+                    }
                 }
             }
         }

@@ -32,6 +32,10 @@ pub struct Cli {
     /// Enable detailed network diagnostics only on failure
     #[arg(long, global = true)]
     pub debug_on_failure: bool,
+
+    /// Default scheme when URL does not contain one
+    #[arg(long, global = true, default_value = "http")]
+    pub default_scheme: String,
 }
 
 #[derive(Subcommand)]
@@ -166,12 +170,14 @@ pub struct GenerateArgs {
 struct CliRunner {
     formatter: ResponseFormatter,
     executor: TestExecutor,
+    default_scheme: String,
 }
 
 impl CliRunner {
     fn new(
         no_cookies: bool,
         cookie_file: Option<String>,
+        default_scheme: String,
         debug: bool,
         debug_on_failure: bool,
     ) -> Result<Self> {
@@ -188,6 +194,7 @@ impl CliRunner {
         Ok(Self {
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
             executor,
+            default_scheme,
         })
     }
 
@@ -197,6 +204,7 @@ impl CliRunner {
 
         // Setup empty context for CLI run
         let mut context = VariableContext::new();
+        context.insert("__default_scheme", &self.default_scheme);
 
         debug!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
 
@@ -377,19 +385,15 @@ impl CliRunner {
         if arg.starts_with("http://") || arg.starts_with("https://") {
             return false;
         }
-        // 2. :/ 开头的本地路径简写 (如 :/api -> localhost/api)
-        if arg.starts_with(":/") {
+        // 2. 所有以 : 开头的参数均判定为冒号本地快捷键（URL），不是键值对参数
+        if arg.starts_with(':') {
             return false;
         }
-        // 3. :port 格式 (如 :3000 -> localhost:3000)
-        if arg.starts_with(':') && arg[1..].chars().all(|c| c.is_ascii_digit()) {
-            return false;
-        }
-        // 4. 包含 :// 的 URL（其他协议）
+        // 3. 包含 :// 的 URL（其他协议）
         if arg.contains("://") {
             return false;
         }
-        // 5. 域名:端口 格式 (如 example.com:8080)
+        // 4. 域名:端口 格式 (如 example.com:8080)
         if let Some((host, port)) = arg.rsplit_once(':') {
             // 如果冒号后面全是数字，且前面不为空，认为是 host:port
             if !host.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
@@ -507,10 +511,11 @@ pub async fn run(
     args: Vec<String>,
     no_cookies: bool,
     cookie_file: Option<String>,
+    default_scheme: String,
     debug: bool,
     debug_on_failure: bool,
 ) -> Result<()> {
-    let runner = CliRunner::new(no_cookies, cookie_file, debug, debug_on_failure)?;
+    let runner = CliRunner::new(no_cookies, cookie_file, default_scheme, debug, debug_on_failure)?;
     runner.run(args).await
 }
 
@@ -520,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_parse_httpie() {
-        let runner = CliRunner::new(false, None, false, false).unwrap();
+        let runner = CliRunner::new(false, None, "http".to_string(), false, false).unwrap();
         // Test case: POST example.com id:=1 name=foo token:123 q==search
         let args = vec![
             "POST".to_string(),
@@ -543,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_parse_curl() {
-        let runner = CliRunner::new(false, None, false, false).unwrap();
+        let runner = CliRunner::new(false, None, "http".to_string(), false, false).unwrap();
 
         // Test case: curl -X POST -H "Content-Type: application/json" -d '{"name":"foo"}' example.com
         let args = vec![
@@ -629,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_parse_httpie_with_urls() {
-        let runner = CliRunner::new(false, None, false, false).unwrap();
+        let runner = CliRunner::new(false, None, "http".to_string(), false, false).unwrap();
 
         // Test: http:// URL
         let args = vec!["http://example.com".to_string()];

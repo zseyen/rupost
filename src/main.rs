@@ -31,6 +31,7 @@ struct RunTestOptions<'a> {
     cookie_file: Option<String>,
     debug: bool,
     debug_on_failure: bool,
+    default_scheme: &'a str,
 }
 
 #[tokio::main]
@@ -70,6 +71,7 @@ async fn main() -> Result<()> {
                 cookie_file,
                 debug: cli.debug,
                 debug_on_failure: cli.debug_on_failure,
+                default_scheme: &cli.default_scheme,
             };
             run_test(options).await?;
         }
@@ -283,6 +285,7 @@ async fn main() -> Result<()> {
                     cli.args,
                     cli.no_cookies,
                     cli.cookie_file,
+                    cli.default_scheme,
                     cli.debug,
                     cli.debug_on_failure,
                 )
@@ -328,6 +331,7 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
 
     let mut var_context =
         ConfigLoader::build_context(&config, options.env_name, &cli_vars, env_file_to_load);
+    var_context.insert("__default_scheme", options.default_scheme);
 
     // 5. 构建 TestExecutor
     let mut executor = if options.no_cookies {

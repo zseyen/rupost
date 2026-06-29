@@ -54,41 +54,6 @@ impl VariableResolver {
         // 1. 替换 URL
         parsed.url = Self::resolve(&parsed.url, context);
 
-        // 如果解析后的 URL 是相对路径（以 '/' 开头），自动拼装基础路径
-        #[allow(clippy::collapsible_if)]
-        if parsed.url.starts_with('/') {
-            if let Some(base) = context
-                .get("base_url")
-                .or_else(|| context.get("baseUrl"))
-                .or_else(|| context.get("BASE_URL"))
-            {
-                let mut final_base = base.trim().to_string();
-                if final_base.ends_with('/') {
-                    final_base.pop();
-                }
-
-                let file_base = parsed
-                    .base_path
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_start_matches('/')
-                    .trim_end_matches('/');
-                let mut joined_path = if file_base.is_empty() {
-                    String::new()
-                } else {
-                    format!("/{}", file_base)
-                };
-
-                let relative_url = parsed.url.trim_start_matches('/');
-                if !relative_url.is_empty() {
-                    joined_path = format!("{}/{}", joined_path, relative_url);
-                }
-
-                parsed.url = format!("{}{}", final_base, joined_path);
-            }
-        }
-
         // 2. 替换 Headers
         for (_key, value) in &mut parsed.headers {
             *value = Self::resolve(value, context);
@@ -272,8 +237,8 @@ mod tests {
 
         VariableResolver::resolve_parsed_request(&mut parsed, &mut ctx);
 
-        // 验证 URL 渲染和 baseUrl 拼接
-        assert_eq!(parsed.url, "https://api.test.com/v1/users/456");
+        // 验证 URL 渲染（此处不再自动拼接，仅替换占位符）
+        assert_eq!(parsed.url, "/users/456");
         
         // 验证 Headers 渲染和 user_agent 自动注入
         assert_eq!(parsed.headers.len(), 2);

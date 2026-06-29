@@ -1,17 +1,21 @@
 # Rupost 开发进度与状态 Checkpoint
 
 ## 当前状态 (Current State)
-1. **WS 领域层重构 (Clean Architecture)**:
-   - 已将帧匹配职责解耦并迁移至 `src/ws/matcher.rs` 的 `WsConditionMatcher`。
-   - 提取了私有辅助函数 `execute_action` 简化了 `WsRunner::execute` 代码。
+1. **URL 智能拼接与快捷缩写 (URL Resolution & Shortcuts)**:
+   - 全面支持 CLI 智能协议补全 (例如域名、`localhost:port` 自动补全默认协议) 与冒号本地快捷键。
+   - 实现测试文件中的冒号局部快捷键自适应转换与层级分层拼装。
+   - 彻底将 URL 拼接与 WS、SSE 分流前置对齐，保持了 clean architecture。
+   - 移除 `VariableResolver` 的相对路径拼接耦合，保持其职责单一。
    - 单元测试与集成测试通过率达到 100%。
 
-2. **示例用例与 Mock 验证 (Examples & Mock verification)**:
-   - 运行了 `examples/run_all.sh` 一键测试，测试套件大部分在公网正常运行，个别用例因 `httpbingo.org` 限流产生超时，已通过单项串行运行和 SSE/LLM 闭环测试全量跑通。
+2. **WS 领域层重构 (Clean Architecture)**:
+   - 已将帧匹配职责解耦并迁移至 `src/ws/matcher.rs` 的 `WsConditionMatcher`。
+   - 单元测试与集成测试通过率达到 100%。
 
 3. **版本库提交管理 (JJ Commits)**:
-   - 使用 `jj` 整理并修补了最近的提交说明，使得每个阶段（优化的 URL 替换与 lagged 自愈、解耦匹配器与重构 Runner）都有清晰的版本记录。
+   - 使用 `jj` 提交并整理了代码，最新提交说明：`feat: implement URL resolution and shortcuts in CLI and test documents`。
 
 ## 下一步工作 (Next Steps)
-- 如有需要，可以深入对批测试/并发性能进行调优。
-- 支持更多 WebSocket 子协议或断言校验规则扩展。
+- 对 Rupost 核心引擎在复杂微服务网关下的多层路径嵌套拼接进行更多环境测试。
+- 继续完善并发测试调度与报告输出美化。
+

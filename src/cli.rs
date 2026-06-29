@@ -316,10 +316,24 @@ impl CliRunner {
                         match opt {
                             "-X" | "--request" => method = val.to_uppercase(),
                             "-d" | "--data" | "--data-raw" => data_parts.push(val.to_string()),
-                            _ => {} // 忽略其他选项
+                            unknown => {
+                                tracing::warn!("Ignored unsupported curl option: {}", unknown);
+                            }
+                        }
+                    } else {
+                        tracing::warn!("Ignored unsupported curl option: {}", s);
+                        // 已知一些带参数的 curl 选项，跳过它们的值，防止值污染真正的 URL 字段
+                        let has_value = [
+                            "-u", "--user", "-o", "--output", "-m", "--max-time",
+                            "--connect-timeout", "-A", "--user-agent", "-e", "--referer",
+                            "-b", "--cookie", "-c", "--cookie-jar", "--data-urlencode",
+                            "--data-binary", "-F", "--form"
+                        ].contains(&s);
+                        if has_value {
+                            let _skipped_val = args_iter.next();
+                            tracing::debug!("Skipped value for unsupported option {}: {:?}", s, _skipped_val);
                         }
                     }
-                    // 其他带参数的选项，跳过下一个参数
                 }
                 // URL (位置参数)
                 _ => {
@@ -437,12 +451,13 @@ impl CliRunner {
                 // Query parameter
                 query_params.push((key.to_string(), value.to_string()));
             } else if let Some((key, value)) = arg.split_once(":=") {
-                // Raw JSON field
-                body_parts.insert(
-                    key.to_string(),
-                    serde_json::from_str::<serde_json::Value>(value)
-                        .unwrap_or(serde_json::Value::String(value.to_string())),
-                );
+                // Raw JSON field with strict parsing
+                let val = serde_json::from_str::<serde_json::Value>(value)
+                    .map_err(|e| RupostError::ParseError(format!(
+                        "Invalid JSON value for key '{}': {}. If it's a string, use '=' instead of ':='.",
+                        key, e
+                    )))?;
+                body_parts.insert(key.to_string(), val);
             } else if let Some((key, value)) = arg.split_once('=') {
                 // String data field
                 body_parts.insert(
@@ -655,5 +670,31 @@ mod tests {
         // Test: :/ shorthand (localhost/)
         let args5 = vec![":/api/users".to_string()];
         runner.parse_httpie(args5).unwrap();
+    }
+
+    #[test]
+    fn test_parse_httpie_strict_json_error() {
+        let runner = CliRunner::new(false, None, "http".to_string(), false, false).unwrap();
+        // 传入非法 JSON 值
+        let args = vec!["example.com".to_string(), "active:=tru".to_string()];
+        let result = runner.parse_httpie(args);
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("Invalid JSON value"));
+    }
+
+    #[test]
+    fn test_parse_curl_unsupported_with_value() {
+        let runner = CliRunner::new(false, None, "http".to_string(), false, false).unwrap();
+        // 传入带参数的不支持选项 -u myuser，以及不带参数的不支持选项 --compressed
+        let args = vec![
+            "-u".to_string(),
+            "myuser".to_string(),
+            "--compressed".to_string(),
+            "example.com".to_string(),
+        ];
+        let request = runner.parse_curl(args).unwrap();
+        // 验证没有因 -u 的值而污染真正的 URL 解析
+        assert_eq!(request.url, "example.com");
     }
 }

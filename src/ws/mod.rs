@@ -7,5 +7,5 @@ pub mod session;
 pub use frame::{WsFrame, WsFrameType, FrameDirection, WsAction, PayloadDecoder, MsgPackDecoder};
 pub use client::{WsClient, WsClientConfig};
 pub use action_parser::WsActionParser;
-pub use matcher::{FrameMatcher, JsonPathMatcher, TextContainsMatcher};
+pub use matcher::{FrameMatcher, JsonPathMatcher, TextContainsMatcher, WsConditionMatcher};
 pub use session::{WsSession, SessionState, BoundedFrameBuffer};

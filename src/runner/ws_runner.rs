@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 use reqwest::header::HeaderMap;
-use serde_json::Value;
 
 use crate::assertion::evaluate_assertions;
 use crate::http::{Request, Response};
@@ -199,182 +198,24 @@ impl WsRunner {
             // 6. 驱动 WsAction 执行流
             for (action_idx, action) in actions.into_iter().enumerate() {
                 executed_actions_count = action_idx + 1;
-                match action {
-                    WsAction::Connect { .. } => {
-                        // Connect 已在初始化时执行，跳过
-                    }
-                    WsAction::Send(frame) => {
-                        // 对发送的 Payload 执行变量替换
-                        let payload_str = frame.payload_as_string();
-                        let resolved_payload = VariableResolver::resolve(&payload_str, context);
-                        
-                        info!("WS [SEND #{}] Payload: {}", action_idx, resolved_payload);
-                        let outbound_frame = WsFrame::new(
-                            FrameDirection::Outbound,
-                            frame.frame_type,
-                            resolved_payload.into_bytes(),
-                            0,
-                        );
-
-                        if let Err(e) = client.send_frame(outbound_frame).await {
-                            final_error = Some(format!("Send failed: {}", e));
+                match Self::execute_action(
+                    action,
+                    action_idx,
+                    &client,
+                    &mut rx,
+                    context,
+                    decoder.as_deref(),
+                    &assertions_to_eval,
+                    &captures_to_eval,
+                    &mut assertion_results,
+                ).await {
+                    Ok(should_continue) => {
+                        if !should_continue {
                             break;
                         }
                     }
-                    WsAction::Wait(duration) => {
-                        info!("WS [WAIT #{}] sleeping for {:?}", action_idx, duration);
-                        tokio::time::sleep(duration).await;
-                    }
-                    WsAction::Expect {
-                        condition,
-                        segments,
-                        expected_value,
-                        operator,
-                        timeout,
-                        assertions,
-                        captures,
-                    } => {
-                        // 动态替换 Expect 中的匹配变量
-                        let resolved_condition = VariableResolver::resolve(&condition, context);
-                        info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
-
-                        // 预先对期望值模板执行变量替换，避免在高频收发帧循环中重复计算
-                        let resolved_expected_value = expected_value.as_ref().map(|ev| {
-                            VariableResolver::resolve(ev, context)
-                        });
-
-                        // 优化点 1: 在接收循环外，提前预解析条件 JSON
-                        let condition_json = serde_json::from_str::<serde_json::Value>(&resolved_condition).ok();
-
-                        // 优化点 2: 提前编译 JsonPathMatcher
-                        let jsonpath_matcher = segments.as_ref().map(|segs| {
-                            crate::ws::matcher::JsonPathMatcher::new(segs.clone(), resolved_expected_value.clone(), operator.clone())
-                        });
-
-                        let expect_timer = tokio::time::sleep(timeout);
-                        tokio::pin!(expect_timer);
-
-                        let mut matched = false;
-                        let mut last_matching_payload = None;
-
-                        loop {
-                            tokio::select! {
-                                _ = &mut expect_timer => {
-                                    break;
-                                }
-                                maybe_frame = rx.recv() => {
-                                    match maybe_frame {
-                                        Ok(frame) => {
-                                            if frame.direction == FrameDirection::Inbound {
-                                                // 优化点 3: 传入预编译及解析的参数，避免高频 parsing 与 cloning
-                                                if Self::matches_condition_optimized(
-                                                    &frame,
-                                                    &resolved_condition,
-                                                    &condition_json,
-                                                    &jsonpath_matcher,
-                                                    decoder.as_deref()
-                                                ) {
-                                                    // 自适应解码出文本用于后续打印与 capture 提取
-                                                    let payload_str = if frame.frame_type == WsFrameType::Binary {
-                                                        if let Some(ref dec) = decoder {
-                                                            match dec.decode(&frame.payload) {
-                                                                Ok(val) => val.to_string(),
-                                                                Err(e) => {
-                                                                    warn!("Decoder failed during matching: {}. Falling back to hex.", e);
-                                                                    format!("0x{}", hex::encode(&frame.payload))
-                                                                }
-                                                            }
-                                                        } else {
-                                                            format!("0x{}", hex::encode(&frame.payload))
-                                                        }
-                                                    } else {
-                                                        frame.payload_as_string()
-                                                    };
-
-                                                    last_matching_payload = Some(payload_str);
-                                                    matched = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                                            warn!("WS expect channel lagged by {} frames, skipping lagged packets.", missed);
-                                            continue;
-                                        }
-                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !matched {
-                            final_error = Some(format!("Expect match timed out or failed. Condition: {}", resolved_condition));
-                            break;
-                        }
-
-                        // 执行对匹配帧的局部断言与捕获 (Stage 4)
-                        if let Some(payload_str) = last_matching_payload {
-                            let virtual_response = Response::new(
-                                200,
-                                HeaderMap::new(),
-                                payload_str,
-                                Duration::from_millis(0),
-                                Duration::from_millis(0),
-                                Duration::from_millis(0),
-                            ).unwrap();
-
-                            // 1. 运行步骤级局部捕获 (Stage 4)
-                            if !captures.is_empty() {
-                                VariableCapture::capture_normal(
-                                    &captures,
-                                    &virtual_response.body,
-                                    &virtual_response.headers,
-                                    context,
-                                );
-                            }
-
-                            // 2. 运行步骤级局部断言 (Stage 4)
-                            if !assertions.is_empty() {
-                                let resolved_local_assertions: Vec<String> = assertions
-                                    .iter()
-                                    .map(|a| VariableResolver::resolve(a, context))
-                                    .collect();
-                                let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
-                                for mut r in local_assert_results {
-                                    r.stream_event_index = Some(action_idx + 1);
-                                    assertion_results.push(r);
-                                }
-                            }
-
-                            // 3. 运行全局变量捕获（对匹配帧适用，保持向后兼容）
-                            VariableCapture::capture_normal(
-                                &captures_to_eval,
-                                &virtual_response.body,
-                                &virtual_response.headers,
-                                context,
-                            );
-
-                            // 4. 评估全局断言（对匹配帧适用，保持向后兼容）
-                            let resolved_assertions: Vec<String> = assertions_to_eval
-                                .iter()
-                                .map(|a| VariableResolver::resolve(a, context))
-                                .collect();
-
-                            let assertions = evaluate_assertions(&resolved_assertions, &virtual_response);
-                            assertion_results.extend(assertions);
-                        }
-                    }
-                    WsAction::Close => {
-                        info!("WS [CLOSE #{}] Active Close connection.", action_idx);
-                        let close_frame = WsFrame::new(
-                            FrameDirection::Outbound,
-                            WsFrameType::Close,
-                            Vec::new(),
-                            0,
-                        );
-                        let _ = client.send_frame(close_frame).await;
+                    Err(e) => {
+                        final_error = Some(e);
                         break;
                     }
                 }
@@ -418,41 +259,194 @@ impl WsRunner {
         test_result.success = success;
         test_result
     }
-
-
-    /// 检查 pattern 是否为 target 的子集
-    fn match_json_subset(pattern: &Value, target: &Value) -> bool {
-        match (pattern, target) {
-            (Value::Object(pat_obj), Value::Object(tgt_obj)) => {
-                for (k, v) in pat_obj {
-                    match tgt_obj.get(k) {
-                        Some(tgt_v) => {
-                            if !Self::match_json_subset(v, tgt_v) {
-                                return false;
-                            }
-                        }
-                        None => return false,
-                    }
-                }
-                true
-            }
-            (Value::Array(pat_arr), Value::Array(tgt_arr)) => {
-                // 如果 pattern 是数组，简化校验：如果 pattern 为空则通过；
-                // 否则，要求 pattern 的第一个元素能在 target 数组中匹配上
-                if pat_arr.is_empty() {
-                    return true;
-                }
-                pat_arr.iter().all(|p| tgt_arr.iter().any(|t| Self::match_json_subset(p, t)))
-            }
-            (p, t) => p == t,
-        }
-    }
 }
 
-/// 简单的 Hex 辅助实现 (防 hex 依赖版本冲突，使用内置格式化实现)
 mod hex {
     pub fn encode(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+}
+
+impl WsRunner {
+    /// 执行单个 WsAction 动作
+    async fn execute_action(
+        action: WsAction,
+        action_idx: usize,
+        client: &WsSession,
+        rx: &mut tokio::sync::broadcast::Receiver<WsFrame>,
+        context: &mut VariableContext,
+        decoder: Option<&dyn PayloadDecoder>,
+        assertions_to_eval: &[String],
+        captures_to_eval: &[VariableCapture],
+        assertion_results: &mut Vec<crate::assertion::AssertionResult>,
+    ) -> Result<bool, String> {
+        match action {
+            WsAction::Connect { .. } => {
+                Ok(true)
+            }
+            WsAction::Send(frame) => {
+                let payload_str = frame.payload_as_string();
+                let resolved_payload = VariableResolver::resolve(&payload_str, context);
+                
+                info!("WS [SEND #{}] Payload: {}", action_idx, resolved_payload);
+                let outbound_frame = WsFrame::new(
+                    FrameDirection::Outbound,
+                    frame.frame_type,
+                    resolved_payload.into_bytes(),
+                    0,
+                );
+
+                if let Err(e) = client.send_frame(outbound_frame).await {
+                    Err(format!("Send failed: {}", e))
+                } else {
+                    Ok(true)
+                }
+            }
+            WsAction::Wait(duration) => {
+                info!("WS [WAIT #{}] sleeping for {:?}", action_idx, duration);
+                tokio::time::sleep(duration).await;
+                Ok(true)
+            }
+            WsAction::Expect {
+                condition,
+                segments,
+                expected_value,
+                operator,
+                timeout,
+                assertions,
+                captures,
+            } => {
+                let resolved_condition = VariableResolver::resolve(&condition, context);
+                info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
+
+                let resolved_expected_value = expected_value.as_ref().map(|ev| {
+                    VariableResolver::resolve(ev, context)
+                });
+
+                // 使用复用的领域层组件 WsConditionMatcher
+                use crate::ws::FrameMatcher;
+                let matcher = crate::ws::WsConditionMatcher::compile(
+                    &resolved_condition,
+                    &segments,
+                    &resolved_expected_value,
+                    &operator,
+                );
+
+                let expect_timer = tokio::time::sleep(timeout);
+                tokio::pin!(expect_timer);
+
+                let mut matched = false;
+                let mut last_matching_payload = None;
+
+                loop {
+                    tokio::select! {
+                        _ = &mut expect_timer => {
+                            break;
+                        }
+                        maybe_frame = rx.recv() => {
+                            match maybe_frame {
+                                Ok(frame) => {
+                                    if frame.direction == FrameDirection::Inbound {
+                                        if matcher.matches(&frame, decoder) {
+                                            let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                                if let Some(ref dec) = decoder {
+                                                    match dec.decode(&frame.payload) {
+                                                        Ok(val) => val.to_string(),
+                                                        Err(e) => {
+                                                            warn!("Decoder failed during matching: {}. Falling back to hex.", e);
+                                                            format!("0x{}", hex::encode(&frame.payload))
+                                                        }
+                                                    }
+                                                } else {
+                                                    format!("0x{}", hex::encode(&frame.payload))
+                                                }
+                                            } else {
+                                                frame.payload_as_string()
+                                            };
+
+                                            last_matching_payload = Some(payload_str);
+                                            matched = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                                    warn!("WS expect channel lagged by {} frames, skipping lagged packets.", missed);
+                                    continue;
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !matched {
+                    return Err(format!("Expect match timed out or failed. Condition: {}", resolved_condition));
+                }
+
+                if let Some(payload_str) = last_matching_payload {
+                    let virtual_response = Response::new(
+                        200,
+                        HeaderMap::new(),
+                        payload_str,
+                        Duration::from_millis(0),
+                        Duration::from_millis(0),
+                        Duration::from_millis(0),
+                    ).unwrap();
+
+                    if !captures.is_empty() {
+                        VariableCapture::capture_normal(
+                            &captures,
+                            &virtual_response.body,
+                            &virtual_response.headers,
+                            context,
+                        );
+                    }
+
+                    if !assertions.is_empty() {
+                        let resolved_local_assertions: Vec<String> = assertions
+                            .iter()
+                            .map(|a| VariableResolver::resolve(a, context))
+                            .collect();
+                        let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
+                        for mut r in local_assert_results {
+                            r.stream_event_index = Some(action_idx + 1);
+                            assertion_results.push(r);
+                        }
+                    }
+
+                    VariableCapture::capture_normal(
+                        captures_to_eval,
+                        &virtual_response.body,
+                        &virtual_response.headers,
+                        context,
+                    );
+
+                    let resolved_assertions: Vec<String> = assertions_to_eval
+                        .iter()
+                        .map(|a| VariableResolver::resolve(a, context))
+                        .collect();
+
+                    let assertions = evaluate_assertions(&resolved_assertions, &virtual_response);
+                    assertion_results.extend(assertions);
+                }
+
+                Ok(true)
+            }
+            WsAction::Close => {
+                info!("WS [CLOSE #{}] Active Close connection.", action_idx);
+                let close_frame = WsFrame::new(
+                    FrameDirection::Outbound,
+                    WsFrameType::Close,
+                    Vec::new(),
+                    0,
+                );
+                let _ = client.send_frame(close_frame).await;
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -466,56 +460,12 @@ impl WsRunner {
         }
         resolved
     }
-
-    fn matches_condition_optimized(
-        frame: &WsFrame,
-        condition: &str,
-        condition_json: &Option<serde_json::Value>,
-        jsonpath_matcher: &Option<crate::ws::matcher::JsonPathMatcher>,
-        decoder: Option<&dyn crate::ws::PayloadDecoder>,
-    ) -> bool {
-        use crate::ws::matcher::FrameMatcher;
-
-        let condition = condition.trim();
-        if condition.is_empty() {
-            return true;
-        }
-
-        // 如果有预编译的 jsonpath_matcher，直接匹配
-        if let Some(matcher) = jsonpath_matcher {
-            return matcher.matches(frame, decoder);
-        }
-
-        // 1. 如果 condition_json 是一个合法的 JSON，且接收帧也是合法 JSON，尝试执行 JSON 子集匹配
-        if let Some(cond_val) = condition_json {
-            let msg_str = if let Some(dec) = decoder {
-                match dec.decode(&frame.payload) {
-                    Ok(val) => match val {
-                        Value::String(ref s) => s.clone(),
-                        _ => val.to_string(),
-                    },
-                    Err(_) => frame.payload_as_string(),
-                }
-            } else {
-                frame.payload_as_string()
-            };
-
-            if let Ok(msg_val) = serde_json::from_str::<Value>(&msg_str) {
-                return Self::match_json_subset(cond_val, &msg_val);
-            }
-        }
-
-        // 2. 否则，降级使用子字符串包含匹配（直接使用 &str, 避免 TextContainsMatcher 再次 clone/allocate）
-        let txt = frame.payload_as_string();
-        txt.contains(condition)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ws::{WsFrame, WsFrameType, FrameDirection};
-    use crate::ws::matcher::JsonPathMatcher;
     use tokio::sync::broadcast;
 
     #[test]
@@ -523,56 +473,6 @@ mod tests {
         let url = "http://example.com/api?redirect=http://google.com";
         let resolved = WsRunner::resolve_ws_url(url);
         assert_eq!(resolved, "ws://example.com/api?redirect=http://google.com");
-    }
-
-    #[test]
-    fn test_matches_condition_optimized() {
-        // 1. JSON subset matching
-        let frame = WsFrame::new(
-            FrameDirection::Inbound,
-            WsFrameType::Text,
-            r#"{"event":"ticker","symbol":"BTC","price":60000}"#.to_string().into_bytes(),
-            0,
-        );
-        let condition = r#"{"event":"ticker"}"#;
-        let condition_json = serde_json::from_str::<serde_json::Value>(condition).ok();
-        assert!(WsRunner::matches_condition_optimized(
-            &frame,
-            condition,
-            &condition_json,
-            &None,
-            None,
-        ));
-
-        // 2. JSONPath matching
-        let jsonpath_matcher = Some(JsonPathMatcher::new(
-            vec!["symbol".to_string()],
-            Some("BTC".to_string()),
-            Some("==".to_string()),
-        ));
-        assert!(WsRunner::matches_condition_optimized(
-            &frame,
-            "$.symbol == BTC",
-            &None,
-            &jsonpath_matcher,
-            None,
-        ));
-
-        // 3. Text contains matching (fallback)
-        assert!(WsRunner::matches_condition_optimized(
-            &frame,
-            "BTC",
-            &None,
-            &None,
-            None,
-        ));
-        assert!(!WsRunner::matches_condition_optimized(
-            &frame,
-            "ETH",
-            &None,
-            &None,
-            None,
-        ));
     }
 
     #[tokio::test]

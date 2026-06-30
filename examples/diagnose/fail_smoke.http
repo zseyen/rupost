@@ -1,0 +1,6 @@
+# @name 故障补测冒烟测试
+GET https://httpbingo.org/get
+
+# 我们不加 @diagnose 注解，但定义一个一定失败的断言（或者让接口本身失败）
+# 比如断言状态码等于 999
+# @assert status == 999

@@ -40,6 +40,9 @@ pub struct TestResult {
 
     /// 细粒度网络时序诊断
     pub timing: Option<crate::http::timing::RequestTiming>,
+
+    /// 深度网络诊断报告
+    pub diagnose_report: Option<crate::http::DiagnosticsReport>,
 }
 
 impl TestResult {
@@ -67,6 +70,7 @@ impl TestResult {
             skipped: false,
             assertions: Vec::new(),
             timing: None,
+            diagnose_report: None,
         }
     }
 
@@ -91,6 +95,7 @@ impl TestResult {
             skipped: false,
             assertions: Vec::new(),
             timing: None,
+            diagnose_report: None,
         }
     }
 
@@ -113,6 +118,7 @@ impl TestResult {
             skipped: true,
             assertions: Vec::new(),
             timing: None,
+            diagnose_report: None,
         }
     }
 }

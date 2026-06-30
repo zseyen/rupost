@@ -373,8 +373,10 @@ impl TestExecutor {
                 )
                 .unwrap();
 
-                if enable_diagnose {
+                let mut diagnose_report = None;
+                if enable_diagnose || self.debug {
                     if let Ok(report) = crate::http::diagnose_url(&url).await {
+                        diagnose_report = Some(report.clone());
                         response_obj = response_obj.with_diagnose_report(report);
                     }
                 }
@@ -402,11 +404,22 @@ impl TestExecutor {
 
                 // 创建成功的测试结果
                 let mut test_result =
-                    TestResult::success(request_number, name, method, url, response_obj.clone());
+                    TestResult::success(request_number, name, method, url.clone(), response_obj.clone());
                 test_result.assertions = assertion_results;
 
                 if !test_result.assertions.is_empty() {
                     test_result.success = test_result.assertions.iter().all(|a| a.passed);
+                }
+
+                test_result.diagnose_report = diagnose_report;
+
+                if self.debug_on_failure && !test_result.success && test_result.diagnose_report.is_none() {
+                    if let Ok(report) = crate::http::diagnose_url(&url).await {
+                        test_result.diagnose_report = Some(report.clone());
+                        if let Some(ref mut resp) = test_result.response {
+                            *resp = resp.clone().with_diagnose_report(report);
+                        }
+                    }
                 }
 
                 let need_timing = self.debug || (self.debug_on_failure && !test_result.success);
@@ -424,11 +437,16 @@ impl TestExecutor {
                     request_number,
                     name,
                     method,
-                    url,
+                    url.clone(),
                     RupostError::RequestExecutionFailed(e.to_string()).to_user_friendly_string(),
                     start.elapsed(),
                 );
-
+                let run_diagnose = enable_diagnose || self.debug || self.debug_on_failure;
+                if run_diagnose {
+                    if let Ok(report) = crate::http::diagnose_url(&url).await {
+                        test_result.diagnose_report = Some(report);
+                    }
+                }
                 let need_timing = self.debug || self.debug_on_failure;
                 test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
                     probe_result,

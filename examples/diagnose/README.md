@@ -82,3 +82,37 @@ rupost d wss://echo.websocket.org
 # 诊断本地开发接口
 rupost d http://localhost:8080/api/v1/users
 ```
+
+---
+
+## 全局调试参数同步与场景联动 (CLI Global Flags)
+
+除了在特定请求中声明 `# @diagnose` 注解外，RuPost 还在测试执行器（`rupost test`）中同步并集成了全局的命令行调试标志，以支持更灵活的按需连通性诊断。
+
+### 1. 联动工作流与触发判定
+在批量或单个用例运行中，诊断引擎将结合请求元数据与命令行标志，智能决定是否执行 `diagnose_url` 细粒度探测：
+1. **声明式优先**：只要用例文件内部包含了 `# @diagnose` 注解，该请求在执行后**必定**进行网络诊断，以确保性能/证书断言提取成功。
+2. **全局调试强制开启 (`--debug`)**：如果运行测试时指定了全局 `--debug` 标志，则对**所有测试步骤**（无论是否标注注解）都会强制追加网络诊断，并在终端打印时延瀑布图。
+3. **失败自动补测 (`--debug-on-failure`)**：如果运行测试时指定了全局 `--debug-on-failure` 标志，在低压测试下不产生多余的诊断握手。**一旦且仅当**某个测试请求由于网络故障（例如超时、拒绝连接）或断言校验失败被判定为失败（`!success`）时，引擎才会异步补测，并将生成的诊断报告输出至控制台，或导出至结构化 JSON 报告中。
+
+### 2. 核心使用场景
+*   **场景 A：本地接口性能敏捷排查**
+    在本地开发微服务接口时，直接使用 `--debug` 运行测试：
+    ```bash
+    rupost test path/to/apis.http --debug
+    ```
+    每一项测试都会输出网络分解瀑布图，快速识别 DNS 耗时、TCP 握手与首字节响应（TTFB）的开销比重。
+*   **场景 B：CI/CD 契约构建卡点**
+    通过 `# @diagnose` 元注解按需锁定重要核心路径，编写断言：
+    ```http
+    # @diagnose
+    GET https://api.yourservice.com/health
+    # @assert cert.days_remaining > 15
+    ```
+    一旦检测出网络延迟异常或 SSL 证书即将到期，CI 构建即自动阻断发布。
+*   **场景 C：生产级高并发巡检（零网络打扰 + 故障精确恢复）**
+    常规巡检期间，不加 `# @diagnose` 标签，仅配置 `--debug-on-failure` 和 `--report json`：
+    ```bash
+    rupost test suite.http --debug-on-failure --report json
+    ```
+    正常状态下接口以超高性能闪速跑完；一旦发生偶发性网络抖动或请求崩溃，会自动补测并生成诊断信息保存于 JSON 报告中，供监控报警与运维定位。

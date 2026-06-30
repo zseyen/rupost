@@ -50,3 +50,18 @@ Always maintain these boundaries:
 1. **No Logic in Main**: `main.rs` should only handle CLI dispatching and error reporting.
 2. **New Features = New Middleware**: If adding a feature like "Auto-Retry", create a new middleware instead of modifying the `HttpEngine`.
 3. **Implicit Over Explicit**: Prefer intelligent defaults (e.g., auto-detecting JSON body) but allow explicit overrides via Metadata (`@metadata`).
+
+## Network Diagnostics & Assertion Metrics Flow
+
+RuPost 提供了一套三维一体的底层网络与安全诊断系统。为确保高频测试下的性能与异常发生时的易用性，其数据流与触发链路必须遵循以下规范：
+
+### 1. 三维触发与判定链路 (Trigger Mechanism)
+- **声明式优先 (`# @diagnose`)**：用例文件若显式打标，必须在请求返回后、断言执行前立刻运行网络诊断，以便将 `DiagnosticsReport` 挂载入 `Response`，支撑 `timing.*` 与 `cert.*` 指标断言提取。
+- **全局覆盖 (`--debug`)**：属于全局命令行选项。若启用，则无视元数据，强制在断言前执行网络诊断。
+- **后置补测 (`--debug-on-failure`)**：针对高并发与 CI 巡检优化。常规状态下零开销；一旦用例被判定为失败（`!success`），若此前没有执行过诊断，则在此处进行异步补测并保存至 `TestResult`。
+- **异常分支诊断**：若在物理链路层遭遇断开或拒绝（`Err(e)` 分支），当开启诊断时，直接运行诊断挂载至 `TestResult::diagnose_report`。
+
+### 2. 零侵入向前兼容设计 (Backward Compatibility)
+- `TestResult` 中新的 `diagnose_report` 必须作为 `Option` 承载。
+- 测试结果报告器（TUI 渲染层）应优先展示 `diagnose_report` 瀑布图；若为 `None`，则必须无缝回退渲染原有的 `timing: RequestTiming` 数据，确保旧用例与旧测试百分之百不被影响。
+

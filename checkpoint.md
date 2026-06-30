@@ -20,8 +20,15 @@
    - 新增了 `rupost diagnose --report json` 结构化导出支持，便于自动化集成。
    - 编写了 [assertion_diagnose.http](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/assertion_diagnose.http) 冒烟测试并完美通过；全量 166 个测试用例回归通过率 100%。
 
-4. **版本库提交管理 (JJ Commits)**:
-   - 使用 `jj` 小步提交，最新提交说明：`feat: complete declarative network diagnostics with assertions, unified timings, and JSON CLI report`。
+4. **CLI 调试参数同步与测试报告数据整合 (CLI & Report Integration)**:
+   - 为 `TestResult` 扩展 `diagnose_report` 字段。非侵入式兼容了旧有的 `timing` 功能。
+   - 实现了全局参数 `--debug` 和 `--debug-on-failure` 与网络诊断功能的同步联动（支持正常运行时的全量前置诊断、故障时的后置补测以及网络完全失败时的 Err 分支捕获）。
+   - 在导出 JSON 格式测试报告时，同步序列化 `diagnose_report` 字段。
+   - 在 `examples/diagnose/README.md` 中补充了针对联动判定、本地联调、CI 构建卡点和高并发“失败即诊断”的使用场景说明文档。
+   - 跑通了全面冒烟与全量回归测试用例验证，通过率 100%。
+
+5. **版本库提交管理 (JJ Commits)**:
+   - 使用 `jj` 分步原子化提交，最新提交说明：`feat: complete CLI global flags synchronization, smoke tests, and scenario documentation for network diagnostics`。
 
 ## 下一步工作 (Next Steps)
 - 启动 Sprint 6：导出可视化 HTML 报告与模板表现层。

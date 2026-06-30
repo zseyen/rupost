@@ -31,6 +31,7 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@base_path" => parse_base_path(content).map(Some),
         "@websocket" => parse_websocket(content).map(Some),
         "@decoder" => parse_decoder(content).map(Some),
+        "@diagnose" => parse_diagnose(content).map(Some),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -82,10 +83,22 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         Metadata::Decoder(decoder) => {
             target.decoder = Some(decoder.clone());
         }
+        Metadata::Diagnose(diagnose) => {
+            target.diagnose = *diagnose;
+        }
     }
 }
 
 // === 各个解析器实现 ===
+
+fn parse_diagnose(content: &str) -> ParseResult<Metadata> {
+    let value = if content.is_empty() {
+        true
+    } else {
+        content.parse::<bool>().unwrap_or(true)
+    };
+    Ok(Metadata::Diagnose(value))
+}
 
 fn parse_name(content: &str) -> ParseResult<Metadata> {
     Ok(Metadata::Name(content.to_string()))
@@ -366,6 +379,19 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(result, Metadata::ForwardTo(ref url) if url == "http://my-proxy.com"));
+    }
+
+    #[test]
+    fn test_parse_diagnose() {
+        let result = parse_metadata("@diagnose").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Diagnose(true)));
+
+        let result = parse_metadata("@diagnose false").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Diagnose(false)));
+
+        let mut target = RequestMetadata::default();
+        apply_metadata(&Metadata::Diagnose(true), &mut target);
+        assert!(target.diagnose);
     }
 
     #[test]

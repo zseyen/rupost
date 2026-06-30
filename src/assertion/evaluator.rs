@@ -100,6 +100,7 @@ mod tests {
             duration: Duration::from_millis(duration_ms),
             ttfb: Duration::from_millis(0),
             transfer: Duration::from_millis(0),
+            diagnose_report: None,
         }
     }
 

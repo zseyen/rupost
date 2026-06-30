@@ -145,6 +145,7 @@ mod tests {
             duration: Duration::from_millis(123),
             ttfb: Duration::from_millis(0),
             transfer: Duration::from_millis(0),
+            diagnose_report: None,
         }
     }
 
@@ -276,6 +277,7 @@ mod tests {
             duration: Duration::from_millis(0),
             ttfb: Duration::from_millis(0),
             transfer: Duration::from_millis(0),
+            diagnose_report: None,
         };
 
         let val = extract_value(&response, &ValuePath::StreamEvent).unwrap();

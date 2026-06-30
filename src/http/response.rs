@@ -11,6 +11,7 @@ pub struct Response {
     pub duration: Duration,
     pub ttfb: Duration,
     pub transfer: Duration,
+    pub diagnose_report: Option<crate::http::diagnose::DiagnosticsReport>,
 }
 
 impl Response {
@@ -29,6 +30,7 @@ impl Response {
             duration,
             ttfb,
             transfer,
+            diagnose_report: None,
         })
     }
 
@@ -40,7 +42,13 @@ impl Response {
             duration: Duration::from_millis(0),
             ttfb: Duration::from_millis(0),
             transfer: Duration::from_millis(0),
+            diagnose_report: None,
         }
+    }
+
+    pub fn with_diagnose_report(mut self, report: crate::http::diagnose::DiagnosticsReport) -> Self {
+        self.diagnose_report = Some(report);
+        self
     }
 
     pub fn is_success(&self) -> bool {

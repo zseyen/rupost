@@ -262,6 +262,7 @@ impl TestExecutor {
 
         let assertions_to_eval = parsed.metadata.assertions.clone();
         let captures_to_eval = parsed.metadata.captures.clone();
+        let enable_diagnose = parsed.metadata.diagnose;
 
         // [History] 创建请求快照 (在 parsed 被 move 之前)
         let request_snapshot = RequestSnapshot::from_parsed(&parsed);
@@ -362,7 +363,7 @@ impl TestExecutor {
                     }
                 };
 
-                let response_obj = crate::http::Response::new(
+                let mut response_obj = crate::http::Response::new(
                     status,
                     headers,
                     body,
@@ -371,6 +372,12 @@ impl TestExecutor {
                     start.elapsed().saturating_sub(ttfb),
                 )
                 .unwrap();
+
+                if enable_diagnose {
+                    if let Ok(report) = crate::http::diagnose_url(&url).await {
+                        response_obj = response_obj.with_diagnose_report(report);
+                    }
+                }
 
                 // 遍历调用中间件的 after_response 钩子
                 for mw in &self.middlewares {

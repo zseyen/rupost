@@ -57,6 +57,20 @@ pub enum ValuePath {
     StreamBody(Vec<String>),
     /// 统一大模型流规整内容
     StreamLlmContent,
+    /// 诊断 DNS 延迟 (ms)
+    TimingDns,
+    /// 诊断 TCP 建连延迟 (ms)
+    TimingTcp,
+    /// 诊断 TLS 握手延迟 (ms)
+    TimingTls,
+    /// 诊断 HTTP TTFB 延迟 (ms)
+    TimingTtfb,
+    /// 证书剩余有效天数
+    CertDays,
+    /// 证书颁发者
+    CertIssuer,
+    /// 证书主题 SAN
+    CertSubject,
 }
 
 impl fmt::Display for ValuePath {
@@ -70,6 +84,13 @@ impl fmt::Display for ValuePath {
             ValuePath::StreamId => write!(f, "stream.id"),
             ValuePath::StreamBody(segments) => write!(f, "stream.body.{}", segments.join(".")),
             ValuePath::StreamLlmContent => write!(f, "stream.llm.content"),
+            ValuePath::TimingDns => write!(f, "timing.dns"),
+            ValuePath::TimingTcp => write!(f, "timing.tcp"),
+            ValuePath::TimingTls => write!(f, "timing.tls"),
+            ValuePath::TimingTtfb => write!(f, "timing.ttfb"),
+            ValuePath::CertDays => write!(f, "cert.days_remaining"),
+            ValuePath::CertIssuer => write!(f, "cert.issuer"),
+            ValuePath::CertSubject => write!(f, "cert.subject"),
         }
     }
 }

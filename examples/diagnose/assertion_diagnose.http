@@ -1,0 +1,12 @@
+# @name 诊断指标测试
+# @diagnose
+GET https://httpbingo.org/get
+
+# 对网络时延发起性能断言 (单位毫秒)
+# @assert timing.dns < 1000
+# @assert timing.tcp < 1000
+# @assert timing.ttfb < 2000
+
+# 对安全证书发起安全断言
+# @assert cert.days_remaining > 5
+# @assert cert.issuer contains "Let's Encrypt"

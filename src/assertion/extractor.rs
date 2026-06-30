@@ -81,6 +81,54 @@ pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValu
                 .collect::<String>();
             Ok(AssertValue::String(decoded))
         }
+
+        ValuePath::TimingDns => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+            })?;
+            Ok(AssertValue::Number(report.dns_lookup_duration.as_millis() as f64))
+        }
+        ValuePath::TimingTcp => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+            })?;
+            Ok(AssertValue::Number(report.tcp_connect_duration.as_millis() as f64))
+        }
+        ValuePath::TimingTls => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+            })?;
+            let ms = report.tls_handshake_duration.map(|d| d.as_millis() as f64).unwrap_or(0.0);
+            Ok(AssertValue::Number(ms))
+        }
+        ValuePath::TimingTtfb => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+            })?;
+            let ms = report.ttfb.map(|d| d.as_millis() as f64).unwrap_or(0.0);
+            Ok(AssertValue::Number(ms))
+        }
+        ValuePath::CertDays => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
+            })?;
+            let days = report.cert_info.as_ref().map(|c| c.days_remaining as f64).unwrap_or(-1.0);
+            Ok(AssertValue::Number(days))
+        }
+        ValuePath::CertIssuer => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
+            })?;
+            let issuer = report.cert_info.as_ref().map(|c| c.issuer.clone()).unwrap_or_default();
+            Ok(AssertValue::String(issuer))
+        }
+        ValuePath::CertSubject => {
+            let report = response.diagnose_report.as_ref().ok_or_else(|| {
+                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
+            })?;
+            let subject = report.cert_info.as_ref().map(|c| c.subject.clone()).unwrap_or_default();
+            Ok(AssertValue::String(subject))
+        }
     }
 }
 
@@ -289,5 +337,83 @@ mod tests {
         let val =
             extract_value(&response, &ValuePath::StreamBody(vec!["text".to_string()])).unwrap();
         assert_eq!(val, AssertValue::String("hello".to_string()));
+    }
+
+    #[test]
+    fn test_extract_diagnose_fields() {
+        use crate::http::{CertInfo, DiagnosticsReport};
+
+        let report = DiagnosticsReport {
+            url: "https://example.com".to_string(),
+            is_https: true,
+            is_websocket: false,
+            ws_upgrade_success: None,
+            resolved_ips: vec!["1.1.1.1".to_string()],
+            dns_lookup_duration: Duration::from_millis(10),
+            tcp_connect_duration: Duration::from_millis(20),
+            tls_handshake_duration: Some(Duration::from_millis(30)),
+            cert_info: Some(CertInfo {
+                subject: "CN=example.com".to_string(),
+                issuer: "CN=Let's Encrypt".to_string(),
+                sans: vec!["example.com".to_string()],
+                validity_not_after: "2026-08-04".to_string(),
+                days_remaining: 35,
+            }),
+            http_status: Some(200),
+            http_version: Some("HTTP/1.1".to_string()),
+            ttfb: Some(Duration::from_millis(40)),
+            total_duration: Duration::from_millis(100),
+        };
+
+        let response = Response {
+            status: Status::new(200).unwrap(),
+            headers: HeaderMap::new(),
+            body: "{}".to_string(),
+            duration: Duration::from_millis(100),
+            ttfb: Duration::from_millis(0),
+            transfer: Duration::from_millis(0),
+            diagnose_report: Some(report),
+        };
+
+        assert_eq!(
+            extract_value(&response, &ValuePath::TimingDns).unwrap(),
+            AssertValue::Number(10.0)
+        );
+        assert_eq!(
+            extract_value(&response, &ValuePath::TimingTcp).unwrap(),
+            AssertValue::Number(20.0)
+        );
+        assert_eq!(
+            extract_value(&response, &ValuePath::TimingTls).unwrap(),
+            AssertValue::Number(30.0)
+        );
+        assert_eq!(
+            extract_value(&response, &ValuePath::TimingTtfb).unwrap(),
+            AssertValue::Number(40.0)
+        );
+        assert_eq!(
+            extract_value(&response, &ValuePath::CertDays).unwrap(),
+            AssertValue::Number(35.0)
+        );
+        assert_eq!(
+            extract_value(&response, &ValuePath::CertIssuer).unwrap(),
+            AssertValue::String("CN=Let's Encrypt".to_string())
+        );
+        assert_eq!(
+            extract_value(&response, &ValuePath::CertSubject).unwrap(),
+            AssertValue::String("CN=example.com".to_string())
+        );
+
+        // 如果诊断报告为空，应当抛出错误说明未启用 @diagnose
+        let empty_response = Response {
+            status: Status::new(200).unwrap(),
+            headers: HeaderMap::new(),
+            body: "{}".to_string(),
+            duration: Duration::from_millis(100),
+            ttfb: Duration::from_millis(0),
+            transfer: Duration::from_millis(0),
+            diagnose_report: None,
+        };
+        assert!(extract_value(&empty_response, &ValuePath::TimingDns).is_err());
     }
 }

@@ -12,13 +12,16 @@
    - 已将帧匹配职责解耦并迁移至 `src/ws/matcher.rs` 的 `WsConditionMatcher`。
    - 单元测试与集成测试通过率达到 100%。
 
-3. **网络诊断示例与讲解 (Network Diagnostics Examples & Tutorial)**:
-   - 新增专属测试示例，包含了本地 HTTP、WebSocket 握手、公网 HTTPS TLS 证书分析和端口连接拒绝异常这 4 个实验场景。
-   - 创建了 [README.md](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/README.md) 详细讲解时延瀑布图、X.509 证书解构和 WS 升级机制。
-   - 编写并跑通了演示脚本 [run_diagnose.sh](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/run_diagnose.sh)，手工验证与测试讲解逻辑完全正常，测试用例通过率 100%。
+3. **声明式网络诊断与断言拓展 (Declarative Diagnostics & Assertion Metrics)**:
+   - 支持通过在测试文档中添加 `# @diagnose` 注解，按需触发网络诊断。
+   - 提取了共享的无状态 `connect_tcp_with_timeout` Socket 测量组件，消除了 `timing` 与 `diagnose` 模块的重复代码。
+   - 引入 `timing.ttfb/dns/tcp/tls` 和 `cert.days_remaining/issuer/subject` 的断言解析与提取，允许直接在用例中编写契约断言。
+   - 对所有网络探测阶段（DNS、TCP、TLS、TTFB 响应）应用了 `tokio::time::timeout` 超时控制，消除 CI/CD 卡死隐患。
+   - 新增了 `rupost diagnose --report json` 结构化导出支持，便于自动化集成。
+   - 编写了 [assertion_diagnose.http](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/assertion_diagnose.http) 冒烟测试并完美通过；全量 166 个测试用例回归通过率 100%。
 
 4. **版本库提交管理 (JJ Commits)**:
-   - 使用 `jj` 提交并描述了代码，最新提交说明：`feat: add network diagnostics examples and presentation script`。
+   - 使用 `jj` 小步提交，最新提交说明：`feat: complete declarative network diagnostics with assertions, unified timings, and JSON CLI report`。
 
 ## 下一步工作 (Next Steps)
 - 启动 Sprint 6：导出可视化 HTML 报告与模板表现层。

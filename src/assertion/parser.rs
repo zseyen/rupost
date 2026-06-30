@@ -83,6 +83,34 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
         return Ok(ValuePath::StreamLlmContent);
     }
 
+    if input == "timing.dns" {
+        return Ok(ValuePath::TimingDns);
+    }
+
+    if input == "timing.tcp" {
+        return Ok(ValuePath::TimingTcp);
+    }
+
+    if input == "timing.tls" {
+        return Ok(ValuePath::TimingTls);
+    }
+
+    if input == "timing.ttfb" {
+        return Ok(ValuePath::TimingTtfb);
+    }
+
+    if input == "cert.days_remaining" {
+        return Ok(ValuePath::CertDays);
+    }
+
+    if input == "cert.issuer" {
+        return Ok(ValuePath::CertIssuer);
+    }
+
+    if input == "cert.subject" {
+        return Ok(ValuePath::CertSubject);
+    }
+
     if let Some(rest) = input.strip_prefix("headers.") {
         return Ok(ValuePath::Header(rest.to_string()));
     }
@@ -108,7 +136,7 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
     }
 
     Err(AssertError::InvalidSyntax(format!(
-        "Invalid value path: {}. Must start with 'status', 'headers.', 'body.', 'response.time', or 'stream.'",
+        "Invalid value path: {}. Must start with 'status', 'headers.', 'body.', 'response.time', 'timing.', 'cert.', or 'stream.'",
         input
     )))
 }

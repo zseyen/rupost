@@ -105,6 +105,10 @@ pub enum Commands {
         /// Target URL to diagnose (e.g. https://example.com)
         #[arg(required = true)]
         url: String,
+
+        /// Format output (terminal or json)
+        #[arg(long, default_value = "terminal")]
+        report: String,
     },
 
     /// Start a local Mock server based on a snapshot/config file

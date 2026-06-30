@@ -80,9 +80,13 @@ async fn main() -> Result<()> {
                 rupost::history::printer::list_history(limit, reverse)?;
             }
         },
-        Some(Commands::Diagnose { url }) => match rupost::http::diagnose_url(&url).await {
-            Ok(report) => {
-                rupost::http::print_diagnose_report(&report);
+        Some(Commands::Diagnose { url, report }) => match rupost::http::diagnose_url(&url).await {
+            Ok(report_data) => {
+                if report == "json" {
+                    println!("{}", serde_json::to_string_pretty(&report_data).unwrap());
+                } else {
+                    rupost::http::print_diagnose_report(&report_data);
+                }
             }
             Err(e) => {
                 eprintln!("Error: {}", e);

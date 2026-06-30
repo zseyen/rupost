@@ -12,10 +12,16 @@
    - 已将帧匹配职责解耦并迁移至 `src/ws/matcher.rs` 的 `WsConditionMatcher`。
    - 单元测试与集成测试通过率达到 100%。
 
-3. **版本库提交管理 (JJ Commits)**:
-   - 使用 `jj` 提交并整理了代码，最新提交说明：`feat: implement URL resolution and shortcuts in CLI and test documents`。
+3. **网络诊断示例与讲解 (Network Diagnostics Examples & Tutorial)**:
+   - 新增专属测试示例，包含了本地 HTTP、WebSocket 握手、公网 HTTPS TLS 证书分析和端口连接拒绝异常这 4 个实验场景。
+   - 创建了 [README.md](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/README.md) 详细讲解时延瀑布图、X.509 证书解构和 WS 升级机制。
+   - 编写并跑通了演示脚本 [run_diagnose.sh](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/run_diagnose.sh)，手工验证与测试讲解逻辑完全正常，测试用例通过率 100%。
+
+4. **版本库提交管理 (JJ Commits)**:
+   - 使用 `jj` 提交并描述了代码，最新提交说明：`feat: add network diagnostics examples and presentation script`。
 
 ## 下一步工作 (Next Steps)
-- 对 Rupost 核心引擎在复杂微服务网关下的多层路径嵌套拼接进行更多环境测试。
-- 继续完善并发测试调度与报告输出美化。
+- 启动 Sprint 6：导出可视化 HTML 报告与模板表现层。
+- 进一步优化并发测试调度的实时 TUI 表现。
+
 

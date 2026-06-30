@@ -4,7 +4,7 @@
 
 ---
 
-## 🛠️ 设计原理与第一性原理
+## 设计原理与第一性原理
 
 普通的 HTTP 库（如 `reqwest`）将底层连接细节进行了封装。如果请求超时或报错，很难清晰区分到底是 **DNS 解析慢**、**TCP 握手被拦截**、**TLS 握手协商失败** 还是 **后端接口响应迟缓（TTFB 慢）**。
 
@@ -18,7 +18,7 @@ RuPost 网络诊断遵循**第一性原理**：
 
 ---
 
-## ⏱️ 时延拆分瀑布图指标说明
+## 时延拆分瀑布图指标说明
 
 在诊断结果中，RuPost 会在终端为您绘制一张精美的 Latency Breakdown 瀑布图。各项指标的定义如下：
 
@@ -32,7 +32,7 @@ RuPost 网络诊断遵循**第一性原理**：
 
 ---
 
-## 🛡️ TLS 证书健康度诊断
+## TLS 证书健康度诊断
 
 在 HTTPS 握手期间，网络诊断会捕获服务器返回的 X.509 证书链（DER 裸字节），并通过 `x509-parser` 进行底层解构。
 
@@ -41,13 +41,13 @@ RuPost 网络诊断遵循**第一性原理**：
 * **Issuer**：签发机构的 Distinguished Name（DN）。
 * **Valid Until**：证书的过期时间（UTC）。
 * **Status (状态分级警告)**：
-  * 🟢 **`[VALID]`**：证书有效，且距离过期天数大于 30 天。
-  * 🟡 **`[WARNING]`**：证书临期（距离过期天数 $\le$ 30 天）。提醒管理员必须尽快更换证书，避免服务突发中断。
-  * 🔴 **`[EXPIRED]`**：证书已过期（天数显示为负数），客户端发起 HTTPS 连接时会因安全校验失败而直接报错。
+  * [VALID]：证书有效，且距离过期天数大于 30 天。
+  * [WARNING]：证书临期（距离过期天数 $\le$ 30 天）。提醒管理员必须尽快更换证书，避免服务突发中断。
+  * [EXPIRED]：证书已过期（天数显示为负数），客户端发起 HTTPS 连接时会因安全校验失败而直接报错。
 
 ---
 
-## 🔌 WebSocket 升级握手诊断
+## WebSocket 升级握手诊断
 
 对于 `ws://` 和 `wss://` 协议，RuPost 会模拟发送标准的 WebSocket 握手升级（Upgrade）请求头部：
 ```http
@@ -60,9 +60,8 @@ Sec-WebSocket-Version: 13
 ```
 
 诊断字段说明：
-* **ws_upgrade_success**：是否响应了 `101 Switching Protocols`。
-* 🟢 **`[WS UPGRADE SUCCESS]`**：说明服务端已正确切换协议，可以建立长连接通道。
-* ❌ **`[WS UPGRADE FAILED]`**：升级失败。
+* [WS UPGRADE SUCCESS]：说明服务端已正确切换协议，可以建立长连接通道。
+* [WS UPGRADE FAILED]：升级失败。
   * **排障建议**：一般是由于 Nginx / 反向代理网关未配置 `Upgrade` 和 `Connection` 头的透传。你需要检查 Nginx 配置文件：
     ```nginx
     proxy_set_header Upgrade $http_upgrade;
@@ -71,7 +70,7 @@ Sec-WebSocket-Version: 13
 
 ---
 
-## 🚀 诊断命令
+## 诊断命令
 
 ```bash
 # 诊断公网 HTTPS 接口

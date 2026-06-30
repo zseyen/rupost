@@ -272,7 +272,7 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     );
     println!();
 
-    println!("{}", "⏱️  Latency Breakdown (Waterfall)".bold());
+    println!("{}", "Latency Breakdown (Waterfall)".bold());
     println!("{}", "-----------------------------------------".cyan());
 
     let dns_ms = report.dns_lookup_duration.as_secs_f64() * 1000.0;
@@ -332,7 +332,7 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     println!();
 
     if report.is_https {
-        println!("{}", "🛡️  TLS Certificate Info".bold());
+        println!("{}", "TLS Certificate Info".bold());
         println!("{}", "-----------------------------------------".cyan());
         if let Some(cert) = &report.cert_info {
             println!("{:<14}: {}", "Subject (SAN)", cert.subject.blue());
@@ -356,32 +356,32 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     }
 
     if report.is_websocket {
-        println!("{}", "🔌  WebSocket Handshake Info".bold());
+        println!("{}", "WebSocket Handshake Info".bold());
         println!("{}", "-----------------------------------------".cyan());
         match report.ws_upgrade_success {
             Some(true) => {
                 println!(
                     "{} {}",
-                    "🟢 [WS UPGRADE SUCCESS]".green().bold(),
+                    "[WS UPGRADE SUCCESS]".green().bold(),
                     "WebSocket Upgrade completed successfully (101 Switching Protocols)".white()
                 );
             }
             Some(false) | None => {
                 println!(
                     "{} {}",
-                    "❌ [WS UPGRADE FAILED]".red().bold(),
+                    "[WS UPGRADE FAILED]".red().bold(),
                     "WebSocket Upgrade handshake failed!".red()
                 );
                 println!(
                     "{}",
-                    "💡 Hint: Did not return 101 Switching Protocols. Check if your Nginx/Gateway\n   is missing 'Upgrade' and 'Connection' headers configuration!"
+                    "Hint: Did not return 101 Switching Protocols. Check if your Nginx/Gateway\n   is missing 'Upgrade' and 'Connection' headers configuration!"
                         .yellow()
                 );
             }
         }
         println!();
     } else {
-        println!("{}", "🌐  HTTP Protocol Info".bold());
+        println!("{}", "HTTP Protocol Info".bold());
         println!("{}", "-----------------------------------------".cyan());
         if let Some(status) = report.http_status {
             let status_colored = if status >= 400 {

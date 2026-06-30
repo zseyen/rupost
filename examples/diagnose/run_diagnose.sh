@@ -66,7 +66,7 @@ echo ""
 
 # 3. 实验一：诊断本地 HTTP 接口
 echo -e "${CYAN}----------------------------------------------------------------${RESET}"
-echo -e "${PURPLE}🧪 实验 1: 本地 HTTP 服务诊断 (Local HTTP Connectivity)${RESET}"
+echo -e "${PURPLE} 实验 1: 本地 HTTP 服务诊断 (Local HTTP Connectivity)${RESET}"
 echo -e "${CYAN}----------------------------------------------------------------${RESET}"
 echo -e "${YELLOW}【测试背景】${RESET} 很多时候我们在本地开发一个微服务（例如端口 9000）。通过诊断命令，"
 echo -e "我们可以迅速了解本地网络的建连基准值。"
@@ -87,7 +87,7 @@ read -p "按回车键 [Enter] 继续到实验 2..."
 
 # 4. 实验二：诊断本地 WebSocket 接口
 echo -e "\n${CYAN}----------------------------------------------------------------${RESET}"
-echo -e "${PURPLE}🧪 实验 2: WebSocket 升级通道诊断 (WebSocket Upgrade)${RESET}"
+echo -e "${PURPLE} 实验 2: WebSocket 升级通道诊断 (WebSocket Upgrade)${RESET}"
 echo -e "${CYAN}----------------------------------------------------------------${RESET}"
 echo -e "${YELLOW}【测试背景】${RESET} 在生产环境中，客户端和微服务之间经常需要建立长连接（WS/WSS）。"
 echo -e "如果遭遇反向代理（如 Nginx、API 网关）配置缺失，握手往往会被拦截。"
@@ -111,7 +111,7 @@ MOCK_PID=""
 
 # 5. 实验三：诊断公网 HTTPS 接口 (带 TLS 握手及证书解构)
 echo -e "\n${CYAN}----------------------------------------------------------------${RESET}"
-echo -e "${PURPLE}🧪 实验 3: 公网 HTTPS 性能与安全证书诊断 (Public HTTPS & Certs)${RESET}"
+echo -e "${PURPLE} 实验 3: 公网 HTTPS 性能与安全证书诊断 (Public HTTPS & Certs)${RESET}"
 echo -e "${CYAN}----------------------------------------------------------------${RESET}"
 echo -e "${YELLOW}【测试背景】${RESET} 在真实的 API 测试场景下，网络链路上往往会产生较大的波动。"
 echo -e "网络诊断工具在这里能够提供完整的‘延迟瀑布图’以及‘X.509 证书深度分析’。"
@@ -127,13 +127,13 @@ if [ $DIAGNOSE_STATUS -ne 0 ]; then
     echo -e "${RED}[提示] 公网 HTTPS 探测未成功，可能因为当前网络受限。跳过此部分讲解。${RESET}"
 else
     echo -e "\n${GREEN}【结果分析讲解】${RESET}"
-    echo -e "1. ${BLUE}⏱️ Latency Breakdown 细粒度时延瀑布图:${RESET}"
+    echo -e "1. ${BLUE}Latency Breakdown 细粒度时延瀑布图:${RESET}"
     echo -e "   - ${BLUE}DNS Lookup:${RESET} 指将 httpbingo.org 通过本地域名解析出公网 IP 的开销（如 30ms ~ 100ms）。"
     echo -e "   - ${GREEN}TCP Connect:${RESET} 发发起目标公网 IP:443 端口的三次握手往返耗时（体现了物理距离和网络 RTT）。"
     echo -e "   - ${PURPLE}TLS Handshake:${RESET} HTTPS 所必需的。通过 ring 密码库与服务器完成密钥交换与安全信道初始化。由于涉及大量非对称加解密和证书传输，通常占比很高。"
     echo -e "   - ${YELLOW}HTTP TTFB:${RESET} 当发送完 HTTP GET 后，等待公网链路将首个字节数据返回给客户端的时间，代表了服务器的应用响应处理延迟。"
     echo -e "   - 终端柱状图直观地展示了哪一个阶段是性能瓶颈。比如，若 TCP 长但 TTFB 短，说明网络差，服务器快；若 TCP 短但 TTFB 极长，说明网络好，但服务器后端接口代码执行缓慢。"
-    echo -e "2. ${BLUE}🛡️ TLS Certificate Info (证书状态诊断):${RESET}"
+    echo -e "2. ${BLUE}TLS Certificate Info (证书状态诊断):${RESET}"
     echo -e "   - 自动获取证书链并调用 x509-parser 解析出公网证书的发行机构 (Issuer) 及域名信息 (Subject SAN)。"
     echo -e "   - ${GREEN}Status:${RESET} 诊断会自动计算证书过期时间与当前 UTC 时间的差值（剩余天数），若天数 > 30，显示 [VALID]；"
     echo -e "     若剩余天数 <= 30，显示黄色 [WARNING] 警告，提前避免线上证书突然过期导致的“雪崩”事故。"
@@ -143,7 +143,7 @@ read -p "按回车键 [Enter] 继续到实验 4..."
 
 # 6. 实验四：演示异常网络连通性诊断 (错误处理)
 echo -e "\n${CYAN}----------------------------------------------------------------${RESET}"
-echo -e "${PURPLE}🧪 实验 4: 故意制造的连接拒绝异常诊断 (Connection Refused)${RESET}"
+echo -e "${PURPLE} 实验 4: 故意制造的连接拒绝异常诊断 (Connection Refused)${RESET}"
 echo -e "${CYAN}----------------------------------------------------------------${RESET}"
 echo -e "${YELLOW}【测试背景】${RESET} 当我们访问一个未启动服务的端口时，我们需要了解 RuPost 报告的精准性。"
 echo -e "${YELLOW}【执行命令】${RESET} ${WHITE}\$ rupost diagnose http://127.0.0.1:9999/${RESET}"

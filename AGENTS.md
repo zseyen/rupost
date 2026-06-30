@@ -116,4 +116,11 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## 5. CLI 开发与命令行传参陷阱 (CLAP Parser Rule)
+
+在使用 `clap` 解析全局命令行参数时，必须牢记其位置解析特性：
+- **全局参数**（例如具备 `global = true` 的 `--debug` 或 `--debug-on-failure`）在运行命令时，**必须紧跟在主程序名之后、子命令之前**（例如：`rupost --debug test suite.http`）。
+- 若将全局参数写在子命令后面（例如：`rupost test suite.http --debug`），在没有显式进行位置参数反射处理的情况下，该参数会被子命令丢弃或误判为普通的位置参数，导致选项失效。在开发新命令行测试或编写脚本时必须严格遵循该格式。
+
+
 

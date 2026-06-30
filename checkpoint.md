@@ -28,7 +28,7 @@
    - 跑通了全面冒烟与全量回归测试用例验证，通过率 100%。
 
 5. **版本库提交管理 (JJ Commits)**:
-   - 使用 `jj` 分步原子化提交，最新提交说明：`feat: complete CLI global flags synchronization, smoke tests, and scenario documentation for network diagnostics`。
+   - 使用 `jj` 分步原子化提交，最新提交说明：`docs: persist learning proposal to rupost-architecture skill and global AGENTS.md rules`。
 
 ## 下一步工作 (Next Steps)
 - 启动 Sprint 6：导出可视化 HTML 报告与模板表现层。

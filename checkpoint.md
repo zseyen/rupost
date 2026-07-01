@@ -1,37 +1,28 @@
 # Rupost 开发进度与状态 Checkpoint
 
 ## 当前状态 (Current State)
-1. **URL 智能拼接与快捷缩写 (URL Resolution & Shortcuts)**:
-   - 全面支持 CLI 智能协议补全 (例如域名、`localhost:port` 自动补全默认协议) 与冒号本地快捷键。
-   - 实现测试文件中的冒号局部快捷键自适应转换与层级分层拼装。
-   - 彻底将 URL 拼接与 WS、SSE 分流前置对齐，保持了 clean architecture。
-   - 移除 `VariableResolver` 的相对路径拼接耦合，保持其职责单一。
-   - 单元测试与集成测试通过率达到 100%。
 
-2. **WS 领域层重构 (Clean Architecture)**:
-   - 已将帧匹配职责解耦并迁移至 `src/ws/matcher.rs` 的 `WsConditionMatcher`。
-   - 单元测试与集成测试通过率达到 100%。
+1. **HTTP 请求/响应基础快照录制与原样重放 (MVP 闭环)**:
+   - **快照主动录制**：在 `rupost test` 命令中扩展了可选参数 `--save-snapshot <file>`，测试运行完毕后可一键将请求/响应数据序列化为结构化 JSON 快照文件。
+   - **原样重放与 Host 覆写**：新增了 `rupost replay <file> [--target <url>]` 命令，加载快照并发送实际网络请求，重放时支持通过 `--target` 参数自动将请求重写到指定的内网测试网关（协议/Host/Port 覆盖），对状态码进行自动化比对和终端高亮输出。
+   - **非侵入式架构**：重载 `TestResult` 增加 `request: Option<RequestSnapshot>` 数据流，并在 `execute_one` 中非侵入式地捕获源请求快照，完全保障了原本核心执行流和其它测试用例的高稳定性。
+   - **自动化集成测试**：编写了专有集成用例 [tests/snapshot_replay_test.rs](file:///Users/zsyzzx/project/rust/rupost/tests/snapshot_replay_test.rs)，基于本地 Wiremock 服务器测试全过程闭环并 100% 通过。
+   - **版本化提交 (JJ)**：已使用 `jj` 工具对当前所有代码修改进行安全提交，版本信息为：`feat: implement HTTP snapshot recording and replaying MVP`。
 
-3. **声明式网络诊断与断言拓展 (Declarative Diagnostics & Assertion Metrics)**:
-   - 支持通过在测试文档中添加 `# @diagnose` 注解，按需触发网络诊断。
-   - 提取了共享的无状态 `connect_tcp_with_timeout` Socket 测量组件，消除了 `timing` 与 `diagnose` 模块的重复代码。
-   - 引入 `timing.ttfb/dns/tcp/tls` 和 `cert.days_remaining/issuer/subject` 的断言解析与提取，允许直接在用例中编写契约断言。
-   - 对所有网络探测阶段（DNS、TCP、TLS、TTFB 响应）应用了 `tokio::time::timeout` 超时控制，消除 CI/CD 卡死隐患。
-   - 新增了 `rupost diagnose --report json` 结构化导出支持，便于自动化集成。
-   - 编写了 [assertion_diagnose.http](file:///Users/zsyzzx/project/rust/rupost/examples/diagnose/assertion_diagnose.http) 冒烟测试并完美通过；全量 166 个测试用例回归通过率 100%。
+2. **声明式网络诊断与断言拓展 (Declarative Diagnostics & Assertion Metrics)**:
+   - 全面支持通过添加 `# @diagnose` 注解触发网络诊断时延瀑布图和 X.509 证书深度分析。
+   - 支持对 `timing.ttfb/dns/tcp/tls` 和 `cert.days_remaining` 的直接声明式契约断言，支持 `rupost diagnose --report json` 结构化导出。
 
-4. **CLI 调试参数同步与测试报告数据整合 (CLI & Report Integration)**:
-   - 为 `TestResult` 扩展 `diagnose_report` 字段。非侵入式兼容了旧有的 `timing` 功能。
-   - 实现了全局参数 `--debug` 和 `--debug-on-failure` 与网络诊断功能的同步联动（支持正常运行时的全量前置诊断、故障时的后置补测以及网络完全失败时的 Err 分支捕获）。
-   - 在导出 JSON 格式测试报告时，同步序列化 `diagnose_report` 字段。
-   - 在 `examples/diagnose/README.md` 中补充了针对联动判定、本地联调、CI 构建卡点和高并发“失败即诊断”的使用场景说明文档。
-   - 跑通了全面冒烟与全量回归测试用例验证，通过率 100%。
+3. **Sprint 5: WebSocket 协议测试与调试**:
+   - 支持在 `.http` 或 `.md` 中以 `@websocket` 声明长连接，解析运行 `SEND` / `EXPECT` 等流式剧本动作，支持 MsgPack 二进制自适应解码和滑动内存历史帧环形缓冲区控制。
 
-5. **版本库提交管理 (JJ Commits)**:
-   - 使用 `jj` 分步原子化提交，最新提交说明：`docs: persist learning proposal to rupost-architecture skill and global AGENTS.md rules`。
+---
 
-## 下一步工作 (Next Steps)
-- 启动 Sprint 6：导出可视化 HTML 报告与模板表现层。
-- 进一步优化并发测试调度的实时 TUI 表现。
+## 下一步工作规划 (Next Steps)
 
+按照新制定的 [后续功能路线图 (Roadmap)](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-07-01-snapshot-replay-roadmap.md)，我们将推进以下扩展功能：
 
+- **敏感数据就地脱敏 (Secrets Masker)**：在快照落盘前，对 Authorization、Cookie 字段及 Body 敏感正则词执行就地掩码打码替换。
+- **智能 JSON Diff 引擎**：重构重放对比逻辑，对 JSON Body 默认解析并智能过滤掉如 `timestamp`、`request_id` 等易频繁抖动的动态字段，避免误报差异。
+- **超时与断网事故现场捕获**：网络完全不通时自动在快照中生成 `status = 599` 的虚拟响应，完整记录连接错误日志。
+- **事后从历史数据导出快照**：重构 `HistoryEntry` 携带 Body，并开发 `rupost history export --last <N>` 的补录导出。

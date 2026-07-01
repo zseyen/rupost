@@ -17,6 +17,7 @@
 | **Sprint 4: 大模型流式调试与初始化脚手架命令** | 自动规整 `stream.llm.content`、非阻塞物理文件增量同步（`@stream_to`）、内置 Mock 大模型服务（`MockLlmServer`）、路由改写与密钥扫描、一键项目与模板初始化命令（`rupost init`，支持别名 `template`/`i`），支持 `.http` 与 `.md` 后缀自适应与安全覆盖预警。 | 已完成 | `src/template/`, `src/http/llm_adapter.rs`, `src/runner/file_sync.rs`, `src/middleware/routing.rs`, `tests/template_test.rs`, `tests/llm_mvp_test.rs`, `templates/config/rupost.toml` |
 | **元数据注释前缀兼容与运行脚本** | 兼容 `# @` 与 `// @` 风格元数据，编写一键测试 examples 的 run_all.sh 脚本 | 已完成 | `src/parser/http_file.rs`, `examples/run_all.sh` |
 | **Sprint 5: WebSocket 协议测试与调试** | 支持在 `.http`/`.md` 中以 `@websocket` 指令声明长连接，识别 `SEND` / `EXPECT` 流式剧本；提供双层后台心跳保活 Worker 协程，支持 MsgPack 二进制解码断言与级联捕获。 | 已完成 | `src/ws/`, `src/runner/ws_runner.rs`, `tests/websocket_integration_test.rs`, `examples/websocket.http`, `examples/websocket.md` |
+| **HTTP 快照录制与原样重放 (MVP)** | 增加测试时一键录制快照开关 `--save-snapshot`；新增顶层 `replay` 子命令与 `ReplayExecutor`，支持指定 `--target` 参数自动改写 Host/Port，对状态码进行比对高亮输出 | 已完成 | `src/cli.rs`, `src/main.rs`, `src/runner/replayer.rs`, `src/runner/types.rs`, `tests/snapshot_replay_test.rs` |
 | **架构重构与组件化分层** | 将 `httpie` 和 `curl` 的解析逻辑从 `CliRunner` 中抽离为独立的 `src/cli/parser.rs` 子组件；将测试文件 URL 智能拼接与补全算法从 `TestExecutor` 中抽离为独立的 `src/runner/url.rs` 子组件，降低模块耦合。 | 已完成 | `src/cli/parser.rs`, `src/runner/url.rs` |
 | **Sprint 6: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
@@ -105,4 +106,15 @@
    - 彻底将 httpie 和 curl 命令行的无状态解析逻辑从有状态的 `CliRunner` 中抽离，并单独提供了 `test_parse_httpie_strict_json_error` 和 `test_parse_curl_unsupported_with_value` 等高覆盖率的专属单元测试。
 2. **URL Resolution 领域服务解耦 (`src/runner/url.rs`)**：
    - 将 URL 智能拼接、冒号本地快捷键替换以及分层相对路径计算算法，从 `TestExecutor` 执行器中彻底剥离，作为无状态的纯逻辑领域服务。大幅提升了代码的可读性，且测试无需依赖 Executor 或 CLI 即可独立运行。
+
+### HTTP 快照录制与原样重放 (MVP)
+1. **测试用例实时录制 (`--save-snapshot`)**：
+   - 在 `rupost test` 命令中扩展了可选参数 `--save-snapshot`，能够无缝捕获测试过程中的完整 HTTP 交互流并打包为结构化 JSON 格式快照文件。
+2. **非侵入式请求状态追踪**：
+   - 为 `TestResult` 扩充了 `request: Option<RequestSnapshot>` 数据承载。在执行器执行请求和响应完毕后，非侵入式自动保存其请求快照以实现快照合并序列化。
+3. **快照重放执行引擎 (`ReplayExecutor`)**：
+   - 新增了重放引擎 `ReplayExecutor`，支持加载快照套件并发送真实流量，支持将原始请求的 Protocol/Host/Port 动态改写为指定的 `--target` 目标物理地址，保持 Path 和 Query 原样不变。
+4. **状态码比对诊断**：
+   - 自动比对新老响应状态码，并在终端高亮高颜值输出 Diff 分析结果。
+
 

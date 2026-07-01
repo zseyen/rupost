@@ -32,6 +32,7 @@ struct RunTestOptions<'a> {
     debug: bool,
     debug_on_failure: bool,
     default_scheme: &'a str,
+    save_snapshot: Option<&'a str>,
 }
 
 #[tokio::main]
@@ -56,6 +57,7 @@ async fn main() -> Result<()> {
             verbose,
             no_cookies,
             cookie_file,
+            save_snapshot,
         }) => {
             let options = RunTestOptions {
                 paths,
@@ -72,12 +74,16 @@ async fn main() -> Result<()> {
                 debug: cli.debug,
                 debug_on_failure: cli.debug_on_failure,
                 default_scheme: &cli.default_scheme,
+                save_snapshot: save_snapshot.as_deref(),
             };
             run_test(options).await?;
         }
         Some(Commands::History { command }) => match command {
             HistoryCommands::List { limit, reverse } => {
                 rupost::history::printer::list_history(limit, reverse)?;
+            }
+            HistoryCommands::Export { last: _, output: _ } => {
+                println!("History export is not implemented in MVP stage.");
             }
         },
         Some(Commands::Diagnose { url, report }) => match rupost::http::diagnose_url(&url).await {
@@ -280,6 +286,10 @@ async fn main() -> Result<()> {
         }) => {
             rupost::template::run_template(&r#type, output.as_deref(), force, list)?;
         }
+        Some(Commands::Replay { file, target, verbose }) => {
+            let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
+            replayer.replay_file(&file).await?;
+        }
         None => {
             if cli.args.is_empty() {
                 tracing::error!("No command provided");
@@ -398,6 +408,41 @@ async fn run_test(options: RunTestOptions<'_>) -> Result<()> {
             }
         }
         TestReporter::print_batch_summary(&batch_results, duration);
+    }
+
+    // 保存快照
+    if let Some(snapshot_path) = options.save_snapshot {
+        use rupost::history::{SnapshotSuite, SnapshotEntry, ResponseSnapshot};
+        let mut entries = Vec::new();
+        for (_, file_results) in &batch_results {
+            for r in file_results {
+                if let Some(req) = &r.request {
+                    if let Some(resp) = &r.response {
+                        let entry = SnapshotEntry {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            request: req.clone(),
+                            response: ResponseSnapshot {
+                                status: resp.status.code(),
+                                headers: resp.headers.clone(),
+                                body: resp.body.clone(),
+                            },
+                        };
+                        entries.push(entry);
+                    }
+                }
+            }
+        }
+        let suite = SnapshotSuite {
+            timestamp: chrono::Utc::now(),
+            source_file: Some(options.paths.join(", ")),
+            entries,
+        };
+        let path = std::path::Path::new(snapshot_path);
+        if let Err(e) = rupost::history::write_snapshot_suite(&suite, path) {
+            tracing::error!("Failed to save snapshot: {}", e);
+        } else {
+            println!("Snapshot saved to: {}", snapshot_path);
+        }
     }
 
     // 8. 设置退出码

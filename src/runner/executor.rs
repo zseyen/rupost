@@ -390,7 +390,7 @@ impl TestExecutor {
 
                 // [History] 异步保存历史记录 (Best Effort)
                 use crate::history::recorder::record_history;
-                record_history(request_snapshot, &response_obj, source);
+                record_history(request_snapshot.clone(), &response_obj, source);
 
                 // 2. 变量捕获
                 VariableCapture::capture_normal(&captures_to_eval, &response_obj.body, &response_obj.headers, context);
@@ -405,6 +405,7 @@ impl TestExecutor {
                 // 创建成功的测试结果
                 let mut test_result =
                     TestResult::success(request_number, name, method, url.clone(), response_obj.clone());
+                test_result.request = Some(request_snapshot);
                 test_result.assertions = assertion_results;
 
                 if !test_result.assertions.is_empty() {
@@ -441,6 +442,7 @@ impl TestExecutor {
                     RupostError::RequestExecutionFailed(e.to_string()).to_user_friendly_string(),
                     start.elapsed(),
                 );
+                test_result.request = Some(request_snapshot);
                 let run_diagnose = enable_diagnose || self.debug || self.debug_on_failure;
                 if run_diagnose {
                     if let Ok(report) = crate::http::diagnose_url(&url).await {

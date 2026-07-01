@@ -87,6 +87,10 @@ pub enum Commands {
         /// File path for persistent cookie storage
         #[arg(long, value_name = "FILE")]
         cookie_file: Option<String>,
+
+        /// File path to save HTTP request/response snapshot
+        #[arg(long, value_name = "FILE")]
+        save_snapshot: Option<String>,
     },
 
     /// Manage request history
@@ -141,6 +145,22 @@ pub enum Commands {
         #[arg(short, long)]
         list: bool,
     },
+
+    /// Replay HTTP requests from a snapshot file
+    #[command(alias = "r")]
+    Replay {
+        /// Path to the snapshot JSON file to replay
+        #[arg(required = true, value_name = "FILE")]
+        file: String,
+
+        /// Override base URL target (e.g. http://localhost:8080)
+        #[arg(short, long, value_name = "URL")]
+        target: Option<String>,
+
+        /// Show detailed request/response details
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -155,6 +175,18 @@ pub enum HistoryCommands {
         /// Show latest entries first (Effective mainly for UI display)
         #[arg(short, long)]
         reverse: bool,
+    },
+
+    /// Export history entries to a snapshot file
+    #[command(alias = "e")]
+    Export {
+        /// Number of recent runs to include
+        #[arg(long, default_value = "1")]
+        last: usize,
+
+        /// Output path for the snapshot JSON file
+        #[arg(short, long, required = true)]
+        output: String,
     },
 }
 

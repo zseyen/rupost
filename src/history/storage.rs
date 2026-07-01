@@ -228,6 +228,27 @@ pub fn get_storage() -> &'static HistoryStorage {
     STORAGE.get_or_init(HistoryStorage::new)
 }
 
+use super::model::SnapshotSuite;
+
+/// 将 SnapshotSuite 写入到指定路径
+pub fn write_snapshot_suite<P: AsRef<Path>>(suite: &SnapshotSuite, path: P) -> Result<()> {
+    if let Some(parent) = path.as_ref().parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(RupostError::IoError)?;
+        }
+    }
+    let json = serde_json::to_string_pretty(suite)?;
+    fs::write(path, json).map_err(RupostError::IoError)?;
+    Ok(())
+}
+
+/// 从指定路径读取 SnapshotSuite
+pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
+    let content = fs::read_to_string(path).map_err(RupostError::IoError)?;
+    let suite = serde_json::from_str(&content)?;
+    Ok(suite)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

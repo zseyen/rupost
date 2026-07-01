@@ -43,6 +43,9 @@ pub struct TestResult {
 
     /// 深度网络诊断报告
     pub diagnose_report: Option<crate::http::DiagnosticsReport>,
+
+    /// 完整的 HTTP 请求快照（用于录制重放）
+    pub request: Option<crate::history::RequestSnapshot>,
 }
 
 impl TestResult {
@@ -71,6 +74,7 @@ impl TestResult {
             assertions: Vec::new(),
             timing: None,
             diagnose_report: None,
+            request: None,
         }
     }
 
@@ -96,6 +100,7 @@ impl TestResult {
             assertions: Vec::new(),
             timing: None,
             diagnose_report: None,
+            request: None,
         }
     }
 
@@ -119,6 +124,7 @@ impl TestResult {
             assertions: Vec::new(),
             timing: None,
             diagnose_report: None,
+            request: None,
         }
     }
 }

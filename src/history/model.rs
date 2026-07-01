@@ -58,6 +58,15 @@ pub struct SnapshotEntry {
     pub response: ResponseSnapshot,
 }
 
+/// 快照套件结构
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotSuite {
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub source_file: Option<String>,
+    pub entries: Vec<SnapshotEntry>,
+}
+
+
 /// 响应快照 (带 Body)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseSnapshot {

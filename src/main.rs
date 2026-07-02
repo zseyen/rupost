@@ -120,6 +120,9 @@ async fn main() -> Result<()> {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             replayer.replay_file(&file).await?;
         }
+        Some(Commands::Tui) => {
+            rupost::tui::run()?;
+        }
         None => {
             if cli.args.is_empty() {
                 tracing::error!("No command provided");

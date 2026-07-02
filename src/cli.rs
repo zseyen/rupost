@@ -161,6 +161,9 @@ pub enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Start interactive terminal UI mode
+    Tui,
 }
 
 #[derive(Subcommand)]

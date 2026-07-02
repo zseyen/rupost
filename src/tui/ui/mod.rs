@@ -8,7 +8,7 @@ use ratatui::{
 use super::state::{AppState, LayoutMode, Panel};
 
 /// 渲染 TUI 面板布局主入口
-pub fn render(frame: &mut Frame, state: &mut AppState) {
+pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &mut tui_textarea::TextArea<'static>) {
     let size = frame.size();
 
     // 1. 终端超小防御机制
@@ -34,7 +34,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
                 .split(size);
 
             render_files_panel(frame, chunks[0], state);
-            render_editor_panel(frame, chunks[1], state);
+            render_editor_panel(frame, chunks[1], state, textarea);
             render_response_panel(frame, chunks[2], state);
         }
         LayoutMode::Narrow => {
@@ -47,7 +47,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
                 ])
                 .split(size);
 
-            render_editor_panel(frame, chunks[0], state);
+            render_editor_panel(frame, chunks[0], state, textarea);
             render_response_panel(frame, chunks[1], state);
         }
         LayoutMode::Stacked => {
@@ -79,7 +79,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
             // 根据当前激活面板进行渲染
             match state.active_panel {
                 Panel::Files => render_files_panel(frame, chunks[1], state),
-                Panel::Editor => render_editor_panel(frame, chunks[1], state),
+                Panel::Editor => render_editor_panel(frame, chunks[1], state, textarea),
                 Panel::Response => render_response_panel(frame, chunks[1], state),
             }
         }
@@ -122,44 +122,24 @@ fn render_files_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(content.block(block), area);
 }
 
-fn render_editor_panel(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_editor_panel(frame: &mut Frame, area: Rect, state: &AppState, textarea: &mut tui_textarea::TextArea<'static>) {
     let focus = state.active_panel == Panel::Editor;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
     
+    let title = if state.is_dirty {
+        " Request Editor * "
+    } else {
+        " Request Editor "
+    };
+
     let block = Block::default()
-        .title(" Request Editor ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
         
-    let text = if let Some(ref req) = state.current_request {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled(format!("{} ", req.method_or_default()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(&req.url),
-            ]),
-            Line::from(""),
-        ];
-        
-        if !req.headers.is_empty() {
-            lines.push(Line::from(Span::styled("Headers:", Style::default().fg(Color::Yellow))));
-            for (k, v) in &req.headers {
-                lines.push(Line::from(format!("  {}: {}", k, v)));
-            }
-        }
-        
-        if let Some(ref body) = req.body {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled("Body:", Style::default().fg(Color::Yellow))));
-            lines.push(Line::from(body.as_str()));
-        }
-        
-        Paragraph::new(lines)
-    } else {
-        Paragraph::new("Press Tab to focus and type URL\nOr select a file on the left panel.")
-            .style(Style::default().fg(Color::DarkGray))
-    };
+    textarea.set_block(block);
     
-    frame.render_widget(text.block(block), area);
+    frame.render_widget(&*textarea, area);
 }
 
 fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {

@@ -19,6 +19,12 @@ pub enum LayoutMode {
     Stacked,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingAction {
+    Quit,
+    SwitchFile(usize),
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub active_panel: Panel,
@@ -37,6 +43,13 @@ pub struct AppState {
     pub variables: VariableContext,
     pub quick_input: Option<String>,
     pub is_quitting: bool,
+
+    // 编辑器及未保存确认状态
+    pub editor_text: String,
+    pub editor_file_path: Option<String>,
+    pub is_dirty: bool,
+    pub show_unsaved_confirm: bool,
+    pub pending_action: Option<PendingAction>,
 }
 
 impl AppState {
@@ -56,6 +69,11 @@ impl AppState {
             variables: VariableContext::new(),
             quick_input: None,
             is_quitting: false,
+            editor_text: String::new(),
+            editor_file_path: None,
+            is_dirty: false,
+            show_unsaved_confirm: false,
+            pending_action: None,
         }
     }
 

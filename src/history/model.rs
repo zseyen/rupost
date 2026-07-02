@@ -38,13 +38,16 @@ pub struct RequestSnapshot {
     pub body: Option<String>,
 }
 
-/// 响应元数据 (不包含 Body，节省空间)
+/// 响应元数据 (TUI 模式下可选包含 Body，节省空间且向前兼容)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseMeta {
     pub status: u16,
 
     #[serde(with = "serialization::header_map")]
     pub headers: HeaderMap,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// 单个 HTTP 交互快照
@@ -75,6 +78,20 @@ pub struct ResponseSnapshot {
     pub headers: reqwest::header::HeaderMap,
 
     pub body: String,
+}
+
+impl From<HistoryEntry> for SnapshotEntry {
+    fn from(entry: HistoryEntry) -> Self {
+        Self {
+            id: entry.id,
+            request: entry.request,
+            response: ResponseSnapshot {
+                status: entry.response.status,
+                headers: entry.response.headers,
+                body: entry.response.body.unwrap_or_else(|| "Old snapshot: body not recorded".to_string()),
+            },
+        }
+    }
 }
 
 impl RequestSnapshot {

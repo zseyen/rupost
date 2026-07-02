@@ -86,19 +86,26 @@ pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValu
             let report = response.diagnose_report.as_ref().ok_or_else(|| {
                 AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
             })?;
-            Ok(AssertValue::Number(report.dns_lookup_duration.as_millis() as f64))
+            Ok(AssertValue::Number(
+                report.dns_lookup_duration.as_millis() as f64
+            ))
         }
         ValuePath::TimingTcp => {
             let report = response.diagnose_report.as_ref().ok_or_else(|| {
                 AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
             })?;
-            Ok(AssertValue::Number(report.tcp_connect_duration.as_millis() as f64))
+            Ok(AssertValue::Number(
+                report.tcp_connect_duration.as_millis() as f64
+            ))
         }
         ValuePath::TimingTls => {
             let report = response.diagnose_report.as_ref().ok_or_else(|| {
                 AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
             })?;
-            let ms = report.tls_handshake_duration.map(|d| d.as_millis() as f64).unwrap_or(0.0);
+            let ms = report
+                .tls_handshake_duration
+                .map(|d| d.as_millis() as f64)
+                .unwrap_or(0.0);
             Ok(AssertValue::Number(ms))
         }
         ValuePath::TimingTtfb => {
@@ -112,21 +119,33 @@ pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValu
             let report = response.diagnose_report.as_ref().ok_or_else(|| {
                 AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
             })?;
-            let days = report.cert_info.as_ref().map(|c| c.days_remaining as f64).unwrap_or(-1.0);
+            let days = report
+                .cert_info
+                .as_ref()
+                .map(|c| c.days_remaining as f64)
+                .unwrap_or(-1.0);
             Ok(AssertValue::Number(days))
         }
         ValuePath::CertIssuer => {
             let report = response.diagnose_report.as_ref().ok_or_else(|| {
                 AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
             })?;
-            let issuer = report.cert_info.as_ref().map(|c| c.issuer.clone()).unwrap_or_default();
+            let issuer = report
+                .cert_info
+                .as_ref()
+                .map(|c| c.issuer.clone())
+                .unwrap_or_default();
             Ok(AssertValue::String(issuer))
         }
         ValuePath::CertSubject => {
             let report = response.diagnose_report.as_ref().ok_or_else(|| {
                 AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
             })?;
-            let subject = report.cert_info.as_ref().map(|c| c.subject.clone()).unwrap_or_default();
+            let subject = report
+                .cert_info
+                .as_ref()
+                .map(|c| c.subject.clone())
+                .unwrap_or_default();
             Ok(AssertValue::String(subject))
         }
     }

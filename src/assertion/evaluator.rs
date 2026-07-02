@@ -404,4 +404,3 @@ pub fn evaluate_sse_llm_content_assertions(
     }
     assertion_results
 }
-

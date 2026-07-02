@@ -153,11 +153,9 @@ impl VariableCapture {
         }
 
         if !stream_captures.is_empty() {
-            if let Ok(captured_vars) = capture_from_response(
-                virtual_body,
-                virtual_headers,
-                &stream_captures,
-            ) {
+            if let Ok(captured_vars) =
+                capture_from_response(virtual_body, virtual_headers, &stream_captures)
+            {
                 context.extend(captured_vars);
             }
         }
@@ -179,11 +177,7 @@ impl VariableCapture {
             }
         }
         if !final_captures.is_empty() {
-            match capture_from_response(
-                final_body,
-                final_headers,
-                &final_captures,
-            ) {
+            match capture_from_response(final_body, final_headers, &final_captures) {
                 Ok(captured_vars) => {
                     context.extend(captured_vars);
                 }

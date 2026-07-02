@@ -18,4 +18,4 @@ pub use request::Request;
 pub use request_builder::to_request;
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
-pub use timing::{DiagnosticsProber, RequestTiming, NetworkLatency};
+pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};

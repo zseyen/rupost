@@ -20,14 +20,12 @@ impl MockServer for DummyMockServer {
 pub mod axum_adapter;
 pub use axum_adapter::AxumMockServer;
 
-use colored::Colorize;
 use crate::history::model::SnapshotEntry;
-use crate::mock::matcher::{MockRouteConfig, TrieRouteMatcher};
-use crate::mock::variant::{
-    CompareOp, ConditionSource, MockVariant, VariantCondition,
-};
 use crate::mock::MockCompiler;
-use crate::runner::{DirectoryScanner, DependencyResolver, WorkflowGraph};
+use crate::mock::matcher::{MockRouteConfig, TrieRouteMatcher};
+use crate::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
+use crate::runner::{DependencyResolver, DirectoryScanner, WorkflowGraph};
+use colored::Colorize;
 use std::collections::HashMap;
 use std::fs;
 
@@ -72,10 +70,7 @@ pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
     let file_config = if is_doc {
         let scanned_files = DirectoryScanner::scan(&[file_path.to_string()])?;
         let sandbox_root = std::env::current_dir()?;
-        let files_map = DependencyResolver::resolve_and_parse(
-            &scanned_files,
-            &sandbox_root,
-        )?;
+        let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
 
         let parse_pairs: Vec<_> = files_map
             .iter()
@@ -191,4 +186,3 @@ mod tests {
         }
     }
 }
-

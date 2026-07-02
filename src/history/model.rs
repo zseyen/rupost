@@ -66,7 +66,6 @@ pub struct SnapshotSuite {
     pub entries: Vec<SnapshotEntry>,
 }
 
-
 /// 响应快照 (带 Body)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseSnapshot {
@@ -118,7 +117,12 @@ mod tests {
         assert_eq!(snapshot.method, "POST");
         assert_eq!(snapshot.url, "http://example.com");
         assert_eq!(
-            snapshot.headers.get("Content-Type").unwrap().to_str().unwrap(),
+            snapshot
+                .headers
+                .get("Content-Type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "application/json"
         );
         assert_eq!(snapshot.body, Some("{}".to_string()));

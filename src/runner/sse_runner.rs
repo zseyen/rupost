@@ -73,7 +73,8 @@ impl SseRunner {
         )
         .unwrap();
 
-        let resolved_assertions: Vec<String> = options.assertions_to_eval
+        let resolved_assertions: Vec<String> = options
+            .assertions_to_eval
             .iter()
             .map(|a| VariableResolver::resolve(a, context))
             .collect();
@@ -106,7 +107,10 @@ impl SseRunner {
 
         loop {
             if options.sse_max_events.is_some_and(|max| event_count >= max) {
-                info!("SSE max events limit reached: {}", options.sse_max_events.unwrap());
+                info!(
+                    "SSE max events limit reached: {}",
+                    options.sse_max_events.unwrap()
+                );
                 break;
             }
 
@@ -288,8 +292,13 @@ impl SseRunner {
         record_history(request_snapshot, &final_response, source);
 
         // 构造最终测试结果
-        let mut test_result =
-            TestResult::success(options.request_number, options.name, options.method, options.url, final_response.clone());
+        let mut test_result = TestResult::success(
+            options.request_number,
+            options.name,
+            options.method,
+            options.url,
+            final_response.clone(),
+        );
         test_result.assertions = assertion_results;
 
         if !test_result.assertions.is_empty() {

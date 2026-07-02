@@ -1,14 +1,12 @@
+use super::url::resolve_final_url;
 use crate::history::model::RequestSnapshot;
 use crate::http::{Client, Request, Response};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
 use crate::runner::ws_runner::WsRunner;
-use crate::variable::{
-    VariableContext, VariableResolver, capture::VariableCapture,
-};
+use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
 use crate::{Result, RupostError};
-use super::url::resolve_final_url;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -83,7 +81,8 @@ impl TestExecutor {
         middleware: Arc<crate::middleware::routing::RoutingMiddleware>,
     ) -> Self {
         self.routing_middleware = Some(middleware.clone());
-        self.middlewares.push(ExecutorMiddleware::Routing(middleware));
+        self.middlewares
+            .push(ExecutorMiddleware::Routing(middleware));
         self
     }
 
@@ -242,7 +241,8 @@ impl TestExecutor {
         }
 
         if parsed.metadata.websocket {
-            return WsRunner::execute(parsed, request_number, context, self.middlewares.clone()).await;
+            return WsRunner::execute(parsed, request_number, context, self.middlewares.clone())
+                .await;
         }
 
         let method = parsed.method_or_default().to_string();
@@ -393,18 +393,29 @@ impl TestExecutor {
                 record_history(request_snapshot.clone(), &response_obj, source);
 
                 // 2. 变量捕获
-                VariableCapture::capture_normal(&captures_to_eval, &response_obj.body, &response_obj.headers, context);
+                VariableCapture::capture_normal(
+                    &captures_to_eval,
+                    &response_obj.body,
+                    &response_obj.headers,
+                    context,
+                );
 
                 // 3. 执行断言求值
                 let resolved_assertions: Vec<String> = assertions_to_eval
                     .iter()
                     .map(|a| VariableResolver::resolve(a, context))
                     .collect();
-                let assertion_results = crate::assertion::evaluate_assertions(&resolved_assertions, &response_obj);
+                let assertion_results =
+                    crate::assertion::evaluate_assertions(&resolved_assertions, &response_obj);
 
                 // 创建成功的测试结果
-                let mut test_result =
-                    TestResult::success(request_number, name, method, url.clone(), response_obj.clone());
+                let mut test_result = TestResult::success(
+                    request_number,
+                    name,
+                    method,
+                    url.clone(),
+                    response_obj.clone(),
+                );
                 test_result.request = Some(request_snapshot);
                 test_result.assertions = assertion_results;
 
@@ -414,7 +425,10 @@ impl TestExecutor {
 
                 test_result.diagnose_report = diagnose_report;
 
-                if self.debug_on_failure && !test_result.success && test_result.diagnose_report.is_none() {
+                if self.debug_on_failure
+                    && !test_result.success
+                    && test_result.diagnose_report.is_none()
+                {
                     if let Ok(report) = crate::http::diagnose_url(&url).await {
                         test_result.diagnose_report = Some(report.clone());
                         if let Some(ref mut resp) = test_result.response {
@@ -468,6 +482,3 @@ impl Default for TestExecutor {
         Self::new()
     }
 }
-
-
-

@@ -1,4 +1,4 @@
-use crate::ws::frame::{WsAction, WsFrame, WsFrameType, FrameDirection};
+use crate::ws::frame::{FrameDirection, WsAction, WsFrame, WsFrameType};
 use std::time::Duration;
 
 pub struct WsActionParser;
@@ -100,7 +100,11 @@ impl WsActionParser {
                             if let Some(from_idx) = content.find("from") {
                                 let source_str = content[from_idx + 4..].trim();
                                 if !var_name.is_empty() && !source_str.is_empty() {
-                                    captures.push(crate::variable::capture::VariableCapture::parse(var_name, source_str));
+                                    captures.push(
+                                        crate::variable::capture::VariableCapture::parse(
+                                            var_name, source_str,
+                                        ),
+                                    );
                                 }
                             }
                         }
@@ -176,7 +180,11 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>,
                 let val_part = condition[pos + op.len()..].trim();
                 let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
                 if !segments.is_empty() {
-                    return (Some(segments), Some(val_part.to_string()), Some(op.to_string()));
+                    return (
+                        Some(segments),
+                        Some(val_part.to_string()),
+                        Some(op.to_string()),
+                    );
                 }
             }
         }
@@ -213,7 +221,10 @@ mod tests {
             panic!("Expected Send action");
         }
 
-        if let WsAction::Expect { condition, timeout, .. } = &actions[1] {
+        if let WsAction::Expect {
+            condition, timeout, ..
+        } = &actions[1]
+        {
             assert_eq!(condition, "{\"response\": \"pong\"}");
             assert_eq!(timeout.as_millis(), 3000);
         } else {
@@ -279,7 +290,16 @@ mod tests {
         "#;
         let actions = WsActionParser::parse_body(body).unwrap();
         assert_eq!(actions.len(), 1);
-        if let WsAction::Expect { condition, segments, expected_value, operator, timeout, assertions, captures } = &actions[0] {
+        if let WsAction::Expect {
+            condition,
+            segments,
+            expected_value,
+            operator,
+            timeout,
+            assertions,
+            captures,
+        } = &actions[0]
+        {
             assert_eq!(condition, "$.event == \"ticker\"");
             assert_eq!(segments.as_ref().unwrap(), &vec!["event".to_string()]);
             assert_eq!(expected_value.as_deref(), Some("\"ticker\""));
@@ -304,21 +324,36 @@ mod tests {
         let actions = WsActionParser::parse_body(body).unwrap();
         assert_eq!(actions.len(), 3);
 
-        if let WsAction::Expect { expected_value, operator, .. } = &actions[0] {
+        if let WsAction::Expect {
+            expected_value,
+            operator,
+            ..
+        } = &actions[0]
+        {
             assert_eq!(operator.as_deref(), Some("!="));
             assert_eq!(expected_value.as_deref(), Some("\"ticker\""));
         } else {
             panic!("Expected Expect action");
         }
 
-        if let WsAction::Expect { expected_value, operator, .. } = &actions[1] {
+        if let WsAction::Expect {
+            expected_value,
+            operator,
+            ..
+        } = &actions[1]
+        {
             assert_eq!(operator.as_deref(), Some("contains"));
             assert_eq!(expected_value.as_deref(), Some("\"hello\""));
         } else {
             panic!("Expected Expect action");
         }
 
-        if let WsAction::Expect { expected_value, operator, .. } = &actions[2] {
+        if let WsAction::Expect {
+            expected_value,
+            operator,
+            ..
+        } = &actions[2]
+        {
             assert_eq!(*operator, None);
             assert_eq!(*expected_value, None);
         } else {

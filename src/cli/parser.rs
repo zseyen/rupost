@@ -38,7 +38,10 @@ pub fn parse_args(args: &[String]) -> Result<ParsedRequest> {
     if is_sse_forced {
         parsed_request.metadata.sse = true;
     }
-    if is_ws_forced || parsed_request.url.starts_with("ws://") || parsed_request.url.starts_with("wss://") {
+    if is_ws_forced
+        || parsed_request.url.starts_with("ws://")
+        || parsed_request.url.starts_with("wss://")
+    {
         parsed_request.metadata.websocket = true;
     }
 
@@ -95,14 +98,34 @@ fn parse_curl(args: Vec<String>) -> Result<ParsedRequest> {
                     tracing::warn!("Ignored unsupported curl option: {}", s);
                     // 已知一些带参数的 curl 选项，跳过它们的值，防止值污染真正的 URL 字段
                     let has_value = [
-                        "-u", "--user", "-o", "--output", "-m", "--max-time",
-                        "--connect-timeout", "-A", "--user-agent", "-e", "--referer",
-                        "-b", "--cookie", "-c", "--cookie-jar", "--data-urlencode",
-                        "--data-binary", "-F", "--form"
-                    ].contains(&s);
+                        "-u",
+                        "--user",
+                        "-o",
+                        "--output",
+                        "-m",
+                        "--max-time",
+                        "--connect-timeout",
+                        "-A",
+                        "--user-agent",
+                        "-e",
+                        "--referer",
+                        "-b",
+                        "--cookie",
+                        "-c",
+                        "--cookie-jar",
+                        "--data-urlencode",
+                        "--data-binary",
+                        "-F",
+                        "--form",
+                    ]
+                    .contains(&s);
                     if has_value {
                         let _skipped_val = args_iter.next();
-                        tracing::debug!("Skipped value for unsupported option {}: {:?}", s, _skipped_val);
+                        tracing::debug!(
+                            "Skipped value for unsupported option {}: {:?}",
+                            s,
+                            _skipped_val
+                        );
                     }
                 }
             }
@@ -175,10 +198,10 @@ fn is_key_value_param(arg: &str) -> bool {
         return false;
     }
     // 4. 域名:端口 格式 (如 example.com:8080)
-    if let Some((host, port)) = arg.rsplit_once(':') {
-        if !host.is_empty() && port.chars().all(|c| c.is_ascii_digit()) {
-            return false;
-        }
+    if let Some((host, port)) = arg.rsplit_once(':')
+        && !host.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+    {
+        return false;
     }
 
     // 按优先级检查键值对分隔符：== :=  = :

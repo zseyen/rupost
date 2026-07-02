@@ -36,7 +36,8 @@ impl DiagnosticsProber {
     ) -> Result<(TcpStream, std::net::SocketAddr, Duration, Duration), String> {
         // 1. 测量 DNS 解析耗时 (带有超时限制)
         let dns_start = Instant::now();
-        let addrs_iter = match timeout(timeout_dur, lookup_host(format!("{}:{}", host, port))).await {
+        let addrs_iter = match timeout(timeout_dur, lookup_host(format!("{}:{}", host, port))).await
+        {
             Ok(Ok(addrs)) => addrs,
             Ok(Err(e)) => return Err(format!("DNS lookup failed: {}", e)),
             Err(_) => return Err(format!("DNS lookup timeout after {:?}", timeout_dur)),

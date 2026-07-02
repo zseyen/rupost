@@ -1,9 +1,9 @@
+use futures_util::{SinkExt, StreamExt};
 use rupost::parser::HttpFileParser;
 use rupost::runner::TestExecutor;
 use rupost::variable::VariableContext;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 // 启动一个本地的 Mock WebSocket 服务器
@@ -16,7 +16,7 @@ async fn start_ws_mock_server() -> (String, tokio::task::JoinHandle<()>) {
         if let Ok((stream, _)) = listener.accept().await {
             if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
                 let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(150));
-                
+
                 loop {
                     tokio::select! {
                         // 模拟高频业务心跳广播帧，用于验证客户端的软匹配与心跳防雪崩机制
@@ -32,7 +32,7 @@ async fn start_ws_mock_server() -> (String, tokio::task::JoinHandle<()>) {
                                     if txt.contains("subscribe_bin") {
                                         // 延迟发送预期的 MsgPack 订阅通知帧
                                         tokio::time::sleep(Duration::from_millis(200)).await;
-                                        
+
                                         #[derive(serde::Serialize)]
                                         struct TickerBin {
                                             event: String,
@@ -110,7 +110,10 @@ CLOSE
     );
 
     // 验证所有的断言均已通过
-    assert!(!res.assertions.is_empty(), "Assertions list cannot be empty");
+    assert!(
+        !res.assertions.is_empty(),
+        "Assertions list cannot be empty"
+    );
     for assert in &res.assertions {
         assert!(assert.passed, "Assertion failed: {}", assert.raw);
     }
@@ -161,7 +164,10 @@ CLOSE
     );
 
     // 验证所有的断言均已通过
-    assert!(!res.assertions.is_empty(), "Assertions list cannot be empty");
+    assert!(
+        !res.assertions.is_empty(),
+        "Assertions list cannot be empty"
+    );
     for assert in &res.assertions {
         assert!(assert.passed, "Assertion failed: {}", assert.raw);
     }
@@ -180,15 +186,20 @@ async fn start_ws_auth_mock_server() -> (String, tokio::task::JoinHandle<()>) {
         if let Ok((stream, _)) = listener.accept().await {
             let mut auth_ok = false;
             let mut cookie_ok = false;
-            
-            let callback = |req: &tokio_tungstenite::tungstenite::handshake::client::Request, resp| {
+
+            let callback = |req: &tokio_tungstenite::tungstenite::handshake::client::Request,
+                            resp| {
                 if let Some(auth_val) = req.headers().get("authorization") {
                     if auth_val.to_str().unwrap().contains("Bearer secret-key-123") {
                         auth_ok = true;
                     }
                 }
                 if let Some(cookie_val) = req.headers().get("cookie") {
-                    if cookie_val.to_str().unwrap().contains("session_id=abc123xyz") {
+                    if cookie_val
+                        .to_str()
+                        .unwrap()
+                        .contains("session_id=abc123xyz")
+                    {
                         cookie_ok = true;
                     }
                 }
@@ -196,10 +207,8 @@ async fn start_ws_auth_mock_server() -> (String, tokio::task::JoinHandle<()>) {
             };
 
             if let Ok(mut ws_stream) = tokio_tungstenite::accept_hdr_async(stream, callback).await {
-                let msg_content = format!(
-                    "{{\"auth_ok\": {}, \"cookie_ok\": {}}}",
-                    auth_ok, cookie_ok
-                );
+                let msg_content =
+                    format!("{{\"auth_ok\": {}, \"cookie_ok\": {}}}", auth_ok, cookie_ok);
                 let _ = ws_stream.send(Message::Text(msg_content)).await;
                 let _ = ws_stream.next().await;
             }
@@ -215,17 +224,18 @@ async fn test_websocket_middleware_and_routing() {
 
     use rupost::middleware::routing::{RoutingMiddleware, RoutingRule};
 
-    let middleware = RoutingMiddleware::new(vec![
-        RoutingRule {
-            match_host: "api.rupost.internal".to_string(),
-            replace_host: ws_url.replace("ws://", ""),
-            inject_headers: {
-                let mut map = std::collections::HashMap::new();
-                map.insert("Authorization".to_string(), "Bearer secret-key-123".to_string());
-                map
-            },
-        }
-    ]);
+    let middleware = RoutingMiddleware::new(vec![RoutingRule {
+        match_host: "api.rupost.internal".to_string(),
+        replace_host: ws_url.replace("ws://", ""),
+        inject_headers: {
+            let mut map = std::collections::HashMap::new();
+            map.insert(
+                "Authorization".to_string(),
+                "Bearer secret-key-123".to_string(),
+            );
+            map
+        },
+    }]);
 
     let temp_dir = tempfile::TempDir::new().unwrap();
     let http_file = temp_dir.path().join("ws_routing.http");
@@ -246,7 +256,10 @@ CLOSE
 
     let results = executor.execute_all(parsed, &mut context).await.unwrap();
     assert_eq!(results.len(), 1);
-    assert!(results[0].success, "WS Upgrade Middleware rewrite and authorization should succeed");
+    assert!(
+        results[0].success,
+        "WS Upgrade Middleware rewrite and authorization should succeed"
+    );
 }
 
 #[tokio::test]
@@ -260,7 +273,7 @@ async fn test_websocket_cookie_inheritance() {
     let ws_target_url = url::Url::parse(&ws_url.replace("ws://", "http://")).unwrap();
     let host = ws_target_url.host_str().unwrap();
     let port = ws_target_url.port().unwrap_or(80);
-    
+
     // 利用 CookieMiddleware 自身接口导出状态，确保与底层 cookie_store 完美兼容
     use rupost::middleware::CookieMiddleware;
     let ephemeral = CookieMiddleware::new_ephemeral();
@@ -297,7 +310,10 @@ CLOSE
 
     let results = executor.execute_all(parsed, &mut context).await.unwrap();
     assert_eq!(results.len(), 1);
-    assert!(results[0].success, "WebSocket upgrade handshake should inherit HTTP session cookie");
+    assert!(
+        results[0].success,
+        "WebSocket upgrade handshake should inherit HTTP session cookie"
+    );
 }
 
 #[tokio::test]
@@ -306,7 +322,7 @@ async fn test_websocket_step_assertions_and_captures() {
 
     let temp_dir = tempfile::TempDir::new().unwrap();
     let http_file = temp_dir.path().join("ws_step_asserts.http");
-    
+
     let content = format!(
         r#"
 ### WS Step Assertions & Variable Cascade test
@@ -337,10 +353,17 @@ CLOSE
     assert_eq!(results.len(), 1);
 
     let res = &results[0];
-    assert!(res.success, "WS Step Assertions & Captures E2E should pass. Error: {:?}", res.error);
+    assert!(
+        res.success,
+        "WS Step Assertions & Captures E2E should pass. Error: {:?}",
+        res.error
+    );
 
     // 验证局部断言结果已经被合并到了结果断言集中，且带有了 stream_event_index 标记！
-    assert!(res.assertions.len() >= 2, "Should contain step level assertions");
+    assert!(
+        res.assertions.len() >= 2,
+        "Should contain step level assertions"
+    );
     for assert in &res.assertions {
         assert!(assert.passed, "Step level assertion failed: {}", assert.raw);
         assert_eq!(assert.stream_event_index, Some(2)); // 它发生在第 2 个动作（EXPECT，1-based 动作顺序中：1是SEND，2是EXPECT）
@@ -369,7 +392,7 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     });
 
     // 2. 客户端建立逻辑 Session
-    use rupost::ws::{WsSession, WsClientConfig, WsFrame, WsFrameType, FrameDirection};
+    use rupost::ws::{FrameDirection, WsClientConfig, WsFrame, WsFrameType, WsSession};
     let config = WsClientConfig {
         url: ws_url.clone(),
         headers: Vec::new(),
@@ -378,7 +401,7 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     };
 
     let session = WsSession::connect(config).await.unwrap();
-    
+
     // 等待第一个服务端将 Socket 关掉，触发客户端的 reconnect
     server_handle1.await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -393,15 +416,19 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     session.send_frame(test_frame).await.unwrap();
 
     // 4. 在相同端口重新绑定启动第二个 Mock 服务端（模拟服务器恢复）
-    let next_listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await.unwrap();
+    let next_listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-    
+
     let _server_handle2 = tokio::spawn(async move {
         if let Ok((stream, _)) = next_listener.accept().await {
             if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
                 if let Some(Ok(Message::Text(txt))) = ws_stream.next().await {
                     let _ = tx.send(txt);
-                    let _ = ws_stream.send(Message::Text("received_ok".to_string())).await;
+                    let _ = ws_stream
+                        .send(Message::Text("received_ok".to_string()))
+                        .await;
                 }
             }
         }
@@ -411,16 +438,25 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     let mut client_rx = session.subscribe();
 
     // 5. 验证：由于指数退避重连，客户端会在约 2 秒内重新连上第二个服务端，并强时序补发 "message_a"！
-    let received_by_server = tokio::time::timeout(Duration::from_secs(5), rx).await.unwrap().unwrap();
+    let received_by_server = tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(received_by_server, "message_a");
 
     // 客户端也应该收到服务端回传的确认消息 "received_ok"
-    let received_by_client = tokio::time::timeout(Duration::from_secs(5), client_rx.recv()).await.unwrap().unwrap();
+    let received_by_client = tokio::time::timeout(Duration::from_secs(5), client_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(received_by_client.payload_as_string(), "received_ok");
-    
+
     // 6. 验证滑动历史缓冲区的 push 正常记录
     let history = session.get_history();
-    assert!(history.len() >= 2, "History should record send and receive frames");
+    assert!(
+        history.len() >= 2,
+        "History should record send and receive frames"
+    );
 }
 
 #[tokio::test]
@@ -473,7 +509,8 @@ CLOSE
     let resp = res.response.as_ref().unwrap();
     assert!(
         resp.body.contains("Run 7 actions."),
-        "Actual body: {}", resp.body
+        "Actual body: {}",
+        resp.body
     );
 }
 
@@ -482,7 +519,7 @@ async fn test_websocket_wss_handshake_crypto_provider() {
     // 1. 初始化 Rustls CryptoProvider (即使在测试环境中)
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    use rupost::ws::{WsSession, WsClientConfig};
+    use rupost::ws::{WsClientConfig, WsSession};
     let config = WsClientConfig {
         url: "wss://127.0.0.1:54321".to_string(),
         headers: Vec::new(),
@@ -495,7 +532,10 @@ async fn test_websocket_wss_handshake_crypto_provider() {
     let result = WsSession::connect(config).await;
     assert!(result.is_err(), "WSS connect to dead port should fail");
     let err_str = format!("{:?}", result.err().unwrap());
-    
+
     // 3. 校验返回的是正常网络 IO/Handshake 失败，而非 CryptoProvider 丢失 panic。
-    assert!(!err_str.contains("CryptoProvider"), "Should not complain about missing CryptoProvider");
+    assert!(
+        !err_str.contains("CryptoProvider"),
+        "Should not complain about missing CryptoProvider"
+    );
 }

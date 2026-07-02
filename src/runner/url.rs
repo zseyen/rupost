@@ -12,7 +12,8 @@ pub fn resolve_final_url(
     let is_cli = source == Some("cli");
 
     // 1. 处理绝对 URL
-    if raw_url.contains("://") || raw_url.starts_with("http://") || raw_url.starts_with("https://") {
+    if raw_url.contains("://") || raw_url.starts_with("http://") || raw_url.starts_with("https://")
+    {
         return Ok(raw_url.to_string());
     }
 
@@ -25,7 +26,12 @@ pub fn resolve_final_url(
             "http://localhost".to_string()
         };
 
-        let final_url = if suffix.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        let final_url = if suffix
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             format!("{}:{}", base, suffix)
         } else {
             format!("{}{}", base, suffix)
@@ -114,10 +120,22 @@ mod tests {
 
     #[test]
     fn test_join_paths() {
-        assert_eq!(join_paths(&["http://example.com", "v1", "users"]), "http://example.com/v1/users");
-        assert_eq!(join_paths(&["http://example.com/", "/v1/", "/users"]), "http://example.com/v1/users");
-        assert_eq!(join_paths(&["http://example.com", "/users"]), "http://example.com/users");
-        assert_eq!(join_paths(&["http://example.com/", "users"]), "http://example.com/users");
+        assert_eq!(
+            join_paths(&["http://example.com", "v1", "users"]),
+            "http://example.com/v1/users"
+        );
+        assert_eq!(
+            join_paths(&["http://example.com/", "/v1/", "/users"]),
+            "http://example.com/v1/users"
+        );
+        assert_eq!(
+            join_paths(&["http://example.com", "/users"]),
+            "http://example.com/users"
+        );
+        assert_eq!(
+            join_paths(&["http://example.com/", "users"]),
+            "http://example.com/users"
+        );
         assert_eq!(join_paths(&["", "users"]), "users");
     }
 
@@ -190,7 +208,14 @@ mod tests {
         ctx.insert("base_url", "http://my-proxy.com");
         // 场景 B（文档）下，像 api.github.com/users 这种不带协议的应视作相对路径
         assert_eq!(
-            resolve_final_url("api.github.com/users", &ctx, "http", Some("file.http"), None).unwrap(),
+            resolve_final_url(
+                "api.github.com/users",
+                &ctx,
+                "http",
+                Some("file.http"),
+                None
+            )
+            .unwrap(),
             "http://my-proxy.com/api.github.com/users"
         );
     }
@@ -215,7 +240,14 @@ mod tests {
         // 无全局 base_url 但文件级 base_path 是绝对路径
         let empty_ctx = VariableContext::new();
         assert_eq!(
-            resolve_final_url("/users", &empty_ctx, "http", Some("file.http"), Some("https://api.absolute.com/v2")).unwrap(),
+            resolve_final_url(
+                "/users",
+                &empty_ctx,
+                "http",
+                Some("file.http"),
+                Some("https://api.absolute.com/v2")
+            )
+            .unwrap(),
             "https://api.absolute.com/v2/users"
         );
 

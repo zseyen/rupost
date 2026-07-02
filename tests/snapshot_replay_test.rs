@@ -1,4 +1,4 @@
-use rupost::history::{SnapshotSuite, SnapshotEntry, RequestSnapshot, ResponseSnapshot};
+use rupost::history::{RequestSnapshot, ResponseSnapshot, SnapshotEntry, SnapshotSuite};
 use rupost::runner::ReplayExecutor;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};

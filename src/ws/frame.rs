@@ -35,7 +35,12 @@ pub struct WsFrame {
 
 impl WsFrame {
     /// 创建一个新的文本或二进制帧
-    pub fn new(direction: FrameDirection, frame_type: WsFrameType, payload: Vec<u8>, timestamp_ns: u64) -> Self {
+    pub fn new(
+        direction: FrameDirection,
+        frame_type: WsFrameType,
+        payload: Vec<u8>,
+        timestamp_ns: u64,
+    ) -> Self {
         Self {
             timestamp_ns,
             direction,

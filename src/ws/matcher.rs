@@ -1,5 +1,5 @@
-use crate::ws::frame::WsFrame;
 use crate::utils::jsonpath::JsonPathResolver;
+use crate::ws::frame::WsFrame;
 use serde_json::Value;
 
 /// 解耦对接收帧匹配判定的接口
@@ -16,7 +16,11 @@ pub struct JsonPathMatcher {
 }
 
 impl JsonPathMatcher {
-    pub fn new(segments: Vec<String>, expected_value: Option<String>, operator: Option<String>) -> Self {
+    pub fn new(
+        segments: Vec<String>,
+        expected_value: Option<String>,
+        operator: Option<String>,
+    ) -> Self {
         Self {
             segments,
             expected_value,
@@ -44,7 +48,8 @@ impl FrameMatcher for JsonPathMatcher {
         };
 
         // 2. 利用预编译 segments 获取 JSON 节点值
-        if let Some(target_val) = JsonPathResolver::resolve_with_segments(&json_val, &self.segments) {
+        if let Some(target_val) = JsonPathResolver::resolve_with_segments(&json_val, &self.segments)
+        {
             if let Some(ref expected) = self.expected_value {
                 let target_str = match target_val {
                     Value::String(s) => s.clone(),
@@ -55,7 +60,7 @@ impl FrameMatcher for JsonPathMatcher {
                 };
                 let clean_expected = expected.trim_matches('"').trim_matches('\'');
                 let clean_target = target_str.trim_matches('"').trim_matches('\'');
-                
+
                 let op = self.operator.as_deref().unwrap_or("==");
                 match op {
                     "!=" => clean_target != clean_expected,
@@ -167,7 +172,9 @@ fn match_json_subset(pattern: &Value, target: &Value) -> bool {
             if pat_arr.is_empty() {
                 return true;
             }
-            pat_arr.iter().all(|p| tgt_arr.iter().any(|t| match_json_subset(p, t)))
+            pat_arr
+                .iter()
+                .all(|p| tgt_arr.iter().any(|t| match_json_subset(p, t)))
         }
         (p, t) => p == t,
     }
@@ -176,8 +183,8 @@ fn match_json_subset(pattern: &Value, target: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ws::frame::FrameDirection;
     use crate::ws::WsFrameType;
+    use crate::ws::frame::FrameDirection;
     use serde_json::json;
 
     #[test]
@@ -186,14 +193,11 @@ mod tests {
             "event": "ticker",
             "price": 100,
             "message": "hello world"
-        }).to_string().into_bytes();
+        })
+        .to_string()
+        .into_bytes();
 
-        let frame = WsFrame::new(
-            FrameDirection::Inbound,
-            WsFrameType::Text,
-            payload,
-            0,
-        );
+        let frame = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, payload, 0);
 
         // 1. 测试 == 匹配
         let matcher_eq = JsonPathMatcher::new(
@@ -234,18 +238,10 @@ mod tests {
         assert!(!matcher_contains_fail.matches(&frame, None));
 
         // 4. 测试无 expected_value 时节点存在即可
-        let matcher_exist = JsonPathMatcher::new(
-            vec!["event".to_string()],
-            None,
-            None,
-        );
+        let matcher_exist = JsonPathMatcher::new(vec!["event".to_string()], None, None);
         assert!(matcher_exist.matches(&frame, None));
 
-        let matcher_exist_fail = JsonPathMatcher::new(
-            vec!["nonexistent".to_string()],
-            None,
-            None,
-        );
+        let matcher_exist_fail = JsonPathMatcher::new(vec!["nonexistent".to_string()], None, None);
         assert!(!matcher_exist_fail.matches(&frame, None));
     }
 
@@ -255,14 +251,11 @@ mod tests {
             "event": "ticker",
             "symbol": "BTC",
             "price": 60000
-        }).to_string().into_bytes();
+        })
+        .to_string()
+        .into_bytes();
 
-        let frame = WsFrame::new(
-            FrameDirection::Inbound,
-            WsFrameType::Text,
-            payload,
-            0,
-        );
+        let frame = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, payload, 0);
 
         // 1. 测试 JSONPath 编译与匹配
         let matcher = WsConditionMatcher::compile(
@@ -274,47 +267,24 @@ mod tests {
         assert!(matcher.matches(&frame, None));
 
         // 2. 测试 JSON 子集匹配
-        let matcher = WsConditionMatcher::compile(
-            r#"{"event":"ticker","price":60000}"#,
-            &None,
-            &None,
-            &None,
-        );
+        let matcher =
+            WsConditionMatcher::compile(r#"{"event":"ticker","price":60000}"#, &None, &None, &None);
         assert!(matcher.matches(&frame, None));
 
         // 测试不匹配的 JSON 子集
-        let matcher = WsConditionMatcher::compile(
-            r#"{"event":"ticker","price":50000}"#,
-            &None,
-            &None,
-            &None,
-        );
+        let matcher =
+            WsConditionMatcher::compile(r#"{"event":"ticker","price":50000}"#, &None, &None, &None);
         assert!(!matcher.matches(&frame, None));
 
         // 3. 测试纯文本包含匹配
-        let matcher = WsConditionMatcher::compile(
-            "BTC",
-            &None,
-            &None,
-            &None,
-        );
+        let matcher = WsConditionMatcher::compile("BTC", &None, &None, &None);
         assert!(matcher.matches(&frame, None));
 
-        let matcher = WsConditionMatcher::compile(
-            "ETH",
-            &None,
-            &None,
-            &None,
-        );
+        let matcher = WsConditionMatcher::compile("ETH", &None, &None, &None);
         assert!(!matcher.matches(&frame, None));
 
         // 4. 空条件匹配
-        let matcher = WsConditionMatcher::compile(
-            "",
-            &None,
-            &None,
-            &None,
-        );
+        let matcher = WsConditionMatcher::compile("", &None, &None, &None);
         assert!(matcher.matches(&frame, None));
     }
 }

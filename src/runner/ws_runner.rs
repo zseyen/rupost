@@ -1,16 +1,19 @@
+use reqwest::header::HeaderMap;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
-use reqwest::header::HeaderMap;
 
 use crate::assertion::evaluate_assertions;
 use crate::http::{Request, Response};
+use crate::middleware::Middleware;
 use crate::parser::types::ParsedRequest;
+use crate::runner::executor::ExecutorMiddleware;
 use crate::runner::types::TestResult;
 use crate::variable::capture::VariableCapture;
 use crate::variable::{VariableContext, VariableResolver};
-use crate::ws::{WsSession, WsClientConfig, WsAction, WsActionParser, WsFrame, WsFrameType, FrameDirection, MsgPackDecoder, PayloadDecoder};
-use crate::runner::executor::ExecutorMiddleware;
-use crate::middleware::Middleware;
+use crate::ws::{
+    FrameDirection, MsgPackDecoder, PayloadDecoder, WsAction, WsActionParser, WsClientConfig,
+    WsFrame, WsFrameType, WsSession,
+};
 
 pub struct WsRunner;
 
@@ -25,7 +28,7 @@ impl WsRunner {
         let start_time = Instant::now();
         let name = parsed.name().map(|s| s.to_string());
         let initial_url = parsed.url.clone();
-        
+
         // 保存断言、捕获列表与超时/Body信息
         let assertions_to_eval = parsed.metadata.assertions.clone();
         let captures_to_eval = parsed.metadata.captures.clone();
@@ -144,12 +147,14 @@ impl WsRunner {
                 let _ = client.send_frame(outbound_frame).await;
                 executed_actions_count += 1;
             }
-            
+
             use colored::Colorize;
-            info!("WS Entering live monitoring mode for 5 seconds. Listening for incoming frames...");
+            info!(
+                "WS Entering live monitoring mode for 5 seconds. Listening for incoming frames..."
+            );
             let monitor_timer = tokio::time::sleep(Duration::from_secs(5));
             tokio::pin!(monitor_timer);
-            
+
             loop {
                 tokio::select! {
                     _ = &mut monitor_timer => {
@@ -184,14 +189,10 @@ impl WsRunner {
                     }
                 }
             }
-            
+
             // 优雅关闭
-            let close_frame = WsFrame::new(
-                FrameDirection::Outbound,
-                WsFrameType::Close,
-                Vec::new(),
-                0,
-            );
+            let close_frame =
+                WsFrame::new(FrameDirection::Outbound, WsFrameType::Close, Vec::new(), 0);
             let _ = client.send_frame(close_frame).await;
             executed_actions_count += 1;
         } else {
@@ -208,7 +209,9 @@ impl WsRunner {
                     &assertions_to_eval,
                     &captures_to_eval,
                     &mut assertion_results,
-                ).await {
+                )
+                .await
+                {
                     Ok(should_continue) => {
                         if !should_continue {
                             break;
@@ -240,11 +243,15 @@ impl WsRunner {
             let summary_response = Response::new(
                 200,
                 HeaderMap::new(),
-                format!("WebSocket Session Completed Successfully. Run {} actions.", executed_actions_count),
+                format!(
+                    "WebSocket Session Completed Successfully. Run {} actions.",
+                    executed_actions_count
+                ),
                 duration,
                 Duration::from_millis(0),
                 Duration::from_millis(0),
-            ).unwrap();
+            )
+            .unwrap();
 
             TestResult::success(
                 request_number,
@@ -281,13 +288,11 @@ impl WsRunner {
         assertion_results: &mut Vec<crate::assertion::AssertionResult>,
     ) -> Result<bool, String> {
         match action {
-            WsAction::Connect { .. } => {
-                Ok(true)
-            }
+            WsAction::Connect { .. } => Ok(true),
             WsAction::Send(frame) => {
                 let payload_str = frame.payload_as_string();
                 let resolved_payload = VariableResolver::resolve(&payload_str, context);
-                
+
                 info!("WS [SEND #{}] Payload: {}", action_idx, resolved_payload);
                 let outbound_frame = WsFrame::new(
                     FrameDirection::Outbound,
@@ -317,11 +322,14 @@ impl WsRunner {
                 captures,
             } => {
                 let resolved_condition = VariableResolver::resolve(&condition, context);
-                info!("WS [EXPECT #{}] Waiting up to {:?} for condition: {}", action_idx, timeout, resolved_condition);
+                info!(
+                    "WS [EXPECT #{}] Waiting up to {:?} for condition: {}",
+                    action_idx, timeout, resolved_condition
+                );
 
-                let resolved_expected_value = expected_value.as_ref().map(|ev| {
-                    VariableResolver::resolve(ev, context)
-                });
+                let resolved_expected_value = expected_value
+                    .as_ref()
+                    .map(|ev| VariableResolver::resolve(ev, context));
 
                 // 使用复用的领域层组件 WsConditionMatcher
                 use crate::ws::FrameMatcher;
@@ -383,7 +391,10 @@ impl WsRunner {
                 }
 
                 if !matched {
-                    return Err(format!("Expect match timed out or failed. Condition: {}", resolved_condition));
+                    return Err(format!(
+                        "Expect match timed out or failed. Condition: {}",
+                        resolved_condition
+                    ));
                 }
 
                 if let Some(payload_str) = last_matching_payload {
@@ -394,7 +405,8 @@ impl WsRunner {
                         Duration::from_millis(0),
                         Duration::from_millis(0),
                         Duration::from_millis(0),
-                    ).unwrap();
+                    )
+                    .unwrap();
 
                     if !captures.is_empty() {
                         VariableCapture::capture_normal(
@@ -410,7 +422,8 @@ impl WsRunner {
                             .iter()
                             .map(|a| VariableResolver::resolve(a, context))
                             .collect();
-                        let local_assert_results = evaluate_assertions(&resolved_local_assertions, &virtual_response);
+                        let local_assert_results =
+                            evaluate_assertions(&resolved_local_assertions, &virtual_response);
                         for mut r in local_assert_results {
                             r.stream_event_index = Some(action_idx + 1);
                             assertion_results.push(r);
@@ -437,12 +450,8 @@ impl WsRunner {
             }
             WsAction::Close => {
                 info!("WS [CLOSE #{}] Active Close connection.", action_idx);
-                let close_frame = WsFrame::new(
-                    FrameDirection::Outbound,
-                    WsFrameType::Close,
-                    Vec::new(),
-                    0,
-                );
+                let close_frame =
+                    WsFrame::new(FrameDirection::Outbound, WsFrameType::Close, Vec::new(), 0);
                 let _ = client.send_frame(close_frame).await;
                 Ok(false)
             }
@@ -465,7 +474,7 @@ impl WsRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ws::{WsFrame, WsFrameType, FrameDirection};
+    use crate::ws::{FrameDirection, WsFrame, WsFrameType};
     use tokio::sync::broadcast;
 
     #[test]
@@ -481,8 +490,18 @@ mod tests {
         let (tx, mut rx) = broadcast::channel::<WsFrame>(1);
 
         // Send two frames to cause the receiver to lag
-        let frame1 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, b"msg1".to_vec(), 0);
-        let frame2 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, b"msg2".to_vec(), 0);
+        let frame1 = WsFrame::new(
+            FrameDirection::Inbound,
+            WsFrameType::Text,
+            b"msg1".to_vec(),
+            0,
+        );
+        let frame2 = WsFrame::new(
+            FrameDirection::Inbound,
+            WsFrameType::Text,
+            b"msg2".to_vec(),
+            0,
+        );
 
         tx.send(frame1).unwrap();
         tx.send(frame2).unwrap();
@@ -511,9 +530,13 @@ mod tests {
             }
         }
 
-        assert_eq!(loop_count, 1, "Should have encountered exactly 1 Lagged error");
-        assert!(received_msg2, "Should have successfully recovered and received msg2");
+        assert_eq!(
+            loop_count, 1,
+            "Should have encountered exactly 1 Lagged error"
+        );
+        assert!(
+            received_msg2,
+            "Should have successfully recovered and received msg2"
+        );
     }
 }
-
-

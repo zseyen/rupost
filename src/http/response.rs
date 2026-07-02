@@ -46,7 +46,10 @@ impl Response {
         }
     }
 
-    pub fn with_diagnose_report(mut self, report: crate::http::diagnose::DiagnosticsReport) -> Self {
+    pub fn with_diagnose_report(
+        mut self,
+        report: crate::http::diagnose::DiagnosticsReport,
+    ) -> Self {
         self.diagnose_report = Some(report);
         self
     }

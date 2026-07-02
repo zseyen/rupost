@@ -58,7 +58,8 @@ impl FileSyncWriter {
     ) -> Result<Option<String>> {
         let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
         if let Some(delta) = llm_adapter.extract_delta(llm_provider, event_data) {
-            self.write_delta(&delta, &format!("{:?}", llm_provider)).await?;
+            self.write_delta(&delta, &format!("{:?}", llm_provider))
+                .await?;
             Ok(Some(delta))
         } else {
             Ok(None)

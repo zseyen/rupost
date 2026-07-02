@@ -19,7 +19,10 @@ impl MockLlmServer {
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         let listener = TcpListener::bind(addr).await?;
         let bound_port = listener.local_addr()?.port();
-        info!("LLM Mock Server listening on http://127.0.0.1:{}", bound_port);
+        info!(
+            "LLM Mock Server listening on http://127.0.0.1:{}",
+            bound_port
+        );
 
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {

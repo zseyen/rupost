@@ -83,7 +83,7 @@ async fn test_diagnose_websocket_upgrade_success() {
         .respond_with(
             ResponseTemplate::new(101)
                 .insert_header("Upgrade", "websocket")
-                .insert_header("Connection", "Upgrade")
+                .insert_header("Connection", "Upgrade"),
         )
         .mount(&mock_server)
         .await;

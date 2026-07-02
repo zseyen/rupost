@@ -1,8 +1,7 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use futures_util::{SinkExt, StreamExt};
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::protocol::Message;
-use futures_util::{SinkExt, StreamExt};
 use tracing::{error, info, warn};
 
 use crate::ws::frame::{FrameDirection, WsFrame, WsFrameType};
@@ -23,22 +22,23 @@ pub struct WsClient {
     write_tx: mpsc::Sender<Message>,
     /// 广播接收消息的通道发送端
     broadcast_tx: broadcast::Sender<WsFrame>,
-    /// 配置信息
-    config: WsClientConfig,
 }
 
 impl WsClient {
     /// 发起连接并初始化后台 Worker
     pub async fn connect(config: WsClientConfig) -> Result<Self, String> {
-                use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let mut request = config.url.as_str().into_client_request()
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = config
+            .url
+            .as_str()
+            .into_client_request()
             .map_err(|e| format!("Invalid WebSocket URL: {}", e))?;
 
         let headers_mut = request.headers_mut();
         for (k, v) in &config.headers {
             if let (Ok(name), Ok(val)) = (
                 tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(k.as_bytes()),
-                tokio_tungstenite::tungstenite::http::HeaderValue::from_str(v)
+                tokio_tungstenite::tungstenite::http::HeaderValue::from_str(v),
             ) {
                 headers_mut.insert(name, val);
             }
@@ -47,13 +47,16 @@ impl WsClient {
         // 建立网络连接
         let (ws_stream, response) = tokio::time::timeout(
             config.handshake_timeout,
-            tokio_tungstenite::connect_async(request)
+            tokio_tungstenite::connect_async(request),
         )
         .await
         .map_err(|_| "WebSocket handshake timed out".to_string())?
         .map_err(|e| format!("WebSocket connection failed: {}", e))?;
 
-        info!("WebSocket connected. Handshake HTTP Status: {}", response.status());
+        info!(
+            "WebSocket connected. Handshake HTTP Status: {}",
+            response.status()
+        );
 
         let (ws_sink, ws_source) = ws_stream.split();
         let (write_tx, write_rx) = mpsc::channel::<Message>(128);
@@ -62,14 +65,20 @@ impl WsClient {
         let client = Self {
             write_tx,
             broadcast_tx: broadcast_tx.clone(),
-            config: config.clone(),
         };
 
         // 启动后台 Worker 协程
         let worker_broadcast_tx = broadcast_tx;
         let ping_interval = config.ping_interval;
         tokio::spawn(async move {
-            Self::run_worker(ws_sink, ws_source, write_rx, worker_broadcast_tx, ping_interval).await;
+            Self::run_worker(
+                ws_sink,
+                ws_source,
+                write_rx,
+                worker_broadcast_tx,
+                ping_interval,
+            )
+            .await;
         });
 
         Ok(client)
@@ -98,11 +107,15 @@ impl WsClient {
     /// 后台 Worker 核心事件循环
     async fn run_worker(
         mut ws_sink: futures_util::stream::SplitSink<
-            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-            Message
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
         >,
         mut ws_source: futures_util::stream::SplitStream<
-            tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
         >,
         mut write_rx: mpsc::Receiver<Message>,
         broadcast_tx: broadcast::Sender<WsFrame>,
@@ -216,8 +229,8 @@ impl WsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
     use crate::ws::frame::WsFrameType;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_ws_client_mock() {
@@ -232,7 +245,9 @@ mod tests {
                 if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
                     // 读取客户端发来的第一条消息并回传
                     if let Some(Ok(Message::Text(msg))) = ws_stream.next().await {
-                        let _ = ws_stream.send(Message::Text(format!("echo: {}", msg))).await;
+                        let _ = ws_stream
+                            .send(Message::Text(format!("echo: {}", msg)))
+                            .await;
                     }
                     // 接收 Ping 帧并回复 Pong
                     if let Some(Ok(Message::Ping(payload))) = ws_stream.next().await {

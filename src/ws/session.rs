@@ -1,10 +1,10 @@
+use crate::ws::client::{WsClient, WsClientConfig};
+use crate::ws::frame::WsFrame;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::collections::VecDeque;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{info, warn, error};
-use crate::ws::frame::WsFrame;
-use crate::ws::client::{WsClient, WsClientConfig};
+use tracing::{error, info, warn};
 
 /// Session 的物理连接状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,10 +158,10 @@ impl SessionManager {
     /// 后台管理循环
     async fn run(&mut self) {
         let mut physical_rx = self.client.subscribe();
-        
+
         loop {
             let current_state = *self.state.lock().unwrap();
-            
+
             match current_state {
                 SessionState::Connected => {
                     while *self.state.lock().unwrap() == SessionState::Connected {
@@ -250,7 +250,10 @@ impl SessionManager {
 
     /// 执行强时序 Flush 补发
     async fn flush_pending_queue(&mut self) {
-        info!("Flushing {} pending frames post-reconnect.", self.pending_send_queue.len());
+        info!(
+            "Flushing {} pending frames post-reconnect.",
+            self.pending_send_queue.len()
+        );
         while let Some(frame) = self.pending_send_queue.pop_front() {
             if let Err(e) = self.client.send_frame(frame.clone()).await {
                 warn!("Secondary disconnection during flush: {}. Re-queueing.", e);
@@ -266,8 +269,11 @@ impl SessionManager {
         let max_attempts = 5;
         for attempt in 1..=max_attempts {
             let delay = Duration::from_secs(1 << attempt); // 2s, 4s, 8s, 16s, 32s
-            info!("Reconnecting attempt {}/{} in {:?}", attempt, max_attempts, delay);
-            
+            info!(
+                "Reconnecting attempt {}/{} in {:?}",
+                attempt, max_attempts, delay
+            );
+
             let sleep_fut = tokio::time::sleep(delay);
             tokio::pin!(sleep_fut);
 
@@ -312,13 +318,13 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ws::frame::FrameDirection;
     use crate::ws::WsFrameType;
+    use crate::ws::frame::FrameDirection;
 
     #[test]
     fn test_bounded_frame_buffer() {
         let mut buf = BoundedFrameBuffer::new(3);
-        
+
         let f1 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![1], 0);
         let f2 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![2], 0);
         let f3 = WsFrame::new(FrameDirection::Inbound, WsFrameType::Text, vec![3], 0);
@@ -328,11 +334,11 @@ mod tests {
         buf.push(f2);
         buf.push(f3);
         assert_eq!(buf.len(), 3);
-        
+
         // 应该顶替掉第一个
         buf.push(f4);
         assert_eq!(buf.len(), 3);
-        
+
         let history = buf.get_all();
         assert_eq!(history[0].payload, vec![2]);
         assert_eq!(history[1].payload, vec![3]);
@@ -342,20 +348,30 @@ mod tests {
     #[test]
     fn test_pending_send_queue_ordering() {
         let mut queue = VecDeque::new();
-        
-        let f1 = WsFrame::new(FrameDirection::Outbound, WsFrameType::Text, b"msg1".to_vec(), 0);
-        let f2 = WsFrame::new(FrameDirection::Outbound, WsFrameType::Text, b"msg2".to_vec(), 0);
-        
+
+        let f1 = WsFrame::new(
+            FrameDirection::Outbound,
+            WsFrameType::Text,
+            b"msg1".to_vec(),
+            0,
+        );
+        let f2 = WsFrame::new(
+            FrameDirection::Outbound,
+            WsFrameType::Text,
+            b"msg2".to_vec(),
+            0,
+        );
+
         // 模拟 Connected 时发送 f1 失败，压入头部
         queue.push_front(f1);
-        
+
         // 模拟重连期间外部又发送了 f2，入队到尾部
         queue.push_back(f2);
-        
+
         // 验证出队顺序是 f1 然后 f2，确保时序未反转
         let popped1 = queue.pop_front().unwrap();
         assert_eq!(popped1.payload, b"msg1".to_vec());
-        
+
         let popped2 = queue.pop_front().unwrap();
         assert_eq!(popped2.payload, b"msg2".to_vec());
     }

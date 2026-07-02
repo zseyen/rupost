@@ -36,7 +36,11 @@ impl ReplayExecutor {
             suite.entries.len()
         );
         if let Some(target) = &self.target_url {
-            println!("{} Overriding target URL base to: {}", "[*]".bold().blue(), target.green());
+            println!(
+                "{} Overriding target URL base to: {}",
+                "[*]".bold().blue(),
+                target.green()
+            );
         }
 
         let mut passed = 0;
@@ -78,7 +82,11 @@ impl ReplayExecutor {
             "  Total: {}, Passed: {}, Failed: {}",
             suite.entries.len(),
             passed.to_string().green(),
-            if failed > 0 { failed.to_string().red() } else { failed.to_string().normal() }
+            if failed > 0 {
+                failed.to_string().red()
+            } else {
+                failed.to_string().normal()
+            }
         );
 
         Ok(ReplayReport {

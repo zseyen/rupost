@@ -50,7 +50,10 @@ impl VariableResolver {
 
     /// 渲染并实例化一个 `ParsedRequest`：解析其 URL, Headers, Body 中的所有占位符和环境变量；
     /// 并处理 Base URL 的自动拼接以及全局 User-Agent 的注入。
-    pub fn resolve_parsed_request(parsed: &mut crate::parser::ParsedRequest, context: &mut VariableContext) {
+    pub fn resolve_parsed_request(
+        parsed: &mut crate::parser::ParsedRequest,
+        context: &mut VariableContext,
+    ) {
         // 1. 替换 URL
         parsed.url = Self::resolve(&parsed.url, context);
 
@@ -230,20 +233,24 @@ mod tests {
         let mut parsed = crate::parser::ParsedRequest::new(1);
         parsed.url = "/users/{{user_id}}".to_string();
         parsed.base_path = Some("v1".to_string());
-        parsed.headers = vec![
-            ("Host".to_string(), "{{host}}".to_string()),
-        ];
+        parsed.headers = vec![("Host".to_string(), "{{host}}".to_string())];
         parsed.body = Some("hello {{user_id}}".to_string());
 
         VariableResolver::resolve_parsed_request(&mut parsed, &mut ctx);
 
         // 验证 URL 渲染（此处不再自动拼接，仅替换占位符）
         assert_eq!(parsed.url, "/users/456");
-        
+
         // 验证 Headers 渲染和 user_agent 自动注入
         assert_eq!(parsed.headers.len(), 2);
-        assert_eq!(parsed.headers[0], ("Host".to_string(), "example.com".to_string()));
-        assert_eq!(parsed.headers[1], ("User-Agent".to_string(), "CustomTestAgent/1.0".to_string()));
+        assert_eq!(
+            parsed.headers[0],
+            ("Host".to_string(), "example.com".to_string())
+        );
+        assert_eq!(
+            parsed.headers[1],
+            ("User-Agent".to_string(), "CustomTestAgent/1.0".to_string())
+        );
 
         // 验证 Body 渲染
         assert_eq!(parsed.body.unwrap(), "hello 456");

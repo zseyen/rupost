@@ -106,8 +106,12 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     // 1 & 2. 结合超时进行统一的 DNS + TCP 握手诊断测量
     let default_timeout = Duration::from_secs(5);
     let (tcp_stream, socket_addr, dns_lookup_duration, tcp_connect_duration) =
-        crate::http::timing::DiagnosticsProber::connect_tcp_with_timeout(host, port, default_timeout)
-            .await?;
+        crate::http::timing::DiagnosticsProber::connect_tcp_with_timeout(
+            host,
+            port,
+            default_timeout,
+        )
+        .await?;
     let resolved_ips = vec![socket_addr.ip().to_string()];
 
     let mut tls_handshake_duration = None;
@@ -154,11 +158,14 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
             .map_err(|e| format!("Invalid server name '{}': {}", host, e))?;
 
         let tls_start = Instant::now();
-        let mut tls_stream = match tokio::time::timeout(default_timeout, connector.connect(server_name, tcp_stream)).await {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(e)) => return Err(format!("TLS handshake failed: {}", e)),
-            Err(_) => return Err(format!("TLS handshake timeout after {:?}", default_timeout)),
-        };
+        let mut tls_stream =
+            match tokio::time::timeout(default_timeout, connector.connect(server_name, tcp_stream))
+                .await
+            {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(e)) => return Err(format!("TLS handshake failed: {}", e)),
+                Err(_) => return Err(format!("TLS handshake timeout after {:?}", default_timeout)),
+            };
         tls_handshake_duration = Some(tls_start.elapsed());
 
         // 获取对端证书链
@@ -220,7 +227,7 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     }
 
     let total_duration = start_all.elapsed();
-    
+
     let ws_upgrade_success = if is_websocket {
         Some(http_status == Some(101))
     } else {
@@ -257,14 +264,22 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
     );
 
     println!("{:<14}: {}", "Target URL", report.url);
-    
+
     let scheme_str = if report.is_websocket {
-        if report.is_https { "WSS".magenta().bold() } else { "WS".cyan().bold() }
+        if report.is_https {
+            "WSS".magenta().bold()
+        } else {
+            "WS".cyan().bold()
+        }
     } else {
-        if report.is_https { "HTTPS".green().bold() } else { "HTTP".yellow().bold() }
+        if report.is_https {
+            "HTTPS".green().bold()
+        } else {
+            "HTTP".yellow().bold()
+        }
     };
     println!("{:<14}: {}", "Scheme", scheme_str);
-    
+
     println!(
         "{:<14}: [{}]",
         "Resolved IPs",

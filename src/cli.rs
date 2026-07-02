@@ -1,11 +1,11 @@
 mod parser;
 
 use clap::{Parser, Subcommand};
+use rupost::Result;
 use rupost::http::Response;
 use rupost::runner::TestExecutor;
 use rupost::utils::{ResponseFormat, ResponseFormatter};
 use rupost::variable::VariableContext;
-use rupost::Result;
 use tracing::{debug, error};
 
 #[derive(Parser)]
@@ -268,7 +268,6 @@ impl CliRunner {
             Err(e) => error!("Failed to format response: {}", e),
         }
     }
-
 }
 
 pub async fn run(
@@ -279,8 +278,12 @@ pub async fn run(
     debug: bool,
     debug_on_failure: bool,
 ) -> Result<()> {
-    let runner = CliRunner::new(no_cookies, cookie_file, default_scheme, debug, debug_on_failure)?;
+    let runner = CliRunner::new(
+        no_cookies,
+        cookie_file,
+        default_scheme,
+        debug,
+        debug_on_failure,
+    )?;
     runner.run(args).await
 }
-
-

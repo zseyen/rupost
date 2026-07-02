@@ -255,7 +255,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     source_paths: &[String],
     snapshot_path: P,
 ) -> Result<()> {
-    use super::model::{SnapshotSuite, SnapshotEntry, ResponseSnapshot};
+    use super::model::{ResponseSnapshot, SnapshotEntry, SnapshotSuite};
     let mut entries = Vec::new();
     for (_, file_results) in batch_results {
         for r in file_results {
@@ -349,8 +349,8 @@ mod tests {
 
     #[test]
     fn test_save_batch_snapshot_run() {
-        use crate::runner::types::TestResult;
         use crate::http::Response;
+        use crate::runner::types::TestResult;
         use reqwest::header::HeaderMap;
         use std::time::Duration;
 
@@ -374,7 +374,8 @@ mod tests {
             Duration::from_millis(50),
             Duration::from_millis(20),
             Duration::from_millis(30),
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut test_result = TestResult::success(
             1,
@@ -385,12 +386,14 @@ mod tests {
         );
         test_result.request = Some(req_snap);
 
-        let batch_results = vec![(
-            PathBuf::from("my_test.http"),
-            vec![test_result],
-        )];
+        let batch_results = vec![(PathBuf::from("my_test.http"), vec![test_result])];
 
-        save_batch_snapshot(&batch_results, &["my_test.http".to_string()], &snapshot_file).unwrap();
+        save_batch_snapshot(
+            &batch_results,
+            &["my_test.http".to_string()],
+            &snapshot_file,
+        )
+        .unwrap();
 
         // 验证读取快照
         let suite = read_snapshot_suite(&snapshot_file).unwrap();
@@ -400,4 +403,3 @@ mod tests {
         assert_eq!(suite.entries[0].response.body, "{\"status\":\"ok\"}");
     }
 }
-

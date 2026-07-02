@@ -112,7 +112,11 @@ async fn main() -> Result<()> {
         }) => {
             rupost::template::run_template(&r#type, output.as_deref(), force, list)?;
         }
-        Some(Commands::Replay { file, target, verbose }) => {
+        Some(Commands::Replay {
+            file,
+            target,
+            verbose,
+        }) => {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             replayer.replay_file(&file).await?;
         }

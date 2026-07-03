@@ -11,7 +11,7 @@ use ratatui::{
 pub fn render(
     frame: &mut Frame,
     state: &mut AppState,
-    textarea: &mut tui_textarea::TextArea<'static>,
+    textarea: &mut ratatui_textarea::TextArea<'static>,
 ) {
     let size = frame.area();
 
@@ -141,7 +141,7 @@ fn render_editor_panel(
     frame: &mut Frame,
     area: Rect,
     state: &AppState,
-    textarea: &mut tui_textarea::TextArea<'static>,
+    textarea: &mut ratatui_textarea::TextArea<'static>,
 ) {
     let focus = state.active_panel == Panel::Editor;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };

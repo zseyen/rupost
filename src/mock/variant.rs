@@ -107,13 +107,19 @@ impl VariantCondition {
                     CompareOp::Exists => !json_val.is_null(),
                     CompareOp::Equals => match &json_val {
                         serde_json::Value::String(s) => s == &self.expected_value,
-                        other => *other == self.expected_value || other.to_string() == self.expected_value,
+                        other => {
+                            *other == self.expected_value
+                                || other.to_string() == self.expected_value
+                        }
                     },
                     CompareOp::Contains => match &json_val {
                         serde_json::Value::String(s) => s.contains(&self.expected_value),
                         serde_json::Value::Array(arr) => arr.iter().any(|item| match item {
                             serde_json::Value::String(s) => s == &self.expected_value,
-                            other => *other == self.expected_value || other.to_string() == self.expected_value,
+                            other => {
+                                *other == self.expected_value
+                                    || other.to_string() == self.expected_value
+                            }
                         }),
                         other => other.to_string().contains(&self.expected_value),
                     },

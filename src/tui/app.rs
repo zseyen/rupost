@@ -62,7 +62,7 @@ async fn run_async() -> Result<()> {
             .collect();
     }
 
-    let mut textarea = tui_textarea::TextArea::default();
+    let mut textarea = ratatui_textarea::TextArea::default();
     textarea.set_placeholder_text(
         "Press Tab to focus and type URL\nOr select a file on the left panel.",
     );
@@ -73,7 +73,7 @@ async fn run_async() -> Result<()> {
         if let Ok(content) = std::fs::read_to_string(first_file) {
             state.editor_text = content.clone();
             state.editor_file_path = Some(first_file.clone());
-            textarea = tui_textarea::TextArea::new(content.lines().map(String::from).collect());
+            textarea = ratatui_textarea::TextArea::new(content.lines().map(String::from).collect());
             state.loaded_file_index = 0;
         }
     }
@@ -114,7 +114,7 @@ async fn run_async() -> Result<()> {
                                                 if let Ok(content) = std::fs::read_to_string(path) {
                                                     state.editor_text = content.clone();
                                                     state.editor_file_path = Some(path.clone());
-                                                    textarea = tui_textarea::TextArea::new(
+                                                    textarea = ratatui_textarea::TextArea::new(
                                                         content.lines().map(String::from).collect(),
                                                     );
                                                     state.is_dirty = false;
@@ -190,7 +190,7 @@ async fn run_async() -> Result<()> {
                                     if let Ok(content) = std::fs::read_to_string(path) {
                                         state.editor_text = content.clone();
                                         state.editor_file_path = Some(path.clone());
-                                        textarea = tui_textarea::TextArea::new(
+                                        textarea = ratatui_textarea::TextArea::new(
                                             content.lines().map(String::from).collect(),
                                         );
                                         state.is_dirty = false;

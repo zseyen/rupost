@@ -89,6 +89,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &mut tui_textar
     if state.show_help {
         render_help_popup(frame, size);
     }
+
+    // 4. 渲染未保存强确认弹窗 (Unsaved Changes Alert Modal)
+    if state.show_unsaved_confirm {
+        render_unsaved_popup(frame, size);
+    }
 }
 
 fn render_files_panel(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -232,6 +237,44 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
     let paragraph = Paragraph::new(help_text).block(block);
     
     // 擦除底层界面，防止透字
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(" WARNING: Unsaved Changes! ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red))),
+        Line::from(""),
+        Line::from(" You have unsaved modifications in the editor."),
+        Line::from(" Do you want to discard them and continue?"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [y] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" Yes, discard changes"),
+            Span::styled("     [n/Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(" No, keep editing"),
+        ]),
+    ];
+
+    let width = 50.min(screen_size.width - 4);
+    let height = 10.min(screen_size.height - 2);
+    
+    let area = Rect::new(
+        (screen_size.width - width) / 2,
+        (screen_size.height - height) / 2,
+        width,
+        height,
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
+        
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+    
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }

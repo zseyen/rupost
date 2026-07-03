@@ -50,6 +50,7 @@ pub struct AppState {
     pub is_dirty: bool,
     pub show_unsaved_confirm: bool,
     pub pending_action: Option<PendingAction>,
+    pub loaded_file_index: usize,
 }
 
 impl AppState {
@@ -74,6 +75,7 @@ impl AppState {
             is_dirty: false,
             show_unsaved_confirm: false,
             pending_action: None,
+            loaded_file_index: 0,
         }
     }
 

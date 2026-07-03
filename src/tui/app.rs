@@ -68,6 +68,7 @@ async fn run_async() -> Result<()> {
             state.editor_text = content.clone();
             state.editor_file_path = Some(first_file.clone());
             textarea = tui_textarea::TextArea::new(content.lines().map(String::from).collect());
+            state.loaded_file_index = 0;
         }
     }
     
@@ -87,9 +88,51 @@ async fn run_async() -> Result<()> {
         if let Some(event) = event_rx.recv().await {
             match event {
                 TuiEvent::Input(key) => {
+                    // 未保存强确认弹窗前置网关
+                    if state.show_unsaved_confirm {
+                        match key.code {
+                            crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => {
+                                if let Some(action) = state.pending_action {
+                                    match action {
+                                        super::state::PendingAction::Quit => {
+                                            state.is_quitting = true;
+                                        }
+                                        super::state::PendingAction::SwitchFile(idx) => {
+                                            if idx < state.file_tree.len() {
+                                                let path = &state.file_tree[idx];
+                                                if let Ok(content) = std::fs::read_to_string(path) {
+                                                    state.editor_text = content.clone();
+                                                    state.editor_file_path = Some(path.clone());
+                                                    textarea = tui_textarea::TextArea::new(content.lines().map(String::from).collect());
+                                                    state.is_dirty = false;
+                                                    state.loaded_file_index = idx;
+                                                    state.selected_file_index = idx;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                state.show_unsaved_confirm = false;
+                                state.pending_action = None;
+                            }
+                            crossterm::event::KeyCode::Char('n') | crossterm::event::KeyCode::Char('N') | crossterm::event::KeyCode::Esc => {
+                                state.selected_file_index = state.loaded_file_index;
+                                state.show_unsaved_confirm = false;
+                                state.pending_action = None;
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     // 全局指令优先
                     if key.code == crossterm::event::KeyCode::Char('q') {
-                        state.update(super::event::Action::Quit);
+                        if state.is_dirty {
+                            state.show_unsaved_confirm = true;
+                            state.pending_action = Some(super::state::PendingAction::Quit);
+                        } else {
+                            state.update(super::event::Action::Quit);
+                        }
                     }
                     if key.code == crossterm::event::KeyCode::Char('?') {
                         state.update(super::event::Action::ToggleHelp);
@@ -119,11 +162,19 @@ async fn run_async() -> Result<()> {
                             crossterm::event::KeyCode::Enter => {
                                 if !state.file_tree.is_empty() {
                                     let path = &state.file_tree[state.selected_file_index];
-                                    if let Ok(content) = std::fs::read_to_string(path) {
-                                        state.editor_text = content.clone();
-                                        state.editor_file_path = Some(path.clone());
-                                        textarea = tui_textarea::TextArea::new(content.lines().map(String::from).collect());
-                                        state.is_dirty = false;
+                                    if state.is_dirty {
+                                        if state.selected_file_index != state.loaded_file_index {
+                                            state.show_unsaved_confirm = true;
+                                            state.pending_action = Some(super::state::PendingAction::SwitchFile(state.selected_file_index));
+                                        }
+                                    } else {
+                                        if let Ok(content) = std::fs::read_to_string(path) {
+                                            state.editor_text = content.clone();
+                                            state.editor_file_path = Some(path.clone());
+                                            textarea = tui_textarea::TextArea::new(content.lines().map(String::from).collect());
+                                            state.is_dirty = false;
+                                            state.loaded_file_index = state.selected_file_index;
+                                        }
                                     }
                                 }
                             }

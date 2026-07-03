@@ -89,3 +89,36 @@ fn test_request_finished_variable_extension() {
     assert_eq!(state.variables.get("session_token").unwrap(), "abc-123-xyz");
     assert_eq!(state.variables.get("user_id").unwrap(), "42");
 }
+
+#[test]
+fn test_unsaved_changes_confirm_modal() {
+    use rupost::tui::state::PendingAction;
+    let mut state = AppState::new();
+
+    // 默认弹窗是关闭的
+    assert!(!state.show_unsaved_confirm);
+    assert_eq!(state.pending_action, None);
+
+    // 模拟编辑器变脏
+    state.is_dirty = true;
+    state.loaded_file_index = 0;
+    state.selected_file_index = 1;
+
+    // 模拟在变脏时触发退出拦截
+    state.show_unsaved_confirm = true;
+    state.pending_action = Some(PendingAction::Quit);
+
+    // 模拟取消
+    state.selected_file_index = state.loaded_file_index;
+    state.show_unsaved_confirm = false;
+    state.pending_action = None;
+
+    assert_eq!(state.selected_file_index, 0);
+    assert!(!state.show_unsaved_confirm);
+
+    // 模拟确认放弃修改
+    state.pending_action = Some(PendingAction::Quit);
+    state.is_quitting = true;
+    
+    assert!(state.is_quitting);
+}

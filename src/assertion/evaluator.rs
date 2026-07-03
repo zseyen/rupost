@@ -80,6 +80,98 @@ fn format_assertion(assertion: &AssertExpr) -> String {
     }
 }
 
+use crate::assertion::parser::parse_assertion;
+
+/// 评估常规的非流式断言
+pub fn evaluate_assertions(
+    resolved_assertions: &[String],
+    response: &Response,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        match parse_assertion(assertion_str) {
+            Ok(assertion_expr) => {
+                let result = evaluate_assertion(&assertion_expr, response);
+                assertion_results.push(result);
+            }
+            Err(e) => {
+                assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+            }
+        }
+    }
+    assertion_results
+}
+
+/// 评估 SSE 握手断言 (过滤掉以 "stream." 开头的断言)
+pub fn evaluate_sse_handshake_assertions(
+    resolved_assertions: &[String],
+    handshake_response: &Response,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        if !assertion_str.contains("stream.") {
+            match parse_assertion(assertion_str) {
+                Ok(assertion_expr) => {
+                    let result = evaluate_assertion(&assertion_expr, handshake_response);
+                    assertion_results.push(result);
+                }
+                Err(e) => {
+                    assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+                }
+            }
+        }
+    }
+    assertion_results
+}
+
+/// 评估实时流事件断言 (包含 "stream." 但排除 "stream.llm.content")
+pub fn evaluate_sse_event_assertions(
+    resolved_assertions: &[String],
+    virtual_response: &Response,
+    event_count: usize,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
+            match parse_assertion(assertion_str) {
+                Ok(assertion_expr) => {
+                    let result = evaluate_assertion(&assertion_expr, virtual_response);
+                    assertion_results.push(result.with_stream_index(event_count));
+                }
+                Err(e) => {
+                    assertion_results.push(
+                        AssertionResult::error(assertion_str.clone(), e)
+                            .with_stream_index(event_count),
+                    );
+                }
+            }
+        }
+    }
+    assertion_results
+}
+
+/// 评估包含 "stream.llm.content" 的断言
+pub fn evaluate_sse_llm_content_assertions(
+    resolved_assertions: &[String],
+    final_response: &Response,
+) -> Vec<AssertionResult> {
+    let mut assertion_results = Vec::new();
+    for assertion_str in resolved_assertions {
+        if assertion_str.contains("stream.llm.content") {
+            match parse_assertion(assertion_str) {
+                Ok(assertion_expr) => {
+                    let result = evaluate_assertion(&assertion_expr, final_response);
+                    assertion_results.push(result);
+                }
+                Err(e) => {
+                    assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
+                }
+            }
+        }
+    }
+    assertion_results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,96 +403,4 @@ mod tests {
         // 因为我们只是匹配断言字符串包含 "stream.llm.content"，实际评估时它会在 response (比如虚拟响应) 上求值
         // 这里的测试只是为了验证断言过滤
     }
-}
-
-use crate::assertion::parser::parse_assertion;
-
-/// 评估常规的非流式断言
-pub fn evaluate_assertions(
-    resolved_assertions: &[String],
-    response: &Response,
-) -> Vec<AssertionResult> {
-    let mut assertion_results = Vec::new();
-    for assertion_str in resolved_assertions {
-        match parse_assertion(assertion_str) {
-            Ok(assertion_expr) => {
-                let result = evaluate_assertion(&assertion_expr, response);
-                assertion_results.push(result);
-            }
-            Err(e) => {
-                assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
-            }
-        }
-    }
-    assertion_results
-}
-
-/// 评估 SSE 握手断言 (过滤掉以 "stream." 开头的断言)
-pub fn evaluate_sse_handshake_assertions(
-    resolved_assertions: &[String],
-    handshake_response: &Response,
-) -> Vec<AssertionResult> {
-    let mut assertion_results = Vec::new();
-    for assertion_str in resolved_assertions {
-        if !assertion_str.contains("stream.") {
-            match parse_assertion(assertion_str) {
-                Ok(assertion_expr) => {
-                    let result = evaluate_assertion(&assertion_expr, handshake_response);
-                    assertion_results.push(result);
-                }
-                Err(e) => {
-                    assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
-                }
-            }
-        }
-    }
-    assertion_results
-}
-
-/// 评估实时流事件断言 (包含 "stream." 但排除 "stream.llm.content")
-pub fn evaluate_sse_event_assertions(
-    resolved_assertions: &[String],
-    virtual_response: &Response,
-    event_count: usize,
-) -> Vec<AssertionResult> {
-    let mut assertion_results = Vec::new();
-    for assertion_str in resolved_assertions {
-        if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
-            match parse_assertion(assertion_str) {
-                Ok(assertion_expr) => {
-                    let result = evaluate_assertion(&assertion_expr, virtual_response);
-                    assertion_results.push(result.with_stream_index(event_count));
-                }
-                Err(e) => {
-                    assertion_results.push(
-                        AssertionResult::error(assertion_str.clone(), e)
-                            .with_stream_index(event_count),
-                    );
-                }
-            }
-        }
-    }
-    assertion_results
-}
-
-/// 评估包含 "stream.llm.content" 的断言
-pub fn evaluate_sse_llm_content_assertions(
-    resolved_assertions: &[String],
-    final_response: &Response,
-) -> Vec<AssertionResult> {
-    let mut assertion_results = Vec::new();
-    for assertion_str in resolved_assertions {
-        if assertion_str.contains("stream.llm.content") {
-            match parse_assertion(assertion_str) {
-                Ok(assertion_expr) => {
-                    let result = evaluate_assertion(&assertion_expr, final_response);
-                    assertion_results.push(result);
-                }
-                Err(e) => {
-                    assertion_results.push(AssertionResult::error(assertion_str.clone(), e));
-                }
-            }
-        }
-    }
-    assertion_results
 }

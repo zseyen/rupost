@@ -16,9 +16,9 @@ impl WsActionParser {
                 continue;
             }
 
-            if trimmed.starts_with("SEND") {
+            if let Some(after_send) = trimmed.strip_prefix("SEND") {
                 // 1. 发送帧动作
-                let mut payload_str = trimmed["SEND".len()..].trim().to_string();
+                let mut payload_str = after_send.trim().to_string();
                 if payload_str.is_empty() {
                     // 多行读取，直到遇到下一个核心指令
                     let mut accumulated = String::new();
@@ -44,9 +44,9 @@ impl WsActionParser {
                     0,
                 );
                 actions.push(WsAction::Send(frame));
-            } else if trimmed.starts_with("EXPECT") {
+            } else if let Some(after_expect) = trimmed.strip_prefix("EXPECT") {
                 // 2. 预期帧匹配动作
-                let mut condition = trimmed["EXPECT".len()..].trim().to_string();
+                let mut condition = after_expect.trim().to_string();
                 let mut timeout = Duration::from_secs(5); // 默认 5 秒超时
                 let mut assertions = Vec::new();
                 let mut captures = Vec::new();
@@ -74,25 +74,25 @@ impl WsActionParser {
                 // 循环读取紧随 EXPECT 其后的局部指令 (@timeout, @assert, @capture)
                 while let Some(next_line) = lines.peek() {
                     let next_trimmed = next_line.trim();
-                    if next_trimmed.starts_with("@timeout") {
+                    if let Some(after_timeout) = next_trimmed.strip_prefix("@timeout") {
                         let _ = lines.next(); // 消费这一行
-                        let content = next_trimmed["@timeout".len()..].trim();
+                        let content = after_timeout.trim();
                         let content = content.trim_start_matches('=').trim();
                         if let Ok(d) = crate::parser::metadata::parse_duration(content) {
                             timeout = d;
                         } else if let Ok(ms) = content.parse::<u64>() {
                             timeout = Duration::from_millis(ms);
                         }
-                    } else if next_trimmed.starts_with("@assert") {
+                    } else if let Some(after_assert) = next_trimmed.strip_prefix("@assert") {
                         let _ = lines.next(); // 消费这一行
-                        let content = next_trimmed["@assert".len()..].trim();
+                        let content = after_assert.trim();
                         let content = content.trim_start_matches('=').trim().to_string();
                         if !content.is_empty() {
                             assertions.push(content);
                         }
-                    } else if next_trimmed.starts_with("@capture") {
+                    } else if let Some(after_capture) = next_trimmed.strip_prefix("@capture") {
                         let _ = lines.next(); // 消费这一行
-                        let content = next_trimmed["@capture".len()..].trim();
+                        let content = after_capture.trim();
                         let content = content.trim_start_matches('=').trim();
                         let parts: Vec<&str> = content.split_whitespace().collect();
                         if parts.len() >= 3 && parts[1] == "from" {
@@ -123,9 +123,9 @@ impl WsActionParser {
                     assertions,
                     captures,
                 });
-            } else if trimmed.starts_with("WAIT") {
+            } else if let Some(after_wait) = trimmed.strip_prefix("WAIT") {
                 // 3. 阻塞等待动作
-                if let Ok(ms) = trimmed["WAIT".len()..].trim().parse::<u64>() {
+                if let Ok(ms) = after_wait.trim().parse::<u64>() {
                     actions.push(WsAction::Wait(Duration::from_millis(ms)));
                 } else {
                     return Err(format!("Invalid WAIT duration: '{}'", trimmed));

@@ -13,52 +13,52 @@ async fn start_ws_mock_server() -> (String, tokio::task::JoinHandle<()>) {
     let ws_url = format!("ws://127.0.0.1:{}", port);
 
     let handle = tokio::spawn(async move {
-        if let Ok((stream, _)) = listener.accept().await {
-            if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
-                let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(150));
+        if let Ok((stream, _)) = listener.accept().await
+            && let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await
+        {
+            let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(150));
 
-                loop {
-                    tokio::select! {
-                        // 模拟高频业务心跳广播帧，用于验证客户端的软匹配与心跳防雪崩机制
-                        _ = heartbeat_timer.tick() => {
-                            let heartbeat_msg = Message::Text(r#"{"type":"heartbeat","data":"pulse"}"#.to_string());
-                            if ws_stream.send(heartbeat_msg).await.is_err() {
+            loop {
+                tokio::select! {
+                    // 模拟高频业务心跳广播帧，用于验证客户端的软匹配与心跳防雪崩机制
+                    _ = heartbeat_timer.tick() => {
+                        let heartbeat_msg = Message::Text(r#"{"type":"heartbeat","data":"pulse"}"#.to_string());
+                        if ws_stream.send(heartbeat_msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    maybe_msg = ws_stream.next() => {
+                        match maybe_msg {
+                            Some(Ok(Message::Text(txt))) => {
+                                if txt.contains("subscribe_bin") {
+                                    // 延迟发送预期的 MsgPack 订阅通知帧
+                                    tokio::time::sleep(Duration::from_millis(200)).await;
+
+                                    #[derive(serde::Serialize)]
+                                    struct TickerBin {
+                                        event: String,
+                                        symbol: String,
+                                        price: u64,
+                                    }
+                                    let ticker = TickerBin {
+                                        event: "ticker".to_string(),
+                                        symbol: "ETH".to_string(),
+                                        price: 3200,
+                                    };
+                                    let bin = rmp_serde::to_vec_named(&ticker).unwrap();
+                                    let ticker_msg = Message::Binary(bin);
+                                    let _ = ws_stream.send(ticker_msg).await;
+                                } else if txt.contains("subscribe") || txt.contains("log_price") {
+                                    // 延迟发送预期的订阅通知帧
+                                    tokio::time::sleep(Duration::from_millis(200)).await;
+                                    let ticker_msg = Message::Text(r#"{"event":"ticker","symbol":"BTC","price":62500}"#.to_string());
+                                    let _ = ws_stream.send(ticker_msg).await;
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) | None => {
                                 break;
                             }
-                        }
-                        maybe_msg = ws_stream.next() => {
-                            match maybe_msg {
-                                Some(Ok(Message::Text(txt))) => {
-                                    if txt.contains("subscribe_bin") {
-                                        // 延迟发送预期的 MsgPack 订阅通知帧
-                                        tokio::time::sleep(Duration::from_millis(200)).await;
-
-                                        #[derive(serde::Serialize)]
-                                        struct TickerBin {
-                                            event: String,
-                                            symbol: String,
-                                            price: u64,
-                                        }
-                                        let ticker = TickerBin {
-                                            event: "ticker".to_string(),
-                                            symbol: "ETH".to_string(),
-                                            price: 3200,
-                                        };
-                                        let bin = rmp_serde::to_vec_named(&ticker).unwrap();
-                                        let ticker_msg = Message::Binary(bin);
-                                        let _ = ws_stream.send(ticker_msg).await;
-                                    } else if txt.contains("subscribe") || txt.contains("log_price") {
-                                        // 延迟发送预期的订阅通知帧
-                                        tokio::time::sleep(Duration::from_millis(200)).await;
-                                        let ticker_msg = Message::Text(r#"{"event":"ticker","symbol":"BTC","price":62500}"#.to_string());
-                                        let _ = ws_stream.send(ticker_msg).await;
-                                    }
-                                }
-                                Some(Ok(Message::Close(_))) | None => {
-                                    break;
-                                }
-                                _ => {}
-                            }
+                            _ => {}
                         }
                     }
                 }
@@ -187,21 +187,21 @@ async fn start_ws_auth_mock_server() -> (String, tokio::task::JoinHandle<()>) {
             let mut auth_ok = false;
             let mut cookie_ok = false;
 
+            #[allow(clippy::result_large_err)]
             let callback = |req: &tokio_tungstenite::tungstenite::handshake::client::Request,
                             resp| {
-                if let Some(auth_val) = req.headers().get("authorization") {
-                    if auth_val.to_str().unwrap().contains("Bearer secret-key-123") {
-                        auth_ok = true;
-                    }
+                if let Some(auth_val) = req.headers().get("authorization")
+                    && auth_val.to_str().unwrap().contains("Bearer secret-key-123")
+                {
+                    auth_ok = true;
                 }
-                if let Some(cookie_val) = req.headers().get("cookie") {
-                    if cookie_val
+                if let Some(cookie_val) = req.headers().get("cookie")
+                    && cookie_val
                         .to_str()
                         .unwrap()
                         .contains("session_id=abc123xyz")
-                    {
-                        cookie_ok = true;
-                    }
+                {
+                    cookie_ok = true;
                 }
                 Ok(resp)
             };
@@ -384,10 +384,10 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
 
     // 服务端只接受连接，然后立刻物理断开（模拟断网物理断线而非发送优雅 Close 帧）
     let server_handle1 = tokio::spawn(async move {
-        if let Ok((stream, _)) = listener.accept().await {
-            if let Ok(ws_stream) = tokio_tungstenite::accept_async(stream).await {
-                drop(ws_stream);
-            }
+        if let Ok((stream, _)) = listener.accept().await
+            && let Ok(ws_stream) = tokio_tungstenite::accept_async(stream).await
+        {
+            drop(ws_stream);
         }
     });
 
@@ -422,15 +422,14 @@ async fn test_websocket_reconnect_and_flush_self_healing() {
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
 
     let _server_handle2 = tokio::spawn(async move {
-        if let Ok((stream, _)) = next_listener.accept().await {
-            if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
-                if let Some(Ok(Message::Text(txt))) = ws_stream.next().await {
-                    let _ = tx.send(txt);
-                    let _ = ws_stream
-                        .send(Message::Text("received_ok".to_string()))
-                        .await;
-                }
-            }
+        if let Ok((stream, _)) = next_listener.accept().await
+            && let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await
+            && let Some(Ok(Message::Text(txt))) = ws_stream.next().await
+        {
+            let _ = tx.send(txt);
+            let _ = ws_stream
+                .send(Message::Text("received_ok".to_string()))
+                .await;
         }
     });
 

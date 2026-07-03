@@ -374,11 +374,11 @@ impl TestExecutor {
                 .unwrap();
 
                 let mut diagnose_report = None;
-                if enable_diagnose || self.debug {
-                    if let Ok(report) = crate::http::diagnose_url(&url).await {
-                        diagnose_report = Some(report.clone());
-                        response_obj = response_obj.with_diagnose_report(report);
-                    }
+                if (enable_diagnose || self.debug)
+                    && let Ok(report) = crate::http::diagnose_url(&url).await
+                {
+                    diagnose_report = Some(report.clone());
+                    response_obj = response_obj.with_diagnose_report(report);
                 }
 
                 // 遍历调用中间件的 after_response 钩子
@@ -428,12 +428,11 @@ impl TestExecutor {
                 if self.debug_on_failure
                     && !test_result.success
                     && test_result.diagnose_report.is_none()
+                    && let Ok(report) = crate::http::diagnose_url(&url).await
                 {
-                    if let Ok(report) = crate::http::diagnose_url(&url).await {
-                        test_result.diagnose_report = Some(report.clone());
-                        if let Some(ref mut resp) = test_result.response {
-                            *resp = resp.clone().with_diagnose_report(report);
-                        }
+                    test_result.diagnose_report = Some(report.clone());
+                    if let Some(ref mut resp) = test_result.response {
+                        *resp = resp.clone().with_diagnose_report(report);
                     }
                 }
 
@@ -458,10 +457,8 @@ impl TestExecutor {
                 );
                 test_result.request = Some(request_snapshot);
                 let run_diagnose = enable_diagnose || self.debug || self.debug_on_failure;
-                if run_diagnose {
-                    if let Ok(report) = crate::http::diagnose_url(&url).await {
-                        test_result.diagnose_report = Some(report);
-                    }
+                if run_diagnose && let Ok(report) = crate::http::diagnose_url(&url).await {
+                    test_result.diagnose_report = Some(report);
                 }
                 let need_timing = self.debug || self.debug_on_failure;
                 test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(

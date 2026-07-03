@@ -241,18 +241,18 @@ mod tests {
 
         // 2. 派生一个服务端 Mock 协程
         tokio::spawn(async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                if let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await {
-                    // 读取客户端发来的第一条消息并回传
-                    if let Some(Ok(Message::Text(msg))) = ws_stream.next().await {
-                        let _ = ws_stream
-                            .send(Message::Text(format!("echo: {}", msg)))
-                            .await;
-                    }
-                    // 接收 Ping 帧并回复 Pong
-                    if let Some(Ok(Message::Ping(payload))) = ws_stream.next().await {
-                        let _ = ws_stream.send(Message::Pong(payload)).await;
-                    }
+            if let Ok((stream, _)) = listener.accept().await
+                && let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await
+            {
+                // 读取客户端发来的第一条消息并回传
+                if let Some(Ok(Message::Text(msg))) = ws_stream.next().await {
+                    let _ = ws_stream
+                        .send(Message::Text(format!("echo: {}", msg)))
+                        .await;
+                }
+                // 接收 Ping 帧并回复 Pong
+                if let Some(Ok(Message::Ping(payload))) = ws_stream.next().await {
+                    let _ = ws_stream.send(Message::Pong(payload)).await;
                 }
             }
         });

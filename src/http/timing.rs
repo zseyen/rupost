@@ -45,10 +45,9 @@ impl DiagnosticsProber {
         let dns_lookup = dns_start.elapsed();
 
         let addrs_vec: Vec<std::net::SocketAddr> = addrs_iter.collect();
-        let target_addr = addrs_vec
+        let target_addr = *addrs_vec
             .first()
-            .ok_or_else(|| "No IP addresses resolved".to_string())?
-            .clone();
+            .ok_or_else(|| "No IP addresses resolved".to_string())?;
 
         // 2. 测量 TCP 握手建立耗时 (带有超时限制)
         let tcp_start = Instant::now();
@@ -88,15 +87,13 @@ impl DiagnosticsProber {
         transfer: Duration,
         need_timing: bool,
     ) -> Option<RequestTiming> {
-        if need_timing {
-            if let Some((dns, tcp)) = probe_result {
-                return Some(RequestTiming {
-                    dns_lookup: dns,
-                    tcp_connect: tcp,
-                    ttfb,
-                    transfer,
-                });
-            }
+        if need_timing && let Some((dns, tcp)) = probe_result {
+            return Some(RequestTiming {
+                dns_lookup: dns,
+                tcp_connect: tcp,
+                ttfb,
+                transfer,
+            });
         }
         None
     }

@@ -42,6 +42,10 @@ impl BoundedFrameBuffer {
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
 }
 
 /// 逻辑会话代理层，对外暴露出与普通 WsClient 几乎一致的发送与订阅接口

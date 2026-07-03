@@ -232,10 +232,10 @@ use super::model::SnapshotSuite;
 
 /// 将 SnapshotSuite 写入到指定路径
 pub fn write_snapshot_suite<P: AsRef<Path>>(suite: &SnapshotSuite, path: P) -> Result<()> {
-    if let Some(parent) = path.as_ref().parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-        }
+    if let Some(parent) = path.as_ref().parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
     }
     let json = serde_json::to_string_pretty(suite)?;
     fs::write(path, json).map_err(RupostError::IoError)?;
@@ -259,19 +259,19 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     let mut entries = Vec::new();
     for (_, file_results) in batch_results {
         for r in file_results {
-            if let Some(req) = &r.request {
-                if let Some(resp) = &r.response {
-                    let entry = SnapshotEntry {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        request: req.clone(),
-                        response: ResponseSnapshot {
-                            status: resp.status.code(),
-                            headers: resp.headers.clone(),
-                            body: resp.body.clone(),
-                        },
-                    };
-                    entries.push(entry);
-                }
+            if let Some(req) = &r.request
+                && let Some(resp) = &r.response
+            {
+                let entry = SnapshotEntry {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    request: req.clone(),
+                    response: ResponseSnapshot {
+                        status: resp.status.code(),
+                        headers: resp.headers.clone(),
+                        body: resp.body.clone(),
+                    },
+                };
+                entries.push(entry);
             }
         }
     }
@@ -284,7 +284,6 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use crate::history::model::{RequestSnapshot, ResponseMeta};

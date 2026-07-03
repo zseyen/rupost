@@ -18,8 +18,7 @@ pub fn resolve_final_url(
     }
 
     // 2. 处理冒号 localhost 缩写
-    if raw_url.starts_with(':') {
-        let suffix = &raw_url[1..];
+    if let Some(suffix) = raw_url.strip_prefix(':') {
         let base = if is_cli {
             format!("{}://localhost", default_scheme)
         } else {

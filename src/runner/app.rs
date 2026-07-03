@@ -163,6 +163,6 @@ mod tests {
         let res = run_test_suite(options).await;
         assert!(res.is_ok());
         // 空路径应直接返回 false (没有发生失败)
-        assert_eq!(res.unwrap(), false);
+        assert!(!res.unwrap());
     }
 }

@@ -199,7 +199,8 @@ fn is_key_value_param(arg: &str) -> bool {
     }
     // 4. 域名:端口 格式 (如 example.com:8080)
     if let Some((host, port)) = arg.rsplit_once(':')
-        && !host.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+        && !host.is_empty()
+        && port.chars().all(|c| c.is_ascii_digit())
     {
         return false;
     }

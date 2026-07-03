@@ -276,6 +276,7 @@ mod hex {
 
 impl WsRunner {
     /// 执行单个 WsAction 动作
+    #[allow(clippy::too_many_arguments)]
     async fn execute_action(
         action: WsAction,
         action_idx: usize,
@@ -354,28 +355,28 @@ impl WsRunner {
                         maybe_frame = rx.recv() => {
                             match maybe_frame {
                                 Ok(frame) => {
-                                    if frame.direction == FrameDirection::Inbound {
-                                        if matcher.matches(&frame, decoder) {
-                                            let payload_str = if frame.frame_type == WsFrameType::Binary {
-                                                if let Some(ref dec) = decoder {
-                                                    match dec.decode(&frame.payload) {
-                                                        Ok(val) => val.to_string(),
-                                                        Err(e) => {
-                                                            warn!("Decoder failed during matching: {}. Falling back to hex.", e);
-                                                            format!("0x{}", hex::encode(&frame.payload))
-                                                        }
+                                    if frame.direction == FrameDirection::Inbound
+                                        && matcher.matches(&frame, decoder)
+                                    {
+                                        let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                            if let Some(dec) = decoder {
+                                                match dec.decode(&frame.payload) {
+                                                    Ok(val) => val.to_string(),
+                                                    Err(e) => {
+                                                        warn!("Decoder failed during matching: {}. Falling back to hex.", e);
+                                                        format!("0x{}", hex::encode(&frame.payload))
                                                     }
-                                                } else {
-                                                    format!("0x{}", hex::encode(&frame.payload))
                                                 }
                                             } else {
-                                                frame.payload_as_string()
-                                            };
+                                                format!("0x{}", hex::encode(&frame.payload))
+                                            }
+                                        } else {
+                                            frame.payload_as_string()
+                                        };
 
-                                            last_matching_payload = Some(payload_str);
-                                            matched = true;
-                                            break;
-                                        }
+                                        last_matching_payload = Some(payload_str);
+                                        matched = true;
+                                        break;
                                     }
                                 }
                                 Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {

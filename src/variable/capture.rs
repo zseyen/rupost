@@ -152,12 +152,11 @@ impl VariableCapture {
             }
         }
 
-        if !stream_captures.is_empty() {
-            if let Ok(captured_vars) =
+        if !stream_captures.is_empty()
+            && let Ok(captured_vars) =
                 capture_from_response(virtual_body, virtual_headers, &stream_captures)
-            {
-                context.extend(captured_vars);
-            }
+        {
+            context.extend(captured_vars);
         }
     }
 

@@ -99,15 +99,14 @@ impl ReplayExecutor {
     async fn replay_entry(&self, entry: &SnapshotEntry) -> Result<bool> {
         // 1. 地址覆写
         let mut target_url = entry.request.url.clone();
-        if let Some(target) = &self.target_url {
-            if let Ok(mut parsed_url) = url::Url::parse(&entry.request.url) {
-                if let Ok(parsed_target) = url::Url::parse(target) {
-                    parsed_url.set_scheme(parsed_target.scheme()).ok();
-                    parsed_url.set_host(parsed_target.host_str()).ok();
-                    parsed_url.set_port(parsed_target.port()).ok();
-                    target_url = parsed_url.to_string();
-                }
-            }
+        if let Some(target) = &self.target_url
+            && let Ok(mut parsed_url) = url::Url::parse(&entry.request.url)
+            && let Ok(parsed_target) = url::Url::parse(target)
+        {
+            parsed_url.set_scheme(parsed_target.scheme()).ok();
+            parsed_url.set_host(parsed_target.host_str()).ok();
+            parsed_url.set_port(parsed_target.port()).ok();
+            target_url = parsed_url.to_string();
         }
 
         // 2. 还原 Request

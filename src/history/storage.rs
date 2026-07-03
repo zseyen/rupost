@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use super::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
@@ -440,6 +441,9 @@ mod tests {
         let list = storage.list().unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "new-1");
-        assert_eq!(list[0].response.body.as_deref().unwrap(), "{\"hello\":\"world\"}");
+        assert_eq!(
+            list[0].response.body.as_deref().unwrap(),
+            "{\"hello\":\"world\"}"
+        );
     }
 }

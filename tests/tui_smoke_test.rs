@@ -1,7 +1,7 @@
+use rupost::http::Response;
+use rupost::parser::ParsedRequest;
 use rupost::tui::event::Action;
 use rupost::tui::state::{AppState, LayoutMode, Panel};
-use rupost::parser::ParsedRequest;
-use rupost::http::Response;
 use std::collections::HashMap;
 
 #[test]
@@ -53,7 +53,7 @@ fn test_state_transitions_via_actions() {
 
     // 测试 SendRequest 会触发 Loading
     let req = ParsedRequest::new(1);
-    state.update(Action::SendRequest(req));
+    state.update(Action::SendRequest(Box::new(req)));
     assert!(state.is_loading);
     assert!(state.current_request.is_some());
 
@@ -78,7 +78,8 @@ fn test_request_finished_variable_extension() {
         std::time::Duration::from_millis(150),
         std::time::Duration::from_millis(50),
         std::time::Duration::from_millis(100),
-    ).unwrap();
+    )
+    .unwrap();
 
     // 模拟后台返回 RequestFinished 消息
     state.handle_request_finished(Ok(response), captured_vars, Vec::new());
@@ -119,6 +120,6 @@ fn test_unsaved_changes_confirm_modal() {
     // 模拟确认放弃修改
     state.pending_action = Some(PendingAction::Quit);
     state.is_quitting = true;
-    
+
     assert!(state.is_quitting);
 }

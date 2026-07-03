@@ -11,7 +11,7 @@ pub enum TuiEvent {
     RequestStarted(Uuid),
     RequestFinished {
         id: Uuid,
-        result: Result<Response, String>,
+        result: Box<Result<Response, String>>,
         captured_vars: HashMap<String, String>,
         assertions: Vec<AssertionResult>,
     },
@@ -22,6 +22,6 @@ pub enum Action {
     Quit,
     ToggleHelp,
     SwitchPanel(super::state::Panel),
-    SendRequest(ParsedRequest),
+    SendRequest(Box<ParsedRequest>),
     UpdateQuickInput(String),
 }

@@ -1,9 +1,9 @@
+use super::event::Action;
 use crate::assertion::AssertionResult;
 use crate::http::Response;
 use crate::parser::ParsedRequest;
 use crate::variable::VariableContext;
 use std::collections::HashMap;
-use super::event::Action;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
@@ -33,7 +33,7 @@ pub struct AppState {
     pub layout_mode: LayoutMode,
     pub terminal_width: u16,
     pub terminal_height: u16,
-    
+
     // 数据模型
     pub file_tree: Vec<String>, // 扁平文件树列表数据
     pub selected_file_index: usize,
@@ -112,7 +112,7 @@ impl AppState {
                 self.active_panel = panel;
             }
             Action::SendRequest(req) => {
-                self.current_request = Some(req);
+                self.current_request = Some(*req);
                 self.is_loading = true;
             }
             Action::UpdateQuickInput(val) => {

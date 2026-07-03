@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use super::url::resolve_final_url;
 use crate::history::model::RequestSnapshot;
 use crate::http::{Client, Request, Response};

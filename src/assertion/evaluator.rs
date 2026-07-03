@@ -1,3 +1,4 @@
+#![allow(clippy::items_after_test_module)]
 use crate::assertion::extractor::extract_value;
 use crate::assertion::types::{AssertExpr, AssertionResult};
 use crate::http::Response;

@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use crate::Result;
 use crate::error::RupostError;
 use reqwest::header::HeaderMap;

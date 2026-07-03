@@ -88,7 +88,10 @@ impl From<HistoryEntry> for SnapshotEntry {
             response: ResponseSnapshot {
                 status: entry.response.status,
                 headers: entry.response.headers,
-                body: entry.response.body.unwrap_or_else(|| "Old snapshot: body not recorded".to_string()),
+                body: entry
+                    .response
+                    .body
+                    .unwrap_or_else(|| "Old snapshot: body not recorded".to_string()),
             },
         }
     }

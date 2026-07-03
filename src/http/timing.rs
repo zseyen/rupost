@@ -1,3 +1,4 @@
+#![allow(clippy::clone_on_copy, clippy::collapsible_if)]
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpStream, lookup_host};

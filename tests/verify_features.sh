@@ -51,9 +51,12 @@ echo -e "${BLUE}[*] 验证 rupost init 初始化模板功能...${NC}"
         exit 1
     fi
     
-    # 验证二次 init 不覆盖现有文件
+    # 验证二次 init 不覆盖现有文件并正确报错
     echo "test-flag" >> rupost.toml
-    $ABS_RUPOST_BIN init
+    if $ABS_RUPOST_BIN init 2>/dev/null; then
+         echo -e "${RED}[ERROR] init 命令在文件已存在时没有报错退出！${NC}"
+         exit 1
+    fi
     if ! grep -q "test-flag" "rupost.toml"; then
          echo -e "${RED}[ERROR] init 命令覆盖了已有的 rupost.toml 配置文件！${NC}"
          exit 1

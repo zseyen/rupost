@@ -1,6 +1,6 @@
+pub mod app;
 pub mod event;
 pub mod state;
-pub mod app;
 pub mod ui;
 
 /// TUI 模式入口点

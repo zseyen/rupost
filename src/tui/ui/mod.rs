@@ -1,15 +1,19 @@
+use super::state::{AppState, LayoutMode, Panel};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap},
-    Frame,
 };
-use super::state::{AppState, LayoutMode, Panel};
 
 /// 渲染 TUI 面板布局主入口
-pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &mut tui_textarea::TextArea<'static>) {
-    let size = frame.size();
+pub fn render(
+    frame: &mut Frame,
+    state: &mut AppState,
+    textarea: &mut tui_textarea::TextArea<'static>,
+) {
+    let size = frame.area();
 
     // 1. 终端超小防御机制
     if size.width < 40 || size.height < 10 {
@@ -55,8 +59,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &mut tui_textar
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),      // 顶部 Tab 栏
-                    Constraint::Min(0),         // 主要显示区域
+                    Constraint::Length(3), // 顶部 Tab 栏
+                    Constraint::Min(0),    // 主要显示区域
                 ])
                 .split(size);
 
@@ -67,13 +71,17 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &mut tui_textar
                 Panel::Editor => 1,
                 Panel::Response => 2,
             };
-            
+
             let tabs = Tabs::new(titles)
                 .block(Block::default().borders(Borders::BOTTOM))
                 .select(active_idx)
                 .style(Style::default().fg(Color::DarkGray))
-                .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-            
+                .highlight_style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                );
+
             frame.render_widget(tabs, chunks[0]);
 
             // 根据当前激活面板进行渲染
@@ -99,22 +107,24 @@ pub fn render(frame: &mut Frame, state: &mut AppState, textarea: &mut tui_textar
 fn render_files_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let focus = state.active_panel == Panel::Files;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
-    
+
     let block = Block::default()
         .title(" Files & History ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
-        
+
     let content = if state.file_tree.is_empty() {
-        Paragraph::new("No files found in workspace.")
-            .style(Style::default().fg(Color::DarkGray))
+        Paragraph::new("No files found in workspace.").style(Style::default().fg(Color::DarkGray))
     } else {
-        let lines: Vec<Line> = state.file_tree
+        let lines: Vec<Line> = state
+            .file_tree
             .iter()
             .enumerate()
             .map(|(idx, f)| {
                 let style = if idx == state.selected_file_index {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::REVERSED)
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::REVERSED)
                 } else {
                     Style::default()
                 };
@@ -123,14 +133,19 @@ fn render_files_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             .collect();
         Paragraph::new(lines)
     };
-    
+
     frame.render_widget(content.block(block), area);
 }
 
-fn render_editor_panel(frame: &mut Frame, area: Rect, state: &AppState, textarea: &mut tui_textarea::TextArea<'static>) {
+fn render_editor_panel(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    textarea: &mut tui_textarea::TextArea<'static>,
+) {
     let focus = state.active_panel == Panel::Editor;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
-    
+
     let title = if state.is_dirty {
         " Request Editor * "
     } else {
@@ -141,31 +156,40 @@ fn render_editor_panel(frame: &mut Frame, area: Rect, state: &AppState, textarea
         .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
-        
+
     textarea.set_block(block);
-    
+
     frame.render_widget(&*textarea, area);
 }
 
 fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let focus = state.active_panel == Panel::Response;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
-    
+
     let block = Block::default()
         .title(" Response Viewer ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
-        
+
     let text = if state.is_loading {
         Paragraph::new("Executing request, please wait...")
             .style(Style::default().fg(Color::Yellow))
     } else if let Some(ref resp) = state.last_response {
-        let status_color = if resp.is_success() { Color::Green } else { Color::Red };
-        
+        let status_color = if resp.is_success() {
+            Color::Green
+        } else {
+            Color::Red
+        };
+
         let mut lines = vec![
             Line::from(vec![
                 Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{} {}", resp.status.code(), resp.status.reason_phrase()), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{} {}", resp.status.code(), resp.status.reason_phrase()),
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("Time: ", Style::default().fg(Color::DarkGray)),
@@ -176,23 +200,28 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             Line::from(""),
             Line::from(Span::styled("Body:", Style::default().fg(Color::Yellow))),
         ];
-        
+
         for line in resp.body.lines() {
             lines.push(Line::from(line));
         }
-        
+
         Paragraph::new(lines).wrap(Wrap { trim: true })
     } else {
         Paragraph::new("No response data. Trigger execution via Ctrl+Enter.")
             .style(Style::default().fg(Color::DarkGray))
     };
-    
+
     frame.render_widget(text.block(block), area);
 }
 
 fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
     let help_text = vec![
-        Line::from(Span::styled(" RuPost TUI Shortcuts Reference ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow))),
+        Line::from(Span::styled(
+            " RuPost TUI Shortcuts Reference ",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Yellow),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Tab        ", Style::default().fg(Color::Cyan)),
@@ -222,7 +251,7 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
 
     let width = 50.min(screen_size.width - 4);
     let height = 12.min(screen_size.height - 2);
-    
+
     let area = Rect::new(
         (screen_size.width - width) / 2,
         (screen_size.height - height) / 2,
@@ -233,9 +262,9 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
-        
+
     let paragraph = Paragraph::new(help_text).block(block);
-    
+
     // 擦除底层界面，防止透字
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
@@ -244,22 +273,33 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
 fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
     let text = vec![
         Line::from(""),
-        Line::from(Span::styled(" WARNING: Unsaved Changes! ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red))),
+        Line::from(Span::styled(
+            " WARNING: Unsaved Changes! ",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+        )),
         Line::from(""),
         Line::from(" You have unsaved modifications in the editor."),
         Line::from(" Do you want to discard them and continue?"),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  [y] ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  [y] ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" Yes, discard changes"),
-            Span::styled("     [n/Esc] ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "     [n/Esc] ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" No, keep editing"),
         ]),
     ];
 
     let width = 50.min(screen_size.width - 4);
     let height = 10.min(screen_size.height - 2);
-    
+
     let area = Rect::new(
         (screen_size.width - width) / 2,
         (screen_size.height - height) / 2,
@@ -270,11 +310,11 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
-        
+
     let paragraph = Paragraph::new(text)
         .block(block)
         .alignment(ratatui::layout::Alignment::Center);
-    
+
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }

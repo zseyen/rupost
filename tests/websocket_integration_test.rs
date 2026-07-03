@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if, clippy::result_large_err)]
 use futures_util::{SinkExt, StreamExt};
 use rupost::parser::HttpFileParser;
 use rupost::runner::TestExecutor;

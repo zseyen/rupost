@@ -1,3 +1,8 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::needless_borrow,
+    clippy::too_many_arguments
+)]
 use reqwest::header::HeaderMap;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};

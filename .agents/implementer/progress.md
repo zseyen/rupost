@@ -1,10 +1,10 @@
 # Progress Status
 
-Last visited: 2026-07-03T13:37:54+08:00
+Last visited: 2026-07-03T13:45:00+08:00
 
 ## Current Status
-- [ ] Run `cargo check` to verify compilation and warning status [pending]
-- [ ] Run `cargo test` (including `cargo test --test tui_smoke_test`) [pending]
-- [ ] Run `./tests/verify_features.sh` integration/smoke script [pending]
-- [ ] Run `./examples/run_all.sh` regression/examples script [pending]
-- [ ] Write a brief handoff report [pending]
+- [x] Run `cargo check` to verify compilation and warning status [done]
+- [x] Run `cargo test` (including `cargo test --test tui_smoke_test`) [done]
+- [x] Run `./tests/verify_features.sh` integration/smoke script [done]
+- [x] Run `./examples/run_all.sh` regression/examples script [done]
+- [x] Write a brief handoff report [done]

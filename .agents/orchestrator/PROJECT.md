@@ -18,8 +18,8 @@
 |---|------|-------|-------------|--------|
 | 1 | Explore & Architecture | Research current codebase structure and check if any TUI code exits | none | DONE |
 | 2 | R3: History Compat | Ensure ResponseMeta and recorder support body option and backward compatibility | M1 | DONE |
-| 3 | R1: Adaptive Layout & Focus | Implement Wide/Narrow/Stacked layouts, Tab/Shift+Tab focus, terminal too small center warning | M2 | PLANNED |
-| 4 | R2: Request Run & Details | Asynchronous execution, loading state, show status/headers/body, response scroll | M3 | PLANNED |
+| 3 | R1: Adaptive Layout & Focus | Implement Wide/Narrow/Stacked layouts, Tab/Shift+Tab focus, terminal too small center warning | M2 | IN_PROGRESS |
+| 4 | R2: Request Run & Details | Asynchronous execution, loading state, show status/headers/body, response scroll | M3 | IN_PROGRESS |
 | 5 | R4: Unsaved Changes Alert | Track dirty state, show y/n modal popup on q or file change | M4 | PLANNED |
 | 6 | A1-A4: Verification | Run all tests (smoke tests, regressions) to verify code compilation and correctness | M5 | PLANNED |
 

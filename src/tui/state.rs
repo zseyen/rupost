@@ -51,6 +51,7 @@ pub struct AppState {
     pub show_unsaved_confirm: bool,
     pub pending_action: Option<PendingAction>,
     pub loaded_file_index: usize,
+    pub response_scroll: u16,
 }
 
 impl AppState {
@@ -76,6 +77,7 @@ impl AppState {
             show_unsaved_confirm: false,
             pending_action: None,
             loaded_file_index: 0,
+            response_scroll: 0,
         }
     }
 

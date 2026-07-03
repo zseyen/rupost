@@ -295,6 +295,21 @@ async fn run_async() -> Result<()> {
                             state.editor_text = textarea.lines().join("\n");
                         }
                     }
+
+                    // Response 面板操作
+                    if state.active_panel == super::state::Panel::Response && !state.show_help {
+                        match key.code {
+                            crossterm::event::KeyCode::Up
+                            | crossterm::event::KeyCode::Char('k') => {
+                                state.response_scroll = state.response_scroll.saturating_sub(1);
+                            }
+                            crossterm::event::KeyCode::Down
+                            | crossterm::event::KeyCode::Char('j') => {
+                                state.response_scroll = state.response_scroll.saturating_add(1);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 TuiEvent::Resize(w, h) => {
                     state.update_layout(w, h);

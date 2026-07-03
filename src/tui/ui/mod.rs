@@ -205,7 +205,16 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             lines.push(Line::from(line));
         }
 
-        Paragraph::new(lines).wrap(Wrap { trim: true })
+        let total_lines = lines.len();
+        let visible_height = area.height.saturating_sub(2) as usize;
+        let max_scroll = total_lines
+            .saturating_sub(visible_height)
+            .min(u16::MAX as usize) as u16;
+        let scroll_y = state.response_scroll.min(max_scroll);
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .scroll((scroll_y, 0))
     } else {
         Paragraph::new("No response data. Trigger execution via Ctrl+Enter.")
             .style(Style::default().fg(Color::DarkGray))

@@ -123,3 +123,15 @@ fn test_unsaved_changes_confirm_modal() {
 
     assert!(state.is_quitting);
 }
+
+#[test]
+fn test_response_scroll_initialization_and_mutation() {
+    let mut state = AppState::new();
+    assert_eq!(state.response_scroll, 0);
+
+    state.response_scroll = state.response_scroll.saturating_add(1);
+    assert_eq!(state.response_scroll, 1);
+
+    state.response_scroll = state.response_scroll.saturating_sub(1);
+    assert_eq!(state.response_scroll, 0);
+}

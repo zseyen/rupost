@@ -133,8 +133,54 @@ async fn run_async() -> Result<()> {
 
                     // Editor 面板操作
                     if state.active_panel == super::state::Panel::Editor && !state.show_help {
-                        // Ctrl+S 保存
-                        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && key.code == crossterm::event::KeyCode::Char('s') {
+                        // Ctrl+R 或 Ctrl+Enter 触发异步运行
+                        let is_run_key = (key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && key.code == crossterm::event::KeyCode::Char('r'))
+                            || (key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && key.code == crossterm::event::KeyCode::Enter);
+
+                        if is_run_key {
+                            if !state.is_loading {
+                                let content = textarea.lines().join("\n");
+                                if let Ok(parsed_file) = crate::parser::parse_content(&content) {
+                                    if !parsed_file.requests.is_empty() {
+                                        let req = parsed_file.requests[0].clone();
+                                        state.is_loading = true;
+
+                                        let mut var_context = state.variables.clone();
+                                        var_context.insert("__default_scheme", "http");
+
+                                        let executor = crate::runner::TestExecutor::with_ephemeral_cookies();
+                                        let source = state.editor_file_path.clone();
+                                        let tx_clone = event_tx.clone();
+                                        let req_id = uuid::Uuid::new_v4();
+
+                                        let _ = tx_clone.send(TuiEvent::RequestStarted(req_id)).await;
+
+                                        tokio::spawn(async move {
+                                            let test_res = executor.execute_one(req, 1, &mut var_context, source).await;
+                                            let captured_vars = var_context.variables().clone();
+
+                                            let result = if test_res.success {
+                                                if let Some(resp) = test_res.response {
+                                                    Ok(resp)
+                                                } else {
+                                                    Err("Request succeeded but no response returned".to_string())
+                                                }
+                                            } else {
+                                                Err(test_res.error.unwrap_or_else(|| "Unknown execution error".to_string()))
+                                            };
+
+                                            let _ = tx_clone.send(TuiEvent::RequestFinished {
+                                                id: req_id,
+                                                result,
+                                                captured_vars,
+                                                assertions: test_res.assertions,
+                                            }).await;
+                                        });
+                                    }
+                                }
+                            }
+                        } else if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && key.code == crossterm::event::KeyCode::Char('s') {
+                            // Ctrl+S 保存
                             if let Some(ref path) = state.editor_file_path {
                                 let text = textarea.lines().join("\n");
                                 if std::fs::write(path, text).is_ok() {
@@ -151,6 +197,9 @@ async fn run_async() -> Result<()> {
                 }
                 TuiEvent::Resize(w, h) => {
                     state.update_layout(w, h);
+                }
+                TuiEvent::RequestFinished { result, captured_vars, assertions, .. } => {
+                    state.handle_request_finished(result, captured_vars, assertions);
                 }
                 TuiEvent::Tick => {}
                 _ => {}

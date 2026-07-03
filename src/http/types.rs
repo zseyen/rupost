@@ -104,8 +104,8 @@ impl Url {
         let url = url::Url::parse(&normalized)?;
 
         let default_port = match url.scheme() {
-            "https" => 443,
-            "http" => 80,
+            "https" | "wss" => 443,
+            "http" | "ws" => 80,
             _ => 80,
         };
 

@@ -1,0 +1,20 @@
+### WebSocket 协议基本调试与测试示例
+# @name WebSocket Basic Demo
+# @websocket
+# @assert body.price > 60000
+# @assert body.symbol == "BTC"
+# @capture btc_price from body.price
+GET ws://127.0.0.1:8080/v1/market
+
+# 1. 订阅动作发送
+SEND { "action": "subscribe", "topic": "ticker.btc" }
+
+# 2. 阻塞式软匹配预期帧，最多等待 3 秒 (默认 5 秒)
+EXPECT { "event": "ticker", "symbol": "BTC" }
+@timeout = 3000
+
+# 3. 阻塞等待 500 毫秒后再进行下一步
+WAIT 500
+
+# 4. 主动优雅关闭 WebSocket 会话连接
+CLOSE

@@ -1,7 +1,7 @@
 # @base_path /v1/chat/completions
 # RuPost 大模型 (LLM) 云端 API 连接性与高级输出处理测试专用用例 (.http)
 #
-# 💡 运行方法：
+# 运行方法：
 # 1. 确保您的 `.env` 配置文件中配置了有效的云端大模型服务地址（如 DashScope 兼容接口，不能带 /v1 后缀）：
 #    BASE_URL=https://dashscope.aliyuncs.com/compatible-mode
 #    API_KEY=sk-your-real-key

@@ -11,6 +11,7 @@ pub mod runner;
 pub mod template;
 pub mod utils;
 pub mod variable;
+pub mod ws;
 
 // Re-export commonly used types
 pub use error::{Result, RupostError};

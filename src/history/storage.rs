@@ -228,6 +228,61 @@ pub fn get_storage() -> &'static HistoryStorage {
     STORAGE.get_or_init(HistoryStorage::new)
 }
 
+use super::model::SnapshotSuite;
+
+/// 将 SnapshotSuite 写入到指定路径
+pub fn write_snapshot_suite<P: AsRef<Path>>(suite: &SnapshotSuite, path: P) -> Result<()> {
+    if let Some(parent) = path.as_ref().parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
+    }
+    let json = serde_json::to_string_pretty(suite)?;
+    fs::write(path, json).map_err(RupostError::IoError)?;
+    Ok(())
+}
+
+/// 从指定路径读取 SnapshotSuite
+pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
+    let content = fs::read_to_string(path).map_err(RupostError::IoError)?;
+    let suite = serde_json::from_str(&content)?;
+    Ok(suite)
+}
+
+/// 从批处理测试结果中提取请求/响应快照并写入指定文件
+pub fn save_batch_snapshot<P: AsRef<Path>>(
+    batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
+    source_paths: &[String],
+    snapshot_path: P,
+) -> Result<()> {
+    use super::model::{ResponseSnapshot, SnapshotEntry, SnapshotSuite};
+    let mut entries = Vec::new();
+    for (_, file_results) in batch_results {
+        for r in file_results {
+            if let Some(req) = &r.request
+                && let Some(resp) = &r.response
+            {
+                let entry = SnapshotEntry {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    request: req.clone(),
+                    response: ResponseSnapshot {
+                        status: resp.status.code(),
+                        headers: resp.headers.clone(),
+                        body: resp.body.clone(),
+                    },
+                };
+                entries.push(entry);
+            }
+        }
+    }
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some(source_paths.join(", ")),
+        entries,
+    };
+    write_snapshot_suite(&suite, snapshot_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,5 +344,61 @@ mod tests {
         assert_eq!(tail.len(), 3);
         assert_eq!(tail[0].id, "7");
         assert_eq!(tail[2].id, "9");
+    }
+
+    #[test]
+    fn test_save_batch_snapshot_run() {
+        use crate::http::Response;
+        use crate::runner::types::TestResult;
+        use reqwest::header::HeaderMap;
+        use std::time::Duration;
+
+        let temp_dir = TempDir::new().unwrap();
+        let snapshot_file = temp_dir.path().join("snapshot.json");
+
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+
+        let req_snap = RequestSnapshot {
+            method: "POST".to_string(),
+            url: "http://example.com/test".to_string(),
+            headers: headers.clone(),
+            body: Some("{\"key\":\"value\"}".to_string()),
+        };
+
+        let response = Response::new(
+            201,
+            headers.clone(),
+            "{\"status\":\"ok\"}".to_string(),
+            Duration::from_millis(50),
+            Duration::from_millis(20),
+            Duration::from_millis(30),
+        )
+        .unwrap();
+
+        let mut test_result = TestResult::success(
+            1,
+            Some("test_req".to_string()),
+            "POST".to_string(),
+            "http://example.com/test".to_string(),
+            response,
+        );
+        test_result.request = Some(req_snap);
+
+        let batch_results = vec![(PathBuf::from("my_test.http"), vec![test_result])];
+
+        save_batch_snapshot(
+            &batch_results,
+            &["my_test.http".to_string()],
+            &snapshot_file,
+        )
+        .unwrap();
+
+        // 验证读取快照
+        let suite = read_snapshot_suite(&snapshot_file).unwrap();
+        assert_eq!(suite.entries.len(), 1);
+        assert_eq!(suite.entries[0].request.method, "POST");
+        assert_eq!(suite.entries[0].response.status, 201);
+        assert_eq!(suite.entries[0].response.body, "{\"status\":\"ok\"}");
     }
 }

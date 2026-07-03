@@ -107,8 +107,10 @@ impl TestReporter {
             println!();
         }
 
-        // 显示网络时序诊断
-        if let Some(ref timing) = result.timing {
+        // 显示网络时序与诊断报告
+        if let Some(ref report) = result.diagnose_report {
+            crate::http::print_diagnose_report(report);
+        } else if let Some(ref timing) = result.timing {
             self.print_timing(timing);
         }
     }
@@ -263,6 +265,7 @@ impl TestReporter {
                     "error": r.error,
                     "skipped": r.skipped,
                     "assertions": assertions_json,
+                    "diagnose_report": r.diagnose_report,
                 }));
             }
             json_list.push(serde_json::json!({

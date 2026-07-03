@@ -193,8 +193,17 @@ impl HttpFileParser {
         let mut http_lines = Vec::new();
         let mut current_line = start_line;
 
+        let mut passed_req_line = false;
+        let mut passed_empty_line = false;
+
         for line in block.lines() {
             let trimmed = line.trim();
+
+            if !passed_req_line && Self::is_valid_request_line(trimmed) {
+                passed_req_line = true;
+            } else if passed_req_line && !passed_empty_line && trimmed.is_empty() {
+                passed_empty_line = true;
+            }
 
             // 支持 `# @directive` 和 `// @directive` 风格的注释元数据（JetBrains/VS Code HTTP 标准写法）
             let directive_candidate = if let Some(stripped) = trimmed.strip_prefix("//") {
@@ -205,7 +214,9 @@ impl HttpFileParser {
                 trimmed
             };
 
-            let metadata = if directive_candidate.starts_with('@') {
+            let skip_metadata = passed_empty_line && request.metadata.websocket;
+
+            let metadata = if directive_candidate.starts_with('@') && !skip_metadata {
                 metadata::parse_metadata(directive_candidate)?
             } else {
                 None

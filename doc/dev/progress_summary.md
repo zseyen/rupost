@@ -13,6 +13,7 @@
 | **Stage 2** | 已完成 | 第一迭代 | HTTP 文件解析 |
 | **Stage 3** | 已完成 | MVP 达成 | 请求转换器 |
 | **Stage 4** | 已完成 | 测试自动化 | 批量执行引擎 |
+| **Refactor** | 已完成 | 2026-07-01 | `main.rs` 架构解耦与 Clean Architecture 重构 |
 
 ### 代码统计
 

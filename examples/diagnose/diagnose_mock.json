@@ -1,0 +1,31 @@
+[
+  {
+    "method": "GET",
+    "path": "/",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/plain"
+        },
+        "response_body": "Hello Diagnose"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/ws",
+    "variants": [
+      {
+        "condition": null,
+        "status": 101,
+        "headers": {
+          "Upgrade": "websocket",
+          "Connection": "Upgrade"
+        },
+        "response_body": ""
+      }
+    ]
+  }
+]

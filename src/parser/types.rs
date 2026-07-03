@@ -120,6 +120,15 @@ pub struct RequestMetadata {
 
     /// 请求重定向转发 URL（@forward_to，可选）
     pub forward_to: Option<String>,
+
+    /// 是否是 WebSocket 请求（@websocket）
+    pub websocket: bool,
+
+    /// WebSocket 二进制帧解码器（@decoder，可选）
+    pub decoder: Option<String>,
+
+    /// 是否开启网络诊断（@diagnose）
+    pub diagnose: bool,
 }
 
 /// 解析出的元数据指令（中间状态）
@@ -137,6 +146,9 @@ pub enum Metadata {
     StreamTo { path: String, append: bool },
     ForwardTo(String),
     BasePath(String),
+    Websocket(bool),
+    Decoder(String),
+    Diagnose(bool),
 }
 
 /// 整个文件的解析结果

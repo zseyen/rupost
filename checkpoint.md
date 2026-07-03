@@ -1,28 +1,28 @@
-# Checkpoint - 2026-06-25
+# Rupost 开发进度与状态 Checkpoint
 
-## 当前状态
+## 当前状态 (Current State)
 
-- **已完成大模型与通用 SSE 模板的规范化打磨**：
-  - 对 `templates/llm` 和 `templates/sse` 目录下的 Markdown 与 HTTP 模板进行了对称化与去表情符号的重构。
-  - 在通用 SSE 模板中，将不合理的大模型 `stream.llm.content` 断言修正为更为普适的通用 `stream.body.<path>` 断言（即断言 `stream.body.status` 字段），并配合 `# @sse_max_events 1` 限制器以防止后续不同事件帧到达时发生断言冲突。
-  - 补齐了 `template.http` 格式模板中缺失的 `@mock-default` 本地仿真场景，实现了完全等价的场景支持与对称设计。
-  - 给所有的测试用例块加上了 `# @test` 标记，使得运行 `rupost test` 时能够自动过滤并跳过无测试断言的 Mock 契约块。
-  - 在 `.env.example` 中移除了所有 emoji，细化了 `BASE_URL` 自适应拼接说明。
+1. **HTTP 请求/响应基础快照录制与原样重放 (MVP 闭环)**:
+   - **快照主动录制**：在 `rupost test` 命令中扩展了可选参数 `--save-snapshot <file>`，测试运行完毕后可一键将请求/响应数据序列化为结构化 JSON 快照文件。
+   - **原样重放与 Host 覆写**：新增了 `rupost replay <file> [--target <url>]` 命令，加载快照并发送实际网络请求，重放时支持通过 `--target` 参数自动将请求重写到指定的内网测试网关（协议/Host/Port 覆盖），对状态码进行自动化比对和终端高亮输出。
+   - **非侵入式架构**：重载 `TestResult` 增加 `request: Option<RequestSnapshot>` 数据流，并在 `execute_one` 中非侵入式地捕获源请求快照，完全保障了原本核心执行流和其它测试用例的高稳定性。
+   - **自动化集成测试**：编写了专有集成用例 [tests/snapshot_replay_test.rs](file:///Users/zsyzzx/project/rust/rupost/tests/snapshot_replay_test.rs)，基于本地 Wiremock 服务器测试全过程闭环并 100% 通过。
+   - **版本化提交 (JJ)**：已使用 `jj` 工具对当前所有代码修改进行安全提交，版本信息为：`feat: implement HTTP snapshot recording and replaying MVP`。
 
-- **成功通过了 init 脚手架命令的测试与闭环联调验证**：
-  - 通过 `rupost init llm` 和 `rupost init sse` 在独立沙盒目录生成了全部四套模板，文件格式干净、正确。
-  - 启动对应的本地 Mock 仿真服务，成功跑通了初始化模板的流式测试，断言通过率为 100%，skipped 过滤逻辑完美执行。
+2. **声明式网络诊断与断言拓展 (Declarative Diagnostics & Assertion Metrics)**:
+   - 全面支持通过添加 `# @diagnose` 注解触发网络诊断时延瀑布图和 X.509 证书深度分析。
+   - 支持对 `timing.ttfb/dns/tcp/tls` 和 `cert.days_remaining` 的直接声明式契约断言，支持 `rupost diagnose --report json` 结构化导出。
 
-- **静态校验与代码格式化**：
-  - 执行 `cargo fmt --all` 对全量代码文件进行了就地格式化，规范了格式。
-  - 针对 stable 编译兼容性折叠 collapsible_if 所引发的警告，在 `src/runner/executor.rs` 的自适应 URL 拼接中添加了 `#[allow(clippy::collapsible_if)]`。
-  - `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo test` 100% 通过。
+3. **Sprint 5: WebSocket 协议测试与调试**:
+   - 支持在 `.http` 或 `.md` 中以 `@websocket` 声明长连接，解析运行 `SEND` / `EXPECT` 等流式剧本动作，支持 MsgPack 二进制自适应解码和滑动内存历史帧环形缓冲区控制。
 
-- **JJ 代码版本化原子提交记录**：
-  - `refact: generalize templates and align http/md mock specs without emojis` (9c3ed68d)
-  - `style: run cargo fmt and allow clippy collapsible_if warning` (7f3549be)
+---
 
-## 下一步
+## 下一步工作规划 (Next Steps)
 
-- **进入下一阶段的高级特性开发**：
-  - 按照开发周期开展下一步 Sprint 工作。
+按照新制定的 [后续功能路线图 (Roadmap)](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-07-01-snapshot-replay-roadmap.md)，我们将推进以下扩展功能：
+
+- **敏感数据就地脱敏 (Secrets Masker)**：在快照落盘前，对 Authorization、Cookie 字段及 Body 敏感正则词执行就地掩码打码替换。
+- **智能 JSON Diff 引擎**：重构重放对比逻辑，对 JSON Body 默认解析并智能过滤掉如 `timestamp`、`request_id` 等易频繁抖动的动态字段，避免误报差异。
+- **超时与断网事故现场捕获**：网络完全不通时自动在快照中生成 `status = 599` 的虚拟响应，完整记录连接错误日志。
+- **事后从历史数据导出快照**：重构 `HistoryEntry` 携带 Body，并开发 `rupost history export --last <N>` 的补录导出。

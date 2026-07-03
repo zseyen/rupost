@@ -29,6 +29,9 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@stream_to" => parse_stream_to(content).map(Some),
         "@forward_to" => parse_forward_to(content).map(Some),
         "@base_path" => parse_base_path(content).map(Some),
+        "@websocket" => parse_websocket(content).map(Some),
+        "@decoder" => parse_decoder(content).map(Some),
+        "@diagnose" => parse_diagnose(content).map(Some),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -74,10 +77,28 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
             target.forward_to = Some(url.clone());
         }
         Metadata::BasePath(_) => {}
+        Metadata::Websocket(ws) => {
+            target.websocket = *ws;
+        }
+        Metadata::Decoder(decoder) => {
+            target.decoder = Some(decoder.clone());
+        }
+        Metadata::Diagnose(diagnose) => {
+            target.diagnose = *diagnose;
+        }
     }
 }
 
 // === 各个解析器实现 ===
+
+fn parse_diagnose(content: &str) -> ParseResult<Metadata> {
+    let value = if content.is_empty() {
+        true
+    } else {
+        content.parse::<bool>().unwrap_or(true)
+    };
+    Ok(Metadata::Diagnose(value))
+}
 
 fn parse_name(content: &str) -> ParseResult<Metadata> {
     Ok(Metadata::Name(content.to_string()))
@@ -196,9 +217,10 @@ fn parse_base_path(content: &str) -> ParseResult<Metadata> {
     Ok(Metadata::BasePath(content.to_string()))
 }
 
-/// 解析时间字符串（支持 "5s", "1000ms", "2m"）
+/// 解析时间字符串（支持 "5s", "1000ms", "2m" 以及带等号的 "= 3s", "= 100ms"）
 pub fn parse_duration(s: &str) -> ParseResult<Duration> {
     let s = s.trim();
+    let s = s.strip_prefix('=').unwrap_or(s).trim();
 
     if let Some(ms) = s.strip_suffix("ms") {
         let millis: u64 = ms.parse().map_err(|_| ParseError::InvalidMetadata {
@@ -226,6 +248,25 @@ pub fn parse_duration(s: &str) -> ParseResult<Duration> {
     }
 }
 
+fn parse_websocket(content: &str) -> ParseResult<Metadata> {
+    let value = if content.is_empty() {
+        true
+    } else {
+        content.parse::<bool>().unwrap_or(true)
+    };
+    Ok(Metadata::Websocket(value))
+}
+
+fn parse_decoder(content: &str) -> ParseResult<Metadata> {
+    if content.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: "@decoder value cannot be empty".to_string(),
+        });
+    }
+    Ok(Metadata::Decoder(content.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +290,14 @@ mod tests {
     fn test_parse_timeout() {
         let result = parse_metadata("@timeout 5s").unwrap().unwrap();
         assert!(matches!(result, Metadata::Timeout(d) if d == Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn test_parse_duration_with_equals() {
+        let d = parse_duration("= 3s").unwrap();
+        assert_eq!(d, Duration::from_secs(3));
+        let d = parse_duration("=100ms").unwrap();
+        assert_eq!(d, Duration::from_millis(100));
     }
 
     #[test]
@@ -333,8 +382,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_diagnose() {
+        let result = parse_metadata("@diagnose").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Diagnose(true)));
+
+        let result = parse_metadata("@diagnose false").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Diagnose(false)));
+
+        let mut target = RequestMetadata::default();
+        apply_metadata(&Metadata::Diagnose(true), &mut target);
+        assert!(target.diagnose);
+    }
+
+    #[test]
     fn test_parse_unrecognized() {
         let result = parse_metadata("@unknown directive").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_websocket_and_decoder() {
+        let result = parse_metadata("@websocket").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Websocket(true)));
+
+        let result = parse_metadata("@websocket false").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Websocket(false)));
+
+        let result = parse_metadata("@decoder messagepack").unwrap().unwrap();
+        assert!(matches!(result, Metadata::Decoder(ref s) if s == "messagepack"));
     }
 }

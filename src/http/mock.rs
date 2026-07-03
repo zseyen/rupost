@@ -14,11 +14,15 @@ impl MockLlmServer {
         Self { port }
     }
 
-    /// 启动本地模拟大模型 SSE 输出的服务端
-    pub async fn start(&self) -> Result<()> {
+    /// 启动本地模拟大模型 SSE 输出的服务端并返回绑定端口
+    pub async fn start(&self) -> Result<u16> {
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         let listener = TcpListener::bind(addr).await?;
-        info!("LLM Mock Server listening on http://{}", addr);
+        let bound_port = listener.local_addr()?.port();
+        info!(
+            "LLM Mock Server listening on http://127.0.0.1:{}",
+            bound_port
+        );
 
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
@@ -67,6 +71,6 @@ impl MockLlmServer {
                 });
             }
         });
-        Ok(())
+        Ok(bound_port)
     }
 }

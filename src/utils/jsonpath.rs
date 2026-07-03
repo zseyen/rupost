@@ -56,11 +56,13 @@ pub fn parse_jsonpath_to_segments(path: &str) -> Vec<String> {
 }
 
 impl JsonPathResolver {
-    /// 统一的值解析逻辑
-    pub fn resolve<'a>(val: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-        let segments = parse_jsonpath_to_segments(path);
+    /// 利用预编译的 segments 进行求值，避免重复解析开销
+    pub fn resolve_with_segments<'a>(
+        val: &'a serde_json::Value,
+        segments: &[String],
+    ) -> Option<&'a serde_json::Value> {
         let mut current = val;
-        for seg in &segments {
+        for seg in segments {
             if let (serde_json::Value::Array(arr), Ok(idx)) = (current, seg.parse::<usize>()) {
                 current = arr.get(idx)?;
                 continue;
@@ -68,6 +70,12 @@ impl JsonPathResolver {
             current = current.get(seg)?;
         }
         Some(current)
+    }
+
+    /// 统一的值解析逻辑
+    pub fn resolve<'a>(val: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+        let segments = parse_jsonpath_to_segments(path);
+        Self::resolve_with_segments(val, &segments)
     }
 }
 

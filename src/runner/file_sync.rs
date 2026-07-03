@@ -49,4 +49,20 @@ impl FileSyncWriter {
 
         Ok(())
     }
+
+    /// 从 SSE 帧事件数据中提取 LLM 文本碎片（delta）并写入本地文件
+    pub async fn write_sse_event(
+        &mut self,
+        event_data: &str,
+        llm_provider: crate::http::llm_adapter::LlmProvider,
+    ) -> Result<Option<String>> {
+        let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
+        if let Some(delta) = llm_adapter.extract_delta(llm_provider, event_data) {
+            self.write_delta(&delta, &format!("{:?}", llm_provider))
+                .await?;
+            Ok(Some(delta))
+        } else {
+            Ok(None)
+        }
+    }
 }

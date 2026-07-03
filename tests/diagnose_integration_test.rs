@@ -74,3 +74,31 @@ async fn test_diagnose_public_https_best_effort() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_diagnose_websocket_upgrade_success() {
+    // 1. 启动 Mock 服务端返回 101 WebSocket Upgrade 响应
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(101)
+                .insert_header("Upgrade", "websocket")
+                .insert_header("Connection", "Upgrade"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    // 2. 将 http 协议地址改写为 ws 协议地址，测试诊断
+    let ws_url = mock_server.uri().replace("http://", "ws://");
+    let result = diagnose_url(&ws_url).await;
+    assert!(result.is_ok(), "WS diagnostics should succeed");
+
+    let report = result.unwrap();
+    assert!(!report.is_https);
+    assert!(report.is_websocket);
+    assert_eq!(report.ws_upgrade_success, Some(true));
+    assert_eq!(report.http_status, Some(101));
+
+    // 打印报告确保不 panic
+    print_diagnose_report(&report);
+}

@@ -160,6 +160,14 @@ async fn run_async() -> Result<()> {
                         };
                         state.update(super::event::Action::SwitchPanel(next_panel));
                     }
+                    if key.code == crossterm::event::KeyCode::BackTab {
+                        let prev_panel = match state.active_panel {
+                            super::state::Panel::Response => super::state::Panel::Editor,
+                            super::state::Panel::Editor => super::state::Panel::Files,
+                            super::state::Panel::Files => super::state::Panel::Response,
+                        };
+                        state.update(super::event::Action::SwitchPanel(prev_panel));
+                    }
 
                     // Files 面板操作
                     if state.active_panel == super::state::Panel::Files && !state.show_help {
@@ -278,6 +286,7 @@ async fn run_async() -> Result<()> {
                                 }
                             }
                         } else if key.code != crossterm::event::KeyCode::Tab
+                            && key.code != crossterm::event::KeyCode::BackTab
                             && key.code != crossterm::event::KeyCode::Char('?')
                         {
                             // 其余非全局功能键则派发给 textarea

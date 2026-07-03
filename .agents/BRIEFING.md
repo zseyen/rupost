@@ -13,6 +13,8 @@ Coordinate and monitor the development of adaptive interactive terminal TUI mode
 - No technical decisions — relay only
 - Victory Audit is MANDATORY before reporting completion
 - Strictly follow the Clean Architecture rules from AGENTS.md
+- Use jj (Jujutsu) colocated git repo for atomic commits, ensuring tests pass at each step
+
 
 ## User Context
 - **Last user request**: Develop adaptive interactive terminal TUI mode for RuPost with non-blocking execution, unified history data management, and visual assertion results.

@@ -62,3 +62,8 @@ Integrity mode: demo
 - [ ] 运行 `tests/verify_features.sh` 冒烟集成测试脚本 100% 成功。
 - [ ] 运行 `examples/run_all.sh` 回归测试脚本 100% 成功，保证没有造成任何旧功能（如 WebSocket, SSE）的回退。
 - [ ] 完成后输出详细的变化分析与回归测试结果 Walkthrough 报告。
+
+## Follow-up — 2026-07-02T15:39:11Z
+
+亲爱的团队，我们已在项目工作区成功初始化了 jj 仓库（共存模式 `jj git init --colocate`）。请在接下来的 TUI MVP 和历史兼容功能开发中，务必使用 `jj` 开展分步代码 management 与原子提交（例如使用 `jj describe` 进行说明、利用 `jj new` 开启新工作修订），并且必须保证每一次分步提交均可通过全量编译和 `cargo test` 验证。
+

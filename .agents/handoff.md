@@ -5,6 +5,8 @@
   - Option 1: State-driven event loop decoupled architecture (recommended, aligned with Clean Architecture).
   - Option 2: Panel Trait router-dispatched multi-component architecture.
 - The Sentinel is waiting for the user to confirm the preferred option.
+- The parent agent instructed that `jj` (Jujutsu) in colocated mode must be used for step-by-step atomic commits, with all tests passing at each step. This constraint has been relayed to the orchestrator.
+
 
 ## Logic Chain
 - Forwarding the orchestrator's proposal to the user for confirmation.

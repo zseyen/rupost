@@ -27,6 +27,7 @@
    - `cargo fmt` 与 `cargo clippy -- -D warnings` 在最新依赖下全绿通过，消除了所有多版本 Widgets 冲突、manual prefixes 截断与 collapsible nested ifs 的警告。
    - 成功将 TUI 核心依赖升级至最新稳定版：`ratatui 0.30`、`crossterm 0.29` 与 `ratatui-textarea 0.9`，并彻底解决了两代 `ratatui` 特征不匹配分裂的难题。
    - 运行冒烟回归脚本 `tests/verify_features.sh` 与示例脚本 `examples/run_all.sh` 均成功通过，所有内置示例 **15/15 成功通过 (ALL PASS)**。
+   - 编写并提交了完整的 [TUI 使用与测试指南](file:///doc/tui/usage_and_testing.md)，同步更新了 [README.md](file:///README.md) 并补齐了技术架构分层总结。
 
 ---
 

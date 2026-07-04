@@ -1,221 +1,152 @@
-# RuPost TUI 技术结构与架构说明
+# RuPost TUI 技术结构与架构说明 (Technical Architecture)
 
-> **设计思想**：依据 Clean Architecture 原则进行规划。将“终端 UI 的绘制和外设交互”作为 Frameworks & Drivers 层，将“界面状态维护和事件响应”作为 Interface Adapters 层，确保核心业务实体与用例逻辑不向外发生依赖，从而构建一个健壮、高响应度、可测试的 TUI 系统。
+> **核心设计思想**：依据 **Clean Architecture (干净架构)** 原则进行系统分层，并结合 **MVU (Model-View-Update)** 单向数据流模式。将“终端 UI 的绘制和底层 Crossterm 外设交互”定位为 Frameworks & Drivers 层，将“界面状态维护和事件分发”作为 Interface Adapters 层，确保核心业务实体与测试执行用例的高内聚低耦合，构建高响应度、非阻塞的交互式命令行测试环境。
 
 ---
 
 ## 一、 架构分层设计 (Clean Architecture)
 
-Rupost TUI 将按照以下四个层级进行构建，层级依赖关系单向自外向内：
+Rupost TUI 的模块组织严格遵循以下分层结构，依赖关系单向自外向内依赖：
 
 ```
        ┌─────────────────────────────────────────────────────────┐
        │             Frameworks & Drivers                        │
-       │  (Ratatui, Crossterm Terminal, Tokio Async Task)        │
+       │  (Ratatui 0.30, Crossterm 0.29, Tokio Async Task)       │
        └──────────────────────────┬──────────────────────────────┘
                                   │ 驱动与渲染
                                   ▼
        ┌─────────────────────────────────────────────────────────┐
-       │             Interface Adapters                          │
-       │  (AppState, AppController/Update, View Renderers)       │
+       │             Interface Adapters (MVU)                    │
+       │  (AppState, TuiEvent, Action, UI Renderers)             │
        └──────────────────────────┬──────────────────────────────┘
                                   │ 映射与转换
                                   ▼
        ┌─────────────────────────────────────────────────────────┐
        │             Use Cases (Application Logic)               │
-       │  (RequestRunner, HistoryManager, ConfigLoader)           │
+       │  (TestExecutor, HistoryStorage, VariableResolver)       │
        └──────────────────────────┬──────────────────────────────┘
                                   │ 编排与调用
                                   ▼
        ┌─────────────────────────────────────────────────────────┐
        │             Entities (Core Domain)                      │
-       │  (ParsedRequest, Response, VariableContext)             │
+       │  (ParsedRequest, ResponseMeta, VariableContext)         │
        └─────────────────────────────────────────────────────────┘
 ```
 
 ### 1. Entities (核心实体层)
-* **位置**：位于底层的核心 Domain 实体，与 UI 框架毫无关系。
-* **主要对象**：
-  * `ParsedRequest`：解析后的 HTTP 请求，包括方法、URL、Headers、Body。
-  * `Response`：HTTP 响应体，包括状态码、Headers、响应时间、大小和 Body。
-  * `VariableContext`：变量上下文环境。
+* **职责**：定义核心的 API 测试逻辑实体。此层完全保持独立，不引入任何 TUI 或网络库的痕迹。
+* **核心结构**：
+  * [ParsedRequest](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/parser/mod.rs)：解析出的 HTTP 请求抽象实体。
+  * [ResponseMeta](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/history/model.rs)：包含状态码、Headers、以及**升级后支持 TUI 回显的 `Option<String>` 响应 Body**。
+  * `VariableContext`：动态变量上下文。
 
 ### 2. Use Cases (应用逻辑层)
-* **位置**：具体的应用用例，管理核心业务逻辑的数据流动。
-* **主要对象**：
-  * `TestExecutor`：请求执行器，负责异步发送请求、收集 Cookie、执行 Assert 校验。
-  * `HistoryStorage`：历史记录的持久化读写。
-  * `MarkdownFileParser` / `HttpFileParser`：解析本地请求描述文件。
+* **职责**：封装具体的运行用例逻辑，串联请求解析、执行和历史持久化。
+* **核心组件**：
+  * [TestExecutor](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/runner/executor.rs)：HTTP/HTTPS 请求的发送与断言校验执行器。
+  * [HistoryStorage](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/history/storage.rs)：负责将测试响应追加保存至 `.rupost/history.jsonl`，并支持向前兼容的反序列化填充。
 
 ### 3. Interface Adapters (接口适配层)
-这是 TUI 的核心控制与适配中枢。采用 **MVU (Model-View-Update)** 即 Elm 架构：
-* **Model (`AppState`)**：保存界面的数据状态（如哪个 Tab 被选中、光标的行列、响应面板是否折叠、正在加载的 loading 状态）。它将 Use Cases 层返回 of 业务数据适配为 UI 展示所需的格式。
-* **Update (`AppController::update`)**：纯函数或控制器逻辑。接收 UI 动作消息（`Msg` 或 `Action`），更新 `Model`，或者派发异步副作用（例如触发一个异步的 HTTP 发送用例）。
-* **View (`Renderer`)**：将 `Model` 数据渲染为 Ratatui 的具体 Widget 结构。
+* **职责**：TUI 的数据和状态转换核心。包含 [AppState](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/tui/state.rs) 以及由 `app.rs` 事件循环充当的控制器。
+* **数据流向**：
+  * 采用经典的 **Elm/MVU (Model-View-Update)** 架构模式。
+  * **Model (`AppState`)**：保存 TUI 当前的动态运行时状态，如激活面板、加载态、编辑器脏标记 `is_dirty` 等。
+  * **Update (`Action` / `TuiEvent`)**：按键输入或后台响应返回被包装成统一的 `TuiEvent` 并触发状态机转移。
+  * **View (`ui/mod.rs`)**：负责渲染自适应视口的 Widget 树。
 
 ### 4. Frameworks & Drivers (框架与驱动层)
-* **位置**：最外层，提供系统底层的具体实现。
-* **主要组件**：
-  * `ratatui::Terminal`：具体的绘制画布。
-  * `crossterm::event`：捕获底层的标准输入按键与鼠标事件。
-  * `tokio::task`：提供后台多线程运行的异步运行时，运行实际的 HTTP 发送网络 IO。
+* **职责**：最外层的技术基础架构与外设设备驱动。
+* **技术底座**：
+  * `ratatui` (0.30.2) + `crossterm` (0.29.0) + `ratatui-textarea` (0.9.2)。
+  * `tokio` 异步执行协程。
 
 ---
 
-## 二、 异步事件流与并发架构 (Concurrency Model)
+## 二、 异步事件回路与非阻塞并发架构
 
-TUI 是单线程串行渲染的，但 HTTP 请求和 AI 分析必须在多线程中异步运行。为防止主线程卡顿，我们采用基于 **Tokio MPSC Channel** 的异步事件回路设计。
+TUI 系统是**单线程串行渲染**的，但 HTTP 发送和文件读取属于 IO 密集型操作。为实现高响应度且不阻塞 UI 渲染，Rupost TUI 基于 **Tokio MPSC Channel** 实现了完全解耦的并发调度架构：
 
 ```
                        ┌──────────────────────┐
-                       │  crossterm-event     │ (按键、尺寸缩放事件)
+                       │   crossterm::event   │ (底层按键与 Resize 事件监听)
                        │  (后台 Event 线程)    │
                        └──────────┬───────────┘
-                                  │ send(TuiEvent::Key)
+                                  │ send(TuiEvent::Input / Resize)
                                   ▼
-┌──────────────────┐   TuiEvent   ┌───────────┐  Action   ┌──────────────────┐
-│                  ├─────────────>│           ├──────────>│                  │
-│   Tokio Runtime  │              │   MPSC    │           │    TUI App       │
-│   (Background)   │<─────────────┤  Channel  │           │  (Main Loop)     │
-│                  │  spawn task  │           │           │                  │
-└──────────────────┘              └───────────┘           └────────┬─────────┘
-  (执行 HTTP 请求/AI)                                               │
-                                                                   ▼
-                                                          terminal.draw() 渲染
+ ┌──────────────────┐   TuiEvent   ┌───────────┐  Action   ┌──────────────────┐
+ │                  ├─────────────>│           ├──────────>│                  │
+ │   Tokio Runtime  │              │   MPSC    │           │     Tui App      │
+ │   (Background)   │<─────────────┤  Receiver │           │   (Main Loop)    │
+ │                  │  spawn task  │           │           │                  │
+ └──────────────────┘              └───────────┘           └────────┬─────────┘
+   (非阻塞执行请求)                                                 │
+                                                                    ▼
+                                                           terminal.draw() 渲染
 ```
 
-### 1. 事件通信管道 (`EventStream`)
-在 TUI 启动时，创建一个 MPSC 通道：
+### 1. 核心事件循环与异步触发
+当在编辑器内触发运行请求（如 `Ctrl+R`）时，更新控制流：
+1. 主线程在 `AppState` 中标记请求为加载态（`loading = true`），UI 此时保持高频（60fps）心跳渲染 Loading 效果。
+2. 调度控制层使用 `tokio::spawn` 启动独立后台协程，执行异步网络请求并等待返回。
+3. 后台请求完成后，向 `mpsc::Sender<TuiEvent>` 投递 `TuiEvent::RequestFinished` 消息。
+4. 主线程 Event Loop 监听到该事件后，更新 `AppState::response`，将响应回显在界面上，并将 Loading 标记置为 `false`。
+
+### 2. 状态克隆与变量继承 (Variables Cloning & Relay)
+为保证链式请求在 TUI 模式中能够顺畅执行，在后台请求接收并触发 `RequestFinished` 时，UI 主循环会自动把响应解析的提取值（如捕获的登录 Token）以非阻塞的方式继承合并到全局的变量列表中：
 ```rust
-pub enum TuiEvent {
-    Input(crossterm::event::KeyEvent), // 用户输入
-    Tick,                              // 定时心跳（用于动画、光标闪烁）
-    Resize(u16, u16),                  // 终端窗口缩放
-    RequestStarted(Uuid),              // 异步请求开始
-    RequestFinished(Uuid, Result<Response, String>), // 异步请求结束
-    AiStreamChunk(String),             // AI 流式分析数据块
-}
-```
-
-### 2. 状态机回路设计
-主循环是一个典型的 Event Loop：
-
-```rust
-// src/tui/app.rs
-pub async fn run_loop<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    mut app_state: AppState,
-    mut event_rx: mpsc::Receiver<TuiEvent>,
-    event_tx: mpsc::Sender<TuiEvent>,
-) -> Result<()> {
-    loop {
-        // 1. 渲染当前状态
-        terminal.draw(|f| {
-            ui::render(f, &mut app_state);
-        })?;
-
-        // 2. 阻塞式接收下一个事件
-        if let Some(event) = event_rx.recv().await {
-            match event {
-                TuiEvent::Input(key) => {
-                    // 处理用户键盘输入
-                    if let Some(action) = handle_key_event(key, &app_state) {
-                        match action {
-                            Action::Quit => break,
-                            Action::SendRequest(req) => {
-                                // 触发后台异步任务
-                                let tx = event_tx.clone();
-                                tokio::spawn(async move {
-                                    tx.send(TuiEvent::RequestStarted(req.id)).await.ok();
-                                    let result = execute_http_request(req).await;
-                                    tx.send(TuiEvent::RequestFinished(req.id, result)).await.ok();
-                                });
-                            }
-                            // 其他 Action 同步更新 Model
-                            other => app_state.update(other),
-                        }
-                    }
-                }
-                TuiEvent::RequestStarted(id) => {
-                    app_state.set_loading(id, true);
-                }
-                TuiEvent::RequestFinished(id, result) => {
-                    app_state.set_loading(id, false);
-                    match result {
-                        Ok(resp) => app_state.handle_response_success(resp),
-                        Err(err) => app_state.handle_response_failure(err),
-                    }
-                }
-                TuiEvent::Resize(w, h) => {
-                    // 自适应布局计算：根据新的终端高宽，动态选择 Wide/Narrow 视图排版
-                    app_state.update_layout(w, h);
-                }
-                TuiEvent::Tick => {
-                    app_state.on_tick();
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(())
+// 当收到 RequestFinished 消息时
+if let Some(resp) = &response_meta {
+    // 自动克隆当前环境变量，并根据当前响应中声明的 captures 捕获新变量
+    state.variables.extend(new_captured_variables);
 }
 ```
 
 ---
 
-## 三、 模块关系与依赖拓扑
+## 三、 当前开发进度与实现状态 (Milestone Progress)
 
-为了体现高内聚低耦合的特质，`src/tui` 的模块之间依赖关系单向推进：
+截至目前，Rupost TUI 的 MVP 核心功能已完整实现并全部交付：
 
-```
-       ┌────────────────────────┐
-       │        terminal        │ (入口驱动：控制原始模式启动、清理)
-       └───────────┬────────────┘
-                   │ 启动
-                   ▼
-       ┌────────────────────────┐
-       │          app           │ (事件循环调度、协调 State 和 UI)
-       └─────┬────────────┬─────┘
-             │            │
-             │ 更新状态    │ 渲染
-             ▼            ▼
-       ┌───────────┐┌───────────┐
-       │   state   ││    ui     │ (自适应布局与具体面板渲染组件)
-       └─────┬─────┘└─────┬─────┘
-             │            │
-             ▼            │
-       ┌───────────┐      │
-       │   event   │<─────┘ (键绑定、组件级输入拦截器)
-       └───────────┘
-```
+### 1. R1. 自适应视口排版与焦点轮转 (Adaptive Layout)
+- **多端响应式布局**：基于屏幕宽度与高度的自适应检测：
+  - **宽屏模式 (width >= 120)**：同屏并排渲染 Files (文件列表)、Editor (编辑器)、Response (响应查看) 三栏面板。
+  - **窄屏模式 (80 <= width < 120)**：双栏并排渲染 Editor 和 Response，Files 默认隐藏（可通过快捷键操作）。
+  - **堆叠模式 (width < 80)**：单栏全屏渲染，顶部通过 Tab 页签切换，最大化利用小屏显示面积。
+- **循环焦点控制**：支持通过 `Tab`（正向）与 `Shift+Tab`（反向）在三栏/双栏视图面板间循环轮换输入焦点。非焦点面板以 `DarkGray` 描边，当前获得焦点的活动面板外框亮显为 `Cyan` 提示。
+- **极小屏幕防御**：当视口极小 (width < 40 或 height < 10) 时，强行中断布局，并全屏居中回显 `Terminal too small.`，有效防止了 Constraints 算力溢出引起的 Panic。
 
-### 1. `state/` 模块：无副作用的纯状态模型
-负责管理所有的内部变量：
-* `app_state.rs`：全局状态（当前焦点面板、浮层弹窗状态）。
-* `request_state.rs`：请求编辑器内的文本缓存。
-* `response_state.rs`：响应数据的滚动偏移、折叠展开树。
-* `ui_state.rs`：当前终端的大小模式（Wide、Narrow、Stacked）。
+### 2. R2. 非阻塞网络执行与可滚动响应 (Async Run & Response Details)
+- **非阻塞后台执行**：通过在内联编辑器中捕获 `Ctrl+R` 和 `Ctrl+Enter` 快捷键，异步调用 `TestExecutor`。
+- **完整回显渲染**：Response 面板不仅以绿色/红色标示状态码，还完整输出耗时毫秒数、字节大小、HTTP 版本、Headers，以及美化的 JSON/文本 Response Body。
+- **响应体垂直滚动**：为 Response 界面绑定了 `j/k` 键和方向键事件，允许用户在界面焦点选中 Response 栏时直接滚动浏览较长的 Response Body。
 
-### 2. `ui/` 模块：自适应布局引擎 (Adaptive Layout Engine)
-基于 `Wide`、`Narrow`、`Stacked` 三种状态渲染不同的 Widget 树：
-* **Wide (宽屏, width >= 120)**：划分 3 个 Rect 横向并列。
-  `Layout::default().direction(Direction::Horizontal).constraints([Constraint::Percentage(25), Constraint::Percentage(40), Constraint::Percentage(35)])`
-* **Narrow (窄屏, 80 <= width < 120)**：双栏布局。左侧请求，右侧响应。文件树隐藏，需通过快捷键 `Ctrl+F` 呼出浮窗。
-* **Stacked (堆叠/超窄屏, width < 80)**：单栏布局。通过 Tab 键或快捷键切换主视图为 [Request]、[Response] 或 [FileTree]。
+### 3. R3. 统一向前兼容的历史数据存取 (History Backward Compatibility)
+- **数据源统一**：底层将 `ResponseMeta` 的 JSON 存储模型统一，加入了可选的 `body: Option<String>`，并在保存历史记录时将 body 克隆追加至 `.rupost/history.jsonl` 中。
+- **向前兼容防崩**：若读取由老旧版本 Rupost 生成的、没有 `body` 字段的历史记录，反序列化器会自动将其置为 `None`，不发生任何解析 Panic，提供安全平滑的向下兼容。
 
-### 3. `event/` 模块：按键拦截映射
-* 分级拦截：如果弹出了 Help 浮窗或 Quick Input，输入事件将被拦截在浮窗的 Input widget 中，其余快捷键失效。
-* 当处于 Normal 模式，事件映射为 `Action` 后分发给控制器；处于 Edit 模式时，按键输入被送进 inline-editor 转换为字符插入事件。
+### 4. R4. 未保存脏修改弹框强拦截 (Unsaved Changes Alert Modal)
+- **变脏机制检测**：在 Request 文本区有修改且未执行 `Ctrl+S` 时，将 `is_dirty` 置为真。
+- **防丢拦截弹窗**：在变脏状态下按 `q` 退出或切换 File 树列表时，自动触发前置悬浮确认弹窗（Modal Clear），告知 `WARNING: Unsaved changes!`。此时事件系统阻塞其余按键输入，仅当用户输入 `y` 确认放弃修改，或输入 `n/Esc` 撤回并退回编辑状态。
 
 ---
 
-## 四、 针对 Clean Architecture TUI 的测试路线
+## 四、 关键技术选型与升级演进
 
-结合此技术结构，后续的测试开发流程应严格闭环：
+为保持终端界面的高品质和开发的高标准，我们彻底重构并对齐了以下核心技术栈依赖：
 
-1. **State 状态机逻辑测试 (100% 单元测试覆盖)**：
-   在没有 Crossterm 真实参与的纯内存测试中，验证 `app_state.update(Action)` 产生的状态跃迁是否完全符合业务预期。
-2. **UI 自适应布局边界值测试**：
-   通过 `TestBackend` 设置极限尺寸（如 `80x24` , `120x30` , `10x10` 崩溃级尺寸），验证 UI 组件渲染时是否会 Panic（通常由于 Constraint 参数计算为负数或超限引起）。
-3. **异步请求生命周期的断言测试**：
-   在后台模拟发出 `RequestStarted` 事件，此时 UI 应转为 Loading 动画；接着模拟发出 `RequestFinished` 事件，Loading 动画应立即被 Response 数据板替代。整个异步流都在 `TestBackend` 的周期内模拟并测试。
+* **`ratatui` (v0.30.2)**：全新引入的跨平台 TUI 画布。在 v0.30 中，我们全面弃用了过时的 `Frame::size`，替换为全新的 `Frame::area`。
+* **`crossterm` (v0.29.0)**：负责高稳定性的多终端键盘与鼠标原始事件捕获。
+* **`ratatui-textarea` (v0.9.2)**：无缝接替了原有的 `tui-textarea 0.7`（原版由于锁死 `ratatui 0.29`，与主工程新版 `ratatui 0.30` 发生了特征不匹配分裂）。完美提供带有拼写占位提示的多行内联编辑器功能。
+
+---
+
+## 五、 测试保障体系 (Multi-Tiered Testing Strategy)
+
+为确保项目的高可靠性，我们建立了从单元测试到端到端集成的回归防御网：
+
+1. **状态机逻辑验证 (TUI Smoke Tests)**：
+   - 包含 [tui_smoke_test.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/tests/tui_smoke_test.rs)，用于模拟终端初始化、自适应高宽计算、脏修改拦截等纯内存状态转换。
+2. **端到端集成验证 (verify_features.sh)**：
+   - 全自动化测试 mock 变体拦截、网络高亮诊断 (diagnose)、变量依赖的并行 DAG 并行计算和模板初始化的防护逻辑。
+3. **回归用例演示 (run_all.sh)**：
+   - 运行 examples 里共计 **15 类用例集**，涵盖 WebSocket 握手、SSE 数据流落盘、Token 并行级联测试，最终结果为 **15/15 ALL PASS (全数跑通)**。

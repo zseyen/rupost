@@ -234,14 +234,32 @@ async fn run_async() -> Result<()> {
                                         let mut var_context = state.variables.clone();
                                         var_context.insert("__default_scheme", "http");
 
+                                        let (stream_tx, mut stream_rx) =
+                                            tokio::sync::mpsc::unbounded_channel();
+
                                         let executor =
-                                            crate::runner::TestExecutor::with_ephemeral_cookies();
+                                            crate::runner::TestExecutor::with_ephemeral_cookies()
+                                                .with_stream_sender(stream_tx);
                                         let source = state.editor_file_path.clone();
                                         let tx_clone = event_tx.clone();
                                         let req_id = uuid::Uuid::new_v4();
 
                                         let _ =
                                             tx_clone.send(TuiEvent::RequestStarted(req_id)).await;
+
+                                        let s_tx = event_tx.clone();
+                                        tokio::spawn(async move {
+                                            while let Some(event) = stream_rx.recv().await {
+                                                match event {
+                                                    crate::runner::types::StreamEvent::SseChunk(chunk) => {
+                                                        let _ = s_tx.send(TuiEvent::StreamChunk { id: req_id, chunk }).await;
+                                                    }
+                                                    crate::runner::types::StreamEvent::WsFrame { is_send, content } => {
+                                                        let _ = s_tx.send(TuiEvent::WsFrame { id: req_id, is_send, content }).await;
+                                                    }
+                                                }
+                                            }
+                                        });
 
                                         tokio::spawn(async move {
                                             let test_res = executor
@@ -321,6 +339,14 @@ async fn run_async() -> Result<()> {
                     ..
                 } => {
                     state.handle_request_finished(*result, captured_vars, assertions);
+                }
+                TuiEvent::StreamChunk { chunk, .. } => {
+                    state.handle_stream_chunk(chunk);
+                }
+                TuiEvent::WsFrame {
+                    is_send, content, ..
+                } => {
+                    state.handle_ws_frame(is_send, content);
                 }
                 TuiEvent::Tick => {}
                 _ => {}

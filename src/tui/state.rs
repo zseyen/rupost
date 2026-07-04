@@ -26,6 +26,13 @@ pub enum PendingAction {
 }
 
 #[derive(Debug, Clone)]
+pub struct WsFrameRecord {
+    pub is_send: bool,
+    pub timestamp: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct AppState {
     pub active_panel: Panel,
     pub is_loading: bool,
@@ -52,6 +59,10 @@ pub struct AppState {
     pub pending_action: Option<PendingAction>,
     pub loaded_file_index: usize,
     pub response_scroll: u16,
+
+    // 长连接缓冲状态
+    pub sse_stream_body: String,
+    pub ws_frames: Vec<WsFrameRecord>,
 }
 
 impl AppState {
@@ -78,6 +89,8 @@ impl AppState {
             pending_action: None,
             loaded_file_index: 0,
             response_scroll: 0,
+            sse_stream_body: String::new(),
+            ws_frames: Vec::new(),
         }
     }
 
@@ -116,10 +129,35 @@ impl AppState {
             Action::SendRequest(req) => {
                 self.current_request = Some(*req);
                 self.is_loading = true;
+                self.sse_stream_body.clear();
+                self.ws_frames.clear();
+                self.response_scroll = 0;
             }
             Action::UpdateQuickInput(val) => {
                 self.quick_input = Some(val);
             }
+        }
+    }
+
+    pub fn handle_stream_chunk(&mut self, chunk: String) {
+        self.sse_stream_body.push_str(&chunk);
+        if self.active_panel == Panel::Response {
+            self.response_scroll = 9999;
+        }
+    }
+
+    pub fn handle_ws_frame(&mut self, is_send: bool, content: String) {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.ws_frames.push(WsFrameRecord {
+            is_send,
+            timestamp: now,
+            content,
+        });
+        if self.ws_frames.len() > 100 {
+            self.ws_frames.remove(0);
+        }
+        if self.active_panel == Panel::Response {
+            self.response_scroll = 9999;
         }
     }
 

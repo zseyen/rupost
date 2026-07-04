@@ -67,3 +67,30 @@ Integrity mode: demo
 
 亲爱的团队，我们已在项目工作区成功初始化了 jj 仓库（共存模式 `jj git init --colocate`）。请在接下来的 TUI MVP 和历史兼容功能开发中，务必使用 `jj` 开展分步代码 management 与原子提交（例如使用 `jj describe` 进行说明、利用 `jj new` 开启新工作修订），并且必须保证每一次分步提交均可通过全量编译和 `cargo test` 验证。
 
+
+## Follow-up — 2026-07-05T09:03:47Z
+
+对 RuPost 的长连接（SSE 和 WebSocket）默认自动落盘、5MB 日志上限与时间周期清理，以及前台 TUI 模式下基于本地日志文件的“滑动窗口/瀑布流视口”加载与查看机制进行技术合理性评估，并调研分析其它类似工具（如 HTTPie, Bruno, curl, wscat, websocat）的实现机制。
+
+Working directory: /Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec
+Integrity mode: development
+
+## Requirements
+
+### R1. 竞品技术机制调研 (Competitor Mechanism Research)
+- 调研主流 API 客户端（如 Bruno、HTTPie、websocat 等）在处理大规模、长时间 WebSocket 收发帧和 SSE 推送流时的持久化方案与终端/UI 交互展示限制。
+- 分析它们如何平衡“界面内存防卡顿”和“完整历史数据可追溯”这两个核心矛盾。
+
+### R2. 提案方案合理性与可行性评估 (Proposed Architecture Review)
+- 对 [implementation_plan.md](file:///Users/zsyzzx/.gemini/antigravity/brain/9ea58095-3a37-4fe7-b92a-044336f4cafe/implementation_plan.md) 中规划的“默认自动落盘”、“5MB 日志硬截断限额”、“7 天自动扫描清理”以及“TUI 滑动视口按需读取”的设计方案进行深度可行性与性能瓶颈评估。
+- 分析在 TUI 模式下高频从本地日志文件 `seek` 和读取数据是否会造成潜在的文件 I/O 抢占、磁盘卡顿或乱序，并提出优化（如引入环形缓冲区/双向队列内存快照防抖缓存）的落地方案。
+
+### R3. 提供具体的长连接历史查看交互原型设计 (History Viewing Interaction Design)
+- 结合新拟定的 `rupost history show <target>` 交互命令，设计其具体的输入参数逻辑及针对 WebSocket 多帧的格式化终端美化渲染样式提案，确保小白用户也能顺畅操作。
+
+## Acceptance Criteria
+
+### 分析与报告交付 (Review Report Delivery)
+- [ ] 输出一份完整的技术合理性评估与竞品调研报告（保存至 artifacts 目录下的 `technical_evaluation_report.md`）。
+- [ ] 针对 TUI 的滑动视口加载算法给出伪代码或架构流程图（Mermaid）。
+- [ ] 提出至少 2 点针对文件 I/O 频繁读取的防御性缓存优化策略。

@@ -135,3 +135,112 @@ fn test_response_scroll_initialization_and_mutation() {
     state.response_scroll = state.response_scroll.saturating_sub(1);
     assert_eq!(state.response_scroll, 0);
 }
+
+#[test]
+fn test_sse_stream_chunk_append() {
+    let mut state = AppState::new();
+    assert!(state.sse_stream_body.is_empty());
+
+    // 模拟追加 SSE 数据块
+    state.handle_stream_chunk("event: message\ndata: Hello".to_string());
+    assert_eq!(state.sse_stream_body, "event: message\ndata: Hello");
+
+    state.handle_stream_chunk("\ninfo: end".to_string());
+    assert_eq!(
+        state.sse_stream_body,
+        "event: message\ndata: Hello\ninfo: end"
+    );
+}
+
+#[test]
+fn test_ws_frame_list_records() {
+    let mut state = AppState::new();
+    assert!(state.ws_frames.is_empty());
+
+    // 模拟接收和发送帧
+    state.handle_ws_frame(true, "PING".to_string());
+    state.handle_ws_frame(false, "PONG".to_string());
+
+    assert_eq!(state.ws_frames.len(), 2);
+    assert!(state.ws_frames[0].is_send);
+    assert_eq!(state.ws_frames[0].content, "PING");
+    assert!(!state.ws_frames[1].is_send);
+    assert_eq!(state.ws_frames[1].content, "PONG");
+
+    // 验证环形缓冲区防溢出保护 (最新 100 帧)
+    for i in 0..110 {
+        state.handle_ws_frame(true, format!("Frame {}", i));
+    }
+    assert_eq!(state.ws_frames.len(), 100);
+    assert_eq!(state.ws_frames[99].content, "Frame 109");
+    assert_eq!(state.ws_frames[0].content, "Frame 10"); // 0-9 应该已经被排挤出队
+}
+
+#[test]
+fn test_sliding_window_viewport_loading() {
+    use std::io::Write;
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("ws_test.log");
+    
+    // 写入 1000 行虚拟 WebSocket 帧记录
+    {
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        for i in 0..1000 {
+            writeln!(file, "[→] 12:00:00 | Frame {}", i).unwrap();
+        }
+    }
+
+    let mut state = AppState::new();
+    state.log_file_path = Some(file_path.clone());
+    state.total_log_lines = 1000;
+
+    // 模拟视图可见高度 20，当前滚动偏移 500
+    // 我们设定滑动视口前后拉展缓冲量 N = 50 行，故预期缓存加载区间为 [450..570]，总计 120 条缓存帧记录
+    state.load_viewport_sliding_window(500, 20);
+
+    assert_eq!(state.viewport_cache.len(), 120);
+    // 第一条缓存帧应对应文件的第 450 行（即 Frame 450）
+    assert_eq!(state.viewport_cache[0].content, "[→] 12:00:00 | Frame 450");
+    // 最后一条缓存帧应对应文件的第 569 行（即 Frame 569）
+    assert_eq!(state.viewport_cache[119].content, "[→] 12:00:00 | Frame 569");
+}
+
+#[test]
+fn test_log_rotation_and_size_limit() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("rotation.log");
+
+    // 调用底层的通用限额落盘辅助方法，设置极小的上限 100 字节
+    let max_bytes = 100;
+    
+    // 连续写入，直到超出 100 字节
+    let data = "A".repeat(40);
+    for _ in 0..5 {
+        let _ = crate::tui::state::write_log_with_limit(&file_path, &data, max_bytes);
+    }
+
+    // 读取物理文件大小，断言它应该被阻断拦截，且以警告结尾
+    let content = std::fs::read_to_string(&file_path).unwrap();
+    assert!(content.len() <= max_bytes + 100);
+    assert!(content.contains("[SYSTEM] Log truncated due to size limit"));
+}
+
+#[test]
+fn test_old_logs_auto_cleanup() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let old_file = temp_dir.path().join("old_ws.log");
+    let new_file = temp_dir.path().join("new_ws.log");
+
+    std::fs::File::create(&old_file).unwrap();
+    std::fs::File::create(&new_file).unwrap();
+
+    // 强行修改 old_file 的修改时间到 10 天前 (10 * 24 * 3600 秒)
+    let ten_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 3600);
+    filetime::set_file_times(&old_file, filetime::FileTime::from_system_time(ten_days_ago), filetime::FileTime::from_system_time(ten_days_ago)).unwrap();
+
+    // 调用清理函数，设置清理时长为 7 天
+    crate::tui::state::cleanup_old_logs_dir(temp_dir.path(), 7).unwrap();
+
+    assert!(!old_file.exists());
+    assert!(new_file.exists());
+}

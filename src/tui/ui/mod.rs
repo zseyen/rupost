@@ -166,12 +166,94 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
     let focus = state.active_panel == Panel::Response;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
 
+    let is_ws = !state.ws_frames.is_empty()
+        || state
+            .current_request
+            .as_ref()
+            .map(|r| r.metadata.websocket)
+            .unwrap_or(false);
+    let is_sse = !state.sse_stream_body.is_empty();
+
+    let title = if state.is_loading {
+        if is_ws {
+            " Response Viewer [WS Streaming...] "
+        } else if is_sse {
+            " Response Viewer [SSE Streaming...] "
+        } else {
+            " Response Viewer (Loading) "
+        }
+    } else {
+        if is_ws {
+            " Response Viewer [WS Completed] "
+        } else if is_sse {
+            " Response Viewer [SSE Completed] "
+        } else {
+            " Response Viewer "
+        }
+    };
+
     let block = Block::default()
-        .title(" Response Viewer ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let text = if state.is_loading {
+    let text = if is_ws {
+        let mut lines = Vec::new();
+        for f in &state.ws_frames {
+            let arrow = if f.is_send { "[→] " } else { "[←] " };
+            let arrow_color = if f.is_send {
+                Color::Cyan
+            } else {
+                Color::Yellow
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    arrow,
+                    Style::default()
+                        .fg(arrow_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{} ", f.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw(&f.content),
+            ]));
+        }
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "WebSocket connected. Listening for frames...",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let total_lines = lines.len();
+        let visible_height = area.height.saturating_sub(2) as usize;
+        let max_scroll = total_lines
+            .saturating_sub(visible_height)
+            .min(u16::MAX as usize) as u16;
+        let scroll_y = state.response_scroll.min(max_scroll);
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .scroll((scroll_y, 0))
+    } else if is_sse {
+        let mut lines = Vec::new();
+        for line in state.sse_stream_body.lines() {
+            lines.push(Line::from(line));
+        }
+
+        let total_lines = lines.len();
+        let visible_height = area.height.saturating_sub(2) as usize;
+        let max_scroll = total_lines
+            .saturating_sub(visible_height)
+            .min(u16::MAX as usize) as u16;
+        let scroll_y = state.response_scroll.min(max_scroll);
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .scroll((scroll_y, 0))
+    } else if state.is_loading {
         Paragraph::new("Executing request, please wait...")
             .style(Style::default().fg(Color::Yellow))
     } else if let Some(ref resp) = state.last_response {

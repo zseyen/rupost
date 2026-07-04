@@ -2,6 +2,20 @@ use crate::assertion::AssertionResult;
 use crate::http::Response;
 use std::time::Duration;
 
+/// 长连接（SSE/WebSocket）流式事件
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// SSE 实时数据块
+    SseChunk(String),
+    /// WebSocket 实时收发帧
+    WsFrame {
+        /// 是否为发送帧
+        is_send: bool,
+        /// 帧文本内容
+        content: String,
+    },
+}
+
 /// 单个请求的执行结果
 #[derive(Debug, Clone)]
 pub struct TestResult {

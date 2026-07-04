@@ -15,6 +15,15 @@ pub enum TuiEvent {
         captured_vars: HashMap<String, String>,
         assertions: Vec<AssertionResult>,
     },
+    StreamChunk {
+        id: Uuid,
+        chunk: String,
+    },
+    WsFrame {
+        id: Uuid,
+        is_send: bool,
+        content: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -29,6 +29,9 @@ impl WsRunner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: Vec<ExecutorMiddleware>,
+        stream_sender: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
     ) -> TestResult {
         let start_time = Instant::now();
         let name = parsed.name().map(|s| s.to_string());
@@ -146,10 +149,16 @@ impl WsRunner {
                 let outbound_frame = WsFrame::new(
                     FrameDirection::Outbound,
                     WsFrameType::Text,
-                    resolved_payload.into_bytes(),
+                    resolved_payload.clone().into_bytes(),
                     0,
                 );
                 let _ = client.send_frame(outbound_frame).await;
+                if let Some(ref sender) = stream_sender {
+                    let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                        is_send: true,
+                        content: resolved_payload,
+                    });
+                }
                 executed_actions_count += 1;
             }
 
@@ -180,6 +189,12 @@ impl WsRunner {
                                         frame.payload_as_string()
                                     };
                                     println!("{} [INBOUND] [Type: {:?}] {}", "[WS]".green().bold(), frame.frame_type, payload_str);
+                                    if let Some(ref sender) = stream_sender {
+                                        let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                                            is_send: false,
+                                            content: payload_str.clone(),
+                                        });
+                                    }
                                     executed_actions_count += 1;
                                 }
                             }
@@ -214,6 +229,7 @@ impl WsRunner {
                     &assertions_to_eval,
                     &captures_to_eval,
                     &mut assertion_results,
+                    stream_sender.as_ref(),
                 )
                 .await
                 {
@@ -292,6 +308,9 @@ impl WsRunner {
         assertions_to_eval: &[String],
         captures_to_eval: &[VariableCapture],
         assertion_results: &mut Vec<crate::assertion::AssertionResult>,
+        stream_sender: Option<
+            &tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
     ) -> Result<bool, String> {
         match action {
             WsAction::Connect { .. } => Ok(true),
@@ -303,13 +322,19 @@ impl WsRunner {
                 let outbound_frame = WsFrame::new(
                     FrameDirection::Outbound,
                     frame.frame_type,
-                    resolved_payload.into_bytes(),
+                    resolved_payload.clone().into_bytes(),
                     0,
                 );
 
                 if let Err(e) = client.send_frame(outbound_frame).await {
                     Err(format!("Send failed: {}", e))
                 } else {
+                    if let Some(sender) = stream_sender {
+                        let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                            is_send: true,
+                            content: resolved_payload.clone(),
+                        });
+                    }
                     Ok(true)
                 }
             }
@@ -360,6 +385,23 @@ impl WsRunner {
                         maybe_frame = rx.recv() => {
                             match maybe_frame {
                                 Ok(frame) => {
+                                    if frame.direction == FrameDirection::Inbound {
+                                        let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                            if let Some(dec) = decoder {
+                                                dec.decode(&frame.payload).map(|v| v.to_string()).unwrap_or_else(|_| format!("0x{}", hex::encode(&frame.payload)))
+                                            } else {
+                                                format!("0x{}", hex::encode(&frame.payload))
+                                            }
+                                        } else {
+                                            frame.payload_as_string()
+                                        };
+                                        if let Some(sender) = stream_sender {
+                                            let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                                                is_send: false,
+                                                content: payload_str,
+                                            });
+                                        }
+                                    }
                                     if frame.direction == FrameDirection::Inbound
                                         && matcher.matches(&frame, decoder)
                                     {

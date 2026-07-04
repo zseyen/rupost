@@ -21,6 +21,8 @@ pub struct SseRunnerOptions {
     pub sse_max_events: Option<usize>,
     pub stream_to: Option<String>,
     pub stream_to_append: bool,
+    pub stream_sender:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
 }
 
 pub struct SseRunner;
@@ -129,6 +131,10 @@ impl SseRunner {
                                 accumulated_body.push_str(&event.data);
                                 accumulated_body.push('\n');
 
+                                if let Some(ref sender) = options.stream_sender {
+                                    let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(event.data.clone()));
+                                }
+
                                 if options.debug {
                                     println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
                                 }
@@ -193,6 +199,10 @@ impl SseRunner {
                                 event_count += 1;
                                 accumulated_body.push_str(&event.data);
                                 accumulated_body.push('\n');
+
+                                if let Some(ref sender) = options.stream_sender {
+                                    let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(event.data.clone()));
+                                }
 
                                 if options.debug {
                                     println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);

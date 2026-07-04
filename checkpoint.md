@@ -28,6 +28,7 @@
    - 成功将 TUI 核心依赖升级至最新稳定版：`ratatui 0.30`、`crossterm 0.29` 与 `ratatui-textarea 0.9`，并彻底解决了两代 `ratatui` 特征不匹配分裂的难题。
    - 运行冒烟回归脚本 `tests/verify_features.sh` 与示例脚本 `examples/run_all.sh` 均成功通过，所有内置示例 **15/15 成功通过 (ALL PASS)**。
    - 编写并提交了完整的 [TUI 使用与测试指南](file:///doc/tui/usage_and_testing.md)，同步更新了 [README.md](file:///README.md) 并补齐了技术架构分层总结。
+   - 实现了 **TUI 长连接流式实时渲染与帧控制台**。在 TUI 模式中，以 `@sse` 或者是 `@websocket` 声明的连接，均由后台 Tokio 协程驱动，UI 帧通过 `UnboundedSender` 异步通信。Response 面板自适应转为 `[WS Streaming...]` / `[SSE Streaming...]` 进行打字机式流回显和滑动窗口帧控制台，支持自动滚动追随和滚动偏移。
 
 ---
 
@@ -35,5 +36,3 @@
 
 - **敏感数据就地脱敏 (Secrets Masker)**：在快照落盘前，对 Authorization、Cookie 字段及 Body 敏感正则词执行就地掩码打码替换。
 - **智能 JSON Diff 引擎**：重构重放对比逻辑，对 JSON Body 默认解析并限制抖动动态字段。
-- **TUI 模式的 WebSocket/SSE 协议扩展支持**：
-  - 在 TUI 中对以 `@websocket` 或 `@sse` 声明的连接，支持触发后台长连接拉起并在终端以流式动态回显调试帧信息。

@@ -34,6 +34,12 @@
    - **全量交互历史 show 指令检索**：在 WsRunner 优雅退出前，将全量收发帧加入响应 Body 归档至 `history.jsonl`；升级 CLI 引入 `rupost history show <target>` 指令，支持根据最近序号（如 1 代表最近一条）或 Short ID 检索回溯，并提供 `[→]` 青色发送、`[←]` 黄色接收的彩色箭头与分栏气泡气泡高亮打印。
    - **垃圾回收与清理双轨制**：实现了长连接日志的**自动异步概率懒清理**（WS/SSE 握手成功后以 1% 概率在 Tokio 后台线程池静默修剪）以及**手动 CLI 清理**（`rupost history prune` 指定天数/大小限制，`rupost history clear` 一键抹除并支持 `-y` 交互拦截和 `--all` 清空大纲数据库）。
    - **Lualine.nvim Python 虚拟环境配置**：在 `lua/configs/lualine.lua` 中新建了 Neovim 状态栏配置，优雅集成了动态环境变量检测（`VIRTUAL_ENV` / `CONDA_DEFAULT_ENV`）与 Python 黄色高亮图标组件。
+  - **TUI 交互体验与滚动问题修复 (Pre-wrapping 架构重构)**：
+    - **内存预折行 (Pre-wrapping) 机制**：重构了 `Paragraph` 展示逻辑，放弃组件自带的 `.wrap()` 和 `.scroll()` 限制，而是在数据载入或 Resize 时利用 `unicode-width` 精确对中英文/Emoji 行进行视觉预排版切分成 `Vec<Line>`。渲染时通过 `[scroll_y..]` 切片送入 `Paragraph`，彻底解决换行折行导致 `max_scroll` 计算不准、以及在 WS/SSE 滑动窗口模式下滚动崩溃的致命缺陷。
+    - **侧边栏双 Tab 与状态解耦**：将侧边栏重构划分为 `[F] Files`（测试文件）和 `[H] History`（请求历史记录）两个独立子 Tab，使用 `Left/Right` 或 `h/l` 进行自由切换。二者分别独立维护自己的 `selected_index` 和 `scroll_offset`（基于滑动可视区边界 clamp 校正算法），切换 Tab 保持位置不复位。
+    - **路径缩略隐藏展示**：文件列表优先展示文件名（Basename），并支持在侧边栏激活时按 `p` 键实时切换完整相对路径展示。
+    - **历史请求反向还原**：历史记录面板中根据 HTTP 方法和状态码进行了精细彩色高亮，并在任意一项上按 `Enter` 时自动将 `RequestSnapshot` 还原序列化为标准的 `.http` 格式语法文本，无缝加载回 Request Editor 以供修改和重跑，并且保留未保存强拦截网关。
+    - **自动化测试保障 (测试先行)**：新增了针对预折行中英文计算、滚动边界修正、HTTP 还原格式等单元测试，以及自适应三种布局和 Modal 状态叠加的子组件渲染压力冒烟测试，通过 `cargo test` 回归测试 100% 成功通过 (all passed)。
 
 ---
 

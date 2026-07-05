@@ -7,6 +7,47 @@ use crate::variable::VariableContext;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Files,
+    History,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarTabState {
+    pub selected_index: usize,
+    pub scroll_offset: usize,
+}
+
+impl SidebarTabState {
+    pub fn new() -> Self {
+        Self {
+            selected_index: 0,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn clamp_scroll_offset(&mut self, item_count: usize, viewport_height: usize) {
+        if item_count == 0 {
+            self.selected_index = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+        if self.selected_index >= item_count {
+            self.selected_index = item_count - 1;
+        }
+        // 向上越界
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        }
+        // 向下越界
+        else if self.selected_index >= self.scroll_offset + viewport_height {
+            self.scroll_offset = self.selected_index - viewport_height + 1;
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Files,
     Editor,
@@ -24,6 +65,7 @@ pub enum LayoutMode {
 pub enum PendingAction {
     Quit,
     SwitchFile(usize),
+    SwitchHistory(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +101,7 @@ pub struct AppState {
     pub show_unsaved_confirm: bool,
     pub pending_action: Option<PendingAction>,
     pub loaded_file_index: usize,
-    pub response_scroll: u16,
+    pub response_scroll: usize,
 
     // 长连接缓冲状态
     pub sse_stream_body: String,
@@ -71,6 +113,14 @@ pub struct AppState {
     pub viewport_cache: std::collections::VecDeque<WsFrameRecord>,
     pub cache_start_line: usize,
     pub cache_end_line: usize,
+
+    // 新增侧边栏与预折行渲染状态
+    pub active_sidebar_tab: SidebarTab,
+    pub files_state: SidebarTabState,
+    pub history_state: SidebarTabState,
+    pub show_full_path: bool,
+    pub history_list: Vec<crate::history::model::HistoryEntry>,
+    pub response_visual_lines: Vec<ratatui::text::Line<'static>>,
 }
 
 impl AppState {
@@ -104,6 +154,14 @@ impl AppState {
             viewport_cache: std::collections::VecDeque::new(),
             cache_start_line: 0,
             cache_end_line: 0,
+
+            // 初始化新字段
+            active_sidebar_tab: SidebarTab::Files,
+            files_state: SidebarTabState::new(),
+            history_state: SidebarTabState::new(),
+            show_full_path: false,
+            history_list: Vec::new(),
+            response_visual_lines: Vec::new(),
         }
     }
 
@@ -301,5 +359,124 @@ pub fn cleanup_old_logs_dir(dir_path: &std::path::Path, days: u64) -> Result<(),
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct VisualLineProcessor;
+
+impl VisualLineProcessor {
+    pub fn wrap_text(text: &str, max_width: usize) -> Vec<ratatui::text::Line<'static>> {
+        use unicode_width::UnicodeWidthChar;
+        let mut visual_lines = Vec::new();
+        for line in text.lines() {
+            if line.is_empty() {
+                visual_lines.push(ratatui::text::Line::from(""));
+                continue;
+            }
+            let mut current_line = String::new();
+            let mut current_width = 0;
+            for c in line.chars() {
+                let char_width = c.width().unwrap_or(0);
+                if current_width + char_width > max_width {
+                    visual_lines.push(ratatui::text::Line::from(current_line.clone()));
+                    current_line.clear();
+                    current_width = 0;
+                }
+                current_line.push(c);
+                current_width += char_width;
+            }
+            if !current_line.is_empty() {
+                visual_lines.push(ratatui::text::Line::from(current_line));
+            }
+        }
+        visual_lines
+    }
+}
+
+pub fn format_request_snapshot_to_http(req: &crate::history::model::RequestSnapshot) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("{} {}\n", req.method, req.url));
+    for (k, v) in &req.headers {
+        if let Ok(val_str) = v.to_str() {
+            s.push_str(&format!("{}: {}\n", k.as_str(), val_str));
+        }
+    }
+    s.push('\n');
+    if let Some(ref body) = req.body {
+        s.push_str(body);
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::model::RequestSnapshot;
+    use reqwest::header::HeaderMap;
+
+    #[test]
+    fn test_visual_line_wrap_english() {
+        let text = "abcdefghij\nklmnopqrst";
+        let lines = VisualLineProcessor::wrap_text(text, 5);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0].to_string(), "abcde");
+        assert_eq!(lines[1].to_string(), "fghij");
+        assert_eq!(lines[2].to_string(), "klmno");
+        assert_eq!(lines[3].to_string(), "pqrst");
+    }
+
+    #[test]
+    fn test_visual_line_wrap_chinese_multibyte() {
+        let text = "你好世界，你好。"; // 8 个字，逻辑宽度 16
+        let lines = VisualLineProcessor::wrap_text(text, 6);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].to_string(), "你好世");
+        assert_eq!(lines[1].to_string(), "界，你");
+        assert_eq!(lines[2].to_string(), "好。");
+    }
+
+    #[test]
+    fn test_sidebar_scroll_bounds_clamp() {
+        let mut state = SidebarTabState::new();
+        let viewport_height = 5;
+
+        state.clamp_scroll_offset(0, viewport_height);
+        assert_eq!(state.selected_index, 0);
+        assert_eq!(state.scroll_offset, 0);
+
+        state.selected_index = 2;
+        state.clamp_scroll_offset(10, viewport_height);
+        assert_eq!(state.scroll_offset, 0);
+
+        state.selected_index = 6;
+        state.clamp_scroll_offset(10, viewport_height);
+        assert_eq!(state.scroll_offset, 2);
+
+        state.selected_index = 1;
+        state.clamp_scroll_offset(10, viewport_height);
+        assert_eq!(state.scroll_offset, 1);
+    }
+
+    #[test]
+    fn test_history_restore_format() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("x-custom", "value".parse().unwrap());
+        
+        let req = RequestSnapshot {
+            method: "POST".to_string(),
+            url: "http://example.com/api".to_string(),
+            headers,
+            body: Some("{\"test\":true}".to_string()),
+        };
+
+        let http_text = format_request_snapshot_to_http(&req);
+        let parsed = crate::parser::parse_content(&http_text).unwrap();
+        let requests = parsed.requests;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method_or_default(), "POST");
+        assert_eq!(requests[0].url, "http://example.com/api");
+        assert_eq!(requests[0].headers.len(), 2);
+        assert_eq!(requests[0].body, Some("{\"test\":true}".to_string()));
     }
 }

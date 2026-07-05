@@ -56,6 +56,9 @@ async fn run_async() -> Result<()> {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
     }
+    // 载入历史记录
+    state.history_list = crate::history::storage::get_storage().tail(100).unwrap_or_default();
+    state.history_list.reverse();
 
     let mut textarea = ratatui_textarea::TextArea::default();
     textarea.set_placeholder_text(
@@ -115,7 +118,21 @@ async fn run_async() -> Result<()> {
                                                     state.is_dirty = false;
                                                     state.loaded_file_index = idx;
                                                     state.selected_file_index = idx;
+                                                    state.files_state.selected_index = idx;
                                                 }
+                                            }
+                                        }
+                                        super::state::PendingAction::SwitchHistory(idx) => {
+                                            if idx < state.history_list.len() {
+                                                let entry = &state.history_list[idx];
+                                                let http_text = super::state::format_request_snapshot_to_http(&entry.request);
+                                                state.editor_text = http_text.clone();
+                                                state.editor_file_path = None;
+                                                textarea = ratatui_textarea::TextArea::new(
+                                                    http_text.lines().map(String::from).collect(),
+                                                );
+                                                state.is_dirty = true;
+                                                state.history_state.selected_index = idx;
                                             }
                                         }
                                     }
@@ -127,6 +144,7 @@ async fn run_async() -> Result<()> {
                             | crossterm::event::KeyCode::Char('N')
                             | crossterm::event::KeyCode::Esc => {
                                 state.selected_file_index = state.loaded_file_index;
+                                state.files_state.selected_index = state.loaded_file_index;
                                 state.show_unsaved_confirm = false;
                                 state.pending_action = None;
                             }
@@ -164,40 +182,99 @@ async fn run_async() -> Result<()> {
                         state.update(super::event::Action::SwitchPanel(prev_panel));
                     }
 
-                    // Files 面板操作
+                    // Files 面板操作 (已重构为双 Tab Sidebar)
                     if state.active_panel == super::state::Panel::Files && !state.show_help {
                         match key.code {
+                            crossterm::event::KeyCode::Left
+                            | crossterm::event::KeyCode::Char('h') => {
+                                state.active_sidebar_tab = super::state::SidebarTab::Files;
+                            }
+                            crossterm::event::KeyCode::Right
+                            | crossterm::event::KeyCode::Char('l') => {
+                                state.active_sidebar_tab = super::state::SidebarTab::History;
+                            }
+                            crossterm::event::KeyCode::Char('p')
+                            | crossterm::event::KeyCode::Char('P') => {
+                                if state.active_sidebar_tab == super::state::SidebarTab::Files {
+                                    state.show_full_path = !state.show_full_path;
+                                }
+                            }
                             crossterm::event::KeyCode::Down
                             | crossterm::event::KeyCode::Char('j') => {
-                                if state.selected_file_index + 1 < state.file_tree.len() {
-                                    state.selected_file_index += 1;
+                                match state.active_sidebar_tab {
+                                    super::state::SidebarTab::Files => {
+                                        if state.files_state.selected_index + 1 < state.file_tree.len() {
+                                            state.files_state.selected_index += 1;
+                                            state.selected_file_index = state.files_state.selected_index;
+                                        }
+                                    }
+                                    super::state::SidebarTab::History => {
+                                        if state.history_state.selected_index + 1 < state.history_list.len() {
+                                            state.history_state.selected_index += 1;
+                                        }
+                                    }
                                 }
                             }
                             crossterm::event::KeyCode::Up
                             | crossterm::event::KeyCode::Char('k') => {
-                                if state.selected_file_index > 0 {
-                                    state.selected_file_index -= 1;
+                                match state.active_sidebar_tab {
+                                    super::state::SidebarTab::Files => {
+                                        if state.files_state.selected_index > 0 {
+                                            state.files_state.selected_index -= 1;
+                                            state.selected_file_index = state.files_state.selected_index;
+                                        }
+                                    }
+                                    super::state::SidebarTab::History => {
+                                        if state.history_state.selected_index > 0 {
+                                            state.history_state.selected_index -= 1;
+                                        }
+                                    }
                                 }
                             }
-                            crossterm::event::KeyCode::Enter if !state.file_tree.is_empty() => {
-                                let path = &state.file_tree[state.selected_file_index];
-                                if state.is_dirty {
-                                    if state.selected_file_index != state.loaded_file_index {
-                                        state.show_unsaved_confirm = true;
-                                        state.pending_action =
-                                            Some(super::state::PendingAction::SwitchFile(
-                                                state.selected_file_index,
-                                            ));
+                            crossterm::event::KeyCode::Enter => {
+                                match state.active_sidebar_tab {
+                                    super::state::SidebarTab::Files => {
+                                        if !state.file_tree.is_empty() {
+                                            let path = &state.file_tree[state.files_state.selected_index];
+                                            if state.is_dirty {
+                                                if state.files_state.selected_index != state.loaded_file_index {
+                                                    state.show_unsaved_confirm = true;
+                                                    state.pending_action =
+                                                        Some(super::state::PendingAction::SwitchFile(
+                                                            state.files_state.selected_index,
+                                                        ));
+                                                }
+                                            } else {
+                                                if let Ok(content) = std::fs::read_to_string(path) {
+                                                    state.editor_text = content.clone();
+                                                    state.editor_file_path = Some(path.clone());
+                                                    textarea = ratatui_textarea::TextArea::new(
+                                                        content.lines().map(String::from).collect(),
+                                                    );
+                                                    state.is_dirty = false;
+                                                    state.loaded_file_index = state.files_state.selected_index;
+                                                }
+                                            }
+                                        }
                                     }
-                                } else {
-                                    if let Ok(content) = std::fs::read_to_string(path) {
-                                        state.editor_text = content.clone();
-                                        state.editor_file_path = Some(path.clone());
-                                        textarea = ratatui_textarea::TextArea::new(
-                                            content.lines().map(String::from).collect(),
-                                        );
-                                        state.is_dirty = false;
-                                        state.loaded_file_index = state.selected_file_index;
+                                    super::state::SidebarTab::History => {
+                                        if !state.history_list.is_empty() {
+                                            let idx = state.history_state.selected_index;
+                                            if state.is_dirty {
+                                                state.show_unsaved_confirm = true;
+                                                state.pending_action =
+                                                    Some(super::state::PendingAction::SwitchHistory(idx));
+                                            } else {
+                                                let entry = &state.history_list[idx];
+                                                let http_text = super::state::format_request_snapshot_to_http(&entry.request);
+                                                state.editor_text = http_text.clone();
+                                                state.editor_file_path = None;
+                                                textarea = ratatui_textarea::TextArea::new(
+                                                    http_text.lines().map(String::from).collect(),
+                                                );
+                                                state.is_dirty = true;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -259,10 +336,19 @@ async fn run_async() -> Result<()> {
                                             }
                                         });
 
+                                        let req_snap_arg = req.clone();
+                                        let source_clone = source.clone();
                                         tokio::spawn(async move {
                                             let test_res = executor
                                                 .execute_one(req, 1, &mut var_context, source)
                                                 .await;
+                                            
+                                            // 写入请求历史
+                                            if let Some(ref resp) = test_res.response {
+                                                let req_snapshot = crate::history::model::RequestSnapshot::from_parsed(&req_snap_arg);
+                                                crate::history::recorder::record_history(req_snapshot, resp, source_clone);
+                                            }
+
                                             let captured_vars = var_context.variables().clone();
 
                                             let result = if test_res.success {
@@ -337,6 +423,14 @@ async fn run_async() -> Result<()> {
                     ..
                 } => {
                     state.handle_request_finished(*result, captured_vars, assertions);
+                    state.response_visual_lines.clear(); // 清空缓存以强迫重新计算预折行
+                    state.response_scroll = 0;          // 请求结束重置滚动
+
+                    // 从存储重新载入最新 100 条请求历史并倒序
+                    state.history_list = crate::history::storage::get_storage().tail(100).unwrap_or_default();
+                    state.history_list.reverse();
+                    state.history_state.selected_index = 0;
+                    state.history_state.scroll_offset = 0;
                 }
                 TuiEvent::StreamChunk { chunk, .. } => {
                     state.handle_stream_chunk(chunk);

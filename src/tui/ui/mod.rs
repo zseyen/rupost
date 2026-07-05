@@ -1,10 +1,14 @@
+pub mod sidebar;
+pub mod editor;
+pub mod response;
+
 use super::state::{AppState, LayoutMode, Panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Tabs},
 };
 
 /// 渲染 TUI 面板布局主入口
@@ -24,22 +28,22 @@ pub fn render(
         return;
     }
 
-    // 2. 根据自适应模式划分主显示区
+    // 2. 根据自适应模式划分主显示区，分派子组件渲染
     match state.layout_mode {
         LayoutMode::Wide => {
             // 三栏并排
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(25), // 📂 Files
+                    Constraint::Percentage(25), // 📂 Files & History (Sidebar)
                     Constraint::Percentage(40), // 📝 Request Editor
                     Constraint::Percentage(35), // 📊 Response Viewer
                 ])
                 .split(size);
 
-            render_files_panel(frame, chunks[0], state);
-            render_editor_panel(frame, chunks[1], state, textarea);
-            render_response_panel(frame, chunks[2], state);
+            sidebar::render(frame, chunks[0], state);
+            editor::render(frame, chunks[1], state, textarea);
+            response::render(frame, chunks[2], state);
         }
         LayoutMode::Narrow => {
             // 双栏并排
@@ -51,8 +55,8 @@ pub fn render(
                 ])
                 .split(size);
 
-            render_editor_panel(frame, chunks[0], state, textarea);
-            render_response_panel(frame, chunks[1], state);
+            editor::render(frame, chunks[0], state, textarea);
+            response::render(frame, chunks[1], state);
         }
         LayoutMode::Stacked => {
             // 单栏堆叠 (通过 Tab 切换显示)
@@ -64,7 +68,7 @@ pub fn render(
                 ])
                 .split(size);
 
-            // 渲染 Tab 导航头
+            // 渲染大 Tab 导航头
             let titles = vec!["[1] Files", "[2] Editor", "[3] Response"];
             let active_idx = match state.active_panel {
                 Panel::Files => 0,
@@ -86,9 +90,9 @@ pub fn render(
 
             // 根据当前激活面板进行渲染
             match state.active_panel {
-                Panel::Files => render_files_panel(frame, chunks[1], state),
-                Panel::Editor => render_editor_panel(frame, chunks[1], state, textarea),
-                Panel::Response => render_response_panel(frame, chunks[1], state),
+                Panel::Files => sidebar::render(frame, chunks[1], state),
+                Panel::Editor => editor::render(frame, chunks[1], state, textarea),
+                Panel::Response => response::render(frame, chunks[1], state),
             }
         }
     }
@@ -104,237 +108,6 @@ pub fn render(
     }
 }
 
-fn render_files_panel(frame: &mut Frame, area: Rect, state: &AppState) {
-    let focus = state.active_panel == Panel::Files;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
-
-    let block = Block::default()
-        .title(" Files & History ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let content = if state.file_tree.is_empty() {
-        Paragraph::new("No files found in workspace.").style(Style::default().fg(Color::DarkGray))
-    } else {
-        let lines: Vec<Line> = state
-            .file_tree
-            .iter()
-            .enumerate()
-            .map(|(idx, f)| {
-                let style = if idx == state.selected_file_index {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::REVERSED)
-                } else {
-                    Style::default()
-                };
-                Line::from(Span::styled(format!("  {}", f), style))
-            })
-            .collect();
-        Paragraph::new(lines)
-    };
-
-    frame.render_widget(content.block(block), area);
-}
-
-fn render_editor_panel(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    textarea: &mut ratatui_textarea::TextArea<'static>,
-) {
-    let focus = state.active_panel == Panel::Editor;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
-
-    let title = if state.is_dirty {
-        " Request Editor * "
-    } else {
-        " Request Editor "
-    };
-
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    textarea.set_block(block);
-
-    frame.render_widget(&*textarea, area);
-}
-
-fn render_response_panel(frame: &mut Frame, area: Rect, state: &mut AppState) {
-    let focus = state.active_panel == Panel::Response;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
-
-    let is_ws = !state.ws_frames.is_empty()
-        || state
-            .current_request
-            .as_ref()
-            .map(|r| r.metadata.websocket)
-            .unwrap_or(false);
-    let is_sse = !state.sse_stream_body.is_empty();
-
-    let title = if state.is_loading {
-        if is_ws {
-            " Response Viewer [WS Streaming...] "
-        } else if is_sse {
-            " Response Viewer [SSE Streaming...] "
-        } else {
-            " Response Viewer (Loading) "
-        }
-    } else {
-        if is_ws {
-            " Response Viewer [WS Completed] "
-        } else if is_sse {
-            " Response Viewer [SSE Completed] "
-        } else {
-            " Response Viewer "
-        }
-    };
-
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let text = if is_ws {
-        let visible_height = area.height.saturating_sub(2) as usize;
-
-        let frames_source = if state.is_loading {
-            // 运行期：用内存里的 ws_frames
-            state.ws_frames.clone()
-        } else {
-            // 静止期：滑动加载日志文件对应视口的数据
-            state.load_viewport_sliding_window(state.response_scroll as usize, visible_height);
-            state.viewport_cache.iter().cloned().collect::<Vec<_>>()
-        };
-
-        let mut lines = Vec::new();
-        for f in &frames_source {
-            let arrow = if f.is_send { "[→] " } else { "[←] " };
-            let arrow_color = if f.is_send {
-                Color::Cyan
-            } else {
-                Color::Yellow
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    arrow,
-                    Style::default()
-                        .fg(arrow_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{} ", f.timestamp),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(f.content.clone()),
-            ]));
-        }
-        if lines.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "WebSocket connected. Listening for frames...",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        let total_lines = if state.is_loading {
-            lines.len()
-        } else {
-            state.total_log_lines
-        };
-
-        let max_scroll = total_lines
-            .saturating_sub(visible_height)
-            .min(u16::MAX as usize) as u16;
-        let scroll_y = state.response_scroll.min(max_scroll);
-
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: true })
-            .scroll((scroll_y, 0))
-    } else if is_sse {
-        let visible_height = area.height.saturating_sub(2) as usize;
-        let mut lines = Vec::new();
-
-        if state.is_loading {
-            // 运行期：用内存 sse_stream_body
-            for line in state.sse_stream_body.lines() {
-                lines.push(Line::from(line.to_string()));
-            }
-        } else {
-            // 静止期：滑动加载
-            state.load_viewport_sliding_window(state.response_scroll as usize, visible_height);
-            for f in &state.viewport_cache {
-                lines.push(Line::from(f.content.clone()));
-            }
-        }
-
-        let total_lines = if state.is_loading {
-            lines.len()
-        } else {
-            state.total_log_lines
-        };
-
-        let max_scroll = total_lines
-            .saturating_sub(visible_height)
-            .min(u16::MAX as usize) as u16;
-        let scroll_y = state.response_scroll.min(max_scroll);
-
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: true })
-            .scroll((scroll_y, 0))
-    } else if state.is_loading {
-        Paragraph::new("Executing request, please wait...")
-            .style(Style::default().fg(Color::Yellow))
-    } else if let Some(ref resp) = state.last_response {
-        let status_color = if resp.is_success() {
-            Color::Green
-        } else {
-            Color::Red
-        };
-
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{} {}", resp.status.code(), resp.status.reason_phrase()),
-                    Style::default()
-                        .fg(status_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Time: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(format!("{}ms  ", resp.duration.as_millis())),
-                Span::styled("Size: ", Style::default().fg(Color::DarkGray)),
-                Span::raw(format!("{} bytes", resp.body.len())),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Body:", Style::default().fg(Color::Yellow))),
-        ];
-
-        for line in resp.body.lines() {
-            lines.push(Line::from(line));
-        }
-
-        let total_lines = lines.len();
-        let visible_height = area.height.saturating_sub(2) as usize;
-        let max_scroll = total_lines
-            .saturating_sub(visible_height)
-            .min(u16::MAX as usize) as u16;
-        let scroll_y = state.response_scroll.min(max_scroll);
-
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: true })
-            .scroll((scroll_y, 0))
-    } else {
-        Paragraph::new("No response data. Trigger execution via Ctrl+Enter.")
-            .style(Style::default().fg(Color::DarkGray))
-    };
-
-    frame.render_widget(text.block(block), area);
-}
-
 fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
     let help_text = vec![
         Line::from(Span::styled(
@@ -346,7 +119,15 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
         Line::from(""),
         Line::from(vec![
             Span::styled("  Tab        ", Style::default().fg(Color::Cyan)),
-            Span::raw(" Switch active panels"),
+            Span::raw(" Switch active panels (Files -> Editor -> Response)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Left/Right ", Style::default().fg(Color::Cyan)),
+            Span::raw(" Switch Sidebar sub-tabs (Files <-> History)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  p          ", Style::default().fg(Color::Cyan)),
+            Span::raw(" Toggle display full file path in Files tab"),
         ]),
         Line::from(vec![
             Span::styled("  Ctrl+Enter ", Style::default().fg(Color::Cyan)),
@@ -355,10 +136,6 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
         Line::from(vec![
             Span::styled("  Ctrl+R     ", Style::default().fg(Color::Cyan)),
             Span::raw(" Send current HTTP request (Backup key)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+N     ", Style::default().fg(Color::Cyan)),
-            Span::raw(" Open Quick Raw Request bar"),
         ]),
         Line::from(vec![
             Span::styled("  ?          ", Style::default().fg(Color::Cyan)),
@@ -370,8 +147,8 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
         ]),
     ];
 
-    let width = 50.min(screen_size.width - 4);
-    let height = 12.min(screen_size.height - 2);
+    let width = 60.min(screen_size.width - 4);
+    let height = 13.min(screen_size.height - 2);
 
     let area = Rect::new(
         (screen_size.width - width) / 2,
@@ -438,4 +215,68 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::state::{AppState, LayoutMode, Panel, SidebarTab};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+    use ratatui_textarea::TextArea;
+
+    #[test]
+    fn smoke_test_components_render() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = AppState::new();
+        state.file_tree = vec![
+            "test1.http".to_string(),
+            "subdir/test2.http".to_string(),
+        ];
+        state.history_list = vec![
+            crate::history::model::HistoryEntry {
+                id: "1".to_string(),
+                timestamp: chrono::Utc::now(),
+                duration_ms: 15,
+                request: crate::history::model::RequestSnapshot {
+                    method: "GET".to_string(),
+                    url: "http://example.com/api".to_string(),
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: None,
+                },
+                source: None,
+                response: crate::history::model::ResponseMeta {
+                    status: 200,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: Some("{}".to_string()),
+                },
+            }
+        ];
+
+        let mut textarea = TextArea::default();
+
+        for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
+            for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
+                for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
+                    state.layout_mode = *layout;
+                    state.active_sidebar_tab = *sidebar_tab;
+                    state.active_panel = *active_panel;
+
+                    state.show_help = true;
+                    state.show_unsaved_confirm = false;
+                    terminal.draw(|f| {
+                        render(f, &mut state, &mut textarea);
+                    }).unwrap();
+
+                    state.show_help = false;
+                    state.show_unsaved_confirm = true;
+                    terminal.draw(|f| {
+                        render(f, &mut state, &mut textarea);
+                    }).unwrap();
+                }
+            }
+        }
+    }
 }

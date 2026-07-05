@@ -51,6 +51,7 @@ futures-util = "0.3"
 ratatui = "0.30"
 crossterm = "0.29"
 ratatui-textarea = "0.9"
+unicode-width = "0.1.13"
 
 [dev-dependencies]
 cookie = "0.18"

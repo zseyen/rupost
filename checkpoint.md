@@ -32,6 +32,8 @@
    - **长连接自动落盘与限额轮转机制**：所有长连接（WebSocket、SSE）运行后默认在 `.rupost/logs/` 下落盘。物理文件设置 **5MB** 安全限制防止磁盘膨胀，并在系统启动时自动清理 **7 天**前修改的陈旧日志文件。
    - **滑动窗口视口缓存机制 (Sliding Window Viewport Cache)**：前台 TUI 引入滑动视口缓存，在长连接运行期间以低开销的内存环形队列回显，在静止期/查看历史时，算法自动从物理日志文件滑动加载可见视口的前后 **N (N=50) 行** 帧记录载入 `viewport_cache` 渲染，性能大幅提升并彻底杜绝内存泄漏与 UI 卡顿。
    - **全量交互历史 show 指令检索**：在 WsRunner 优雅退出前，将全量收发帧加入响应 Body 归档至 `history.jsonl`；升级 CLI 引入 `rupost history show <target>` 指令，支持根据最近序号（如 1 代表最近一条）或 Short ID 检索回溯，并提供 `[→]` 青色发送、`[←]` 黄色接收的彩色箭头与分栏气泡气泡高亮打印。
+   - **垃圾回收与清理双轨制**：实现了长连接日志的**自动异步概率懒清理**（WS/SSE 握手成功后以 1% 概率在 Tokio 后台线程池静默修剪）以及**手动 CLI 清理**（`rupost history prune` 指定天数/大小限制，`rupost history clear` 一键抹除并支持 `-y` 交互拦截和 `--all` 清空大纲数据库）。
+   - **Lualine.nvim Python 虚拟环境配置**：在 `lua/configs/lualine.lua` 中新建了 Neovim 状态栏配置，优雅集成了动态环境变量检测（`VIRTUAL_ENV` / `CONDA_DEFAULT_ENV`）与 Python 黄色高亮图标组件。
 
 ---
 

@@ -56,28 +56,6 @@ impl WsRunner {
             ));
         }
 
-        // 清理超过 7 天的旧日志
-        if let Some(parent) = log_path.parent() {
-            let _ = std::fs::read_dir(parent).map(|read_dir| {
-                let limit_duration = std::time::Duration::from_secs(7 * 24 * 3600);
-                let now = std::time::SystemTime::now();
-                for entry in read_dir.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Ok(metadata) = path.metadata() {
-                            if let Ok(modified) = metadata.modified() {
-                                if let Ok(age) = now.duration_since(modified) {
-                                    if age > limit_duration {
-                                        let _ = std::fs::remove_file(path);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-
         let mut accumulated_log: Vec<String> = Vec::new();
         let max_bytes = 5 * 1024 * 1024; // 5MB limit
 
@@ -139,7 +117,12 @@ impl WsRunner {
         };
 
         let client = match WsSession::connect(config).await {
-            Ok(c) => c,
+            Ok(c) => {
+                if let Some(parent) = log_path.parent() {
+                    crate::runner::gc::LogGc::try_trigger_lazy_gc(parent);
+                }
+                c
+            }
             Err(e) => {
                 error!("WebSocket connection failed: {}", e);
                 return TestResult::error(

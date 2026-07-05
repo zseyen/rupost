@@ -295,28 +295,7 @@ pub fn write_log_with_limit(
 
 /// 自动清理 7 天前过期的日志目录文件
 pub fn cleanup_old_logs_dir(dir_path: &std::path::Path, days: u64) -> Result<(), std::io::Error> {
-    if !dir_path.exists() {
-        return Ok(());
-    }
-    let limit_duration = std::time::Duration::from_secs(days * 24 * 3600);
-    let now = std::time::SystemTime::now();
-
-    for entry in std::fs::read_dir(dir_path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            if let Ok(metadata) = path.metadata() {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(age) = now.duration_since(modified) {
-                        if age > limit_duration {
-                            let _ = std::fs::remove_file(path);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    crate::runner::gc::perform_prune(dir_path, days, 999999).map(|_| ())
 }
 
 impl Default for AppState {

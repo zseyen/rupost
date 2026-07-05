@@ -56,26 +56,9 @@ impl SseRunner {
             ));
         }
 
-        // 清理 7 天陈旧日志
+        // 懒触发概率后台 GC
         if let Some(parent) = log_path.parent() {
-            let _ = std::fs::read_dir(parent).map(|read_dir| {
-                let limit_duration = std::time::Duration::from_secs(7 * 24 * 3600);
-                let now = std::time::SystemTime::now();
-                for entry in read_dir.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Ok(metadata) = path.metadata() {
-                            if let Ok(modified) = metadata.modified() {
-                                if let Ok(age) = now.duration_since(modified) {
-                                    if age > limit_duration {
-                                        let _ = std::fs::remove_file(path);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            });
+            crate::runner::gc::LogGc::try_trigger_lazy_gc(parent);
         }
 
         let max_bytes = 5 * 1024 * 1024; // 5MB limit

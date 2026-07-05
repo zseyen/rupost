@@ -61,6 +61,12 @@ async fn main() -> Result<()> {
             HistoryCommands::Show { target } => {
                 rupost::history::printer::show_history(&target)?;
             }
+            HistoryCommands::Prune { days, max_size } => {
+                rupost::history::printer::prune_history(days, max_size)?;
+            }
+            HistoryCommands::Clear { yes, all } => {
+                rupost::history::printer::clear_history(yes, all)?;
+            }
             HistoryCommands::Export { last: _, output: _ } => {
                 println!("History export is not implemented in MVP stage.");
             }

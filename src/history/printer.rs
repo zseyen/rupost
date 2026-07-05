@@ -117,3 +117,93 @@ pub fn show_history(target: &str) -> Result<()> {
 
     Ok(())
 }
+
+pub fn prune_history(days: u64, max_size: usize) -> Result<()> {
+    use colored::Colorize;
+    let dir_str = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
+    let log_dir = std::path::PathBuf::from(dir_str).join("logs");
+
+    println!(
+        "Scanning log directory: {}",
+        log_dir.display().to_string().cyan()
+    );
+    match crate::runner::gc::perform_prune(&log_dir, days, max_size) {
+        Ok((count, bytes)) => {
+            let mb = bytes as f64 / 1024.0 / 1024.0;
+            println!(
+                "{} Removed {} files (Released {:.2} MB).",
+                "[✓]".green().bold(),
+                count,
+                mb
+            );
+        }
+        Err(e) => {
+            println!("{} Failed to prune logs: {}", "[✗]".red().bold(), e);
+        }
+    }
+    Ok(())
+}
+
+pub fn clear_history(yes: bool, all: bool) -> Result<()> {
+    use colored::Colorize;
+    use std::io::{Write, stdin, stdout};
+
+    if !yes {
+        print!(
+            "{} {} Are you sure you want to permanently clear all logs? (y/N): ",
+            "[!]".yellow().bold(),
+            "WARNING: Permanent deletion ahead!".bold()
+        );
+        let _ = stdout().flush();
+        let mut input = String::new();
+        if stdin().read_line(&mut input).is_err() {
+            println!("Aborted.");
+            return Ok(());
+        }
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    let dir_str = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
+    let log_dir = std::path::PathBuf::from(&dir_str).join("logs");
+
+    // 1. 清空 logs/ 文件夹
+    match crate::runner::gc::perform_clear(&log_dir) {
+        Ok((count, bytes)) => {
+            let mb = bytes as f64 / 1024.0 / 1024.0;
+            println!(
+                "{} Cleared logs/ directory. Removed {} files (Released {:.2} MB).",
+                "[✓]".green().bold(),
+                count,
+                mb
+            );
+        }
+        Err(e) => {
+            println!(
+                "{} Failed to clear logs directory: {}",
+                "[✗]".red().bold(),
+                e
+            );
+        }
+    }
+
+    // 2. 如果携带了 --all，清空 history.jsonl
+    if all {
+        let history_db = std::path::PathBuf::from(&dir_str).join("history.jsonl");
+        if history_db.exists() {
+            if std::fs::remove_file(&history_db).is_ok() {
+                println!("{} Cleared history.jsonl database.", "[✓]".green().bold());
+            } else {
+                println!(
+                    "{} Failed to clear history.jsonl database.",
+                    "[✗]".red().bold()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}

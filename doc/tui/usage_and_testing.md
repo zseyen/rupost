@@ -54,10 +54,20 @@ TUI 会自动根据当前的终端窗口大小调整显示布局：
 为保证大规模或长时间 WebSocket 帧与 SSE 流数据的完整可追溯性，且不卡顿终端渲染，RuPost 采取了双轨方案：
 * **默认落盘**：所有 SSE 与 WebSocket 连接启动后，无需显示声明，底层均会默认在本地工作区的 `.rupost/logs/` 目录下生成时间戳命名的物理文件（如 `ws_20260705_1.log`），全量写入所有出站与入站数据帧。
 * **文件限额**：为防止磁盘空间耗尽，单个连接的日志物理文件上限为 **5MB**（大约可存储数万帧）。文件超限后会自动截断写入并追加 `[SYSTEM] Log truncated due to size limit` 警告。
-* **周期自愈**：每次 TUI/CLI 启动时，系统会自动在后台扫描日志目录，清理删除超过 **7 天**未修改的陈旧历史日志。
+* **周期自愈与概率懒清理 (Lazy GC)**：每次 TUI/CLI 启动或发起常规请求时，**完全不进行任何文件遍历与清理**以保证 0 延时启动。只有当长连接成功建立，后台任务开始运行时，才会触发清理调用，且清理具有 **1%** 的概率（即每 100 次连接大概率只有 1 次实际执行），在 `tokio::task::spawn_blocking` 异步后台线程池中静默扫描清理 7 天前过期的日志，并对目录进行修剪（LRU 算法把超过 100MB 的旧文件删掉，降低到 80MB 以下）。
 
-### 7. 历史交互回溯 (Viewing Long-Connection History)
-要检索并完整阅读过往长连接或常规 HTTP 通信的详细帧日志，您可以使用新增的 `rupost history show <target>` 交互命令：
+### 7. 手动垃圾清理与修剪 (Manual CLI Cleanup & Pruning)
+您可以使用以下新增的 CLI 命令，显式管理和删除长连接日志以及整个历史数据库：
+* **强制修剪**：运行 `rupost history prune [--days <D>] [--max-size <MB>]`
+  * `--days`：指定删除多少天之前的日志文件（默认 7 天）。
+  - `--max-size`：指定最大日志文件夹容量（默认 100MB），超出限制将按照文件修改时间从旧到新依次删除（LRU 算法）。
+* **物理清空**：运行 `rupost history clear [-y/--yes] [--all]`
+  * 默认会有红色醒目的 WARNING 确认框防止误删，提示用户输入 `y/n` 进行二次确认。
+  * **`-y` / `--yes`**：自动跳过确认询问，适用于 CI/CD 或 Shell 自动化清理脚本。
+  * **`--all`**：不仅清空 `logs/` 目录，还一并清空 `.rupost/history.jsonl` 主历史大纲数据库。
+
+### 8. 历史交互回溯 (Viewing Long-Connection History)
+要检索并完整阅读过往长连接或常规 HTTP 通信的详细帧日志，您可以使用 `rupost history show <target>` 交互命令：
 * **列表查询**：先运行 `rupost history list` 列出历史记录的大纲，第一列为条目的 **Short ID**（例如 `8cb08160`）。
 * **指定查看**：运行 `rupost history show <target>` 查看详细响应及历史长交互。其检索规则如下：
   * **按最近序号查看 (新手推荐)**：传入正整数 `N`（如 `rupost history show 1` 查看上一次刚执行完的最新日志；`show 2` 查看倒数第二条）。

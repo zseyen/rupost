@@ -254,3 +254,67 @@ fn test_old_logs_auto_cleanup() {
     assert!(!old_file.exists());
     assert!(new_file.exists());
 }
+
+#[test]
+fn test_gc_probabilistic_simulation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let old_file = temp_dir.path().join("old_ws.log");
+    std::fs::File::create(&old_file).unwrap();
+    let ten_days_ago =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 3600);
+    filetime::set_file_times(
+        &old_file,
+        filetime::FileTime::from_system_time(ten_days_ago),
+        filetime::FileTime::from_system_time(ten_days_ago),
+    )
+    .unwrap();
+
+    let (deleted_count, _) = rupost::runner::gc::perform_prune(temp_dir.path(), 7, 100).unwrap();
+    assert_eq!(deleted_count, 1);
+    assert!(!old_file.exists());
+}
+
+#[test]
+fn test_gc_perform_prune_size_limit() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let old_file = temp_dir.path().join("old_ws.log");
+    let new_file = temp_dir.path().join("new_ws.log");
+
+    std::fs::write(&old_file, "A".repeat(1500 * 1024)).unwrap();
+    std::fs::write(&new_file, "B".repeat(100)).unwrap();
+
+    let now = std::time::SystemTime::now();
+    let five_secs_ago = now - std::time::Duration::from_secs(5);
+
+    filetime::set_file_times(
+        &old_file,
+        filetime::FileTime::from_system_time(five_secs_ago),
+        filetime::FileTime::from_system_time(five_secs_ago),
+    )
+    .unwrap();
+    filetime::set_file_times(
+        &new_file,
+        filetime::FileTime::from_system_time(now),
+        filetime::FileTime::from_system_time(now),
+    )
+    .unwrap();
+
+    let (deleted_count, _) = rupost::runner::gc::perform_prune(temp_dir.path(), 30, 1).unwrap();
+    assert_eq!(deleted_count, 1);
+    assert!(!old_file.exists());
+    assert!(new_file.exists());
+}
+
+#[test]
+fn test_gc_perform_clear() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file1 = temp_dir.path().join("ws1.log");
+    let file2 = temp_dir.path().join("ws2.log");
+    std::fs::write(&file1, "hello").unwrap();
+    std::fs::write(&file2, "world").unwrap();
+
+    let (deleted_count, _) = rupost::runner::gc::perform_clear(temp_dir.path()).unwrap();
+    assert_eq!(deleted_count, 2);
+    assert!(!file1.exists());
+    assert!(!file2.exists());
+}

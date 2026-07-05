@@ -203,6 +203,7 @@ impl AppState {
                 self.sse_stream_body.clear();
                 self.ws_frames.clear();
                 self.response_scroll = 0;
+                self.response_visual_lines.clear();
             }
             Action::UpdateQuickInput(val) => {
                 self.quick_input = Some(val);

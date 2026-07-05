@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use super::event::Action;
 use crate::assertion::AssertionResult;
 use crate::http::Response;
@@ -63,6 +64,13 @@ pub struct AppState {
     // 长连接缓冲状态
     pub sse_stream_body: String,
     pub ws_frames: Vec<WsFrameRecord>,
+
+    // 瀑布流/滑动视口优化状态
+    pub log_file_path: Option<std::path::PathBuf>,
+    pub total_log_lines: usize,
+    pub viewport_cache: std::collections::VecDeque<WsFrameRecord>,
+    pub cache_start_line: usize,
+    pub cache_end_line: usize,
 }
 
 impl AppState {
@@ -91,6 +99,11 @@ impl AppState {
             response_scroll: 0,
             sse_stream_body: String::new(),
             ws_frames: Vec::new(),
+            log_file_path: None,
+            total_log_lines: 0,
+            viewport_cache: std::collections::VecDeque::new(),
+            cache_start_line: 0,
+            cache_end_line: 0,
         }
     }
 
@@ -140,6 +153,7 @@ impl AppState {
     }
 
     pub fn handle_stream_chunk(&mut self, chunk: String) {
+        self.total_log_lines += chunk.matches('\n').count();
         self.sse_stream_body.push_str(&chunk);
         if self.active_panel == Panel::Response {
             self.response_scroll = 9999;
@@ -147,6 +161,7 @@ impl AppState {
     }
 
     pub fn handle_ws_frame(&mut self, is_send: bool, content: String) {
+        self.total_log_lines += 1;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
         self.ws_frames.push(WsFrameRecord {
             is_send,
@@ -181,6 +196,127 @@ impl AppState {
             }
         }
     }
+
+    /// 滚动视口滑动窗口加载算法 (Sliding Viewport)
+    pub fn load_viewport_sliding_window(&mut self, scroll_y: usize, height: usize) {
+        let file_path = match &self.log_file_path {
+            Some(p) => p,
+            None => return,
+        };
+
+        let buffer_size = 50; // 前后缓冲区扩展行数
+        let start = scroll_y.saturating_sub(buffer_size);
+        let end = (scroll_y + height + buffer_size).min(self.total_log_lines);
+
+        // 如果当前的缓存已经包含了我们计算出来的范围，并且不为空，则不需要重新读取物理文件
+        if !self.viewport_cache.is_empty()
+            && start >= self.cache_start_line
+            && end <= self.cache_end_line
+        {
+            return;
+        }
+
+        // 重新读取文件指定行
+        if let Ok(file) = std::fs::File::open(file_path) {
+            use std::io::BufRead;
+            let reader = std::io::BufReader::new(file);
+            let mut new_cache = std::collections::VecDeque::new();
+
+            for (idx, line) in reader.lines().enumerate() {
+                if idx < start {
+                    continue;
+                }
+                if idx >= end {
+                    break;
+                }
+                if let Ok(l) = line {
+                    let is_send = l.starts_with("[→]");
+                    let is_recv = l.starts_with("[←]");
+                    let (timestamp, content) = if (is_send || is_recv) && l.len() >= 15 {
+                        let ts = l.chars().skip(4).take(8).collect::<String>();
+                        let c = l.chars().skip(15).collect::<String>();
+                        (ts, c)
+                    } else {
+                        (
+                            chrono::Local::now().format("%H:%M:%S").to_string(),
+                            l.clone(),
+                        )
+                    };
+
+                    new_cache.push_back(WsFrameRecord {
+                        is_send,
+                        timestamp,
+                        content,
+                    });
+                }
+            }
+
+            self.viewport_cache = new_cache;
+            self.cache_start_line = start;
+            self.cache_end_line = end;
+        }
+    }
+}
+
+/// 通用限额落盘函数：如果日志大小超出限制，则停止追加并写入警告
+pub fn write_log_with_limit(
+    file_path: &std::path::Path,
+    data: &str,
+    max_bytes: usize,
+) -> Result<(), std::io::Error> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    if let Some(parent) = file_path.parent() {
+        if !parent.exists() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+
+    let file_len = file_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    if file_len >= max_bytes {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file_path)?;
+
+    let new_len = file_len + data.len();
+    if new_len > max_bytes {
+        file.write_all(b"\n[SYSTEM] Log truncated due to size limit\n")?;
+    } else {
+        file.write_all(data.as_bytes())?;
+    }
+    file.flush()?;
+    Ok(())
+}
+
+/// 自动清理 7 天前过期的日志目录文件
+pub fn cleanup_old_logs_dir(dir_path: &std::path::Path, days: u64) -> Result<(), std::io::Error> {
+    if !dir_path.exists() {
+        return Ok(());
+    }
+    let limit_duration = std::time::Duration::from_secs(days * 24 * 3600);
+    let now = std::time::SystemTime::now();
+
+    for entry in std::fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Ok(metadata) = path.metadata() {
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(age) = now.duration_since(modified) {
+                        if age > limit_duration {
+                            let _ = std::fs::remove_file(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 impl Default for AppState {

@@ -14,6 +14,8 @@ pub enum StreamEvent {
         /// 帧文本内容
         content: String,
     },
+    /// 初始化日志物理路径（用于 TUI 视口滑动窗口 seek 加载）
+    InitLogPath(String),
 }
 
 /// 单个请求的执行结果

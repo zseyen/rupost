@@ -162,7 +162,7 @@ fn render_editor_panel(
     frame.render_widget(&*textarea, area);
 }
 
-fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_response_panel(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let focus = state.active_panel == Panel::Response;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
 
@@ -198,8 +198,19 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
         .border_style(Style::default().fg(border_color));
 
     let text = if is_ws {
+        let visible_height = area.height.saturating_sub(2) as usize;
+
+        let frames_source = if state.is_loading {
+            // 运行期：用内存里的 ws_frames
+            state.ws_frames.clone()
+        } else {
+            // 静止期：滑动加载日志文件对应视口的数据
+            state.load_viewport_sliding_window(state.response_scroll as usize, visible_height);
+            state.viewport_cache.iter().cloned().collect::<Vec<_>>()
+        };
+
         let mut lines = Vec::new();
-        for f in &state.ws_frames {
+        for f in &frames_source {
             let arrow = if f.is_send { "[→] " } else { "[←] " };
             let arrow_color = if f.is_send {
                 Color::Cyan
@@ -217,7 +228,7 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
                     format!("{} ", f.timestamp),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::raw(&f.content),
+                Span::raw(f.content.clone()),
             ]));
         }
         if lines.is_empty() {
@@ -227,8 +238,12 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             )));
         }
 
-        let total_lines = lines.len();
-        let visible_height = area.height.saturating_sub(2) as usize;
+        let total_lines = if state.is_loading {
+            lines.len()
+        } else {
+            state.total_log_lines
+        };
+
         let max_scroll = total_lines
             .saturating_sub(visible_height)
             .min(u16::MAX as usize) as u16;
@@ -238,13 +253,28 @@ fn render_response_panel(frame: &mut Frame, area: Rect, state: &AppState) {
             .wrap(Wrap { trim: true })
             .scroll((scroll_y, 0))
     } else if is_sse {
+        let visible_height = area.height.saturating_sub(2) as usize;
         let mut lines = Vec::new();
-        for line in state.sse_stream_body.lines() {
-            lines.push(Line::from(line));
+
+        if state.is_loading {
+            // 运行期：用内存 sse_stream_body
+            for line in state.sse_stream_body.lines() {
+                lines.push(Line::from(line.to_string()));
+            }
+        } else {
+            // 静止期：滑动加载
+            state.load_viewport_sliding_window(state.response_scroll as usize, visible_height);
+            for f in &state.viewport_cache {
+                lines.push(Line::from(f.content.clone()));
+            }
         }
 
-        let total_lines = lines.len();
-        let visible_height = area.height.saturating_sub(2) as usize;
+        let total_lines = if state.is_loading {
+            lines.len()
+        } else {
+            state.total_log_lines
+        };
+
         let max_scroll = total_lines
             .saturating_sub(visible_height)
             .min(u16::MAX as usize) as u16;

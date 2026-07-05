@@ -50,6 +50,20 @@ TUI 会自动根据当前的终端窗口大小调整显示布局：
   * 按 **`y` / `Y`**：确认丢弃当前修改，强制退出或切换。
   * 按 **`n` / `N` / `Esc`**：取消，退回编辑器，还原原输入光标位置。
 
+### 6. 长连接默认自动落盘与清理 (Log Rotation & Auto Cleanup)
+为保证大规模或长时间 WebSocket 帧与 SSE 流数据的完整可追溯性，且不卡顿终端渲染，RuPost 采取了双轨方案：
+* **默认落盘**：所有 SSE 与 WebSocket 连接启动后，无需显示声明，底层均会默认在本地工作区的 `.rupost/logs/` 目录下生成时间戳命名的物理文件（如 `ws_20260705_1.log`），全量写入所有出站与入站数据帧。
+* **文件限额**：为防止磁盘空间耗尽，单个连接的日志物理文件上限为 **5MB**（大约可存储数万帧）。文件超限后会自动截断写入并追加 `[SYSTEM] Log truncated due to size limit` 警告。
+* **周期自愈**：每次 TUI/CLI 启动时，系统会自动在后台扫描日志目录，清理删除超过 **7 天**未修改的陈旧历史日志。
+
+### 7. 历史交互回溯 (Viewing Long-Connection History)
+要检索并完整阅读过往长连接或常规 HTTP 通信的详细帧日志，您可以使用新增的 `rupost history show <target>` 交互命令：
+* **列表查询**：先运行 `rupost history list` 列出历史记录的大纲，第一列为条目的 **Short ID**（例如 `8cb08160`）。
+* **指定查看**：运行 `rupost history show <target>` 查看详细响应及历史长交互。其检索规则如下：
+  * **按最近序号查看 (新手推荐)**：传入正整数 `N`（如 `rupost history show 1` 查看上一次刚执行完的最新日志；`show 2` 查看倒数第二条）。
+  * **按 Short ID 查看**：传入短 ID 前缀（如 `rupost history show 8cb081`）。
+* **彩色回显**：对 WebSocket 历史帧会采用专属的箭头标识（`[→]` 青色代表发送，`[←]` 黄色代表接收）彩色表格美化打印，SSE 推送采用绿色输出，常规 HTTP 自动格式化回显，方便用户进行离线调试。
+
 ---
 
 ## 🧪 二、 测试说明 (Testing Guide)
@@ -60,10 +74,13 @@ RuPost 的 TUI 模式建立了三级防御测试体系，用于在对 CLI、内�
 这套测试不涉及真实的终端 I/O 绑定，而是在虚拟 `TestBackend` 的内存上模拟运行，用于验证 TUI 的状态机转换和自适应计算：
 * **核心覆盖**：
   * `test_app_state_initialization`：验证 App 初始的焦点、弹窗和布局状态。
-  * `test_adaptive_layout_calculations`：验证在极小（崩溃极限）视口、宽屏、堆叠屏下的布局自适应约束计算，以及防 Panic 的边界值。
-  * `test_state_transitions_via_actions`：验证 Action 状态跃迁与 Tab 焦点的正反向切换。
-  * `test_unsaved_changes_confirm_modal`：验证变脏后，文件切换和退出的阻断弹窗弹出逻辑及 `Y/N` 转移状态机。
-  * `test_request_finished_variable_extension`：验证异步网络数据捕获返回后，全局变量的克隆合并链路。
+  * `test_adaptive_layout_calculations`：验证在极小视口、宽屏、单栏屏下的布局自适应。
+  * `test_state_transitions_via_actions`：验证 Action 状态跃迁与 Tab 焦点切换。
+  * `test_unsaved_changes_confirm_modal`：验证脏文件退出阻断及弹窗转移状态机。
+  * `test_request_finished_variable_extension`：验证异步数据捕获全局变量的克隆合并。
+  * `test_sliding_window_viewport_loading`：验证 TUI 滚动时从物理日志文件增量滑动加载前后 N 条帧记录的算法偏移与定位精度。
+  * `test_log_rotation_and_size_limit`：验证 5MB 日志硬限额在超标后截断并追加系统 SYSTEM 提示的拦截机制。
+  * `test_old_logs_auto_cleanup`：验证后台异步扫描清理 7 天过期临时日志的自愈能力。
 * **执行命令**：
   ```bash
   cargo test --test tui_smoke_test

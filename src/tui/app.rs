@@ -252,10 +252,13 @@ async fn run_async() -> Result<()> {
                                             while let Some(event) = stream_rx.recv().await {
                                                 match event {
                                                     crate::runner::types::StreamEvent::SseChunk(chunk) => {
-                                                        let _ = s_tx.send(TuiEvent::StreamChunk { id: req_id, chunk }).await;
+                                                        let _ = s_tx.send(TuiEvent::StreamChunk { id: req_id, chunk, total_lines: 0 }).await;
                                                     }
                                                     crate::runner::types::StreamEvent::WsFrame { is_send, content } => {
-                                                        let _ = s_tx.send(TuiEvent::WsFrame { id: req_id, is_send, content }).await;
+                                                        let _ = s_tx.send(TuiEvent::WsFrame { id: req_id, is_send, content, total_lines: 0 }).await;
+                                                    }
+                                                    crate::runner::types::StreamEvent::InitLogPath(path) => {
+                                                        let _ = s_tx.send(TuiEvent::InitLogPath { id: req_id, path }).await;
                                                     }
                                                 }
                                             }
@@ -347,6 +350,11 @@ async fn run_async() -> Result<()> {
                     is_send, content, ..
                 } => {
                     state.handle_ws_frame(is_send, content);
+                }
+                TuiEvent::InitLogPath { path, .. } => {
+                    state.log_file_path = Some(std::path::PathBuf::from(path));
+                    state.total_log_lines = 0;
+                    state.viewport_cache.clear();
                 }
                 TuiEvent::Tick => {}
                 _ => {}

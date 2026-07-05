@@ -18,11 +18,17 @@ pub enum TuiEvent {
     StreamChunk {
         id: Uuid,
         chunk: String,
+        total_lines: usize,
     },
     WsFrame {
         id: Uuid,
         is_send: bool,
         content: String,
+        total_lines: usize,
+    },
+    InitLogPath {
+        id: Uuid,
+        path: String,
     },
 }
 

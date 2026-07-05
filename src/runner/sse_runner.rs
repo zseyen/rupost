@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use crate::history::model::RequestSnapshot;
 use crate::http::{Response, SseParser};
 use crate::middleware::Middleware;
@@ -40,6 +41,44 @@ impl SseRunner {
         probe_result: Option<(Duration, Duration)>,
         middlewares: Vec<crate::runner::executor::ExecutorMiddleware>,
     ) -> TestResult {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let default_log_name = format!("sse_{}.log", timestamp);
+        let final_stream_to = options.stream_to.clone().unwrap_or_else(|| {
+            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
+            format!("{}/logs/{}", dir, default_log_name)
+        });
+        let log_path = std::path::PathBuf::from(&final_stream_to);
+
+        // 通知物理路径给前台
+        if let Some(ref sender) = options.stream_sender {
+            let _ = sender.send(crate::runner::types::StreamEvent::InitLogPath(
+                final_stream_to.clone(),
+            ));
+        }
+
+        // 清理 7 天陈旧日志
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::read_dir(parent).map(|read_dir| {
+                let limit_duration = std::time::Duration::from_secs(7 * 24 * 3600);
+                let now = std::time::SystemTime::now();
+                for entry in read_dir.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Ok(metadata) = path.metadata() {
+                            if let Ok(modified) = metadata.modified() {
+                                if let Ok(age) = now.duration_since(modified) {
+                                    if age > limit_duration {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        let max_bytes = 5 * 1024 * 1024; // 5MB limit
         let status_code = response.status().as_u16();
         let headers = response.headers().clone();
 
@@ -130,6 +169,9 @@ impl SseRunner {
                                 event_count += 1;
                                 accumulated_body.push_str(&event.data);
                                 accumulated_body.push('\n');
+
+                                let log_line = format!("data: {}\n\n", event.data);
+                                let _ = write_sse_log_with_limit(&log_path, &log_line, max_bytes).await;
 
                                 if let Some(ref sender) = options.stream_sender {
                                     let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(event.data.clone()));
@@ -325,4 +367,42 @@ impl SseRunner {
 
         test_result
     }
+}
+
+async fn write_sse_log_with_limit(
+    log_path: &std::path::Path,
+    data: &str,
+    max_bytes: usize,
+) -> Result<(), std::io::Error> {
+    use tokio::fs::OpenOptions;
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(parent) = log_path.parent() {
+        if !parent.exists() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+    }
+
+    let file_len = log_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    if file_len >= max_bytes {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(log_path)
+        .await?;
+
+    let new_len = file_len + data.len();
+    if new_len > max_bytes {
+        let _ = file
+            .write_all(b"\n[SYSTEM] Log truncated due to size limit (5MB).\n")
+            .await;
+    } else {
+        let _ = file.write_all(data.as_bytes()).await;
+    }
+    let _ = file.flush().await;
+    Ok(())
 }

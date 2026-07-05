@@ -181,7 +181,7 @@ fn test_sliding_window_viewport_loading() {
     use std::io::Write;
     let temp_dir = tempfile::tempdir().unwrap();
     let file_path = temp_dir.path().join("ws_test.log");
-    
+
     // 写入 1000 行虚拟 WebSocket 帧记录
     {
         let mut file = std::fs::File::create(&file_path).unwrap();
@@ -200,9 +200,13 @@ fn test_sliding_window_viewport_loading() {
 
     assert_eq!(state.viewport_cache.len(), 120);
     // 第一条缓存帧应对应文件的第 450 行（即 Frame 450）
-    assert_eq!(state.viewport_cache[0].content, "[→] 12:00:00 | Frame 450");
+    assert_eq!(state.viewport_cache[0].content, "Frame 450");
+    assert!(state.viewport_cache[0].is_send);
+    assert_eq!(state.viewport_cache[0].timestamp, "12:00:00");
     // 最后一条缓存帧应对应文件的第 569 行（即 Frame 569）
-    assert_eq!(state.viewport_cache[119].content, "[→] 12:00:00 | Frame 569");
+    assert_eq!(state.viewport_cache[119].content, "Frame 569");
+    assert!(state.viewport_cache[119].is_send);
+    assert_eq!(state.viewport_cache[119].timestamp, "12:00:00");
 }
 
 #[test]
@@ -212,11 +216,11 @@ fn test_log_rotation_and_size_limit() {
 
     // 调用底层的通用限额落盘辅助方法，设置极小的上限 100 字节
     let max_bytes = 100;
-    
+
     // 连续写入，直到超出 100 字节
     let data = "A".repeat(40);
     for _ in 0..5 {
-        let _ = crate::tui::state::write_log_with_limit(&file_path, &data, max_bytes);
+        let _ = rupost::tui::state::write_log_with_limit(&file_path, &data, max_bytes);
     }
 
     // 读取物理文件大小，断言它应该被阻断拦截，且以警告结尾
@@ -235,11 +239,17 @@ fn test_old_logs_auto_cleanup() {
     std::fs::File::create(&new_file).unwrap();
 
     // 强行修改 old_file 的修改时间到 10 天前 (10 * 24 * 3600 秒)
-    let ten_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 3600);
-    filetime::set_file_times(&old_file, filetime::FileTime::from_system_time(ten_days_ago), filetime::FileTime::from_system_time(ten_days_ago)).unwrap();
+    let ten_days_ago =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 3600);
+    filetime::set_file_times(
+        &old_file,
+        filetime::FileTime::from_system_time(ten_days_ago),
+        filetime::FileTime::from_system_time(ten_days_ago),
+    )
+    .unwrap();
 
     // 调用清理函数，设置清理时长为 7 天
-    crate::tui::state::cleanup_old_logs_dir(temp_dir.path(), 7).unwrap();
+    rupost::tui::state::cleanup_old_logs_dir(temp_dir.path(), 7).unwrap();
 
     assert!(!old_file.exists());
     assert!(new_file.exists());

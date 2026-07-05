@@ -58,6 +58,9 @@ async fn main() -> Result<()> {
             HistoryCommands::List { limit, reverse } => {
                 rupost::history::printer::list_history(limit, reverse)?;
             }
+            HistoryCommands::Show { target } => {
+                rupost::history::printer::show_history(&target)?;
+            }
             HistoryCommands::Export { last: _, output: _ } => {
                 println!("History export is not implemented in MVP stage.");
             }

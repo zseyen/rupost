@@ -191,6 +191,14 @@ pub enum HistoryCommands {
         #[arg(short, long, required = true)]
         output: String,
     },
+
+    /// Show detailed response and body/frames for a specific history entry
+    #[command(alias = "s")]
+    Show {
+        /// History entry number (1-indexed, 1 is the oldest) or UUID
+        #[arg(required = true)]
+        target: String,
+    },
 }
 
 #[derive(Parser, Debug)]

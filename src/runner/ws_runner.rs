@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use crate::assertion::evaluate_assertions;
+use crate::history::model::RequestSnapshot;
 use crate::http::{Request, Response};
 use crate::middleware::Middleware;
 use crate::parser::types::ParsedRequest;
@@ -36,6 +37,49 @@ impl WsRunner {
         let start_time = Instant::now();
         let name = parsed.name().map(|s| s.to_string());
         let initial_url = parsed.url.clone();
+
+        let request_snapshot = RequestSnapshot::from_parsed(&parsed);
+
+        // 默认自动创建物理日志落盘文件，使用 request_number 或者是根据系统 UUID/时间戳命名
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let default_log_name = format!("ws_{}_{}.log", timestamp, request_number);
+        let log_path_str = parsed.metadata.stream_to.clone().unwrap_or_else(|| {
+            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
+            format!("{}/logs/{}", dir, default_log_name)
+        });
+        let log_path = std::path::PathBuf::from(&log_path_str);
+
+        // 如果在 TUI 下，把物理路径通知给前台
+        if let Some(ref sender) = stream_sender {
+            let _ = sender.send(crate::runner::types::StreamEvent::InitLogPath(
+                log_path_str.clone(),
+            ));
+        }
+
+        // 清理超过 7 天的旧日志
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::read_dir(parent).map(|read_dir| {
+                let limit_duration = std::time::Duration::from_secs(7 * 24 * 3600);
+                let now = std::time::SystemTime::now();
+                for entry in read_dir.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Ok(metadata) = path.metadata() {
+                            if let Ok(modified) = metadata.modified() {
+                                if let Ok(age) = now.duration_since(modified) {
+                                    if age > limit_duration {
+                                        let _ = std::fs::remove_file(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        let mut accumulated_log: Vec<String> = Vec::new();
+        let max_bytes = 5 * 1024 * 1024; // 5MB limit
 
         // 保存断言、捕获列表与超时/Body信息
         let assertions_to_eval = parsed.metadata.assertions.clone();
@@ -139,8 +183,6 @@ impl WsRunner {
             None => None,
         };
 
-        let mut executed_actions_count = 0;
-
         if actions.is_empty() {
             // CLI 直接测试模式：如果有 body 则发包，然后持续打印 5 秒的入站流
             if !body_content.trim().is_empty() {
@@ -153,13 +195,17 @@ impl WsRunner {
                     0,
                 );
                 let _ = client.send_frame(outbound_frame).await;
+                let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
+                accumulated_log.push(log_line.trim_end().to_string());
+                let _ = write_ws_log_with_limit(&log_path, &log_line, max_bytes).await;
+
                 if let Some(ref sender) = stream_sender {
                     let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
                         is_send: true,
                         content: resolved_payload,
                     });
                 }
-                executed_actions_count += 1;
             }
 
             use colored::Colorize;
@@ -189,13 +235,18 @@ impl WsRunner {
                                         frame.payload_as_string()
                                     };
                                     println!("{} [INBOUND] [Type: {:?}] {}", "[WS]".green().bold(), frame.frame_type, payload_str);
+                                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                                    let log_line = format!("[←] {} | {}\n", ts, payload_str);
+                                    accumulated_log.push(log_line.trim_end().to_string());
+                                    let _ = write_ws_log_with_limit(&log_path, &log_line, max_bytes).await;
+
                                     if let Some(ref sender) = stream_sender {
                                         let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
                                             is_send: false,
                                             content: payload_str.clone(),
                                         });
                                     }
-                                    executed_actions_count += 1;
+
                                 }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
@@ -214,11 +265,9 @@ impl WsRunner {
             let close_frame =
                 WsFrame::new(FrameDirection::Outbound, WsFrameType::Close, Vec::new(), 0);
             let _ = client.send_frame(close_frame).await;
-            executed_actions_count += 1;
         } else {
             // 6. 驱动 WsAction 执行流
             for (action_idx, action) in actions.into_iter().enumerate() {
-                executed_actions_count = action_idx + 1;
                 match Self::execute_action(
                     action,
                     action_idx,
@@ -230,6 +279,8 @@ impl WsRunner {
                     &captures_to_eval,
                     &mut assertion_results,
                     stream_sender.as_ref(),
+                    Some(&log_path),
+                    &mut accumulated_log,
                 )
                 .await
                 {
@@ -250,41 +301,38 @@ impl WsRunner {
         let duration = start_time.elapsed();
         let success = final_error.is_none() && assertion_results.iter().all(|a| a.passed);
 
-        let mut test_result = if let Some(err) = final_error {
-            TestResult::error(
-                request_number,
-                name,
-                "GET".to_string(),
-                resolved_url,
-                err,
-                duration,
-            )
-        } else {
-            // 成功时构建一个代表长连接总结的 Response
-            let summary_response = Response::new(
-                200,
-                HeaderMap::new(),
-                format!(
-                    "WebSocket Session Completed Successfully. Run {} actions.",
-                    executed_actions_count
-                ),
-                duration,
-                Duration::from_millis(0),
-                Duration::from_millis(0),
-            )
-            .unwrap();
+        let final_body = accumulated_log.join("\n");
+        let summary_response = Response::new(
+            if success { 200 } else { 500 },
+            HeaderMap::new(),
+            final_body,
+            duration,
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+        )
+        .unwrap();
 
-            TestResult::success(
-                request_number,
-                name,
-                "GET".to_string(),
-                resolved_url,
-                summary_response,
-            )
+        let test_result = TestResult {
+            request_number,
+            name,
+            method: "GET".to_string(),
+            url: resolved_url,
+            status: Some(summary_response.status.code()),
+            duration,
+            success,
+            error: final_error.clone(),
+            response: Some(summary_response.clone()),
+            skipped: false,
+            assertions: assertion_results,
+            timing: None,
+            diagnose_report: None,
+            request: Some(request_snapshot.clone()),
         };
 
-        test_result.assertions = assertion_results;
-        test_result.success = success;
+        // 保存历史记录 (WebSocket 专用)
+        use crate::history::recorder::record_history;
+        record_history(request_snapshot, &summary_response, None);
+
         test_result
     }
 }
@@ -311,6 +359,8 @@ impl WsRunner {
         stream_sender: Option<
             &tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
+        log_path: Option<&std::path::Path>,
+        accumulated_log: &mut Vec<String>,
     ) -> Result<bool, String> {
         match action {
             WsAction::Connect { .. } => Ok(true),
@@ -329,6 +379,13 @@ impl WsRunner {
                 if let Err(e) = client.send_frame(outbound_frame).await {
                     Err(format!("Send failed: {}", e))
                 } else {
+                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                    let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
+                    accumulated_log.push(log_line.trim_end().to_string());
+                    if let Some(path) = log_path {
+                        let _ = write_ws_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                    }
+
                     if let Some(sender) = stream_sender {
                         let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
                             is_send: true,
@@ -395,6 +452,13 @@ impl WsRunner {
                                         } else {
                                             frame.payload_as_string()
                                         };
+                                        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                                        let log_line = format!("[←] {} | {}\n", ts, payload_str);
+                                        accumulated_log.push(log_line.trim_end().to_string());
+                                        if let Some(path) = log_path {
+                                            let _ = write_ws_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                                        }
+
                                         if let Some(sender) = stream_sender {
                                             let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
                                                 is_send: false,
@@ -517,6 +581,44 @@ impl WsRunner {
         }
         resolved
     }
+}
+
+async fn write_ws_log_with_limit(
+    log_path: &std::path::Path,
+    data: &str,
+    max_bytes: usize,
+) -> Result<(), std::io::Error> {
+    use tokio::fs::OpenOptions;
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(parent) = log_path.parent() {
+        if !parent.exists() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+    }
+
+    let file_len = log_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    if file_len >= max_bytes {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(log_path)
+        .await?;
+
+    let new_len = file_len + data.len();
+    if new_len > max_bytes {
+        let _ = file
+            .write_all(b"\n[SYSTEM] Log truncated due to size limit (5MB).\n")
+            .await;
+    } else {
+        let _ = file.write_all(data.as_bytes()).await;
+    }
+    let _ = file.flush().await;
+    Ok(())
 }
 
 #[cfg(test)]

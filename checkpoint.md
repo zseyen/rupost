@@ -29,10 +29,13 @@
    - 运行冒烟回归脚本 `tests/verify_features.sh` 与示例脚本 `examples/run_all.sh` 均成功通过，所有内置示例 **15/15 成功通过 (ALL PASS)**。
    - 编写并提交了完整的 [TUI 使用与测试指南](file:///doc/tui/usage_and_testing.md)，同步更新了 [README.md](file:///README.md) 并补齐了技术架构分层总结。
    - 实现了 **TUI 长连接流式实时渲染与帧控制台**。在 TUI 模式中，以 `@sse` 或者是 `@websocket` 声明的连接，均由后台 Tokio 协程驱动，UI 帧通过 `UnboundedSender` 异步通信。Response 面板自适应转为 `[WS Streaming...]` / `[SSE Streaming...]` 进行打字机式流回显和滑动窗口帧控制台，支持自动滚动追随和滚动偏移。
+   - **长连接自动落盘与限额轮转机制**：所有长连接（WebSocket、SSE）运行后默认在 `.rupost/logs/` 下落盘。物理文件设置 **5MB** 安全限制防止磁盘膨胀，并在系统启动时自动清理 **7 天**前修改的陈旧日志文件。
+   - **滑动窗口视口缓存机制 (Sliding Window Viewport Cache)**：前台 TUI 引入滑动视口缓存，在长连接运行期间以低开销的内存环形队列回显，在静止期/查看历史时，算法自动从物理日志文件滑动加载可见视口的前后 **N (N=50) 行** 帧记录载入 `viewport_cache` 渲染，性能大幅提升并彻底杜绝内存泄漏与 UI 卡顿。
+   - **全量交互历史 show 指令检索**：在 WsRunner 优雅退出前，将全量收发帧加入响应 Body 归档至 `history.jsonl`；升级 CLI 引入 `rupost history show <target>` 指令，支持根据最近序号（如 1 代表最近一条）或 Short ID 检索回溯，并提供 `[→]` 青色发送、`[←]` 黄色接收的彩色箭头与分栏气泡气泡高亮打印。
 
 ---
 
 ## 下一步工作规划 (Next Steps)
 
-- **敏感数据就地脱敏 (Secrets Masker)**：在快照落盘前，对 Authorization、Cookie 字段及 Body 敏感正则词执行就地掩码打码替换。
 - **智能 JSON Diff 引擎**：重构重放对比逻辑，对 JSON Body 默认解析并限制抖动动态字段。
+- **敏感数据就地脱敏 (Secrets Masker)**：在快照落盘前，对 Authorization、Cookie 字段及 Body 敏感正则词执行就地掩码打码替换。

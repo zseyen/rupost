@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
             replayer.replay_file(&file).await?;
         }
         Some(Commands::Tui) => {
-            rupost::tui::run()?;
+            rupost::tui::run().await?;
         }
         None => {
             if cli.args.is_empty() {

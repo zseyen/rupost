@@ -11,13 +11,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// 启动并运行 TUI 主事件循环
-pub fn run() -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(crate::error::RupostError::IoError)?;
-
-    rt.block_on(async { run_async().await })
+pub async fn run() -> Result<()> {
+    run_async().await
 }
 
 async fn run_async() -> Result<()> {

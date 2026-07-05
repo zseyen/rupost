@@ -265,6 +265,24 @@ rm -f rupost.toml .env
 # 清理临时文件
 rm -rf "$TEMP_DIR"
 
+# 6. 验证 TUI 启动与防嵌套 Runtime Panic 冒烟测试
+echo -e "${BLUE}[*] 验证 TUI 非交互式启动与退出 (防 nested runtime panic)...${NC}"
+# 我们通过管道向程序传入退出指令 q
+# 在非 TTY 环境下，程序会因无法初始化 raw mode 而抛出 "Device not configured" 并退出。
+# 如果发生 nested runtime panic，则会输出 "Cannot start a runtime from within a runtime"。
+TUI_OUT=$(echo "q" | $RUPOST_BIN tui 2>&1 || true)
+echo "TUI 启动输出: $TUI_OUT"
+
+if echo "$TUI_OUT" | grep -q "Cannot start a runtime from within a runtime"; then
+    echo -e "${RED}[ERROR] TUI 启动冒烟测试失败：发现 Runtime 嵌套冲突！${NC}"
+    exit 1
+elif echo "$TUI_OUT" | grep -q "Device not configured" || echo "$TUI_OUT" | grep -q "Unsupported" || [[ "$TUI_OUT" == "" ]]; then
+    echo -e "${GREEN}[✓] TUI 运行环境校验成功（非 TTY 优雅返回，无 Runtime 嵌套冲突）！${NC}"
+else
+    echo -e "${RED}[ERROR] TUI 启动发生了非预期的错误！${NC}"
+    exit 1
+fi
+
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"
 echo -e "${GREEN}=====================================================${NC}"

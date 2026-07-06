@@ -67,10 +67,7 @@ async fn run_async() -> Result<()> {
 
     let mut state = AppState::new();
     if let Ok(files) = crate::runner::scanner::DirectoryScanner::scan(&[".".to_string()]) {
-        state.file_tree = files
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
+        state.file_tree = filter_tui_test_files(files);
     }
     // 载入历史记录
     state.history_list = crate::history::storage::get_storage().tail(100).unwrap_or_default();
@@ -667,5 +664,160 @@ fn sync_preview_to_editor(
                 load_history_response_to_state(state);
             }
         }
+    }
+}
+
+/// 对 TUI 中扫描出的所有候选文件路径进行精细化过滤
+/// 1. 过滤文件名黑名单：README.md, SUMMARY.md, CHANGELOG.md, AGENTS.md, checkpoint.md, walkthrough.md 等
+/// 2. 过滤目录黑名单：.git, .rupost, target, node_modules, .agents, .gemini 等
+/// 3. 轻量内容启发式扫描：读取前缀 1024 字节，检查是否是包含有效 HTTP 请求的 http 文件或包含 http 代码块的 md 文件
+pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
+    let mut result = Vec::new();
+    
+    // 黑名单目录列表
+    let blacklisted_dirs = [
+        ".git",
+        ".rupost",
+        "target",
+        "node_modules",
+        ".agents",
+        ".gemini",
+    ];
+    
+    // 黑名单文件名列表
+    let blacklisted_files = [
+        "README.md",
+        "readme.md",
+        "SUMMARY.md",
+        "summary.md",
+        "CHANGELOG.md",
+        "changelog.md",
+        "AGENTS.md",
+        "agents.md",
+        "checkpoint.md",
+        "walkthrough.md",
+    ];
+
+    for path in paths {
+        // 1. 第一层过滤：路径名及黑名单拦截（零 IO 读盘）
+        // 检查是否包含黑名单目录
+        let has_blacklisted_dir = blacklisted_dirs.iter().any(|&dir| {
+            path.components().any(|c| c.as_os_str() == dir)
+        });
+        if has_blacklisted_dir {
+            continue;
+        }
+
+        // 检查文件名是否在黑名单中
+        if let Some(file_name) = path.file_name() {
+            let name_str = file_name.to_string_lossy();
+            if blacklisted_files.iter().any(|&f| name_str.eq_ignore_ascii_case(f)) {
+                continue;
+            }
+        }
+
+        // 2. 第二层过滤：轻量级启发式读盘检视
+        if let Ok(mut file) = std::fs::File::open(&path) {
+            use std::io::Read;
+            let mut buf = [0u8; 1024];
+            if let Ok(bytes_read) = file.read(&mut buf) {
+                let content = String::from_utf8_lossy(&buf[..bytes_read]);
+                
+                let is_http_extension = path.extension()
+                    .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("http"))
+                    .unwrap_or(false);
+                let is_md_extension = path.extension()
+                    .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
+                    .unwrap_or(false);
+
+                if is_http_extension {
+                    let has_request = content.lines().any(|line| {
+                        let trimmed = line.trim();
+                        trimmed.starts_with("GET ")
+                            || trimmed.starts_with("POST ")
+                            || trimmed.starts_with("PUT ")
+                            || trimmed.starts_with("DELETE ")
+                            || trimmed.starts_with("PATCH ")
+                            || trimmed.starts_with("HEAD ")
+                            || trimmed.starts_with("OPTIONS ")
+                            || trimmed.starts_with("WEBSOCKET ")
+                            || trimmed.starts_with("WS ")
+                    });
+                    if !has_request {
+                        continue;
+                    }
+                } else if is_md_extension {
+                    if !content.contains("```http") && !content.contains("```rest") {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        result.push(path.to_string_lossy().to_string());
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_filter_tui_test_files_cases() {
+        let dir = tempdir().unwrap();
+        
+        // 1. 创建合格的 .http 文件
+        let http_ok = dir.path().join("ok.http");
+        std::fs::write(&http_ok, "GET http://example.com").unwrap();
+
+        // 2. 创建合格的 .md 文件
+        let md_ok = dir.path().join("ok.md");
+        std::fs::write(&md_ok, "# Doc\n```http\nPOST /login\n```").unwrap();
+
+        // 3. 创建不合格的普通 README
+        let readme = dir.path().join("README.md");
+        std::fs::write(&readme, "# README\nThis is just a doc.").unwrap();
+
+        // 4. 创建空 .http 文件
+        let empty_http = dir.path().join("empty.http");
+        std::fs::write(&empty_http, "   \n  ").unwrap();
+
+        // 5. 创建非 UTF-8 二进制大文件
+        let binary_http = dir.path().join("binary.http");
+        let mut f = std::fs::File::create(&binary_http).unwrap();
+        f.write_all(&[0u8, 159u8, 146u8, 150u8, 0xffu8, 0x00u8]).unwrap();
+
+        // 6. 创建黑名单目录下的合格文件
+        let node_modules_dir = dir.path().join("node_modules");
+        std::fs::create_dir(&node_modules_dir).unwrap();
+        let http_node = node_modules_dir.join("test.http");
+        std::fs::write(&http_node, "GET http://localhost").unwrap();
+
+        let paths = vec![
+            http_ok.clone(),
+            md_ok.clone(),
+            readme,
+            empty_http,
+            binary_http,
+            http_node,
+        ];
+
+        let filtered = filter_tui_test_files(paths);
+        assert_eq!(filtered.len(), 2);
+        
+        let has_http = filtered.iter().any(|p| p.contains("ok.http"));
+        let has_md = filtered.iter().any(|p| p.contains("ok.md"));
+        assert!(has_http);
+        assert!(has_md);
     }
 }

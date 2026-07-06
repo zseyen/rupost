@@ -386,3 +386,30 @@ fn test_narrow_layout_three_column_guarantee() {
     assert_eq!(state.layout_mode, LayoutMode::Narrow);
     assert_eq!(state.active_sidebar_tab, SidebarTab::Files);
 }
+
+#[test]
+fn test_read_only_smoke_render_constraints() {
+    // 1. 初始化 TestBackend
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    state.editor_text = "GET http://localhost\nAccept: json".to_string();
+
+    // 2. 模拟设置 PopupState 为 Help (包含我们新增加的 History 知识大段说明)
+    state.show_help = true;
+
+    // 3. 施加多重边界分辨率压测，暴露 Constraint panic
+    let test_sizes = vec![(120, 40), (95, 30), (70, 20), (35, 5)];
+    for &(w, h) in &test_sizes {
+        state.update_layout(w, h);
+        
+        // 触发重绘，调用主渲染入口
+        let res = terminal.draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        });
+        
+        // 确保 draw 过程中没有发生任何 panic，且成功绘制
+        assert!(res.is_ok());
+    }
+}

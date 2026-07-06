@@ -342,31 +342,31 @@ fn test_dirty_editor_history_switch_interception() {
     state.active_sidebar_tab = SidebarTab::History;
     state.active_panel = Panel::Files;
     state.is_dirty = true;
-    
-    state.history_list = vec![
-        rupost::history::model::HistoryEntry {
-            id: "1".to_string(),
-            timestamp: chrono::Utc::now(),
-            duration_ms: 10,
-            request: rupost::history::model::RequestSnapshot {
-                method: "GET".to_string(),
-                url: "http://example.com".to_string(),
-                headers: reqwest::header::HeaderMap::new(),
-                body: None,
-            },
-            source: None,
-            response: rupost::history::model::ResponseMeta {
-                status: 200,
-                headers: reqwest::header::HeaderMap::new(),
-                body: Some("".to_string()),
-            },
-        }
-    ];
+
+    state.history_list = vec![rupost::history::model::HistoryEntry {
+        id: "1".to_string(),
+        timestamp: chrono::Utc::now(),
+        duration_ms: 10,
+        request: rupost::history::model::RequestSnapshot {
+            method: "GET".to_string(),
+            url: "http://example.com".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        source: None,
+        response: rupost::history::model::ResponseMeta {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: Some("".to_string()),
+        },
+    }];
 
     if !state.history_list.is_empty() {
         if state.is_dirty {
             state.show_unsaved_confirm = true;
-            state.pending_action = Some(PendingAction::SwitchHistory(state.history_state.selected_index));
+            state.pending_action = Some(PendingAction::SwitchHistory(
+                state.history_state.selected_index,
+            ));
         } else {
             state.active_panel = Panel::Editor;
         }
@@ -381,7 +381,7 @@ fn test_dirty_editor_history_switch_interception() {
 fn test_narrow_layout_three_column_guarantee() {
     use rupost::tui::state::SidebarTab;
     let mut state = AppState::new();
-    
+
     state.update_layout(90, 20);
     assert_eq!(state.layout_mode, LayoutMode::Narrow);
     assert_eq!(state.active_sidebar_tab, SidebarTab::Files);
@@ -403,12 +403,12 @@ fn test_read_only_smoke_render_constraints() {
     let test_sizes = vec![(120, 40), (95, 30), (70, 20), (35, 5)];
     for &(w, h) in &test_sizes {
         state.update_layout(w, h);
-        
+
         // 触发重绘，调用主渲染入口
         let res = terminal.draw(|frame| {
             rupost::tui::ui::render(frame, &mut state);
         });
-        
+
         // 确保 draw 过程中没有发生任何 panic，且成功绘制
         assert!(res.is_ok());
     }

@@ -1,6 +1,6 @@
-pub mod sidebar;
 pub mod editor;
 pub mod response;
+pub mod sidebar;
 
 use super::state::{AppState, LayoutMode, Panel};
 use ratatui::{
@@ -12,10 +12,7 @@ use ratatui::{
 };
 
 /// 渲染 TUI 面板布局主入口
-pub fn render(
-    frame: &mut Frame,
-    state: &mut AppState,
-) {
+pub fn render(frame: &mut Frame, state: &mut AppState) {
     let size = frame.area();
 
     // 1. 终端超小防御机制
@@ -244,64 +241,174 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
 
 fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     use crate::tui::state::{Panel, SidebarTab};
-    
+
     let style = Style::default()
         .bg(Color::Rgb(30, 30, 46))
         .fg(Color::Rgb(205, 214, 244));
-        
+
     let spans = match state.active_panel {
         Panel::Files => match state.active_sidebar_tab {
             SidebarTab::Files => vec![
-                Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " q ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Quit │ "),
-                Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " ? ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Help │ "),
-                Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Tab ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Focus Editor │ "),
-                Span::styled(" h/l (←/→) ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " h/l (←/→) ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Switch Tab │ "),
-                Span::styled(" j/k (↑/↓) / Click ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " j/k (↑/↓) / Click ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Select │ "),
-                Span::styled(" Enter ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Enter ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Edit File │ "),
-                Span::styled(" p ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " p ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Toggle Path"),
             ],
             SidebarTab::History => vec![
-                Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " q ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Quit │ "),
-                Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " ? ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Help │ "),
-                Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Tab ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Focus Editor │ "),
-                Span::styled(" h/l (←/→) ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " h/l (←/→) ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Switch Tab │ "),
-                Span::styled(" j/k (↑/↓) / Click ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " j/k (↑/↓) / Click ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Select │ "),
-                Span::styled(" Enter ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " Enter ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("Load History"),
             ],
         },
         Panel::Editor => vec![
-            Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " q ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Quit │ "),
-            Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ? ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Help │ "),
-            Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Tab ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Focus Response │ "),
-            Span::styled(" Ctrl+Enter / Ctrl+R ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Ctrl+Enter / Ctrl+R ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Run Request │ "),
-            Span::styled(" Ctrl+S ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Ctrl+S ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Save"),
         ],
         Panel::Response => vec![
-            Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " q ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Quit │ "),
-            Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " ? ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Help │ "),
-            Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Tab ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Focus Sidebar │ "),
-            Span::styled(" j/k (↑/↓) ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " j/k (↑/↓) ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("Scroll Response"),
         ],
     };
@@ -314,8 +421,8 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 mod tests {
     use super::*;
     use crate::tui::state::{AppState, LayoutMode, Panel, SidebarTab};
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn smoke_test_components_render() {
@@ -323,29 +430,24 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         let mut state = AppState::new();
-        state.file_tree = vec![
-            "test1.http".to_string(),
-            "subdir/test2.http".to_string(),
-        ];
-        state.history_list = vec![
-            crate::history::model::HistoryEntry {
-                id: "1".to_string(),
-                timestamp: chrono::Utc::now(),
-                duration_ms: 15,
-                request: crate::history::model::RequestSnapshot {
-                    method: "GET".to_string(),
-                    url: "http://example.com/api".to_string(),
-                    headers: reqwest::header::HeaderMap::new(),
-                    body: None,
-                },
-                source: None,
-                response: crate::history::model::ResponseMeta {
-                    status: 200,
-                    headers: reqwest::header::HeaderMap::new(),
-                    body: Some("{}".to_string()),
-                },
-            }
-        ];
+        state.file_tree = vec!["test1.http".to_string(), "subdir/test2.http".to_string()];
+        state.history_list = vec![crate::history::model::HistoryEntry {
+            id: "1".to_string(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 15,
+            request: crate::history::model::RequestSnapshot {
+                method: "GET".to_string(),
+                url: "http://example.com/api".to_string(),
+                headers: reqwest::header::HeaderMap::new(),
+                body: None,
+            },
+            source: None,
+            response: crate::history::model::ResponseMeta {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some("{}".to_string()),
+            },
+        }];
 
         for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
             for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
@@ -356,15 +458,19 @@ mod tests {
 
                     state.show_help = true;
                     state.show_unsaved_confirm = false;
-                    terminal.draw(|f| {
-                        render(f, &mut state);
-                    }).unwrap();
+                    terminal
+                        .draw(|f| {
+                            render(f, &mut state);
+                        })
+                        .unwrap();
 
                     state.show_help = false;
                     state.show_unsaved_confirm = true;
-                    terminal.draw(|f| {
-                        render(f, &mut state);
-                    }).unwrap();
+                    terminal
+                        .draw(|f| {
+                            render(f, &mut state);
+                        })
+                        .unwrap();
                 }
             }
         }

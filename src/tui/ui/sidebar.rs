@@ -43,7 +43,9 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     match state.active_sidebar_tab {
         SidebarTab::Files => {
             let file_count = state.file_tree.len();
-            state.files_state.clamp_scroll_offset(file_count, viewport_height);
+            state
+                .files_state
+                .clamp_scroll_offset(file_count, viewport_height);
 
             let start = state.files_state.scroll_offset;
             let end = (start + viewport_height).min(file_count);
@@ -78,23 +80,33 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                         };
 
                         // 如果当前文件已经加载进编辑器，显示一个小星号前缀
-                        let is_loaded = actual_idx == state.loaded_file_index 
-                            && state.editor_file_path.as_ref().map_or(false, |p| p == full_path);
+                        let is_loaded = actual_idx == state.loaded_file_index
+                            && state.editor_file_path.as_ref() == Some(full_path);
                         let prefix = if is_loaded { "* " } else { "  " };
 
                         Line::from(vec![
-                            Span::styled(prefix, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                            Span::styled(
+                                prefix,
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
                             Span::styled(display_text, style),
                         ])
                     })
                     .collect()
             };
 
-            frame.render_widget(Paragraph::new(lines).block(block.title(" Files ")), chunks[1]);
+            frame.render_widget(
+                Paragraph::new(lines).block(block.title(" Files ")),
+                chunks[1],
+            );
         }
         SidebarTab::History => {
             let history_count = state.history_list.len();
-            state.history_state.clamp_scroll_offset(history_count, viewport_height);
+            state
+                .history_state
+                .clamp_scroll_offset(history_count, viewport_height);
 
             let start = state.history_state.scroll_offset;
             let end = (start + viewport_height).min(history_count);
@@ -129,7 +141,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                         };
 
                         let status = entry.response.status;
-                        let status_color = if status >= 200 && status < 400 {
+                        let status_color = if (200..400).contains(&status) {
                             Color::Green
                         } else {
                             Color::Red
@@ -141,19 +153,34 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                             &entry.id
                         };
 
-                        let host_and_path = crate::tui::state::format_url_host_and_path(&entry.request.url);
+                        let host_and_path =
+                            crate::tui::state::format_url_host_and_path(&entry.request.url);
 
                         Line::from(vec![
-                            Span::styled(format!("[{}] ", short_id), Style::default().fg(Color::DarkGray)),
-                            Span::styled(format!("{:<5}", method), Style::default().fg(method_color).add_modifier(Modifier::BOLD)),
+                            Span::styled(
+                                format!("[{}] ", short_id),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::styled(
+                                format!("{:<5}", method),
+                                Style::default()
+                                    .fg(method_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
                             Span::styled(format!(" {} ", host_and_path), base_style),
-                            Span::styled(format!(" ({})", status), Style::default().fg(status_color)),
+                            Span::styled(
+                                format!(" ({})", status),
+                                Style::default().fg(status_color),
+                            ),
                         ])
                     })
                     .collect()
             };
 
-            frame.render_widget(Paragraph::new(lines).block(block.title(" Request History ")), chunks[1]);
+            frame.render_widget(
+                Paragraph::new(lines).block(block.title(" Request History ")),
+                chunks[1],
+            );
         }
     }
 }

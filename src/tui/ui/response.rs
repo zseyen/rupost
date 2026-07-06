@@ -43,7 +43,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .border_style(Style::default().fg(border_color));
 
     let visible_height = area.height.saturating_sub(2) as usize; // 可视行数
-    let max_width = area.width.saturating_sub(2) as usize;       // 可视列数
+    let max_width = area.width.saturating_sub(2) as usize; // 可视列数
 
     if is_ws {
         // 1. 获取 WS 原始帧数据源
@@ -58,7 +58,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let mut visual_lines = Vec::new();
         for f in &frames_source {
             let arrow = if f.is_send { "[→] " } else { "[←] " };
-            let arrow_color = if f.is_send { Color::Cyan } else { Color::Yellow };
+            let arrow_color = if f.is_send {
+                Color::Cyan
+            } else {
+                Color::Yellow
+            };
 
             // 原始日志单行文本
             let text_line = format!("{} {} {}", arrow, f.timestamp, f.content);
@@ -68,14 +72,30 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 let raw_str = w_line.to_string();
                 if raw_str.starts_with("[→]") {
                     visual_lines.push(Line::from(vec![
-                        Span::styled("[→] ", Style::default().fg(arrow_color).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{} ", f.timestamp), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            "[→] ",
+                            Style::default()
+                                .fg(arrow_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("{} ", f.timestamp),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::raw(raw_str[15..].to_string()),
                     ]));
                 } else if raw_str.starts_with("[←]") {
                     visual_lines.push(Line::from(vec![
-                        Span::styled("[←] ", Style::default().fg(arrow_color).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{} ", f.timestamp), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            "[←] ",
+                            Style::default()
+                                .fg(arrow_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("{} ", f.timestamp),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::raw(raw_str[15..].to_string()),
                     ]));
                 } else {
@@ -100,14 +120,18 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let sliced = visual_lines[scroll_y..end].to_vec();
 
         frame.render_widget(Paragraph::new(sliced).block(block), area);
-
     } else if is_sse {
         // SSE 同样处理
         let raw_body = if state.is_loading {
             state.sse_stream_body.clone()
         } else {
             state.load_viewport_sliding_window(state.response_scroll, visible_height);
-            state.viewport_cache.iter().map(|f| f.content.clone()).collect::<Vec<_>>().join("\n")
+            state
+                .viewport_cache
+                .iter()
+                .map(|f| f.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
         };
 
         let mut visual_lines = Vec::new();
@@ -137,7 +161,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let sliced = visual_lines[scroll_y..end].to_vec();
 
         frame.render_widget(Paragraph::new(sliced).block(block), area);
-
     } else if state.is_loading {
         frame.render_widget(
             Paragraph::new("Executing request, please wait...")
@@ -172,14 +195,20 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
     if let Some(ref resp) = state.last_response {
         let mut raw_lines = Vec::new();
-        let status_color = if resp.is_success() { Color::Green } else { Color::Red };
+        let status_color = if resp.is_success() {
+            Color::Green
+        } else {
+            Color::Red
+        };
 
         // 拼接头部与基本属性
         raw_lines.push(Line::from(vec![
             Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} {}", resp.status.code(), resp.status.reason_phrase()),
-                Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
         raw_lines.push(Line::from(vec![
@@ -189,7 +218,10 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             Span::raw(format!("{} bytes", resp.body.len())),
         ]));
         raw_lines.push(Line::from(""));
-        raw_lines.push(Line::from(Span::styled("Body:", Style::default().fg(Color::Yellow))));
+        raw_lines.push(Line::from(Span::styled(
+            "Body:",
+            Style::default().fg(Color::Yellow),
+        )));
 
         // 拼接响应 Body 各行
         for line in resp.body.lines() {
@@ -205,7 +237,8 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 wrapped.push(Line::from(""));
                 continue;
             }
-            let wrapped_sub = crate::tui::state::VisualLineProcessor::wrap_text(&line_str, max_width);
+            let wrapped_sub =
+                crate::tui::state::VisualLineProcessor::wrap_text(&line_str, max_width);
             for w in wrapped_sub {
                 wrapped.push(w);
             }

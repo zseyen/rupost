@@ -12,7 +12,7 @@ pub enum SidebarTab {
     History,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SidebarTabState {
     pub selected_index: usize,
     pub scroll_offset: usize,
@@ -45,7 +45,6 @@ impl SidebarTabState {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
@@ -452,10 +451,19 @@ mod tests {
 
     #[test]
     fn test_format_url_host_and_path() {
-        assert_eq!(format_url_host_and_path("https://baidu.com/api/v1?q=1"), "baidu.com/api/v1");
-        assert_eq!(format_url_host_and_path("http://localhost:8080/users/1#fragment"), "localhost:8080/users/1");
+        assert_eq!(
+            format_url_host_and_path("https://baidu.com/api/v1?q=1"),
+            "baidu.com/api/v1"
+        );
+        assert_eq!(
+            format_url_host_and_path("http://localhost:8080/users/1#fragment"),
+            "localhost:8080/users/1"
+        );
         assert_eq!(format_url_host_and_path("http://google.com"), "google.com/");
-        assert_eq!(format_url_host_and_path("localhost:3000/test?foo=bar"), "localhost:3000/test");
+        assert_eq!(
+            format_url_host_and_path("localhost:3000/test?foo=bar"),
+            "localhost:3000/test"
+        );
         assert_eq!(format_url_host_and_path("/relative/path"), "/relative/path");
     }
 
@@ -507,7 +515,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", "application/json".parse().unwrap());
         headers.insert("x-custom", "value".parse().unwrap());
-        
+
         let req = RequestSnapshot {
             method: "POST".to_string(),
             url: "http://example.com/api".to_string(),

@@ -6,20 +6,20 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-) {
+pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let focus = state.active_panel == Panel::Editor;
     let border_color = if focus { Color::Cyan } else { Color::DarkGray };
 
     // 计算总行数并渲染当前滚动行号
     let total_lines = state.editor_text.lines().count();
     let title = if total_lines > 0 {
-        format!(" 🔌 Request Preview [Line {}/{}] (Read-Only) ", state.editor_scroll + 1, total_lines)
+        format!(
+            " Request Preview [Line {}/{}] (Read-Only) ",
+            state.editor_scroll + 1,
+            total_lines
+        )
     } else {
-        " 🔌 Request Preview [Line 0/0] (Read-Only) ".to_string()
+        " Request Preview [Line 0/0] (Read-Only) ".to_string()
     };
 
     let block = Block::default()

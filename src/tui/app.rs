@@ -45,11 +45,13 @@ async fn run_async() -> Result<()> {
                             break;
                         }
                     }
+                    #[allow(clippy::collapsible_match)]
                     Ok(CrosstermEvent::Mouse(mouse)) => {
                         if tx_clone.send(TuiEvent::MouseInput(mouse)).await.is_err() {
                             break;
                         }
                     }
+                    #[allow(clippy::collapsible_match)]
                     Ok(CrosstermEvent::Resize(w, h)) => {
                         if tx_clone.send(TuiEvent::Resize(w, h)).await.is_err() {
                             break;
@@ -70,7 +72,9 @@ async fn run_async() -> Result<()> {
         state.file_tree = filter_tui_test_files(files);
     }
     // 载入历史记录
-    state.history_list = crate::history::storage::get_storage().tail(100).unwrap_or_default();
+    state.history_list = crate::history::storage::get_storage()
+        .tail(100)
+        .unwrap_or_default();
     state.history_list.reverse();
 
     // 默认加载首个文件
@@ -125,7 +129,8 @@ async fn run_async() -> Result<()> {
                                                     state.selected_file_index = idx;
                                                     state.files_state.selected_index = idx;
                                                     state.editor_scroll = 0;
-                                                    state.active_panel = super::state::Panel::Editor;
+                                                    state.active_panel =
+                                                        super::state::Panel::Editor;
                                                 }
                                             }
                                         }
@@ -133,7 +138,10 @@ async fn run_async() -> Result<()> {
                                             if idx < state.history_list.len() {
                                                 state.history_state.selected_index = idx;
                                                 let entry = &state.history_list[idx];
-                                                let http_text = super::state::format_request_snapshot_to_http(&entry.request);
+                                                let http_text =
+                                                    super::state::format_request_snapshot_to_http(
+                                                        &entry.request,
+                                                    );
                                                 state.editor_text = http_text;
                                                 state.editor_file_path = None;
                                                 state.is_dirty = false;
@@ -212,14 +220,19 @@ async fn run_async() -> Result<()> {
                             | crossterm::event::KeyCode::Char('j') => {
                                 match state.active_sidebar_tab {
                                     super::state::SidebarTab::Files => {
-                                        if state.files_state.selected_index + 1 < state.file_tree.len() {
+                                        if state.files_state.selected_index + 1
+                                            < state.file_tree.len()
+                                        {
                                             state.files_state.selected_index += 1;
-                                            state.selected_file_index = state.files_state.selected_index;
+                                            state.selected_file_index =
+                                                state.files_state.selected_index;
                                             sync_preview_to_editor(&mut state);
                                         }
                                     }
                                     super::state::SidebarTab::History => {
-                                        if state.history_state.selected_index + 1 < state.history_list.len() {
+                                        if state.history_state.selected_index + 1
+                                            < state.history_list.len()
+                                        {
                                             state.history_state.selected_index += 1;
                                             sync_preview_to_editor(&mut state);
                                         }
@@ -232,7 +245,8 @@ async fn run_async() -> Result<()> {
                                     super::state::SidebarTab::Files => {
                                         if state.files_state.selected_index > 0 {
                                             state.files_state.selected_index -= 1;
-                                            state.selected_file_index = state.files_state.selected_index;
+                                            state.selected_file_index =
+                                                state.files_state.selected_index;
                                             sync_preview_to_editor(&mut state);
                                         }
                                     }
@@ -244,34 +258,40 @@ async fn run_async() -> Result<()> {
                                     }
                                 }
                             }
-                            crossterm::event::KeyCode::Enter => {
-                                match state.active_sidebar_tab {
-                                    super::state::SidebarTab::Files => {
-                                        if !state.file_tree.is_empty() {
-                                            if state.is_dirty {
-                                                if state.files_state.selected_index != state.loaded_file_index {
-                                                    state.show_unsaved_confirm = true;
-                                                    state.pending_action = Some(super::state::PendingAction::SwitchFile(state.files_state.selected_index));
-                                                } else {
-                                                    state.active_panel = super::state::Panel::Editor;
-                                                }
-                                            } else {
-                                                state.active_panel = super::state::Panel::Editor;
-                                            }
-                                        }
-                                    }
-                                    super::state::SidebarTab::History => {
-                                        if !state.history_list.is_empty() {
-                                            if state.is_dirty {
+                            crossterm::event::KeyCode::Enter => match state.active_sidebar_tab {
+                                super::state::SidebarTab::Files => {
+                                    if !state.file_tree.is_empty() {
+                                        if state.is_dirty {
+                                            if state.files_state.selected_index
+                                                != state.loaded_file_index
+                                            {
                                                 state.show_unsaved_confirm = true;
-                                                state.pending_action = Some(super::state::PendingAction::SwitchHistory(state.history_state.selected_index));
+                                                state.pending_action =
+                                                    Some(super::state::PendingAction::SwitchFile(
+                                                        state.files_state.selected_index,
+                                                    ));
                                             } else {
                                                 state.active_panel = super::state::Panel::Editor;
                                             }
+                                        } else {
+                                            state.active_panel = super::state::Panel::Editor;
                                         }
                                     }
                                 }
-                            }
+                                super::state::SidebarTab::History => {
+                                    if !state.history_list.is_empty() {
+                                        if state.is_dirty {
+                                            state.show_unsaved_confirm = true;
+                                            state.pending_action =
+                                                Some(super::state::PendingAction::SwitchHistory(
+                                                    state.history_state.selected_index,
+                                                ));
+                                        } else {
+                                            state.active_panel = super::state::Panel::Editor;
+                                        }
+                                    }
+                                }
+                            },
                             _ => {}
                         }
                     }
@@ -297,7 +317,9 @@ async fn run_async() -> Result<()> {
                                         if !reqs.is_empty() {
                                             let req = reqs[0].clone();
                                             // 主动通知状态机，初始化相关变量，清空 Response 界面
-                                            state.update(super::event::Action::SendRequest(Box::new(req.clone())));
+                                            state.update(super::event::Action::SendRequest(
+                                                Box::new(req.clone()),
+                                            ));
 
                                             let mut var_context = state.variables.clone();
                                             var_context.insert("__default_scheme", "http");
@@ -309,12 +331,16 @@ async fn run_async() -> Result<()> {
                                                 crate::runner::TestExecutor::with_ephemeral_cookies()
                                                     .with_stream_sender(stream_tx);
                                             // 优雅回退 source 至 "tui" 标识
-                                            let source = state.editor_file_path.clone().or_else(|| Some("tui".to_string()));
+                                            let source = state
+                                                .editor_file_path
+                                                .clone()
+                                                .or_else(|| Some("tui".to_string()));
                                             let tx_clone = event_tx.clone();
                                             let req_id = uuid::Uuid::new_v4();
 
-                                            let _ =
-                                                tx_clone.send(TuiEvent::RequestStarted(req_id)).await;
+                                            let _ = tx_clone
+                                                .send(TuiEvent::RequestStarted(req_id))
+                                                .await;
 
                                             let s_tx = event_tx.clone();
                                             tokio::spawn(async move {
@@ -339,11 +365,15 @@ async fn run_async() -> Result<()> {
                                                 let test_res = executor
                                                     .execute_one(req, 1, &mut var_context, source)
                                                     .await;
-                                                
+
                                                 // 写入请求历史
                                                 if let Some(ref resp) = test_res.response {
                                                     let req_snapshot = crate::history::model::RequestSnapshot::from_parsed(&req_snap_arg);
-                                                    crate::history::recorder::record_history(req_snapshot, resp, source_clone);
+                                                    crate::history::recorder::record_history(
+                                                        req_snapshot,
+                                                        resp,
+                                                        source_clone,
+                                                    );
                                                 }
 
                                                 let captured_vars = var_context.variables().clone();
@@ -357,7 +387,7 @@ async fn run_async() -> Result<()> {
                                                 } else {
                                                     Err(test_res.error.unwrap_or_else(|| {
                                                         "Unknown execution error".to_string()
-                                                     }))
+                                                    }))
                                                 };
 
                                                 let _ = tx_clone
@@ -371,13 +401,18 @@ async fn run_async() -> Result<()> {
                                             });
                                         } else {
                                             // 没找到请求
-                                            state.last_response = Some(crate::http::Response::error("No request block found in editor.".to_string()));
+                                            state.last_response =
+                                                Some(crate::http::Response::error(
+                                                    "No request block found in editor.".to_string(),
+                                                ));
                                             state.response_visual_lines.clear();
                                         }
                                     }
                                     Err(e) => {
                                         // 回显 HTTP 解析报错
-                                        state.last_response = Some(crate::http::Response::error(format!("HTTP Parser Error: {}", e)));
+                                        state.last_response = Some(crate::http::Response::error(
+                                            format!("HTTP Parser Error: {}", e),
+                                        ));
                                         state.response_visual_lines.clear();
                                     }
                                 }
@@ -398,7 +433,8 @@ async fn run_async() -> Result<()> {
                                     state.editor_scroll = state.editor_scroll.saturating_sub(10);
                                 }
                                 crossterm::event::KeyCode::PageDown => {
-                                    state.editor_scroll = (state.editor_scroll + 10).min(total_lines.saturating_sub(1));
+                                    state.editor_scroll = (state.editor_scroll + 10)
+                                        .min(total_lines.saturating_sub(1));
                                 }
                                 _ => {}
                             }
@@ -424,7 +460,11 @@ async fn run_async() -> Result<()> {
                     state.update_layout(w, h);
                 }
                 TuiEvent::MouseInput(mouse_event) => {
-                    if mouse_event.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) {
+                    if mouse_event.kind
+                        == crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Left,
+                        )
+                    {
                         let x = mouse_event.column;
                         let y = mouse_event.row;
                         let w = state.terminal_width;
@@ -437,9 +477,11 @@ async fn run_async() -> Result<()> {
                                 if y == 0 && x < sidebar_w {
                                     state.active_panel = crate::tui::state::Panel::Files;
                                     if x < 11 {
-                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
-                                    } else if x >= 12 && x < 24 {
-                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
+                                        state.active_sidebar_tab =
+                                            crate::tui::state::SidebarTab::Files;
+                                    } else if (12..24).contains(&x) {
+                                        state.active_sidebar_tab =
+                                            crate::tui::state::SidebarTab::History;
                                     }
                                     sync_preview_to_editor(&mut state);
                                 } else if y >= 1 && y < h - 1 && x < sidebar_w {
@@ -474,9 +516,11 @@ async fn run_async() -> Result<()> {
                                 if y == 0 && x < sidebar_w {
                                     state.active_panel = crate::tui::state::Panel::Files;
                                     if x < 11 {
-                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
-                                    } else if x >= 12 && x < 24 {
-                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
+                                        state.active_sidebar_tab =
+                                            crate::tui::state::SidebarTab::Files;
+                                    } else if (12..24).contains(&x) {
+                                        state.active_sidebar_tab =
+                                            crate::tui::state::SidebarTab::History;
                                     }
                                     sync_preview_to_editor(&mut state);
                                 } else if y >= 1 && y < h - 1 && x < sidebar_w {
@@ -515,32 +559,37 @@ async fn run_async() -> Result<()> {
                                     } else {
                                         state.active_panel = crate::tui::state::Panel::Response;
                                     }
-                                } else if y > 2 && y < h - 1 {
-                                    if state.active_panel == crate::tui::state::Panel::Files {
-                                        if y == 3 {
-                                            if x < 11 {
-                                                state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
-                                            } else if x >= 12 && x < 24 {
-                                                state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
-                                            }
-                                            sync_preview_to_editor(&mut state);
-                                        } else if y >= 4 {
-                                            let click_row = y.saturating_sub(5) as usize;
-                                            match state.active_sidebar_tab {
-                                                crate::tui::state::SidebarTab::Files => {
-                                                    let idx = state.files_state.scroll_offset + click_row;
-                                                    if idx < state.file_tree.len() {
-                                                        state.files_state.selected_index = idx;
-                                                        state.selected_file_index = idx;
-                                                        sync_preview_to_editor(&mut state);
-                                                    }
+                                } else if y > 2
+                                    && y < h - 1
+                                    && state.active_panel == crate::tui::state::Panel::Files
+                                {
+                                    if y == 3 {
+                                        if x < 11 {
+                                            state.active_sidebar_tab =
+                                                crate::tui::state::SidebarTab::Files;
+                                        } else if (12..24).contains(&x) {
+                                            state.active_sidebar_tab =
+                                                crate::tui::state::SidebarTab::History;
+                                        }
+                                        sync_preview_to_editor(&mut state);
+                                    } else if y >= 4 {
+                                        let click_row = y.saturating_sub(5) as usize;
+                                        match state.active_sidebar_tab {
+                                            crate::tui::state::SidebarTab::Files => {
+                                                let idx =
+                                                    state.files_state.scroll_offset + click_row;
+                                                if idx < state.file_tree.len() {
+                                                    state.files_state.selected_index = idx;
+                                                    state.selected_file_index = idx;
+                                                    sync_preview_to_editor(&mut state);
                                                 }
-                                                crate::tui::state::SidebarTab::History => {
-                                                    let idx = state.history_state.scroll_offset + click_row;
-                                                    if idx < state.history_list.len() {
-                                                        state.history_state.selected_index = idx;
-                                                        sync_preview_to_editor(&mut state);
-                                                    }
+                                            }
+                                            crate::tui::state::SidebarTab::History => {
+                                                let idx =
+                                                    state.history_state.scroll_offset + click_row;
+                                                if idx < state.history_list.len() {
+                                                    state.history_state.selected_index = idx;
+                                                    sync_preview_to_editor(&mut state);
                                                 }
                                             }
                                         }
@@ -558,10 +607,12 @@ async fn run_async() -> Result<()> {
                 } => {
                     state.handle_request_finished(*result, captured_vars, assertions);
                     state.response_visual_lines.clear(); // 清空缓存以强迫重新计算预折行
-                    state.response_scroll = 0;          // 请求结束重置滚动
+                    state.response_scroll = 0; // 请求结束重置滚动
 
                     // 从存储重新载入最新 100 条请求历史并倒序
-                    state.history_list = crate::history::storage::get_storage().tail(100).unwrap_or_default();
+                    state.history_list = crate::history::storage::get_storage()
+                        .tail(100)
+                        .unwrap_or_default();
                     state.history_list.reverse();
                     state.history_state.selected_index = 0;
                     state.history_state.scroll_offset = 0;
@@ -605,14 +656,18 @@ async fn run_async() -> Result<()> {
 }
 
 fn load_history_response_to_state(state: &mut crate::tui::state::AppState) {
-    if !state.history_list.is_empty() 
-        && state.history_state.selected_index < state.history_list.len() 
+    if !state.history_list.is_empty()
+        && state.history_state.selected_index < state.history_list.len()
     {
         let entry = &state.history_list[state.history_state.selected_index];
         if let Ok(resp) = crate::http::Response::new(
             entry.response.status,
             entry.response.headers.clone(),
-            entry.response.body.clone().unwrap_or_else(|| "Body not recorded".to_string()),
+            entry
+                .response
+                .body
+                .clone()
+                .unwrap_or_else(|| "Body not recorded".to_string()),
             std::time::Duration::from_millis(entry.duration_ms),
             std::time::Duration::ZERO,
             std::time::Duration::ZERO,
@@ -624,15 +679,15 @@ fn load_history_response_to_state(state: &mut crate::tui::state::AppState) {
     }
 }
 
-fn sync_preview_to_editor(
-    state: &mut crate::tui::state::AppState,
-) {
+fn sync_preview_to_editor(state: &mut crate::tui::state::AppState) {
     if state.is_dirty {
         return;
     }
     match state.active_sidebar_tab {
         crate::tui::state::SidebarTab::Files => {
-            if !state.file_tree.is_empty() && state.files_state.selected_index < state.file_tree.len() {
+            if !state.file_tree.is_empty()
+                && state.files_state.selected_index < state.file_tree.len()
+            {
                 let path = &state.file_tree[state.files_state.selected_index];
                 if let Ok(content) = std::fs::read_to_string(path) {
                     state.editor_text = content;
@@ -644,7 +699,9 @@ fn sync_preview_to_editor(
             }
         }
         crate::tui::state::SidebarTab::History => {
-            if !state.history_list.is_empty() && state.history_state.selected_index < state.history_list.len() {
+            if !state.history_list.is_empty()
+                && state.history_state.selected_index < state.history_list.len()
+            {
                 let entry = &state.history_list[state.history_state.selected_index];
                 let http_text = crate::tui::state::format_request_snapshot_to_http(&entry.request);
                 state.editor_text = http_text;
@@ -663,7 +720,7 @@ fn sync_preview_to_editor(
 /// 3. 轻量内容启发式扫描：读取前缀 1024 字节，检查是否是包含有效 HTTP 请求的 http 文件或包含 http 代码块的 md 文件
 pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
     let mut result = Vec::new();
-    
+
     // 黑名单目录列表
     let blacklisted_dirs = [
         ".git",
@@ -673,7 +730,7 @@ pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
         ".agents",
         ".gemini",
     ];
-    
+
     // 黑名单文件名列表
     let blacklisted_files = [
         "README.md",
@@ -691,9 +748,9 @@ pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
     for path in paths {
         // 1. 第一层过滤：路径名及黑名单拦截（零 IO 读盘）
         // 检查是否包含黑名单目录
-        let has_blacklisted_dir = blacklisted_dirs.iter().any(|&dir| {
-            path.components().any(|c| c.as_os_str() == dir)
-        });
+        let has_blacklisted_dir = blacklisted_dirs
+            .iter()
+            .any(|&dir| path.components().any(|c| c.as_os_str() == dir));
         if has_blacklisted_dir {
             continue;
         }
@@ -701,7 +758,10 @@ pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
         // 检查文件名是否在黑名单中
         if let Some(file_name) = path.file_name() {
             let name_str = file_name.to_string_lossy();
-            if blacklisted_files.iter().any(|&f| name_str.eq_ignore_ascii_case(f)) {
+            if blacklisted_files
+                .iter()
+                .any(|&f| name_str.eq_ignore_ascii_case(f))
+            {
                 continue;
             }
         }
@@ -712,11 +772,13 @@ pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
             let mut buf = [0u8; 1024];
             if let Ok(bytes_read) = file.read(&mut buf) {
                 let content = String::from_utf8_lossy(&buf[..bytes_read]);
-                
-                let is_http_extension = path.extension()
+
+                let is_http_extension = path
+                    .extension()
                     .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("http"))
                     .unwrap_or(false);
-                let is_md_extension = path.extension()
+                let is_md_extension = path
+                    .extension()
                     .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
                     .unwrap_or(false);
 
@@ -765,7 +827,7 @@ mod tests {
     #[test]
     fn test_filter_tui_test_files_cases() {
         let dir = tempdir().unwrap();
-        
+
         // 1. 创建合格的 .http 文件
         let http_ok = dir.path().join("ok.http");
         std::fs::write(&http_ok, "GET http://example.com").unwrap();
@@ -785,7 +847,8 @@ mod tests {
         // 5. 创建非 UTF-8 二进制大文件
         let binary_http = dir.path().join("binary.http");
         let mut f = std::fs::File::create(&binary_http).unwrap();
-        f.write_all(&[0u8, 159u8, 146u8, 150u8, 0xffu8, 0x00u8]).unwrap();
+        f.write_all(&[0u8, 159u8, 146u8, 150u8, 0xffu8, 0x00u8])
+            .unwrap();
 
         // 6. 创建黑名单目录下的合格文件
         let node_modules_dir = dir.path().join("node_modules");
@@ -804,7 +867,7 @@ mod tests {
 
         let filtered = filter_tui_test_files(paths);
         assert_eq!(filtered.len(), 2);
-        
+
         let has_http = filtered.iter().any(|p| p.contains("ok.http"));
         let has_md = filtered.iter().any(|p| p.contains("ok.md"));
         assert!(has_http);

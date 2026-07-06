@@ -28,6 +28,14 @@ pub fn render(
         return;
     }
 
+    // 划分出最底下一行的 Help Bar 区域
+    let screen_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(size);
+    let main_area = screen_chunks[0];
+    let help_bar_area = screen_chunks[1];
+
     // 2. 根据自适应模式划分主显示区，分派子组件渲染
     match state.layout_mode {
         LayoutMode::Wide => {
@@ -39,24 +47,26 @@ pub fn render(
                     Constraint::Percentage(40), // 📝 Request Editor
                     Constraint::Percentage(35), // 📊 Response Viewer
                 ])
-                .split(size);
+                .split(main_area);
 
             sidebar::render(frame, chunks[0], state);
             editor::render(frame, chunks[1], state, textarea);
             response::render(frame, chunks[2], state);
         }
         LayoutMode::Narrow => {
-            // 双栏并排
+            // 重构为三栏并排 (20% sidebar, 40% editor, 40% response)
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(50), // 📝 Request Editor
-                    Constraint::Percentage(50), // 📊 Response Viewer
+                    Constraint::Percentage(20), // 📂 Files & History (Sidebar)
+                    Constraint::Percentage(40), // 📝 Request Editor
+                    Constraint::Percentage(40), // 📊 Response Viewer
                 ])
-                .split(size);
+                .split(main_area);
 
-            editor::render(frame, chunks[0], state, textarea);
-            response::render(frame, chunks[1], state);
+            sidebar::render(frame, chunks[0], state);
+            editor::render(frame, chunks[1], state, textarea);
+            response::render(frame, chunks[2], state);
         }
         LayoutMode::Stacked => {
             // 单栏堆叠 (通过 Tab 切换显示)
@@ -66,7 +76,7 @@ pub fn render(
                     Constraint::Length(3), // 顶部 Tab 栏
                     Constraint::Min(0),    // 主要显示区域
                 ])
-                .split(size);
+                .split(main_area);
 
             // 渲染大 Tab 导航头
             let titles = vec!["[1] Files", "[2] Editor", "[3] Response"];
@@ -99,13 +109,16 @@ pub fn render(
 
     // 3. 渲染全局帮助悬浮窗 (Modal Panel)
     if state.show_help {
-        render_help_popup(frame, size);
+        render_help_popup(frame, main_area);
     }
 
     // 4. 渲染未保存强确认弹窗 (Unsaved Changes Alert Modal)
     if state.show_unsaved_confirm {
-        render_unsaved_popup(frame, size);
+        render_unsaved_popup(frame, main_area);
     }
+
+    // 5. 渲染底部 lazygit 风格状态栏
+    render_help_bar(frame, help_bar_area, state);
 }
 
 fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
@@ -214,6 +227,74 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
         .alignment(ratatui::layout::Alignment::Center);
 
     frame.render_widget(Clear, area);
+    frame.render_widget(paragraph, area);
+}
+
+fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
+    use crate::tui::state::{Panel, SidebarTab};
+    
+    let style = Style::default()
+        .bg(Color::Rgb(30, 30, 46))
+        .fg(Color::Rgb(205, 214, 244));
+        
+    let spans = match state.active_panel {
+        Panel::Files => match state.active_sidebar_tab {
+            SidebarTab::Files => vec![
+                Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw("Quit │ "),
+                Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw("Help │ "),
+                Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Focus Editor │ "),
+                Span::styled(" h/l (←/→) ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Switch Tab │ "),
+                Span::styled(" j/k (↑/↓) / Click ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Select │ "),
+                Span::styled(" Enter ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("Edit File │ "),
+                Span::styled(" p ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Toggle Path"),
+            ],
+            SidebarTab::History => vec![
+                Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw("Quit │ "),
+                Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw("Help │ "),
+                Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Focus Editor │ "),
+                Span::styled(" h/l (←/→) ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Switch Tab │ "),
+                Span::styled(" j/k (↑/↓) / Click ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("Select │ "),
+                Span::styled(" Enter ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("Load History"),
+            ],
+        },
+        Panel::Editor => vec![
+            Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("Quit │ "),
+            Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("Help │ "),
+            Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Focus Response │ "),
+            Span::styled(" Ctrl+Enter / Ctrl+R ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Run Request │ "),
+            Span::styled(" Ctrl+S ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Save"),
+        ],
+        Panel::Response => vec![
+            Span::styled(" q ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("Quit │ "),
+            Span::styled(" ? ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("Help │ "),
+            Span::styled(" Tab ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Focus Sidebar │ "),
+            Span::styled(" j/k (↑/↓) ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Scroll Response"),
+        ],
+    };
+
+    let paragraph = Paragraph::new(Line::from(spans)).style(style);
     frame.render_widget(paragraph, area);
 }
 

@@ -19,7 +19,12 @@ async fn run_async() -> Result<()> {
     // 1. 初始化终端
     enable_raw_mode().map_err(crate::error::RupostError::IoError)?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen).map_err(crate::error::RupostError::IoError)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    )
+    .map_err(crate::error::RupostError::IoError)?;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)
@@ -34,12 +39,23 @@ async fn run_async() -> Result<()> {
         loop {
             // 阻断式轮询是否有 crossterm 事件
             if event::poll(Duration::from_millis(50)).unwrap_or(false) {
-                let event_res = event::read();
-                if let Ok(CrosstermEvent::Key(key)) = event_res {
-                    let send_res = tx_clone.send(TuiEvent::Input(key)).await;
-                    if send_res.is_err() {
-                        break;
+                match event::read() {
+                    Ok(CrosstermEvent::Key(key)) => {
+                        if tx_clone.send(TuiEvent::Input(key)).await.is_err() {
+                            break;
+                        }
                     }
+                    Ok(CrosstermEvent::Mouse(mouse)) => {
+                        if tx_clone.send(TuiEvent::MouseInput(mouse)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(CrosstermEvent::Resize(w, h)) => {
+                        if tx_clone.send(TuiEvent::Resize(w, h)).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
             }
             // 内部心跳
@@ -119,11 +135,13 @@ async fn run_async() -> Result<()> {
                                                     state.loaded_file_index = idx;
                                                     state.selected_file_index = idx;
                                                     state.files_state.selected_index = idx;
+                                                    state.active_panel = super::state::Panel::Editor;
                                                 }
                                             }
                                         }
                                         super::state::PendingAction::SwitchHistory(idx) => {
                                             if idx < state.history_list.len() {
+                                                state.history_state.selected_index = idx;
                                                 let entry = &state.history_list[idx];
                                                 let http_text = super::state::format_request_snapshot_to_http(&entry.request);
                                                 state.editor_text = http_text.clone();
@@ -131,8 +149,9 @@ async fn run_async() -> Result<()> {
                                                 textarea = ratatui_textarea::TextArea::new(
                                                     http_text.lines().map(String::from).collect(),
                                                 );
-                                                state.is_dirty = true;
-                                                state.history_state.selected_index = idx;
+                                                state.is_dirty = false;
+                                                load_history_response_to_state(&mut state);
+                                                state.active_panel = super::state::Panel::Editor;
                                             }
                                         }
                                     }
@@ -188,11 +207,12 @@ async fn run_async() -> Result<()> {
                             crossterm::event::KeyCode::Left
                             | crossterm::event::KeyCode::Char('h') => {
                                 state.active_sidebar_tab = super::state::SidebarTab::Files;
+                                sync_preview_to_editor(&mut state, &mut textarea);
                             }
                             crossterm::event::KeyCode::Right
                             | crossterm::event::KeyCode::Char('l') => {
                                 state.active_sidebar_tab = super::state::SidebarTab::History;
-                                load_history_response_to_state(&mut state);
+                                sync_preview_to_editor(&mut state, &mut textarea);
                             }
                             crossterm::event::KeyCode::Char('p')
                             | crossterm::event::KeyCode::Char('P') => {
@@ -207,12 +227,13 @@ async fn run_async() -> Result<()> {
                                         if state.files_state.selected_index + 1 < state.file_tree.len() {
                                             state.files_state.selected_index += 1;
                                             state.selected_file_index = state.files_state.selected_index;
+                                            sync_preview_to_editor(&mut state, &mut textarea);
                                         }
                                     }
                                     super::state::SidebarTab::History => {
                                         if state.history_state.selected_index + 1 < state.history_list.len() {
                                             state.history_state.selected_index += 1;
-                                            load_history_response_to_state(&mut state);
+                                            sync_preview_to_editor(&mut state, &mut textarea);
                                         }
                                     }
                                 }
@@ -224,12 +245,13 @@ async fn run_async() -> Result<()> {
                                         if state.files_state.selected_index > 0 {
                                             state.files_state.selected_index -= 1;
                                             state.selected_file_index = state.files_state.selected_index;
+                                            sync_preview_to_editor(&mut state, &mut textarea);
                                         }
                                     }
                                     super::state::SidebarTab::History => {
                                         if state.history_state.selected_index > 0 {
                                             state.history_state.selected_index -= 1;
-                                            load_history_response_to_state(&mut state);
+                                            sync_preview_to_editor(&mut state, &mut textarea);
                                         }
                                     }
                                 }
@@ -238,44 +260,25 @@ async fn run_async() -> Result<()> {
                                 match state.active_sidebar_tab {
                                     super::state::SidebarTab::Files => {
                                         if !state.file_tree.is_empty() {
-                                            let path = &state.file_tree[state.files_state.selected_index];
                                             if state.is_dirty {
                                                 if state.files_state.selected_index != state.loaded_file_index {
                                                     state.show_unsaved_confirm = true;
-                                                    state.pending_action =
-                                                        Some(super::state::PendingAction::SwitchFile(
-                                                            state.files_state.selected_index,
-                                                        ));
+                                                    state.pending_action = Some(super::state::PendingAction::SwitchFile(state.files_state.selected_index));
+                                                } else {
+                                                    state.active_panel = super::state::Panel::Editor;
                                                 }
                                             } else {
-                                                if let Ok(content) = std::fs::read_to_string(path) {
-                                                    state.editor_text = content.clone();
-                                                    state.editor_file_path = Some(path.clone());
-                                                    textarea = ratatui_textarea::TextArea::new(
-                                                        content.lines().map(String::from).collect(),
-                                                    );
-                                                    state.is_dirty = false;
-                                                    state.loaded_file_index = state.files_state.selected_index;
-                                                }
+                                                state.active_panel = super::state::Panel::Editor;
                                             }
                                         }
                                     }
                                     super::state::SidebarTab::History => {
                                         if !state.history_list.is_empty() {
-                                            let idx = state.history_state.selected_index;
                                             if state.is_dirty {
                                                 state.show_unsaved_confirm = true;
-                                                state.pending_action =
-                                                    Some(super::state::PendingAction::SwitchHistory(idx));
+                                                state.pending_action = Some(super::state::PendingAction::SwitchHistory(state.history_state.selected_index));
                                             } else {
-                                                let entry = &state.history_list[idx];
-                                                let http_text = super::state::format_request_snapshot_to_http(&entry.request);
-                                                state.editor_text = http_text.clone();
-                                                state.editor_file_path = None;
-                                                textarea = ratatui_textarea::TextArea::new(
-                                                    http_text.lines().map(String::from).collect(),
-                                                );
-                                                state.is_dirty = true;
+                                                state.active_panel = super::state::Panel::Editor;
                                             }
                                         }
                                     }
@@ -432,6 +435,133 @@ async fn run_async() -> Result<()> {
                 TuiEvent::Resize(w, h) => {
                     state.update_layout(w, h);
                 }
+                TuiEvent::MouseInput(mouse_event) => {
+                    if mouse_event.kind == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) {
+                        let x = mouse_event.column;
+                        let y = mouse_event.row;
+                        let w = state.terminal_width;
+                        let h = state.terminal_height;
+
+                        match state.layout_mode {
+                            crate::tui::state::LayoutMode::Wide => {
+                                let sidebar_w = (w as f32 * 0.25) as u16;
+                                let editor_w = (w as f32 * 0.40) as u16;
+                                if y == 0 && x < sidebar_w {
+                                    state.active_panel = crate::tui::state::Panel::Files;
+                                    if x < 11 {
+                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
+                                    } else if x >= 12 && x < 24 {
+                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
+                                    }
+                                    sync_preview_to_editor(&mut state, &mut textarea);
+                                } else if y >= 1 && y < h - 1 && x < sidebar_w {
+                                    state.active_panel = crate::tui::state::Panel::Files;
+                                    let click_row = y.saturating_sub(2) as usize;
+                                    match state.active_sidebar_tab {
+                                        crate::tui::state::SidebarTab::Files => {
+                                            let idx = state.files_state.scroll_offset + click_row;
+                                            if idx < state.file_tree.len() {
+                                                state.files_state.selected_index = idx;
+                                                state.selected_file_index = idx;
+                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                            }
+                                        }
+                                        crate::tui::state::SidebarTab::History => {
+                                            let idx = state.history_state.scroll_offset + click_row;
+                                            if idx < state.history_list.len() {
+                                                state.history_state.selected_index = idx;
+                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                            }
+                                        }
+                                    }
+                                } else if x >= sidebar_w && x < sidebar_w + editor_w && y < h - 1 {
+                                    state.active_panel = crate::tui::state::Panel::Editor;
+                                } else if x >= sidebar_w + editor_w && x < w && y < h - 1 {
+                                    state.active_panel = crate::tui::state::Panel::Response;
+                                }
+                            }
+                            crate::tui::state::LayoutMode::Narrow => {
+                                let sidebar_w = (w as f32 * 0.20) as u16;
+                                let editor_w = (w as f32 * 0.40) as u16;
+                                if y == 0 && x < sidebar_w {
+                                    state.active_panel = crate::tui::state::Panel::Files;
+                                    if x < 11 {
+                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
+                                    } else if x >= 12 && x < 24 {
+                                        state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
+                                    }
+                                    sync_preview_to_editor(&mut state, &mut textarea);
+                                } else if y >= 1 && y < h - 1 && x < sidebar_w {
+                                    state.active_panel = crate::tui::state::Panel::Files;
+                                    let click_row = y.saturating_sub(2) as usize;
+                                    match state.active_sidebar_tab {
+                                        crate::tui::state::SidebarTab::Files => {
+                                            let idx = state.files_state.scroll_offset + click_row;
+                                            if idx < state.file_tree.len() {
+                                                state.files_state.selected_index = idx;
+                                                state.selected_file_index = idx;
+                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                            }
+                                        }
+                                        crate::tui::state::SidebarTab::History => {
+                                            let idx = state.history_state.scroll_offset + click_row;
+                                            if idx < state.history_list.len() {
+                                                state.history_state.selected_index = idx;
+                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                            }
+                                        }
+                                    }
+                                } else if x >= sidebar_w && x < sidebar_w + editor_w && y < h - 1 {
+                                    state.active_panel = crate::tui::state::Panel::Editor;
+                                } else if x >= sidebar_w + editor_w && x < w && y < h - 1 {
+                                    state.active_panel = crate::tui::state::Panel::Response;
+                                }
+                            }
+                            crate::tui::state::LayoutMode::Stacked => {
+                                if y <= 2 {
+                                    let col_w = w / 3;
+                                    if x < col_w {
+                                        state.active_panel = crate::tui::state::Panel::Files;
+                                    } else if x >= col_w && x < col_w * 2 {
+                                        state.active_panel = crate::tui::state::Panel::Editor;
+                                    } else {
+                                        state.active_panel = crate::tui::state::Panel::Response;
+                                    }
+                                } else if y > 2 && y < h - 1 {
+                                    if state.active_panel == crate::tui::state::Panel::Files {
+                                        if y == 3 {
+                                            if x < 11 {
+                                                state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
+                                            } else if x >= 12 && x < 24 {
+                                                state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
+                                            }
+                                            sync_preview_to_editor(&mut state, &mut textarea);
+                                        } else if y >= 4 {
+                                            let click_row = y.saturating_sub(5) as usize;
+                                            match state.active_sidebar_tab {
+                                                crate::tui::state::SidebarTab::Files => {
+                                                    let idx = state.files_state.scroll_offset + click_row;
+                                                    if idx < state.file_tree.len() {
+                                                        state.files_state.selected_index = idx;
+                                                        state.selected_file_index = idx;
+                                                        sync_preview_to_editor(&mut state, &mut textarea);
+                                                    }
+                                                }
+                                                crate::tui::state::SidebarTab::History => {
+                                                    let idx = state.history_state.scroll_offset + click_row;
+                                                    if idx < state.history_list.len() {
+                                                        state.history_state.selected_index = idx;
+                                                        sync_preview_to_editor(&mut state, &mut textarea);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 TuiEvent::RequestFinished {
                     result,
                     captured_vars,
@@ -473,8 +603,12 @@ async fn run_async() -> Result<()> {
 
     // 4. 清理并还原终端
     disable_raw_mode().map_err(crate::error::RupostError::IoError)?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)
-        .map_err(crate::error::RupostError::IoError)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        crossterm::event::DisableMouseCapture
+    )
+    .map_err(crate::error::RupostError::IoError)?;
     terminal
         .show_cursor()
         .map_err(|e| crate::error::RupostError::IoError(std::io::Error::other(e.to_string())))?;
@@ -483,8 +617,7 @@ async fn run_async() -> Result<()> {
 }
 
 fn load_history_response_to_state(state: &mut crate::tui::state::AppState) {
-    if state.active_sidebar_tab == crate::tui::state::SidebarTab::History 
-        && !state.history_list.is_empty() 
+    if !state.history_list.is_empty() 
         && state.history_state.selected_index < state.history_list.len() 
     {
         let entry = &state.history_list[state.history_state.selected_index];
@@ -499,6 +632,40 @@ fn load_history_response_to_state(state: &mut crate::tui::state::AppState) {
             state.last_response = Some(resp);
             state.response_visual_lines.clear();
             state.response_scroll = 0;
+        }
+    }
+}
+
+fn sync_preview_to_editor(
+    state: &mut crate::tui::state::AppState,
+    textarea: &mut ratatui_textarea::TextArea<'static>,
+) {
+    if state.is_dirty {
+        return;
+    }
+    match state.active_sidebar_tab {
+        crate::tui::state::SidebarTab::Files => {
+            if !state.file_tree.is_empty() && state.files_state.selected_index < state.file_tree.len() {
+                let path = &state.file_tree[state.files_state.selected_index];
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    state.editor_text = content.clone();
+                    state.editor_file_path = Some(path.clone());
+                    *textarea = ratatui_textarea::TextArea::new(content.lines().map(String::from).collect());
+                    state.is_dirty = false;
+                    state.loaded_file_index = state.files_state.selected_index;
+                }
+            }
+        }
+        crate::tui::state::SidebarTab::History => {
+            if !state.history_list.is_empty() && state.history_state.selected_index < state.history_list.len() {
+                let entry = &state.history_list[state.history_state.selected_index];
+                let http_text = crate::tui::state::format_request_snapshot_to_http(&entry.request);
+                state.editor_text = http_text.clone();
+                state.editor_file_path = None;
+                *textarea = ratatui_textarea::TextArea::new(http_text.lines().map(String::from).collect());
+                state.is_dirty = false;
+                load_history_response_to_state(state);
+            }
         }
     }
 }

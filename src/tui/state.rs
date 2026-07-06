@@ -409,11 +409,53 @@ pub fn format_request_snapshot_to_http(req: &crate::history::model::RequestSnaps
     s
 }
 
+/// 提取 URL 中的 Host 和 Path 组合，剥离协议前缀（如 http://, https://）
+/// 例如："https://baidu.com/api/v1?q=1" -> "baidu.com/api/v1"
+/// 如果解析失败，则做降级的前缀剥离。
+pub fn format_url_host_and_path(url_str: &str) -> String {
+    if let Ok(u) = url::Url::parse(url_str) {
+        let scheme = u.scheme();
+        if scheme == "http" || scheme == "https" || scheme == "ws" || scheme == "wss" {
+            let host = u.host_str().unwrap_or("");
+            let port_part = if let Some(port) = u.port() {
+                format!(":{}", port)
+            } else {
+                "".to_string()
+            };
+            let path = u.path();
+            let combined = format!("{}{}{}", host, port_part, path);
+            if !combined.is_empty() {
+                return combined;
+            }
+        }
+    }
+
+    let stripped = url_str
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    if let Some(pos) = stripped.find('?') {
+        stripped[..pos].to_string()
+    } else if let Some(pos) = stripped.find('#') {
+        stripped[..pos].to_string()
+    } else {
+        stripped.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::history::model::RequestSnapshot;
     use reqwest::header::HeaderMap;
+
+    #[test]
+    fn test_format_url_host_and_path() {
+        assert_eq!(format_url_host_and_path("https://baidu.com/api/v1?q=1"), "baidu.com/api/v1");
+        assert_eq!(format_url_host_and_path("http://localhost:8080/users/1#fragment"), "localhost:8080/users/1");
+        assert_eq!(format_url_host_and_path("http://google.com"), "google.com/");
+        assert_eq!(format_url_host_and_path("localhost:3000/test?foo=bar"), "localhost:3000/test");
+        assert_eq!(format_url_host_and_path("/relative/path"), "/relative/path");
+    }
 
     #[test]
     fn test_visual_line_wrap_english() {

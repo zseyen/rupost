@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 pub enum TuiEvent {
     Input(crossterm::event::KeyEvent),
+    MouseInput(crossterm::event::MouseEvent),
     Tick,
     Resize(u16, u16),
     RequestStarted(Uuid),

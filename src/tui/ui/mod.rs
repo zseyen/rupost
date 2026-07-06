@@ -15,7 +15,6 @@ use ratatui::{
 pub fn render(
     frame: &mut Frame,
     state: &mut AppState,
-    textarea: &mut ratatui_textarea::TextArea<'static>,
 ) {
     let size = frame.area();
 
@@ -50,7 +49,7 @@ pub fn render(
                 .split(main_area);
 
             sidebar::render(frame, chunks[0], state);
-            editor::render(frame, chunks[1], state, textarea);
+            editor::render(frame, chunks[1], state);
             response::render(frame, chunks[2], state);
         }
         LayoutMode::Narrow => {
@@ -65,7 +64,7 @@ pub fn render(
                 .split(main_area);
 
             sidebar::render(frame, chunks[0], state);
-            editor::render(frame, chunks[1], state, textarea);
+            editor::render(frame, chunks[1], state);
             response::render(frame, chunks[2], state);
         }
         LayoutMode::Stacked => {
@@ -101,7 +100,7 @@ pub fn render(
             // 根据当前激活面板进行渲染
             match state.active_panel {
                 Panel::Files => sidebar::render(frame, chunks[1], state),
-                Panel::Editor => editor::render(frame, chunks[1], state, textarea),
+                Panel::Editor => editor::render(frame, chunks[1], state),
                 Panel::Response => response::render(frame, chunks[1], state),
             }
         }
@@ -304,7 +303,6 @@ mod tests {
     use crate::tui::state::{AppState, LayoutMode, Panel, SidebarTab};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
-    use ratatui_textarea::TextArea;
 
     #[test]
     fn smoke_test_components_render() {
@@ -336,8 +334,6 @@ mod tests {
             }
         ];
 
-        let mut textarea = TextArea::default();
-
         for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
             for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
                 for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
@@ -348,13 +344,13 @@ mod tests {
                     state.show_help = true;
                     state.show_unsaved_confirm = false;
                     terminal.draw(|f| {
-                        render(f, &mut state, &mut textarea);
+                        render(f, &mut state);
                     }).unwrap();
 
                     state.show_help = false;
                     state.show_unsaved_confirm = true;
                     terminal.draw(|f| {
-                        render(f, &mut state, &mut textarea);
+                        render(f, &mut state);
                     }).unwrap();
                 }
             }

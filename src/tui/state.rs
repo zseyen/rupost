@@ -121,6 +121,7 @@ pub struct AppState {
     pub show_full_path: bool,
     pub history_list: Vec<crate::history::model::HistoryEntry>,
     pub response_visual_lines: Vec<ratatui::text::Line<'static>>,
+    pub editor_scroll: usize,
 }
 
 impl AppState {
@@ -162,6 +163,7 @@ impl AppState {
             show_full_path: false,
             history_list: Vec::new(),
             response_visual_lines: Vec::new(),
+            editor_scroll: 0,
         }
     }
 

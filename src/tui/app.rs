@@ -73,19 +73,14 @@ async fn run_async() -> Result<()> {
     state.history_list = crate::history::storage::get_storage().tail(100).unwrap_or_default();
     state.history_list.reverse();
 
-    let mut textarea = ratatui_textarea::TextArea::default();
-    textarea.set_placeholder_text(
-        "Press Tab to focus and type URL\nOr select a file on the left panel.",
-    );
-
     // 默认加载首个文件
     if !state.file_tree.is_empty() {
         let first_file = &state.file_tree[0];
         if let Ok(content) = std::fs::read_to_string(first_file) {
-            state.editor_text = content.clone();
+            state.editor_text = content;
             state.editor_file_path = Some(first_file.clone());
-            textarea = ratatui_textarea::TextArea::new(content.lines().map(String::from).collect());
             state.loaded_file_index = 0;
+            state.editor_scroll = 0;
         }
     }
 
@@ -99,7 +94,7 @@ async fn run_async() -> Result<()> {
         // A. 渲染当前状态
         terminal
             .draw(|frame| {
-                super::ui::render(frame, &mut state, &mut textarea);
+                super::ui::render(frame, &mut state);
             })
             .map_err(|e| {
                 crate::error::RupostError::IoError(std::io::Error::other(e.to_string()))
@@ -123,15 +118,13 @@ async fn run_async() -> Result<()> {
                                             if idx < state.file_tree.len() {
                                                 let path = &state.file_tree[idx];
                                                 if let Ok(content) = std::fs::read_to_string(path) {
-                                                    state.editor_text = content.clone();
+                                                    state.editor_text = content;
                                                     state.editor_file_path = Some(path.clone());
-                                                    textarea = ratatui_textarea::TextArea::new(
-                                                        content.lines().map(String::from).collect(),
-                                                    );
                                                     state.is_dirty = false;
                                                     state.loaded_file_index = idx;
                                                     state.selected_file_index = idx;
                                                     state.files_state.selected_index = idx;
+                                                    state.editor_scroll = 0;
                                                     state.active_panel = super::state::Panel::Editor;
                                                 }
                                             }
@@ -141,13 +134,11 @@ async fn run_async() -> Result<()> {
                                                 state.history_state.selected_index = idx;
                                                 let entry = &state.history_list[idx];
                                                 let http_text = super::state::format_request_snapshot_to_http(&entry.request);
-                                                state.editor_text = http_text.clone();
+                                                state.editor_text = http_text;
                                                 state.editor_file_path = None;
-                                                textarea = ratatui_textarea::TextArea::new(
-                                                    http_text.lines().map(String::from).collect(),
-                                                );
                                                 state.is_dirty = false;
                                                 load_history_response_to_state(&mut state);
+                                                state.editor_scroll = 0;
                                                 state.active_panel = super::state::Panel::Editor;
                                             }
                                         }
@@ -204,12 +195,12 @@ async fn run_async() -> Result<()> {
                             crossterm::event::KeyCode::Left
                             | crossterm::event::KeyCode::Char('h') => {
                                 state.active_sidebar_tab = super::state::SidebarTab::Files;
-                                sync_preview_to_editor(&mut state, &mut textarea);
+                                sync_preview_to_editor(&mut state);
                             }
                             crossterm::event::KeyCode::Right
                             | crossterm::event::KeyCode::Char('l') => {
                                 state.active_sidebar_tab = super::state::SidebarTab::History;
-                                sync_preview_to_editor(&mut state, &mut textarea);
+                                sync_preview_to_editor(&mut state);
                             }
                             crossterm::event::KeyCode::Char('p')
                             | crossterm::event::KeyCode::Char('P') => {
@@ -224,13 +215,13 @@ async fn run_async() -> Result<()> {
                                         if state.files_state.selected_index + 1 < state.file_tree.len() {
                                             state.files_state.selected_index += 1;
                                             state.selected_file_index = state.files_state.selected_index;
-                                            sync_preview_to_editor(&mut state, &mut textarea);
+                                            sync_preview_to_editor(&mut state);
                                         }
                                     }
                                     super::state::SidebarTab::History => {
                                         if state.history_state.selected_index + 1 < state.history_list.len() {
                                             state.history_state.selected_index += 1;
-                                            sync_preview_to_editor(&mut state, &mut textarea);
+                                            sync_preview_to_editor(&mut state);
                                         }
                                     }
                                 }
@@ -242,13 +233,13 @@ async fn run_async() -> Result<()> {
                                         if state.files_state.selected_index > 0 {
                                             state.files_state.selected_index -= 1;
                                             state.selected_file_index = state.files_state.selected_index;
-                                            sync_preview_to_editor(&mut state, &mut textarea);
+                                            sync_preview_to_editor(&mut state);
                                         }
                                     }
                                     super::state::SidebarTab::History => {
                                         if state.history_state.selected_index > 0 {
                                             state.history_state.selected_index -= 1;
-                                            sync_preview_to_editor(&mut state, &mut textarea);
+                                            sync_preview_to_editor(&mut state);
                                         }
                                     }
                                 }
@@ -296,11 +287,11 @@ async fn run_async() -> Result<()> {
                                 .modifiers
                                 .contains(crossterm::event::KeyModifiers::CONTROL)
                                 && key.code == crossterm::event::KeyCode::Enter);
-
+                        let total_lines = state.editor_text.lines().count();
                         if is_run_key {
                             if !state.is_loading {
-                                let content = textarea.lines().join("\n");
-                                match crate::parser::parse_content(&content) {
+                                let content = &state.editor_text;
+                                match crate::parser::parse_content(content) {
                                     Ok(parsed_file) => {
                                         let reqs = &parsed_file.requests;
                                         if !reqs.is_empty() {
@@ -366,7 +357,7 @@ async fn run_async() -> Result<()> {
                                                 } else {
                                                     Err(test_res.error.unwrap_or_else(|| {
                                                         "Unknown execution error".to_string()
-                                                    }))
+                                                     }))
                                                 };
 
                                                 let _ = tx_clone
@@ -391,26 +382,26 @@ async fn run_async() -> Result<()> {
                                     }
                                 }
                             }
-                        } else if key
-                            .modifiers
-                            .contains(crossterm::event::KeyModifiers::CONTROL)
-                            && key.code == crossterm::event::KeyCode::Char('s')
-                        {
-                            // Ctrl+S 保存
-                            if let Some(ref path) = state.editor_file_path {
-                                let text = textarea.lines().join("\n");
-                                if std::fs::write(path, text).is_ok() {
-                                    state.is_dirty = false;
+                        } else {
+                            match key.code {
+                                crossterm::event::KeyCode::Up
+                                | crossterm::event::KeyCode::Char('k') => {
+                                    state.editor_scroll = state.editor_scroll.saturating_sub(1);
                                 }
+                                crossterm::event::KeyCode::Down
+                                | crossterm::event::KeyCode::Char('j') => {
+                                    if state.editor_scroll + 1 < total_lines {
+                                        state.editor_scroll += 1;
+                                    }
+                                }
+                                crossterm::event::KeyCode::PageUp => {
+                                    state.editor_scroll = state.editor_scroll.saturating_sub(10);
+                                }
+                                crossterm::event::KeyCode::PageDown => {
+                                    state.editor_scroll = (state.editor_scroll + 10).min(total_lines.saturating_sub(1));
+                                }
+                                _ => {}
                             }
-                        } else if key.code != crossterm::event::KeyCode::Tab
-                            && key.code != crossterm::event::KeyCode::BackTab
-                            && key.code != crossterm::event::KeyCode::Char('?')
-                        {
-                            // 其余非全局功能键则派发给 textarea
-                            textarea.input(key);
-                            state.is_dirty = true;
-                            state.editor_text = textarea.lines().join("\n");
                         }
                     }
 
@@ -450,7 +441,7 @@ async fn run_async() -> Result<()> {
                                     } else if x >= 12 && x < 24 {
                                         state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
                                     }
-                                    sync_preview_to_editor(&mut state, &mut textarea);
+                                    sync_preview_to_editor(&mut state);
                                 } else if y >= 1 && y < h - 1 && x < sidebar_w {
                                     state.active_panel = crate::tui::state::Panel::Files;
                                     let click_row = y.saturating_sub(2) as usize;
@@ -460,14 +451,14 @@ async fn run_async() -> Result<()> {
                                             if idx < state.file_tree.len() {
                                                 state.files_state.selected_index = idx;
                                                 state.selected_file_index = idx;
-                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                                sync_preview_to_editor(&mut state);
                                             }
                                         }
                                         crate::tui::state::SidebarTab::History => {
                                             let idx = state.history_state.scroll_offset + click_row;
                                             if idx < state.history_list.len() {
                                                 state.history_state.selected_index = idx;
-                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                                sync_preview_to_editor(&mut state);
                                             }
                                         }
                                     }
@@ -487,7 +478,7 @@ async fn run_async() -> Result<()> {
                                     } else if x >= 12 && x < 24 {
                                         state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
                                     }
-                                    sync_preview_to_editor(&mut state, &mut textarea);
+                                    sync_preview_to_editor(&mut state);
                                 } else if y >= 1 && y < h - 1 && x < sidebar_w {
                                     state.active_panel = crate::tui::state::Panel::Files;
                                     let click_row = y.saturating_sub(2) as usize;
@@ -497,14 +488,14 @@ async fn run_async() -> Result<()> {
                                             if idx < state.file_tree.len() {
                                                 state.files_state.selected_index = idx;
                                                 state.selected_file_index = idx;
-                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                                sync_preview_to_editor(&mut state);
                                             }
                                         }
                                         crate::tui::state::SidebarTab::History => {
                                             let idx = state.history_state.scroll_offset + click_row;
                                             if idx < state.history_list.len() {
                                                 state.history_state.selected_index = idx;
-                                                sync_preview_to_editor(&mut state, &mut textarea);
+                                                sync_preview_to_editor(&mut state);
                                             }
                                         }
                                     }
@@ -532,7 +523,7 @@ async fn run_async() -> Result<()> {
                                             } else if x >= 12 && x < 24 {
                                                 state.active_sidebar_tab = crate::tui::state::SidebarTab::History;
                                             }
-                                            sync_preview_to_editor(&mut state, &mut textarea);
+                                            sync_preview_to_editor(&mut state);
                                         } else if y >= 4 {
                                             let click_row = y.saturating_sub(5) as usize;
                                             match state.active_sidebar_tab {
@@ -541,14 +532,14 @@ async fn run_async() -> Result<()> {
                                                     if idx < state.file_tree.len() {
                                                         state.files_state.selected_index = idx;
                                                         state.selected_file_index = idx;
-                                                        sync_preview_to_editor(&mut state, &mut textarea);
+                                                        sync_preview_to_editor(&mut state);
                                                     }
                                                 }
                                                 crate::tui::state::SidebarTab::History => {
                                                     let idx = state.history_state.scroll_offset + click_row;
                                                     if idx < state.history_list.len() {
                                                         state.history_state.selected_index = idx;
-                                                        sync_preview_to_editor(&mut state, &mut textarea);
+                                                        sync_preview_to_editor(&mut state);
                                                     }
                                                 }
                                             }
@@ -635,7 +626,6 @@ fn load_history_response_to_state(state: &mut crate::tui::state::AppState) {
 
 fn sync_preview_to_editor(
     state: &mut crate::tui::state::AppState,
-    textarea: &mut ratatui_textarea::TextArea<'static>,
 ) {
     if state.is_dirty {
         return;
@@ -645,11 +635,11 @@ fn sync_preview_to_editor(
             if !state.file_tree.is_empty() && state.files_state.selected_index < state.file_tree.len() {
                 let path = &state.file_tree[state.files_state.selected_index];
                 if let Ok(content) = std::fs::read_to_string(path) {
-                    state.editor_text = content.clone();
+                    state.editor_text = content;
                     state.editor_file_path = Some(path.clone());
-                    *textarea = ratatui_textarea::TextArea::new(content.lines().map(String::from).collect());
                     state.is_dirty = false;
                     state.loaded_file_index = state.files_state.selected_index;
+                    state.editor_scroll = 0; // 重置滚动
                 }
             }
         }
@@ -657,11 +647,11 @@ fn sync_preview_to_editor(
             if !state.history_list.is_empty() && state.history_state.selected_index < state.history_list.len() {
                 let entry = &state.history_list[state.history_state.selected_index];
                 let http_text = crate::tui::state::format_request_snapshot_to_http(&entry.request);
-                state.editor_text = http_text.clone();
+                state.editor_text = http_text;
                 state.editor_file_path = None;
-                *textarea = ratatui_textarea::TextArea::new(http_text.lines().map(String::from).collect());
                 state.is_dirty = false;
                 load_history_response_to_state(state);
+                state.editor_scroll = 0; // 重置滚动
             }
         }
     }

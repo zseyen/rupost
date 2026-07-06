@@ -150,6 +150,10 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
             Span::raw(" Send current HTTP request (Backup key)"),
         ]),
         Line::from(vec![
+            Span::styled("  Enter      ", Style::default().fg(Color::Cyan)),
+            Span::raw(" In History tab, restore request to Preview"),
+        ]),
+        Line::from(vec![
             Span::styled("  ?          ", Style::default().fg(Color::Cyan)),
             Span::raw(" Toggle this help panel"),
         ]),
@@ -157,10 +161,19 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
             Span::styled("  q          ", Style::default().fg(Color::Cyan)),
             Span::raw(" Safe exit TUI mode"),
         ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  * History Storage: ~/.rupost/history.jsonl",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "  * Run `rupost history show <Short ID>` in terminal to view details.",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
 
-    let width = 60.min(screen_size.width - 4);
-    let height = 13.min(screen_size.height - 2);
+    let width = 74.min(screen_size.width - 4);
+    let height = 16.min(screen_size.height - 2);
 
     let area = Rect::new(
         (screen_size.width - width) / 2,

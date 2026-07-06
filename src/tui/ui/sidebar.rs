@@ -135,17 +135,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                             Color::Red
                         };
 
-                        let path = if let Ok(u) = url::Url::parse(&entry.request.url) {
-                            u.path().to_string()
+                        let short_id = if entry.id.len() >= 8 {
+                            &entry.id[..8]
                         } else {
-                            entry.request.url.clone()
+                            &entry.id
                         };
 
+                        let host_and_path = crate::tui::state::format_url_host_and_path(&entry.request.url);
+
                         Line::from(vec![
-                            Span::styled(format!("[{}] ", status), Style::default().fg(status_color)),
-                            Span::styled(format!("{:<6}", method), Style::default().fg(method_color).add_modifier(Modifier::BOLD)),
-                            Span::styled(format!(" {} ", path), base_style),
-                            Span::styled(format!("({}ms)", entry.duration_ms), Style::default().fg(Color::DarkGray)),
+                            Span::styled(format!("[{}] ", short_id), Style::default().fg(Color::DarkGray)),
+                            Span::styled(format!("{:<5}", method), Style::default().fg(method_color).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!(" {} ", host_and_path), base_style),
+                            Span::styled(format!(" ({})", status), Style::default().fg(status_color)),
                         ])
                     })
                     .collect()

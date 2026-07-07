@@ -243,10 +243,15 @@ fn should_keep_file(
     blacklisted_files: &[&str],
 ) -> bool {
     // 1. 第一层过滤：路径名及黑名单拦截（零 IO 读盘）
-    // 检查是否包含黑名单目录
+    // 检查是否包含黑名单目录（仅针对相对于当前工作目录的路径组件，防止父级目录包含隐藏目录名称时被误杀）
+    let relative_path = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok())
+        .unwrap_or(path);
+
     let has_blacklisted_dir = blacklisted_dirs
         .iter()
-        .any(|&dir| path.components().any(|c| c.as_os_str() == dir));
+        .any(|&dir| relative_path.components().any(|c| c.as_os_str() == dir));
     if has_blacklisted_dir {
         return false;
     }
@@ -359,5 +364,28 @@ mod tests {
         let has_md = filtered.iter().any(|p| p.contains("ok.md"));
         assert!(has_http);
         assert!(has_md);
+    }
+
+    #[test]
+    fn test_should_keep_file_with_parent_blacklist_leak() {
+        let cwd = std::path::Path::new("/Users/user/.gemini/worktrees/project");
+        let blacklisted_dirs = [".gemini"];
+        let blacklisted_files: &[&str] = &[];
+
+        // 模拟一个文件，其绝对路径中包含黑名单目录名 ".gemini"，但相对于工作目录不包含该目录
+        let file_path = std::path::Path::new("/Users/user/.gemini/worktrees/project/examples/ok.http");
+
+        // 1. 模拟旧版 any 逻辑（必会因为绝对路径包含 .gemini 而拦截）
+        let has_blacklisted_dir_old = blacklisted_dirs
+            .iter()
+            .any(|&dir| file_path.components().any(|c| c.as_os_str() == dir));
+        assert!(has_blacklisted_dir_old);
+
+        // 2. 模拟新版相对路径逻辑（剔除父级前缀，保留相对路径组件）
+        let relative_path = file_path.strip_prefix(cwd).unwrap(); // "examples/ok.http"
+        let has_blacklisted_dir_new = blacklisted_dirs
+            .iter()
+            .any(|&dir| relative_path.components().any(|c| c.as_os_str() == dir));
+        assert!(!has_blacklisted_dir_new); // 不应拦截
     }
 }

@@ -428,7 +428,7 @@ fn test_external_file_modification_hot_reload() {
 
     let mut state = AppState::new();
     state.editor_file_path = Some(file_path.to_string_lossy().to_string());
-    
+
     // 首次主动载入时间戳并缓存
     let metadata = std::fs::metadata(&file_path).unwrap();
     state.editor_file_mtime = metadata.modified().ok();
@@ -447,7 +447,7 @@ fn test_external_file_modification_hot_reload() {
 
     // 4. 断言重新加载成功，文件内容已热刷新
     assert_eq!(state.editor_text, "GET http://localhost/new");
-    
+
     // 5. 校验第二次无修改的 Tick 不会触发重复加载
     state.editor_text = "GET http://corrupted".to_string();
     state.check_and_reload_editor_file();
@@ -460,7 +460,7 @@ fn test_large_response_rendering_safety() {
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
 
     let mut state = AppState::new();
-    
+
     // 1. 构造一个 5000 行的超大型模拟响应
     let huge_body = vec!["JSON line content data string example"; 5000].join("\n");
     let response = Response::new(
@@ -500,7 +500,7 @@ fn test_read_only_dirty_deadlock_release() {
     let mut state = AppState::new();
     state.is_dirty = true;
     state.show_unsaved_confirm = false;
-    
+
     // 断言 TUI 常态下没有被强制弹窗拦截阻断
     assert!(!state.show_unsaved_confirm);
 }
@@ -508,10 +508,10 @@ fn test_read_only_dirty_deadlock_release() {
 #[test]
 fn test_direct_run_window_interactive_states() {
     let mut state = AppState::new();
-    
+
     // 1. 模拟运行状态
     state.is_loading = true;
-    
+
     // 在 TestBackend 下测试渲染，确保没有 panic 且正常绘制
     let backend = ratatui::backend::TestBackend::new(80, 24);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
@@ -532,7 +532,7 @@ fn test_direct_run_window_interactive_states() {
     )
     .unwrap();
     state.last_response = Some(response);
-    
+
     use rupost::assertion::AssertionResult;
     state.assertions = vec![
         AssertionResult {
@@ -559,11 +559,18 @@ fn test_direct_run_window_interactive_states() {
         rupost::tui::ui::render(frame, &mut state);
     });
     assert!(res.is_ok());
-    
+
     // 验证包含状态前缀和断言通过率
-    let joined_lines: String = state.response_visual_lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(" ");
+    let joined_lines: String = state
+        .response_visual_lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let found_success = joined_lines.contains("[SUCCESS]");
-    let found_assertions_count = joined_lines.contains("Assertions:") && joined_lines.contains("2 passed") && joined_lines.contains("failed");
+    let found_assertions_count = joined_lines.contains("Assertions:")
+        && joined_lines.contains("2 passed")
+        && joined_lines.contains("failed");
     assert!(found_success);
     assert!(found_assertions_count);
 }
@@ -573,21 +580,21 @@ fn test_tui_command_line_file_auto_positioning() {
     let temp_dir = tempfile::tempdir().unwrap();
     let file_a = temp_dir.path().join("a.http");
     let file_b = temp_dir.path().join("b.http");
-    
+
     std::fs::write(&file_a, "GET http://a").unwrap();
     std::fs::write(&file_b, "GET http://b").unwrap();
-    
+
     let mut state = AppState::new();
     state.file_tree = vec![
         file_a.to_string_lossy().to_string(),
         file_b.to_string_lossy().to_string(),
     ];
-    
+
     // 模拟命令行中传入了定位到 b.http 的参数，利用我们刚写的匹配算法
     let initial_file = Some(file_b.to_string_lossy().to_string());
     let mut initial_idx = 0;
-    if let Some(ref init_path) = initial_file {
-        if let Some(pos) = state.file_tree.iter().position(|p| {
+    if let Some(init_path) = &initial_file {
+        let matched = state.file_tree.iter().position(|p| {
             p == init_path
                 || std::path::Path::new(p)
                     .canonicalize()
@@ -598,11 +605,12 @@ fn test_tui_command_line_file_auto_positioning() {
                             .unwrap_or(false)
                     })
                     .unwrap_or(false)
-        }) {
+        });
+        if let Some(pos) = matched {
             initial_idx = pos;
         }
     }
-    
+
     assert_eq!(initial_idx, 1); // 成功定位到第二项 (b.http)
 }
 
@@ -610,10 +618,10 @@ fn test_tui_command_line_file_auto_positioning() {
 fn test_history_replay_memory_dispatch() {
     use rupost::tui::state::SidebarTab;
     let mut state = AppState::new();
-    
+
     // 1. 设置处于历史记录 tab
     state.active_sidebar_tab = SidebarTab::History;
-    
+
     // 2. 模拟内存中已载入一份历史 ParsedRequest
     let request_snap = ParsedRequest {
         method: Some("POST".to_string()),
@@ -643,7 +651,7 @@ fn test_history_replay_memory_dispatch() {
 #[test]
 fn test_response_scroll_clamp_boundary() {
     let mut state = AppState::new();
-    
+
     // 1. 模拟 10 行视觉文本，视口高度为 6 (排除 borders 后可视行数为 4)
     state.terminal_height = 6;
     state.response_visual_lines = vec![ratatui::text::Line::from("line"); 10];

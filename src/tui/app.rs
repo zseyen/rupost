@@ -79,8 +79,8 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
 
     // 默认加载首个文件或指定的 initial_file
     let mut initial_idx = 0;
-    if let Some(ref init_path) = initial_file {
-        if let Some(pos) = state.file_tree.iter().position(|p| {
+    if let Some(init_path) = &initial_file {
+        let matched = state.file_tree.iter().position(|p| {
             p == init_path
                 || std::path::Path::new(p)
                     .canonicalize()
@@ -91,7 +91,8 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                             .unwrap_or(false)
                     })
                     .unwrap_or(false)
-        }) {
+        });
+        if let Some(pos) = matched {
             initial_idx = pos;
         }
     }
@@ -306,15 +307,19 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                         let total_lines = state.editor_text.lines().count();
                         if is_run_key {
                             if !state.is_loading {
-                                let parsed_req = if state.active_sidebar_tab == super::state::SidebarTab::History {
+                                let parsed_req = if state.active_sidebar_tab
+                                    == super::state::SidebarTab::History
+                                {
                                     state.current_request.clone()
                                 } else {
                                     match crate::parser::parse_content(&state.editor_text) {
                                         Ok(parsed) => parsed.requests.first().cloned(),
                                         Err(e) => {
-                                            state.last_response = Some(crate::http::Response::error(
-                                                format!("HTTP Parser Error: {}", e),
-                                            ));
+                                            state.last_response =
+                                                Some(crate::http::Response::error(format!(
+                                                    "HTTP Parser Error: {}",
+                                                    e
+                                                )));
                                             state.response_visual_lines.clear();
                                             None
                                         }
@@ -338,22 +343,45 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                                     let tx_clone = event_tx.clone();
                                     let req_id = uuid::Uuid::new_v4();
 
-                                    let _ = tx_clone
-                                        .send(TuiEvent::RequestStarted(req_id))
-                                        .await;
+                                    let _ = tx_clone.send(TuiEvent::RequestStarted(req_id)).await;
 
                                     let s_tx = event_tx.clone();
                                     tokio::spawn(async move {
                                         while let Some(event) = stream_rx.recv().await {
                                             match event {
-                                                crate::runner::types::StreamEvent::SseChunk(chunk) => {
-                                                    let _ = s_tx.send(TuiEvent::StreamChunk { id: req_id, chunk, total_lines: 0 }).await;
+                                                crate::runner::types::StreamEvent::SseChunk(
+                                                    chunk,
+                                                ) => {
+                                                    let _ = s_tx
+                                                        .send(TuiEvent::StreamChunk {
+                                                            id: req_id,
+                                                            chunk,
+                                                            total_lines: 0,
+                                                        })
+                                                        .await;
                                                 }
-                                                crate::runner::types::StreamEvent::WsFrame { is_send, content } => {
-                                                    let _ = s_tx.send(TuiEvent::WsFrame { id: req_id, is_send, content, total_lines: 0 }).await;
+                                                crate::runner::types::StreamEvent::WsFrame {
+                                                    is_send,
+                                                    content,
+                                                } => {
+                                                    let _ = s_tx
+                                                        .send(TuiEvent::WsFrame {
+                                                            id: req_id,
+                                                            is_send,
+                                                            content,
+                                                            total_lines: 0,
+                                                        })
+                                                        .await;
                                                 }
-                                                crate::runner::types::StreamEvent::InitLogPath(path) => {
-                                                    let _ = s_tx.send(TuiEvent::InitLogPath { id: req_id, path }).await;
+                                                crate::runner::types::StreamEvent::InitLogPath(
+                                                    path,
+                                                ) => {
+                                                    let _ = s_tx
+                                                        .send(TuiEvent::InitLogPath {
+                                                            id: req_id,
+                                                            path,
+                                                        })
+                                                        .await;
                                                 }
                                             }
                                         }
@@ -367,7 +395,10 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                                             .await;
 
                                         if let Some(ref resp) = test_res.response {
-                                            let req_snapshot = crate::history::model::RequestSnapshot::from_parsed(&req_snap_arg);
+                                            let req_snapshot =
+                                                crate::history::model::RequestSnapshot::from_parsed(
+                                                    &req_snap_arg,
+                                                );
                                             crate::history::recorder::record_history(
                                                 req_snapshot,
                                                 resp,
@@ -381,7 +412,8 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                                             if let Some(resp) = test_res.response {
                                                 Ok(resp)
                                             } else {
-                                                Err("Request succeeded but no response returned".to_string())
+                                                Err("Request succeeded but no response returned"
+                                                    .to_string())
                                             }
                                         } else {
                                             Err(test_res.error.unwrap_or_else(|| {
@@ -438,7 +470,8 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                             }
                             crossterm::event::KeyCode::Down
                             | crossterm::event::KeyCode::Char('j') => {
-                                let visible_height = state.terminal_height.saturating_sub(2) as usize;
+                                let visible_height =
+                                    state.terminal_height.saturating_sub(2) as usize;
                                 let total = if !state.ws_frames.is_empty() {
                                     state.ws_frames.len()
                                 } else if !state.sse_stream_body.is_empty() {

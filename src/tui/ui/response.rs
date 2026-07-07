@@ -164,7 +164,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     } else if state.is_loading {
         frame.render_widget(
             Paragraph::new("[RUNNING] Sending request...")
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .block(block),
             area,
         );
@@ -202,15 +206,35 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
         };
 
         let has_failures = !resp.is_success() || state.assertions.iter().any(|a| !a.passed);
-        let status_text = if has_failures { "[FAILED]" } else { "[SUCCESS]" };
-        let status_text_color = if has_failures { Color::Red } else { Color::Green };
+        let status_text = if has_failures {
+            "[FAILED]"
+        } else {
+            "[SUCCESS]"
+        };
+        let status_text_color = if has_failures {
+            Color::Red
+        } else {
+            Color::Green
+        };
 
         // 拼接任务诊断状态栏
         raw_lines.push(Line::from(vec![
-            Span::styled(format!("{} ", status_text), Style::default().fg(status_text_color).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("Status: {} {} ", resp.status.code(), resp.status.reason_phrase()), Style::default().fg(status_color)),
+            Span::styled(
+                format!("{} ", status_text),
+                Style::default()
+                    .fg(status_text_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "Status: {} {} ",
+                    resp.status.code(),
+                    resp.status.reason_phrase()
+                ),
+                Style::default().fg(status_color),
+            ),
         ]));
-        
+
         let mut time_size_spans = vec![
             Span::styled("Time: ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{}ms  ", resp.duration.as_millis())),
@@ -223,9 +247,16 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
         if total_assertions > 0 {
             let passed_assertions = state.assertions.iter().filter(|a| a.passed).count();
             let failed_assertions = total_assertions - passed_assertions;
-            let assertions_color = if failed_assertions > 0 { Color::Red } else { Color::Green };
+            let assertions_color = if failed_assertions > 0 {
+                Color::Red
+            } else {
+                Color::Green
+            };
             time_size_spans.push(Span::styled(
-                format!("Assertions: {} passed, {} failed", passed_assertions, failed_assertions),
+                format!(
+                    "Assertions: {} passed, {} failed",
+                    passed_assertions, failed_assertions
+                ),
                 Style::default().fg(assertions_color),
             ));
         }
@@ -253,8 +284,13 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
 
         if is_truncated {
             raw_lines.push(Line::from(Span::styled(
-                format!(" [WARNING: Response truncated from {} to 1000 lines. View full log in CLI] ", total_body_lines),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                format!(
+                    " [WARNING: Response truncated from {} to 1000 lines. View full log in CLI] ",
+                    total_body_lines
+                ),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )));
         }
 

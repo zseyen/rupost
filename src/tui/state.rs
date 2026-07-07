@@ -462,7 +462,6 @@ impl AppState {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

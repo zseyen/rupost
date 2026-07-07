@@ -11,11 +11,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// 启动并运行 TUI 主事件循环
-pub async fn run() -> Result<()> {
-    run_async().await
+pub async fn run(initial_file: Option<String>) -> Result<()> {
+    run_async(initial_file).await
 }
 
-async fn run_async() -> Result<()> {
+async fn run_async(initial_file: Option<String>) -> Result<()> {
     // 1. 初始化终端
     enable_raw_mode().map_err(crate::error::RupostError::IoError)?;
     let mut stdout = std::io::stdout();
@@ -77,13 +77,36 @@ async fn run_async() -> Result<()> {
         .unwrap_or_default();
     state.history_list.reverse();
 
-    // 默认加载首个文件
-    if !state.file_tree.is_empty() {
-        let first_file = &state.file_tree[0];
+    // 默认加载首个文件或指定的 initial_file
+    let mut initial_idx = 0;
+    if let Some(ref init_path) = initial_file {
+        if let Some(pos) = state.file_tree.iter().position(|p| {
+            p == init_path
+                || std::path::Path::new(p)
+                    .canonicalize()
+                    .map(|c| {
+                        std::path::Path::new(init_path)
+                            .canonicalize()
+                            .map(|ic| c == ic)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
+        }) {
+            initial_idx = pos;
+        }
+    }
+
+    if !state.file_tree.is_empty() && initial_idx < state.file_tree.len() {
+        let first_file = &state.file_tree[initial_idx];
         if let Ok(content) = std::fs::read_to_string(first_file) {
             state.editor_text = content;
             state.editor_file_path = Some(first_file.clone());
-            state.loaded_file_index = 0;
+            if let Ok(metadata) = std::fs::metadata(first_file) {
+                state.editor_file_mtime = metadata.modified().ok();
+            }
+            state.selected_file_index = initial_idx;
+            state.files_state.selected_index = initial_idx;
+            state.loaded_file_index = initial_idx;
             state.editor_scroll = 0;
         }
     }

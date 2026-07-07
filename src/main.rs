@@ -129,8 +129,8 @@ async fn main() -> Result<()> {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             replayer.replay_file(&file).await?;
         }
-        Some(Commands::Tui) => {
-            rupost::tui::run().await?;
+        Some(Commands::Tui { file }) => {
+            rupost::tui::run(file).await?;
         }
         None => {
             if cli.args.is_empty() {

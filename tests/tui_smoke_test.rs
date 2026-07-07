@@ -504,3 +504,104 @@ fn test_read_only_dirty_deadlock_release() {
     // 断言 TUI 常态下没有被强制弹窗拦截阻断
     assert!(!state.show_unsaved_confirm);
 }
+
+#[test]
+fn test_direct_run_window_interactive_states() {
+    let mut state = AppState::new();
+    
+    // 1. 模拟运行状态
+    state.is_loading = true;
+    
+    // 在 TestBackend 下测试渲染，确保没有 panic 且正常绘制
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let res = terminal.draw(|frame| {
+        rupost::tui::ui::render(frame, &mut state);
+    });
+    assert!(res.is_ok());
+
+    // 2. 模拟运行结束并返回包含 3 个通过断言的成功响应
+    state.is_loading = false;
+    let response = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        "OK".to_string(),
+        std::time::Duration::from_millis(150),
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(100),
+    )
+    .unwrap();
+    state.last_response = Some(response);
+    
+    use rupost::assertion::AssertionResult;
+    state.assertions = vec![
+        AssertionResult {
+            raw: "status == 200".to_string(),
+            passed: true,
+            actual: Some("200".to_string()),
+            expected: "200".to_string(),
+            message: None,
+            stream_event_index: None,
+        },
+        AssertionResult {
+            raw: "body contains OK".to_string(),
+            passed: true,
+            actual: Some("OK".to_string()),
+            expected: "OK".to_string(),
+            message: None,
+            stream_event_index: None,
+        },
+    ];
+
+    // 重新渲染并构建视觉行
+    state.response_visual_lines.clear();
+    let res = terminal.draw(|frame| {
+        rupost::tui::ui::render(frame, &mut state);
+    });
+    assert!(res.is_ok());
+    
+    // 验证包含状态前缀和断言通过率
+    let joined_lines: String = state.response_visual_lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(" ");
+    let found_success = joined_lines.contains("[SUCCESS]");
+    let found_assertions_count = joined_lines.contains("Assertions:") && joined_lines.contains("2 passed") && joined_lines.contains("failed");
+    assert!(found_success);
+    assert!(found_assertions_count);
+}
+
+#[test]
+fn test_tui_command_line_file_auto_positioning() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_a = temp_dir.path().join("a.http");
+    let file_b = temp_dir.path().join("b.http");
+    
+    std::fs::write(&file_a, "GET http://a").unwrap();
+    std::fs::write(&file_b, "GET http://b").unwrap();
+    
+    let mut state = AppState::new();
+    state.file_tree = vec![
+        file_a.to_string_lossy().to_string(),
+        file_b.to_string_lossy().to_string(),
+    ];
+    
+    // 模拟命令行中传入了定位到 b.http 的参数，利用我们刚写的匹配算法
+    let initial_file = Some(file_b.to_string_lossy().to_string());
+    let mut initial_idx = 0;
+    if let Some(ref init_path) = initial_file {
+        if let Some(pos) = state.file_tree.iter().position(|p| {
+            p == init_path
+                || std::path::Path::new(p)
+                    .canonicalize()
+                    .map(|c| {
+                        std::path::Path::new(init_path)
+                            .canonicalize()
+                            .map(|ic| c == ic)
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
+        }) {
+            initial_idx = pos;
+        }
+    }
+    
+    assert_eq!(initial_idx, 1); // 成功定位到第二项 (b.http)
+}

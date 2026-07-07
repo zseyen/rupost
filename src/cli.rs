@@ -163,7 +163,11 @@ pub enum Commands {
     },
 
     /// Start interactive terminal UI mode
-    Tui,
+    Tui {
+        /// Optional test file path to pre-load and preview in TUI
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

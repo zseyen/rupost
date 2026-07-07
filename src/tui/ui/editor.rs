@@ -14,12 +14,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     let total_lines = state.editor_text.lines().count();
     let title = if total_lines > 0 {
         format!(
-            " Request Preview [Line {}/{}] (Read-Only) ",
+            " Request Preview [Line {}/{}] (Read-Only) | Run [Ctrl+Enter] ",
             state.editor_scroll + 1,
             total_lines
         )
     } else {
-        " Request Preview [Line 0/0] (Read-Only) ".to_string()
+        " Request Preview [Line 0/0] (Read-Only) | Run [Ctrl+Enter] ".to_string()
     };
 
     let block = Block::default()

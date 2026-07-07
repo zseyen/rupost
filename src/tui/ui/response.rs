@@ -163,8 +163,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         frame.render_widget(Paragraph::new(sliced).block(block), area);
     } else if state.is_loading {
         frame.render_widget(
-            Paragraph::new("Executing request, please wait...")
-                .style(Style::default().fg(Color::Yellow))
+            Paragraph::new("[RUNNING] Sending request...")
+                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
                 .block(block),
             area,
         );
@@ -201,22 +201,35 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             Color::Red
         };
 
-        // 拼接头部与基本属性
+        let has_failures = !resp.is_success() || state.assertions.iter().any(|a| !a.passed);
+        let status_text = if has_failures { "[FAILED]" } else { "[SUCCESS]" };
+        let status_text_color = if has_failures { Color::Red } else { Color::Green };
+
+        // 拼接任务诊断状态栏
         raw_lines.push(Line::from(vec![
-            Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} {}", resp.status.code(), resp.status.reason_phrase()),
-                Style::default()
-                    .fg(status_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(format!("{} ", status_text), Style::default().fg(status_text_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("Status: {} {} ", resp.status.code(), resp.status.reason_phrase()), Style::default().fg(status_color)),
         ]));
-        raw_lines.push(Line::from(vec![
+        
+        let mut time_size_spans = vec![
             Span::styled("Time: ", Style::default().fg(Color::DarkGray)),
             Span::raw(format!("{}ms  ", resp.duration.as_millis())),
             Span::styled("Size: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{} bytes", resp.body.len())),
-        ]));
+            Span::raw(format!("{} bytes  ", resp.body.len())),
+        ];
+
+        // 拼接断言进度统计
+        let total_assertions = state.assertions.len();
+        if total_assertions > 0 {
+            let passed_assertions = state.assertions.iter().filter(|a| a.passed).count();
+            let failed_assertions = total_assertions - passed_assertions;
+            let assertions_color = if failed_assertions > 0 { Color::Red } else { Color::Green };
+            time_size_spans.push(Span::styled(
+                format!("Assertions: {} passed, {} failed", passed_assertions, failed_assertions),
+                Style::default().fg(assertions_color),
+            ));
+        }
+        raw_lines.push(Line::from(time_size_spans));
         raw_lines.push(Line::from(""));
         raw_lines.push(Line::from(Span::styled(
             "Body:",

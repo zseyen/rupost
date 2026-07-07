@@ -12,7 +12,25 @@ pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 
     // 计算总行数并渲染当前滚动行号
     let total_lines = state.editor_text.lines().count();
-    let title = if total_lines > 0 {
+    let title = if state.active_sidebar_tab == crate::tui::state::SidebarTab::History
+        && !state.history_list.is_empty()
+    {
+        let idx = state.history_state.selected_index;
+        if idx < state.history_list.len() {
+            let entry = &state.history_list[idx];
+            let short_id = if entry.id.len() >= 8 {
+                &entry.id[..8]
+            } else {
+                &entry.id
+            };
+            format!(
+                " Request Preview [History ID: {}] (Read-Only) | Run [Ctrl+Enter] ",
+                short_id
+            )
+        } else {
+            " Request Preview [History] (Read-Only) | Run [Ctrl+Enter] ".to_string()
+        }
+    } else if total_lines > 0 {
         format!(
             " Request Preview [Line {}/{}] (Read-Only) | Run [Ctrl+Enter] ",
             state.editor_scroll + 1,

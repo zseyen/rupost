@@ -179,22 +179,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                             Color::Red
                         };
 
-                        let short_id = if entry.id.len() >= 8 {
-                            &entry.id[..8]
-                        } else {
-                            &entry.id
-                        };
-
                         let host_and_path =
                             crate::tui::state::format_url_host_and_path(&entry.request.url);
 
                         Line::from(vec![
                             Span::styled(
-                                format!("[{}] ", short_id),
-                                Style::default().fg(Color::DarkGray),
-                            ),
-                            Span::styled(
-                                format!("{:<5}", method),
+                                format!("{:<4}", method),
                                 Style::default()
                                     .fg(method_color)
                                     .add_modifier(Modifier::BOLD),

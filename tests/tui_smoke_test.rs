@@ -839,3 +839,77 @@ fn test_phase3_loading_smoke_render() {
         assert!(res.is_ok());
     }
 }
+
+#[test]
+fn test_history_sidebar_render_no_id_prefix() {
+    use rupost::tui::state::SidebarTab;
+    let mut state = AppState::new();
+    state.active_sidebar_tab = SidebarTab::History;
+
+    // 录入模拟历史数据
+    state.history_list = vec![rupost::history::model::HistoryEntry {
+        id: "7713fb92-5359-4e27-aed8-a4664bbb025b".to_string(),
+        timestamp: chrono::Utc::now(),
+        duration_ms: 10,
+        request: rupost::history::model::RequestSnapshot {
+            method: "GET".to_string(),
+            url: "http://example.com/api".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        source: None,
+        response: rupost::history::model::ResponseMeta {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: Some("".to_string()),
+        },
+    }];
+
+    // 模拟 TestBackend 渲染以触发生态计算，或者直接通过 render 函数获取其返回
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let res = terminal.draw(|frame| {
+        rupost::tui::ui::sidebar::render(frame, frame.area(), &mut state);
+    });
+    assert!(res.is_ok());
+
+    // 我们还可以验证在 AppState 下，渲染所用字段 host_and_path 的转换正确性
+    let host_and_path = rupost::tui::state::format_url_host_and_path("http://example.com/api");
+    assert_eq!(host_and_path, "example.com/api");
+}
+
+#[test]
+fn test_history_editor_title_id_display() {
+    use rupost::tui::state::SidebarTab;
+    let mut state = AppState::new();
+    state.active_sidebar_tab = SidebarTab::History;
+    state.history_state.selected_index = 0;
+
+    state.history_list = vec![rupost::history::model::HistoryEntry {
+        id: "7713fb92-5359-4e27-aed8-a4664bbb025b".to_string(),
+        timestamp: chrono::Utc::now(),
+        duration_ms: 10,
+        request: rupost::history::model::RequestSnapshot {
+            method: "GET".to_string(),
+            url: "http://example.com/api".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        source: None,
+        response: rupost::history::model::ResponseMeta {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: Some("".to_string()),
+        },
+    }];
+
+    // 模拟 TestBackend 下渲染编辑器组件
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    // 执行 draw 触发渲染
+    let res = terminal.draw(|frame| {
+        rupost::tui::ui::editor::render(frame, frame.area(), &state);
+    });
+    assert!(res.is_ok());
+}

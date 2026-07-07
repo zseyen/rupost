@@ -173,6 +173,9 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                 }
                 TuiEvent::Tick => {
                     state.check_and_reload_editor_file();
+                    if state.is_loading {
+                        state.loading_tick = state.loading_tick.wrapping_add(1);
+                    }
                 }
                 _ => {}
             }
@@ -197,8 +200,6 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
 
     Ok(())
 }
-
-
 
 /// 对 TUI 中扫描出的所有候选文件路径进行精细化过滤
 /// 1. 过滤文件名黑名单：README.md, SUMMARY.md, CHANGELOG.md, AGENTS.md, checkpoint.md, walkthrough.md 等
@@ -246,7 +247,10 @@ fn should_keep_file(
     // 检查是否包含黑名单目录（仅针对相对于当前工作目录的路径组件，防止父级目录包含隐藏目录名称时被误杀）
     let relative_path = std::env::current_dir()
         .ok()
-        .and_then(|cwd| path.strip_prefix(&cwd).ok())
+        .and_then(|cwd| {
+            let canonical_cwd = cwd.canonicalize().ok()?;
+            path.strip_prefix(&canonical_cwd).ok()
+        })
         .unwrap_or(path);
 
     let has_blacklisted_dir = blacklisted_dirs
@@ -370,10 +374,10 @@ mod tests {
     fn test_should_keep_file_with_parent_blacklist_leak() {
         let cwd = std::path::Path::new("/Users/user/.gemini/worktrees/project");
         let blacklisted_dirs = [".gemini"];
-        let blacklisted_files: &[&str] = &[];
 
         // 模拟一个文件，其绝对路径中包含黑名单目录名 ".gemini"，但相对于工作目录不包含该目录
-        let file_path = std::path::Path::new("/Users/user/.gemini/worktrees/project/examples/ok.http");
+        let file_path =
+            std::path::Path::new("/Users/user/.gemini/worktrees/project/examples/ok.http");
 
         // 1. 模拟旧版 any 逻辑（必会因为绝对路径包含 .gemini 而拦截）
         let has_blacklisted_dir_old = blacklisted_dirs
@@ -387,5 +391,23 @@ mod tests {
             .iter()
             .any(|&dir| relative_path.components().any(|c| c.as_os_str() == dir));
         assert!(!has_blacklisted_dir_new); // 不应拦截
+    }
+
+    #[test]
+    fn test_should_keep_file_symlink_scenario() {
+        // 模拟 macOS 常见的符号链接与 canonical 物理绝对路径的前缀差异
+        let symlink_cwd = std::path::Path::new("/Users/user/.gemini/worktrees/project");
+        let canonical_cwd = std::path::Path::new("/private/Users/user/.gemini/worktrees/project");
+
+        let file_path =
+            std::path::Path::new("/private/Users/user/.gemini/worktrees/project/examples/ok.http");
+
+        // 1. 如果直接对带有符号链接的 cwd 进行 strip_prefix，会因为前缀不匹配而失败
+        let strip_direct_fail = file_path.strip_prefix(symlink_cwd).is_err();
+        assert!(strip_direct_fail);
+
+        // 2. 经过展开（模拟 canonicalize 后相同物理路径前缀），strip_prefix 能够完美剥离前缀并放行
+        let relative_path = file_path.strip_prefix(canonical_cwd).unwrap();
+        assert_eq!(relative_path, std::path::Path::new("examples/ok.http"));
     }
 }

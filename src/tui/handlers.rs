@@ -1,18 +1,26 @@
-use crossterm::event::{KeyEvent, KeyCode, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
+use super::event::{Action, TuiEvent};
+use super::state::{AppState, Panel, PendingAction, SidebarTab};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc;
-use super::event::{TuiEvent, Action};
-use super::state::{AppState, Panel, SidebarTab, PendingAction};
 
 /// 处理 TUI 按键输入事件
-pub async fn handle_key(
-    state: &mut AppState,
-    key: KeyEvent,
-    event_tx: &mpsc::Sender<TuiEvent>,
-) {
+pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
     // 1. 未保存确认弹窗的前置处理
     if state.show_unsaved_confirm {
         handle_confirm_key(state, key);
         return;
+    }
+
+    // 全局 Esc 键高优先级拦截（用于关闭其他全局轻量弹窗并返回 Files 面板）
+    if key.code == KeyCode::Esc {
+        if state.show_help {
+            state.show_help = false;
+            return;
+        }
+        if state.active_panel != Panel::Files {
+            state.active_panel = Panel::Files;
+            return;
+        }
     }
 
     // 2. 全局高优先级指令
@@ -79,7 +87,8 @@ fn handle_confirm_key(state: &mut AppState, key: KeyEvent) {
                         if idx < state.history_list.len() {
                             state.history_state.selected_index = idx;
                             let entry = &state.history_list[idx];
-                            let http_text = super::state::format_request_snapshot_to_http(&entry.request);
+                            let http_text =
+                                super::state::format_request_snapshot_to_http(&entry.request);
                             state.editor_text = http_text;
                             state.editor_file_path = None;
                             state.is_dirty = false;
@@ -169,19 +178,19 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
 }
 
 /// 处理编辑器面板按键（包括触发运行测试请求）
-async fn handle_editor_key(
-    state: &mut AppState,
-    key: KeyEvent,
-    event_tx: &mpsc::Sender<TuiEvent>,
-) {
+async fn handle_editor_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
     if state.show_help {
         return;
     }
-    let is_run_key = (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r'))
+    let is_run_key = (key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.code == KeyCode::Char('r'))
         || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter);
     let total_lines = state.editor_text.lines().count();
 
     if is_run_key {
+        if state.is_loading {
+            return;
+        }
         if !state.is_loading {
             let parsed_req = if state.active_sidebar_tab == SidebarTab::History {
                 state.current_request.clone()
@@ -206,7 +215,10 @@ async fn handle_editor_key(
                 let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
                 let executor = crate::runner::TestExecutor::with_ephemeral_cookies()
                     .with_stream_sender(stream_tx);
-                let source = state.editor_file_path.clone().or_else(|| Some("tui".to_string()));
+                let source = state
+                    .editor_file_path
+                    .clone()
+                    .or_else(|| Some("tui".to_string()));
                 let tx_clone = event_tx.clone();
                 let req_id = uuid::Uuid::new_v4();
 
@@ -217,25 +229,26 @@ async fn handle_editor_key(
                     while let Some(event) = stream_rx.recv().await {
                         match event {
                             crate::runner::types::StreamEvent::SseChunk(chunk) => {
-                                let _ = s_tx.send(TuiEvent::StreamChunk {
-                                    id: req_id,
-                                    chunk,
-                                    total_lines: 0,
-                                }).await;
+                                let _ = s_tx
+                                    .send(TuiEvent::StreamChunk {
+                                        id: req_id,
+                                        chunk,
+                                        total_lines: 0,
+                                    })
+                                    .await;
                             }
                             crate::runner::types::StreamEvent::WsFrame { is_send, content } => {
-                                let _ = s_tx.send(TuiEvent::WsFrame {
-                                    id: req_id,
-                                    is_send,
-                                    content,
-                                    total_lines: 0,
-                                }).await;
+                                let _ = s_tx
+                                    .send(TuiEvent::WsFrame {
+                                        id: req_id,
+                                        is_send,
+                                        content,
+                                        total_lines: 0,
+                                    })
+                                    .await;
                             }
                             crate::runner::types::StreamEvent::InitLogPath(path) => {
-                                let _ = s_tx.send(TuiEvent::InitLogPath {
-                                    id: req_id,
-                                    path,
-                                }).await;
+                                let _ = s_tx.send(TuiEvent::InitLogPath { id: req_id, path }).await;
                             }
                         }
                     }
@@ -247,7 +260,8 @@ async fn handle_editor_key(
                     let test_res = executor.execute_one(req, 1, &mut var_context, source).await;
 
                     if let Some(ref resp) = test_res.response {
-                        let req_snapshot = crate::history::model::RequestSnapshot::from_parsed(&req_snap_arg);
+                        let req_snapshot =
+                            crate::history::model::RequestSnapshot::from_parsed(&req_snap_arg);
                         crate::history::recorder::record_history(req_snapshot, resp, source_clone);
                     }
 
@@ -259,15 +273,19 @@ async fn handle_editor_key(
                             Err("Request succeeded but no response returned".to_string())
                         }
                     } else {
-                        Err(test_res.error.unwrap_or_else(|| "Unknown execution error".to_string()))
+                        Err(test_res
+                            .error
+                            .unwrap_or_else(|| "Unknown execution error".to_string()))
                     };
 
-                    let _ = tx_clone.send(TuiEvent::RequestFinished {
-                        id: req_id,
-                        result: Box::new(result),
-                        captured_vars,
-                        assertions: test_res.assertions,
-                    }).await;
+                    let _ = tx_clone
+                        .send(TuiEvent::RequestFinished {
+                            id: req_id,
+                            result: Box::new(result),
+                            captured_vars,
+                            assertions: test_res.assertions,
+                        })
+                        .await;
                 });
             } else if state.last_response.is_none() {
                 state.last_response = Some(crate::http::Response::error(
@@ -527,7 +545,7 @@ fn sync_preview_to_editor(state: &mut AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[tokio::test]
     async fn test_handle_global_tab_navigation() {
@@ -562,9 +580,9 @@ mod tests {
         // 模拟按 'N' 取消
         let key_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
         handle_key(&mut state, key_n, &tx).await;
-        assert_eq!(state.show_unsaved_confirm, false);
+        assert!(!state.show_unsaved_confirm);
         assert_eq!(state.pending_action, None);
-        assert_eq!(state.is_quitting, false);
+        assert!(!state.is_quitting);
 
         // 重设为确认
         state.show_unsaved_confirm = true;
@@ -572,9 +590,9 @@ mod tests {
         // 模拟按 'Y' 确认退出
         let key_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
         handle_key(&mut state, key_y, &tx).await;
-        assert_eq!(state.show_unsaved_confirm, false);
+        assert!(!state.show_unsaved_confirm);
         assert_eq!(state.pending_action, None);
-        assert_eq!(state.is_quitting, true);
+        assert!(state.is_quitting);
     }
 
     #[tokio::test]

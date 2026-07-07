@@ -20,20 +20,21 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let is_sse = !state.sse_stream_body.is_empty();
 
     let title = if state.is_loading {
+        let spinner_char = state.get_spinner_char();
         if is_ws {
-            " Response Viewer [WS Streaming...] "
+            format!(" Response Viewer [WS Streaming {}] ", spinner_char)
         } else if is_sse {
-            " Response Viewer [SSE Streaming...] "
+            format!(" Response Viewer [SSE Streaming {}] ", spinner_char)
         } else {
-            " Response Viewer (Loading) "
+            format!(" Response Viewer [Loading {}] ", spinner_char)
         }
     } else {
         if is_ws {
-            " Response Viewer [WS Completed] "
+            " Response Viewer [WS Completed] ".to_string()
         } else if is_sse {
-            " Response Viewer [SSE Completed] "
+            " Response Viewer [SSE Completed] ".to_string()
         } else {
-            " Response Viewer "
+            " Response Viewer ".to_string()
         }
     };
 
@@ -46,130 +47,157 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let max_width = area.width.saturating_sub(2) as usize; // 可视列数
 
     if is_ws {
-        // 1. 获取 WS 原始帧数据源
-        let frames_source = if state.is_loading {
-            state.ws_frames.clone()
+        let visual_lines = if state.is_loading {
+            state.ws_visual_lines.clone()
         } else {
+            // 获取 WS 原始帧数据源
             state.load_viewport_sliding_window(state.response_scroll, visible_height);
-            state.viewport_cache.iter().cloned().collect::<Vec<_>>()
-        };
-
-        // 2. 构造带格式的物理行，并统一进行预折行 (Pre-wrapping)
-        let mut visual_lines = Vec::new();
-        for f in &frames_source {
-            let arrow = if f.is_send { "[→] " } else { "[←] " };
-            let arrow_color = if f.is_send {
-                Color::Cyan
-            } else {
-                Color::Yellow
-            };
-
-            // 原始日志单行文本
-            let text_line = format!("{} {} {}", arrow, f.timestamp, f.content);
-            let wrapped = crate::tui::state::VisualLineProcessor::wrap_text(&text_line, max_width);
-            for w_line in wrapped {
-                // 由于 wrap_text 返回的是纯 Line，我们在首行附加一下箭头的样式
-                let raw_str = w_line.to_string();
-                if raw_str.starts_with("[→]") {
-                    visual_lines.push(Line::from(vec![
-                        Span::styled(
-                            "[→] ",
-                            Style::default()
-                                .fg(arrow_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("{} ", f.timestamp),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::raw(raw_str[15..].to_string()),
-                    ]));
-                } else if raw_str.starts_with("[←]") {
-                    visual_lines.push(Line::from(vec![
-                        Span::styled(
-                            "[←] ",
-                            Style::default()
-                                .fg(arrow_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("{} ", f.timestamp),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::raw(raw_str[15..].to_string()),
-                    ]));
+            let mut lines = Vec::new();
+            for f in &state.viewport_cache {
+                let arrow = if f.is_send { "[→] " } else { "[←] " };
+                let arrow_color = if f.is_send {
+                    Color::Cyan
                 } else {
-                    visual_lines.push(w_line);
+                    Color::Yellow
+                };
+                let text_line = format!("{} {} {}", arrow, f.timestamp, f.content);
+                let wrapped =
+                    crate::tui::state::VisualLineProcessor::wrap_text(&text_line, max_width);
+                for w_line in wrapped {
+                    let raw_str = w_line.to_string();
+                    if raw_str.starts_with("[→]") {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                "[→] ",
+                                Style::default()
+                                    .fg(arrow_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("{} ", f.timestamp),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::raw(raw_str[15..].to_string()),
+                        ]));
+                    } else if raw_str.starts_with("[←]") {
+                        lines.push(Line::from(vec![
+                            Span::styled(
+                                "[←] ",
+                                Style::default()
+                                    .fg(arrow_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("{} ", f.timestamp),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::raw(raw_str[15..].to_string()),
+                        ]));
+                    } else {
+                        lines.push(w_line);
+                    }
                 }
             }
-        }
+            lines
+        };
 
-        if visual_lines.is_empty() {
-            visual_lines.push(Line::from(Span::styled(
+        let mut visual_lines_final = visual_lines;
+        if visual_lines_final.is_empty() {
+            visual_lines_final.push(Line::from(Span::styled(
                 "WebSocket connected. Listening for frames...",
                 Style::default().fg(Color::DarkGray),
             )));
         }
 
         // 3. 计算精确的切片范围并渲染
-        let total_lines = visual_lines.len();
+        let total_lines = visual_lines_final.len();
         let max_scroll = total_lines.saturating_sub(visible_height);
         let scroll_y = state.response_scroll.min(max_scroll);
 
         let end = (scroll_y + visible_height).min(total_lines);
-        let sliced = visual_lines[scroll_y..end].to_vec();
+        let sliced = visual_lines_final[scroll_y..end].to_vec();
 
         frame.render_widget(Paragraph::new(sliced).block(block), area);
     } else if is_sse {
-        // SSE 同样处理
-        let raw_body = if state.is_loading {
-            state.sse_stream_body.clone()
+        let visual_lines = if state.is_loading {
+            // 1. 若因 Resize 导致缓存被清空，执行一次性的惰性全量重构
+            if state.sse_visual_lines.is_empty() && !state.sse_stream_body.is_empty() {
+                let body = &state.sse_stream_body;
+                if let Some(last_newline_idx) = body.rfind('\n') {
+                    let completed_text = &body[..=last_newline_idx];
+                    for line in completed_text.lines() {
+                        let wrapped =
+                            crate::tui::state::VisualLineProcessor::wrap_text(line, max_width);
+                        for w in wrapped {
+                            state.sse_visual_lines.push(w);
+                        }
+                    }
+                    state.sse_last_processed_pos = last_newline_idx + 1;
+                }
+            }
+
+            // 2. 取出已缓存行，并动态折行最后一行的未闭合活动行 (active line)
+            let active_line = &state.sse_stream_body[state.sse_last_processed_pos..];
+            let mut lines = state.sse_visual_lines.clone();
+            if !active_line.is_empty() {
+                let wrapped_active =
+                    crate::tui::state::VisualLineProcessor::wrap_text(active_line, max_width);
+                for w in wrapped_active {
+                    lines.push(w);
+                }
+            }
+            lines
         } else {
             state.load_viewport_sliding_window(state.response_scroll, visible_height);
-            state
+            let raw_body = state
                 .viewport_cache
                 .iter()
                 .map(|f| f.content.clone())
                 .collect::<Vec<_>>()
-                .join("\n")
-        };
+                .join("\n");
 
-        let mut visual_lines = Vec::new();
-        for line in raw_body.lines() {
-            let wrapped = crate::tui::state::VisualLineProcessor::wrap_text(line, max_width);
-            if wrapped.is_empty() {
-                visual_lines.push(Line::from(""));
-            } else {
-                for w in wrapped {
-                    visual_lines.push(w);
+            let mut lines = Vec::new();
+            for line in raw_body.lines() {
+                let wrapped = crate::tui::state::VisualLineProcessor::wrap_text(line, max_width);
+                if wrapped.is_empty() {
+                    lines.push(Line::from(""));
+                } else {
+                    for w in wrapped {
+                        lines.push(w);
+                    }
                 }
             }
-        }
+            lines
+        };
 
-        if visual_lines.is_empty() {
-            visual_lines.push(Line::from(Span::styled(
+        let mut visual_lines_final = visual_lines;
+        if visual_lines_final.is_empty() {
+            visual_lines_final.push(Line::from(Span::styled(
                 "SSE streaming connected...",
                 Style::default().fg(Color::DarkGray),
             )));
         }
 
-        let total_lines = visual_lines.len();
+        let total_lines = visual_lines_final.len();
         let max_scroll = total_lines.saturating_sub(visible_height);
         let scroll_y = state.response_scroll.min(max_scroll);
 
         let end = (scroll_y + visible_height).min(total_lines);
-        let sliced = visual_lines[scroll_y..end].to_vec();
+        let sliced = visual_lines_final[scroll_y..end].to_vec();
 
         frame.render_widget(Paragraph::new(sliced).block(block), area);
     } else if state.is_loading {
         frame.render_widget(
-            Paragraph::new("[RUNNING] Sending request...")
-                .style(
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .block(block),
+            Paragraph::new(format!(
+                "[RUNNING] Sending request... {}",
+                state.get_spinner_char()
+            ))
+            .style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .block(block),
             area,
         );
     } else if state.last_response.is_some() {

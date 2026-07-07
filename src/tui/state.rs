@@ -74,6 +74,13 @@ pub struct WsFrameRecord {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileExecState {
+    Running,
+    Success,
+    Failed,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub active_panel: Panel,
@@ -122,6 +129,14 @@ pub struct AppState {
     pub history_list: Vec<crate::history::model::HistoryEntry>,
     pub response_visual_lines: Vec<ratatui::text::Line<'static>>,
     pub editor_scroll: usize,
+
+    // Phase 3 新增状态与缓存字段
+    pub loading_tick: usize,
+    pub file_execution_states: std::collections::HashMap<String, FileExecState>,
+    pub sse_visual_lines: Vec<ratatui::text::Line<'static>>,
+    pub sse_last_processed_pos: usize,
+    pub ws_visual_lines: Vec<ratatui::text::Line<'static>>,
+    pub current_response_width: usize,
 }
 
 impl AppState {
@@ -165,6 +180,14 @@ impl AppState {
             history_list: Vec::new(),
             response_visual_lines: Vec::new(),
             editor_scroll: 0,
+
+            // Phase 3 字段初始化
+            loading_tick: 0,
+            file_execution_states: std::collections::HashMap::new(),
+            sse_visual_lines: Vec::new(),
+            sse_last_processed_pos: 0,
+            ws_visual_lines: Vec::new(),
+            current_response_width: 120, // 默认面板占宽
         }
     }
 
@@ -186,6 +209,26 @@ impl AppState {
         } else {
             self.layout_mode = LayoutMode::Stacked;
         }
+
+        let response_width = match self.layout_mode {
+            LayoutMode::Wide => {
+                let w = (width as u32 * 35 / 100) as u16;
+                w.saturating_sub(2) as usize
+            }
+            LayoutMode::Narrow => {
+                let w = (width as u32 * 40 / 100) as u16;
+                w.saturating_sub(2) as usize
+            }
+            LayoutMode::Stacked => width.saturating_sub(2) as usize,
+        };
+
+        if response_width != self.current_response_width {
+            self.current_response_width = response_width;
+            self.response_visual_lines.clear();
+            self.sse_visual_lines.clear();
+            self.sse_last_processed_pos = 0;
+            self.ws_visual_lines.clear();
+        }
     }
 
     /// 单向状态机更新
@@ -203,10 +246,21 @@ impl AppState {
             Action::SendRequest(req) => {
                 self.current_request = Some(*req);
                 self.is_loading = true;
+                self.loading_tick = 0;
                 self.sse_stream_body.clear();
                 self.ws_frames.clear();
                 self.response_scroll = 0;
                 self.response_visual_lines.clear();
+                self.sse_visual_lines.clear();
+                self.sse_last_processed_pos = 0;
+                self.ws_visual_lines.clear();
+
+                if let Some(ref path) = self.editor_file_path {
+                    if self.active_sidebar_tab == SidebarTab::Files {
+                        self.file_execution_states
+                            .insert(path.clone(), FileExecState::Running);
+                    }
+                }
             }
             Action::UpdateQuickInput(val) => {
                 self.quick_input = Some(val);
@@ -214,9 +268,32 @@ impl AppState {
         }
     }
 
+    pub fn get_spinner_char(&self) -> &'static str {
+        let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        spinner_chars[(self.loading_tick / 2) % spinner_chars.len()]
+    }
+
     pub fn handle_stream_chunk(&mut self, chunk: String) {
-        self.total_log_lines += chunk.matches('\n').count();
         self.sse_stream_body.push_str(&chunk);
+        self.total_log_lines += chunk.matches('\n').count();
+
+        let max_width = self.current_response_width;
+        let body_ref = &self.sse_stream_body;
+
+        if let Some(last_newline_idx) = body_ref[self.sse_last_processed_pos..].rfind('\n') {
+            let actual_newline_idx = self.sse_last_processed_pos + last_newline_idx;
+            let completed_text = &body_ref[self.sse_last_processed_pos..=actual_newline_idx];
+            for line in completed_text.lines() {
+                let wrapped = VisualLineProcessor::wrap_text(line, max_width);
+                if wrapped.is_empty() {
+                    self.sse_visual_lines.push(ratatui::text::Line::from(""));
+                } else {
+                    self.sse_visual_lines.extend(wrapped);
+                }
+            }
+            self.sse_last_processed_pos = actual_newline_idx + 1;
+        }
+
         if self.active_panel == Panel::Response {
             self.response_scroll = 9999;
         }
@@ -225,20 +302,35 @@ impl AppState {
     pub fn handle_ws_frame(&mut self, is_send: bool, content: String) {
         self.total_log_lines += 1;
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        let arrow = if is_send { "->" } else { "<-" };
+        let text_line = format!("{} {} {}", arrow, now, content);
+        let max_width = self.current_response_width;
+        let wrapped = VisualLineProcessor::wrap_text(&text_line, max_width);
+
         self.ws_frames.push(WsFrameRecord {
             is_send,
             timestamp: now,
             content,
         });
+
         if self.ws_frames.len() > 100 {
             self.ws_frames.remove(0);
+            self.ws_visual_lines.clear();
+            for f in &self.ws_frames {
+                let a = if f.is_send { "->" } else { "<-" };
+                let t = format!("{} {} {}", a, f.timestamp, f.content);
+                let w = VisualLineProcessor::wrap_text(&t, max_width);
+                self.ws_visual_lines.extend(w);
+            }
+        } else {
+            self.ws_visual_lines.extend(wrapped);
         }
+
         if self.active_panel == Panel::Response {
             self.response_scroll = 9999;
         }
     }
 
-    /// 处理完成的请求结果同步变量
     pub fn handle_request_finished(
         &mut self,
         result: Result<Response, String>,
@@ -246,11 +338,24 @@ impl AppState {
         assertions: Vec<AssertionResult>,
     ) {
         self.is_loading = false;
-        self.assertions = assertions;
+        self.assertions = assertions.clone();
+
+        let is_success = result.is_ok() && assertions.iter().all(|a| a.passed);
+        let exec_state = if is_success {
+            FileExecState::Success
+        } else {
+            FileExecState::Failed
+        };
+
+        if let Some(ref path) = self.editor_file_path {
+            if self.active_sidebar_tab == SidebarTab::Files {
+                self.file_execution_states.insert(path.clone(), exec_state);
+            }
+        }
+
         match result {
             Ok(resp) => {
                 self.last_response = Some(resp);
-                // 同步变量到全局上下文，防止多线程借用争用
                 self.variables.extend(captured_vars);
             }
             Err(e) => {
@@ -258,8 +363,6 @@ impl AppState {
             }
         }
     }
-
-    /// 滚动视口滑动窗口加载算法 (Sliding Viewport)
     pub fn load_viewport_sliding_window(&mut self, scroll_y: usize, height: usize) {
         let file_path = match &self.log_file_path {
             Some(p) => p,

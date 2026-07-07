@@ -84,7 +84,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                             && state.editor_file_path.as_ref() == Some(full_path);
                         let prefix = if is_loaded { "* " } else { "  " };
 
-                        Line::from(vec![
+                        let mut spans = vec![
                             Span::styled(
                                 prefix,
                                 Style::default()
@@ -92,7 +92,39 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(display_text, style),
-                        ])
+                        ];
+
+                        if let Some(exec_state) = state.file_execution_states.get(full_path) {
+                            use crate::tui::state::FileExecState;
+                            match exec_state {
+                                FileExecState::Running => {
+                                    spans.push(Span::styled(
+                                        " [RUNNING]",
+                                        Style::default()
+                                            .fg(Color::Yellow)
+                                            .add_modifier(Modifier::BOLD),
+                                    ));
+                                }
+                                FileExecState::Success => {
+                                    spans.push(Span::styled(
+                                        " [SUCCESS]",
+                                        Style::default()
+                                            .fg(Color::Green)
+                                            .add_modifier(Modifier::BOLD),
+                                    ));
+                                }
+                                FileExecState::Failed => {
+                                    spans.push(Span::styled(
+                                        " [FAILED]",
+                                        Style::default()
+                                            .fg(Color::Red)
+                                            .add_modifier(Modifier::BOLD),
+                                    ));
+                                }
+                            }
+                        }
+
+                        Line::from(spans)
                     })
                     .collect()
             };

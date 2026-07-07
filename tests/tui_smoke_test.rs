@@ -670,3 +670,172 @@ fn test_response_scroll_clamp_boundary() {
     // 3. 断言被严格 Clamp 限制在 max_scroll 边界
     assert_eq!(state.response_scroll, 6);
 }
+
+#[test]
+fn test_global_esc_key_close_and_unfocus() {
+    let mut state = AppState::new();
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+    // 1. 测试 Esc 关闭帮助菜单
+    state.show_help = true;
+    let esc_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::empty(),
+    );
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, esc_key, &tx).await;
+    });
+    assert!(!state.show_help);
+
+    // 2. 测试 Esc 退回侧边栏
+    state.active_panel = Panel::Editor;
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, esc_key, &tx).await;
+    });
+    assert_eq!(state.active_panel, Panel::Files);
+}
+
+#[test]
+fn test_loading_spinner_and_ticks() {
+    use rupost::tui::event::Action;
+    let mut state = AppState::new();
+
+    // 初始状态
+    assert_eq!(state.loading_tick, 0);
+
+    // 模拟运行，累加 Tick
+    state.is_loading = true;
+    state.loading_tick = 5;
+
+    // 触发 SendRequest，校验 loading_tick 归零重置
+    let dummy_req = ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "http://localhost".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: Default::default(),
+        line_number: 1,
+        base_path: None,
+    };
+    state.update(Action::SendRequest(Box::new(dummy_req)));
+    assert_eq!(state.loading_tick, 0);
+
+    // 验证 get_spinner_char 转换
+    state.loading_tick = 2; // 分频除以 2，取模
+    let ch = state.get_spinner_char();
+    assert!(!ch.is_empty());
+}
+
+#[test]
+fn test_request_concurrency_lock() {
+    let mut state = AppState::new();
+    state.is_loading = true;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+
+    // 模拟在 is_loading 时按 Ctrl+Enter 运行
+    let run_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter,
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, run_key, &tx).await;
+    });
+
+    // 校验由于锁机制，没有任何 RequestStarted 信号发送出去
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_file_execution_states_tracking() {
+    use rupost::tui::event::Action;
+    use rupost::tui::state::FileExecState;
+    let mut state = AppState::new();
+    state.editor_file_path = Some("examples/ok.http".to_string());
+
+    let dummy_req = ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "http://localhost".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: Default::default(),
+        line_number: 1,
+        base_path: None,
+    };
+
+    // 1. 发送请求，状态变为 Running
+    state.update(Action::SendRequest(Box::new(dummy_req)));
+    assert_eq!(
+        state.file_execution_states.get("examples/ok.http"),
+        Some(&FileExecState::Running)
+    );
+
+    // 2. 响应返回 (成功且无断言失败)，状态变为 Success
+    state.handle_request_finished(
+        Ok(Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "OK".to_string(),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap()),
+        std::collections::HashMap::new(),
+        vec![],
+    );
+    assert_eq!(
+        state.file_execution_states.get("examples/ok.http"),
+        Some(&FileExecState::Success)
+    );
+
+    // 3. 响应返回 (失败)，状态变为 Failed
+    state.editor_file_path = Some("examples/fail.http".to_string());
+    state.is_loading = true;
+    state.handle_request_finished(
+        Err("Connection failed".to_string()),
+        std::collections::HashMap::new(),
+        vec![],
+    );
+    assert_eq!(
+        state.file_execution_states.get("examples/fail.http"),
+        Some(&FileExecState::Failed)
+    );
+}
+
+#[test]
+fn test_streaming_incremental_wrap_cache_performance() {
+    let mut state = AppState::new();
+    state.current_response_width = 40;
+
+    // 1. 模拟增量追加 SSE 块
+    state.handle_stream_chunk("line 1\nline 2\n".to_string());
+    assert!(!state.sse_visual_lines.is_empty());
+    assert_eq!(state.sse_last_processed_pos, 14);
+
+    // 2. 模拟 Resize 导致宽度改变
+    state.update_layout(80, 24); // 此时 update_layout 会触发 Response 宽度变化，进而清空缓存
+    assert!(state.sse_visual_lines.is_empty());
+    assert_eq!(state.sse_last_processed_pos, 0);
+}
+
+#[test]
+fn test_phase3_loading_smoke_render() {
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    state.is_loading = true;
+    state.loading_tick = 3;
+
+    // 模拟 SSE 流
+    state.sse_stream_body = "event: data\ncontent: test\n".to_string();
+
+    let test_sizes = vec![(100, 30), (80, 20), (35, 5)];
+    for &(w, h) in &test_sizes {
+        state.update_layout(w, h);
+        let res = terminal.draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        });
+        assert!(res.is_ok());
+    }
+}

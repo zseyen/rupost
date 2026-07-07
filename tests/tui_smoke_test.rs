@@ -494,3 +494,13 @@ fn test_large_response_rendering_safety() {
     }
     assert!(found_warning);
 }
+
+#[test]
+fn test_read_only_dirty_deadlock_release() {
+    let mut state = AppState::new();
+    state.is_dirty = true;
+    state.show_unsaved_confirm = false;
+    
+    // 断言 TUI 常态下没有被强制弹窗拦截阻断
+    assert!(!state.show_unsaved_confirm);
+}

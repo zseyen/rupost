@@ -170,12 +170,7 @@ async fn run_async() -> Result<()> {
 
                     // 全局指令优先
                     if key.code == crossterm::event::KeyCode::Char('q') {
-                        if state.is_dirty {
-                            state.show_unsaved_confirm = true;
-                            state.pending_action = Some(super::state::PendingAction::Quit);
-                        } else {
-                            state.update(super::event::Action::Quit);
-                        }
+                        state.update(super::event::Action::Quit);
                     }
                     if key.code == crossterm::event::KeyCode::Char('?') {
                         state.update(super::event::Action::ToggleHelp);
@@ -261,34 +256,12 @@ async fn run_async() -> Result<()> {
                             crossterm::event::KeyCode::Enter => match state.active_sidebar_tab {
                                 super::state::SidebarTab::Files => {
                                     if !state.file_tree.is_empty() {
-                                        if state.is_dirty {
-                                            if state.files_state.selected_index
-                                                != state.loaded_file_index
-                                            {
-                                                state.show_unsaved_confirm = true;
-                                                state.pending_action =
-                                                    Some(super::state::PendingAction::SwitchFile(
-                                                        state.files_state.selected_index,
-                                                    ));
-                                            } else {
-                                                state.active_panel = super::state::Panel::Editor;
-                                            }
-                                        } else {
-                                            state.active_panel = super::state::Panel::Editor;
-                                        }
+                                        state.active_panel = super::state::Panel::Editor;
                                     }
                                 }
                                 super::state::SidebarTab::History => {
                                     if !state.history_list.is_empty() {
-                                        if state.is_dirty {
-                                            state.show_unsaved_confirm = true;
-                                            state.pending_action =
-                                                Some(super::state::PendingAction::SwitchHistory(
-                                                    state.history_state.selected_index,
-                                                ));
-                                        } else {
-                                            state.active_panel = super::state::Panel::Editor;
-                                        }
+                                        state.active_panel = super::state::Panel::Editor;
                                     }
                                 }
                             },

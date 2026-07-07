@@ -630,7 +630,9 @@ async fn run_async() -> Result<()> {
                     state.total_log_lines = 0;
                     state.viewport_cache.clear();
                 }
-                TuiEvent::Tick => {}
+                TuiEvent::Tick => {
+                    state.check_and_reload_editor_file();
+                }
                 _ => {}
             }
         }
@@ -692,6 +694,11 @@ fn sync_preview_to_editor(state: &mut crate::tui::state::AppState) {
                 if let Ok(content) = std::fs::read_to_string(path) {
                     state.editor_text = content;
                     state.editor_file_path = Some(path.clone());
+                    if let Ok(metadata) = std::fs::metadata(path) {
+                        state.editor_file_mtime = metadata.modified().ok();
+                    } else {
+                        state.editor_file_mtime = None;
+                    }
                     state.is_dirty = false;
                     state.loaded_file_index = state.files_state.selected_index;
                     state.editor_scroll = 0; // 重置滚动
@@ -706,6 +713,7 @@ fn sync_preview_to_editor(state: &mut crate::tui::state::AppState) {
                 let http_text = crate::tui::state::format_request_snapshot_to_http(&entry.request);
                 state.editor_text = http_text;
                 state.editor_file_path = None;
+                state.editor_file_mtime = None;
                 state.is_dirty = false;
                 load_history_response_to_state(state);
                 state.editor_scroll = 0; // 重置滚动

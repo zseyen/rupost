@@ -96,6 +96,7 @@ pub struct AppState {
     // 编辑器及未保存确认状态
     pub editor_text: String,
     pub editor_file_path: Option<String>,
+    pub editor_file_mtime: Option<std::time::SystemTime>,
     pub is_dirty: bool,
     pub show_unsaved_confirm: bool,
     pub pending_action: Option<PendingAction>,
@@ -142,6 +143,7 @@ impl AppState {
             is_quitting: false,
             editor_text: String::new(),
             editor_file_path: None,
+            editor_file_mtime: None,
             is_dirty: false,
             show_unsaved_confirm: false,
             pending_action: None,
@@ -442,6 +444,24 @@ pub fn format_url_host_and_path(url_str: &str) -> String {
         stripped.to_string()
     }
 }
+
+impl AppState {
+    pub fn check_and_reload_editor_file(&mut self) {
+        if let Some(ref path_str) = self.editor_file_path {
+            if let Ok(metadata) = std::fs::metadata(path_str) {
+                if let Ok(new_mtime) = metadata.modified() {
+                    if Some(new_mtime) != self.editor_file_mtime {
+                        if let Ok(content) = std::fs::read_to_string(path_str) {
+                            self.editor_text = content;
+                            self.editor_file_mtime = Some(new_mtime);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -413,3 +413,43 @@ fn test_read_only_smoke_render_constraints() {
         assert!(res.is_ok());
     }
 }
+
+#[test]
+fn test_external_file_modification_hot_reload() {
+    use std::io::Write;
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("test_file.http");
+
+    // 1. 创建测试文件，写入初始用例并载入
+    {
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(b"GET http://localhost/old").unwrap();
+    }
+
+    let mut state = AppState::new();
+    state.editor_file_path = Some(file_path.to_string_lossy().to_string());
+    
+    // 首次主动载入时间戳并缓存
+    let metadata = std::fs::metadata(&file_path).unwrap();
+    state.editor_file_mtime = metadata.modified().ok();
+    state.editor_text = "GET http://localhost/old".to_string();
+
+    // 2. 模拟外部修改文件内容，改写文件
+    // 睡眠一下，确保文件修改时间戳发生了物理位移（部分系统精度是秒级）
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    {
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(b"GET http://localhost/new").unwrap();
+    }
+
+    // 3. 呼叫 check_and_reload_editor_file
+    state.check_and_reload_editor_file();
+
+    // 4. 断言重新加载成功，文件内容已热刷新
+    assert_eq!(state.editor_text, "GET http://localhost/new");
+    
+    // 5. 校验第二次无修改的 Tick 不会触发重复加载
+    state.editor_text = "GET http://corrupted".to_string();
+    state.check_and_reload_editor_file();
+    assert_eq!(state.editor_text, "GET http://corrupted"); // 依然是内存值，说明防重复读盘机制正常工作
+}

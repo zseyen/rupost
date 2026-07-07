@@ -585,29 +585,28 @@ fn test_tui_command_line_file_auto_positioning() {
     std::fs::write(&file_b, "GET http://b").unwrap();
 
     let mut state = AppState::new();
-    state.file_tree = vec![
+    state.workspace_root = temp_dir.path().to_path_buf();
+    state.raw_file_list = vec![
         file_a.to_string_lossy().to_string(),
         file_b.to_string_lossy().to_string(),
     ];
+    state.rebuild_visible_tree_nodes();
 
     // 模拟命令行中传入了定位到 b.http 的参数，利用我们刚写的匹配算法
     let initial_file = Some(file_b.to_string_lossy().to_string());
     let mut initial_idx = 0;
     if let Some(init_path) = &initial_file {
-        let matched = state.file_tree.iter().position(|p| {
-            p == init_path
-                || std::path::Path::new(p)
-                    .canonicalize()
-                    .map(|c| {
-                        std::path::Path::new(init_path)
-                            .canonicalize()
-                            .map(|ic| c == ic)
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false)
-        });
-        if let Some(pos) = matched {
-            initial_idx = pos;
+        if let Ok(canon_init) = std::path::Path::new(init_path).canonicalize() {
+            let matched = state.visible_file_nodes.iter().position(|n| {
+                if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
+                    c.to_string_lossy() == canon_init.to_string_lossy()
+                } else {
+                    n.abs_path == canon_init.to_string_lossy()
+                }
+            });
+            if let Some(pos) = matched {
+                initial_idx = pos;
+            }
         }
     }
 
@@ -913,3 +912,89 @@ fn test_history_editor_title_id_display() {
     });
     assert!(res.is_ok());
 }
+
+#[test]
+fn test_file_tree_trie_construction() {
+    let mut state = AppState::new();
+    state.workspace_root = std::path::PathBuf::from("/workspace");
+    state.raw_file_list = vec![
+        "/workspace/a/b/c.http".to_string(),
+        "/workspace/a/d.http".to_string(),
+        "/workspace/e.http".to_string(),
+    ];
+
+    // 1. 测试未展开任何目录时的投影 (默认折叠)
+    state.expanded_dirs.clear();
+    state.rebuild_visible_tree_nodes();
+
+    // 应该只展示顶级项: "a" 目录和 "e.http" 文件
+    assert_eq!(state.visible_file_nodes.len(), 2);
+    assert_eq!(state.visible_file_nodes[0].display_name, "a");
+    assert!(state.visible_file_nodes[0].is_dir);
+    assert_eq!(state.visible_file_nodes[1].display_name, "e.http");
+    assert!(!state.visible_file_nodes[1].is_dir);
+
+    // 2. 测试展开 "a" 目录及子目录 "a/b" 时的投影
+    state.expanded_dirs.insert("a".to_string());
+    state.expanded_dirs.insert("a/b".to_string());
+    state.rebuild_visible_tree_nodes();
+
+    // 应该展示 "a"、"a/b"、"a/b/c.http"、"a/d.http"、"e.http" 
+    assert_eq!(state.visible_file_nodes.len(), 5);
+}
+
+#[test]
+fn test_file_tree_selected_index_rebound() {
+    let mut state = AppState::new();
+    state.workspace_root = std::path::PathBuf::from("/workspace");
+    state.raw_file_list = vec![
+        "/workspace/a/b/c.http".to_string(),
+        "/workspace/a/d.http".to_string(),
+    ];
+    state.expanded_dirs.insert("a".to_string());
+    state.expanded_dirs.insert("a/b".to_string());
+    state.rebuild_visible_tree_nodes();
+
+    // 当前树展开为:
+    // 0: a (dir)
+    // 1: a/b (dir)
+    // 2: a/b/c.http (file)
+    // 3: a/d.http (file)
+    assert_eq!(state.visible_file_nodes.len(), 4);
+
+    // 1. 光标选中 a/b/c.http (index = 2)
+    state.files_state.selected_index = 2;
+
+    // 2. 折叠 "a/b" 目录 (使得 c.http 被隐藏)
+    state.toggle_directory(1);
+
+    // 展开列表现在为:
+    // 0: a (dir)
+    // 1: a/b (dir, collapsed)
+    // 2: a/d.http (file)
+    assert_eq!(state.visible_file_nodes.len(), 3);
+    
+    // 验证光标是否“回弹”定位到父目录 "a/b" (即新索引 1)
+    assert_eq!(state.files_state.selected_index, 1);
+    assert_eq!(state.visible_file_nodes[state.files_state.selected_index].display_name, "b");
+}
+
+#[test]
+fn test_file_tree_empty_state_guard() {
+    let mut state = AppState::new();
+    state.workspace_root = std::path::PathBuf::from("/workspace");
+    state.raw_file_list.clear();
+    state.rebuild_visible_tree_nodes();
+
+    assert!(state.visible_file_nodes.is_empty());
+    assert_eq!(state.files_state.selected_index, 0);
+
+    // 模拟渲染空状态，确保无 panic
+    let backend = ratatui::backend::TestBackend::new(80, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let res = terminal.draw(|frame| {
+        rupost::tui::ui::render(frame, &mut state);
+    });
+    assert!(res.is_ok());
+}
+

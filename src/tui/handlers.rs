@@ -69,17 +69,19 @@ fn handle_confirm_key(state: &mut AppState, key: KeyEvent) {
                         state.is_quitting = true;
                     }
                     PendingAction::SwitchFile(idx) => {
-                        if idx < state.file_tree.len() {
-                            let path = &state.file_tree[idx];
-                            if let Ok(content) = std::fs::read_to_string(path) {
-                                state.editor_text = content;
-                                state.editor_file_path = Some(path.clone());
-                                state.is_dirty = false;
-                                state.loaded_file_index = idx;
-                                state.selected_file_index = idx;
-                                state.files_state.selected_index = idx;
-                                state.editor_scroll = 0;
-                                state.active_panel = Panel::Editor;
+                        if idx < state.visible_file_nodes.len() {
+                            let node = &state.visible_file_nodes[idx];
+                            if !node.is_dir {
+                                if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
+                                    state.editor_text = content;
+                                    state.editor_file_path = Some(node.abs_path.clone());
+                                    state.is_dirty = false;
+                                    state.loaded_file_index = idx;
+                                    state.selected_file_index = idx;
+                                    state.files_state.selected_index = idx;
+                                    state.editor_scroll = 0;
+                                    state.active_panel = Panel::Editor;
+                                }
                             }
                         }
                     }
@@ -119,10 +121,30 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
     }
     match key.code {
         KeyCode::Left | KeyCode::Char('h') => {
+            if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty() {
+                let idx = state.files_state.selected_index;
+                if idx < state.visible_file_nodes.len() {
+                    let node = &state.visible_file_nodes[idx];
+                    if node.is_dir && state.expanded_dirs.contains(&node.rel_path) {
+                        state.toggle_directory(idx);
+                        return;
+                    }
+                }
+            }
             state.active_sidebar_tab = SidebarTab::Files;
             sync_preview_to_editor(state);
         }
         KeyCode::Right | KeyCode::Char('l') => {
+            if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty() {
+                let idx = state.files_state.selected_index;
+                if idx < state.visible_file_nodes.len() {
+                    let node = &state.visible_file_nodes[idx];
+                    if node.is_dir && !state.expanded_dirs.contains(&node.rel_path) {
+                        state.toggle_directory(idx);
+                        return;
+                    }
+                }
+            }
             state.active_sidebar_tab = SidebarTab::History;
             sync_preview_to_editor(state);
         }
@@ -133,7 +155,7 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
         }
         KeyCode::Down | KeyCode::Char('j') => match state.active_sidebar_tab {
             SidebarTab::Files => {
-                if state.files_state.selected_index + 1 < state.file_tree.len() {
+                if state.files_state.selected_index + 1 < state.visible_file_nodes.len() {
                     state.files_state.selected_index += 1;
                     state.selected_file_index = state.files_state.selected_index;
                     sync_preview_to_editor(state);
@@ -163,8 +185,16 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
         },
         KeyCode::Enter => match state.active_sidebar_tab {
             SidebarTab::Files => {
-                if !state.file_tree.is_empty() {
-                    state.active_panel = Panel::Editor;
+                if !state.visible_file_nodes.is_empty() {
+                    let idx = state.files_state.selected_index;
+                    if idx < state.visible_file_nodes.len() {
+                        let node = &state.visible_file_nodes[idx];
+                        if node.is_dir {
+                            state.toggle_directory(idx);
+                        } else {
+                            state.active_panel = Panel::Editor;
+                        }
+                    }
                 }
             }
             SidebarTab::History => {
@@ -368,10 +398,15 @@ pub fn handle_mouse(state: &mut AppState, mouse_event: MouseEvent) {
                     match state.active_sidebar_tab {
                         SidebarTab::Files => {
                             let idx = state.files_state.scroll_offset + click_row;
-                            if idx < state.file_tree.len() {
-                                state.files_state.selected_index = idx;
-                                state.selected_file_index = idx;
-                                sync_preview_to_editor(state);
+                            if idx < state.visible_file_nodes.len() {
+                                let is_dir = state.visible_file_nodes[idx].is_dir;
+                                if is_dir {
+                                    state.toggle_directory(idx);
+                                } else {
+                                    state.files_state.selected_index = idx;
+                                    state.selected_file_index = idx;
+                                    sync_preview_to_editor(state);
+                                }
                             }
                         }
                         SidebarTab::History => {
@@ -405,10 +440,15 @@ pub fn handle_mouse(state: &mut AppState, mouse_event: MouseEvent) {
                     match state.active_sidebar_tab {
                         SidebarTab::Files => {
                             let idx = state.files_state.scroll_offset + click_row;
-                            if idx < state.file_tree.len() {
-                                state.files_state.selected_index = idx;
-                                state.selected_file_index = idx;
-                                sync_preview_to_editor(state);
+                            if idx < state.visible_file_nodes.len() {
+                                let is_dir = state.visible_file_nodes[idx].is_dir;
+                                if is_dir {
+                                    state.toggle_directory(idx);
+                                } else {
+                                    state.files_state.selected_index = idx;
+                                    state.selected_file_index = idx;
+                                    sync_preview_to_editor(state);
+                                }
                             }
                         }
                         SidebarTab::History => {
@@ -448,10 +488,15 @@ pub fn handle_mouse(state: &mut AppState, mouse_event: MouseEvent) {
                         match state.active_sidebar_tab {
                             SidebarTab::Files => {
                                 let idx = state.files_state.scroll_offset + click_row;
-                                if idx < state.file_tree.len() {
-                                    state.files_state.selected_index = idx;
-                                    state.selected_file_index = idx;
-                                    sync_preview_to_editor(state);
+                                if idx < state.visible_file_nodes.len() {
+                                    let is_dir = state.visible_file_nodes[idx].is_dir;
+                                    if is_dir {
+                                        state.toggle_directory(idx);
+                                    } else {
+                                        state.files_state.selected_index = idx;
+                                        state.selected_file_index = idx;
+                                        sync_preview_to_editor(state);
+                                    }
                                 }
                             }
                             SidebarTab::History => {
@@ -503,21 +548,23 @@ fn sync_preview_to_editor(state: &mut AppState) {
     }
     match state.active_sidebar_tab {
         SidebarTab::Files => {
-            if !state.file_tree.is_empty()
-                && state.files_state.selected_index < state.file_tree.len()
+            if !state.visible_file_nodes.is_empty()
+                && state.files_state.selected_index < state.visible_file_nodes.len()
             {
-                let path = &state.file_tree[state.files_state.selected_index];
-                if let Ok(content) = std::fs::read_to_string(path) {
-                    state.editor_text = content;
-                    state.editor_file_path = Some(path.clone());
-                    if let Ok(metadata) = std::fs::metadata(path) {
-                        state.editor_file_mtime = metadata.modified().ok();
-                    } else {
-                        state.editor_file_mtime = None;
+                let node = &state.visible_file_nodes[state.files_state.selected_index];
+                if !node.is_dir {
+                    if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
+                        state.editor_text = content;
+                        state.editor_file_path = Some(node.abs_path.clone());
+                        if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
+                            state.editor_file_mtime = metadata.modified().ok();
+                        } else {
+                            state.editor_file_mtime = None;
+                        }
+                        state.is_dirty = false;
+                        state.loaded_file_index = state.files_state.selected_index;
+                        state.editor_scroll = 0;
                     }
-                    state.is_dirty = false;
-                    state.loaded_file_index = state.files_state.selected_index;
-                    state.editor_scroll = 0;
                 }
             }
         }

@@ -430,7 +430,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         let mut state = AppState::new();
-        state.file_tree = vec!["test1.http".to_string(), "subdir/test2.http".to_string()];
+        state.raw_file_list = vec!["test1.http".to_string(), "subdir/test2.http".to_string()];
+        state.rebuild_visible_tree_nodes();
         state.history_list = vec![crate::history::model::HistoryEntry {
             id: "1".to_string(),
             timestamp: chrono::Utc::now(),

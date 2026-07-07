@@ -42,7 +42,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
     match state.active_sidebar_tab {
         SidebarTab::Files => {
-            let file_count = state.file_tree.len();
+            let file_count = state.visible_file_nodes.len();
             state
                 .files_state
                 .clamp_scroll_offset(file_count, viewport_height);
@@ -50,19 +50,27 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
             let start = state.files_state.scroll_offset;
             let end = (start + viewport_height).min(file_count);
 
-            let lines: Vec<Line> = if state.file_tree.is_empty() {
-                vec![Line::from(Span::styled(
-                    "No files found in workspace.",
-                    Style::default().fg(Color::DarkGray),
-                ))]
+            let lines: Vec<Line> = if state.visible_file_nodes.is_empty() {
+                vec![
+                    Line::raw(""),
+                    Line::from(Span::styled(
+                        " (No HTTP files found in workspace)",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(Span::styled(
+                        " Press '?' for help",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ]
             } else {
-                state.file_tree[start..end]
+                state.visible_file_nodes[start..end]
                     .iter()
                     .enumerate()
-                    .map(|(idx, full_path)| {
+                    .map(|(idx, node)| {
                         let actual_idx = start + idx;
                         let is_selected = actual_idx == state.files_state.selected_index;
-                        let style = if is_selected {
+                        
+                        let base_style = if is_selected {
                             Style::default()
                                 .fg(Color::Yellow)
                                 .add_modifier(Modifier::REVERSED)
@@ -70,36 +78,47 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                             Style::default()
                         };
 
-                        let display_text = if state.show_full_path {
-                            full_path.clone()
+                        // 1. 连线前缀 (使用淡灰色)
+                        let prefix = node.render_prefix();
+                        
+                        // 2. ▸ / ▾ 指示符
+                        let indicator = if node.is_dir {
+                            if state.expanded_dirs.contains(&node.rel_path) {
+                                "▾ "
+                            } else {
+                                "▸ "
+                            }
                         } else {
-                            std::path::Path::new(full_path)
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| full_path.clone())
+                            "  "
                         };
 
-                        // 如果当前文件已经加载进编辑器，显示一个小星号前缀
-                        let is_loaded = actual_idx == state.loaded_file_index
-                            && state.editor_file_path.as_ref() == Some(full_path);
-                        let prefix = if is_loaded { "* " } else { "  " };
+                        // 3. 文件名/目录名样式
+                        let name_style = if node.is_dir {
+                            base_style.add_modifier(Modifier::BOLD)
+                        } else {
+                            base_style
+                        };
+
+                        let is_loaded = !node.is_dir && state.editor_file_path.as_ref() == Some(&node.abs_path);
+                        let name_text = if is_loaded {
+                            format!("{} *", node.display_name)
+                        } else {
+                            node.display_name.clone()
+                        };
 
                         let mut spans = vec![
-                            Span::styled(
-                                prefix,
-                                Style::default()
-                                    .fg(Color::Cyan)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled(display_text, style),
+                            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                            Span::styled(indicator, Style::default().fg(Color::DarkGray)),
+                            Span::styled(name_text, name_style),
                         ];
 
-                        if let Some(exec_state) = state.file_execution_states.get(full_path) {
+                        // 4. 执行状态 (如果是运行中，提供动态旋转 blind spinner，如果是完成，提供彩色 SUCCESS/FAILED)
+                        if let Some(exec_state) = state.file_execution_states.get(&node.abs_path) {
                             use crate::tui::state::FileExecState;
                             match exec_state {
                                 FileExecState::Running => {
                                     spans.push(Span::styled(
-                                        " [RUNNING]",
+                                        format!(" [RUNNING] {}", state.get_spinner_char()),
                                         Style::default()
                                             .fg(Color::Yellow)
                                             .add_modifier(Modifier::BOLD),

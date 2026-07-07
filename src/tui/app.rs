@@ -759,8 +759,6 @@ fn sync_preview_to_editor(state: &mut crate::tui::state::AppState) {
 /// 2. 过滤目录黑名单：.git, .rupost, target, node_modules, .agents, .gemini 等
 /// 3. 轻量内容启发式扫描：读取前缀 1024 字节，检查是否是包含有效 HTTP 请求的 http 文件或包含 http 代码块的 md 文件
 pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
-    let mut result = Vec::new();
-
     // 黑名单目录列表
     let blacklisted_dirs = [
         ".git",
@@ -785,77 +783,80 @@ pub fn filter_tui_test_files(paths: Vec<std::path::PathBuf>) -> Vec<String> {
         "walkthrough.md",
     ];
 
-    for path in paths {
-        // 1. 第一层过滤：路径名及黑名单拦截（零 IO 读盘）
-        // 检查是否包含黑名单目录
-        let has_blacklisted_dir = blacklisted_dirs
-            .iter()
-            .any(|&dir| path.components().any(|c| c.as_os_str() == dir));
-        if has_blacklisted_dir {
-            continue;
-        }
+    paths
+        .into_iter()
+        .filter(|path| should_keep_file(path, &blacklisted_dirs, &blacklisted_files))
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
 
-        // 检查文件名是否在黑名单中
-        if let Some(file_name) = path.file_name() {
-            let name_str = file_name.to_string_lossy();
-            if blacklisted_files
-                .iter()
-                .any(|&f| name_str.eq_ignore_ascii_case(f))
-            {
-                continue;
-            }
-        }
-
-        // 2. 第二层过滤：轻量级启发式读盘检视
-        if let Ok(mut file) = std::fs::File::open(&path) {
-            use std::io::Read;
-            let mut buf = [0u8; 1024];
-            if let Ok(bytes_read) = file.read(&mut buf) {
-                let content = String::from_utf8_lossy(&buf[..bytes_read]);
-
-                let is_http_extension = path
-                    .extension()
-                    .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("http"))
-                    .unwrap_or(false);
-                let is_md_extension = path
-                    .extension()
-                    .map(|ext| ext.to_string_lossy().eq_ignore_ascii_case("md"))
-                    .unwrap_or(false);
-
-                if is_http_extension {
-                    let has_request = content.lines().any(|line| {
-                        let trimmed = line.trim();
-                        trimmed.starts_with("GET ")
-                            || trimmed.starts_with("POST ")
-                            || trimmed.starts_with("PUT ")
-                            || trimmed.starts_with("DELETE ")
-                            || trimmed.starts_with("PATCH ")
-                            || trimmed.starts_with("HEAD ")
-                            || trimmed.starts_with("OPTIONS ")
-                            || trimmed.starts_with("WEBSOCKET ")
-                            || trimmed.starts_with("WS ")
-                    });
-                    if !has_request {
-                        continue;
-                    }
-                } else if is_md_extension {
-                    if !content.contains("```http") && !content.contains("```rest") {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-        } else {
-            continue;
-        }
-
-        result.push(path.to_string_lossy().to_string());
+/// 检查单个文件是否应当保留作为测试文件候选
+fn should_keep_file(
+    path: &std::path::Path,
+    blacklisted_dirs: &[&str],
+    blacklisted_files: &[&str],
+) -> bool {
+    // 1. 第一层过滤：路径名及黑名单拦截（零 IO 读盘）
+    // 检查是否包含黑名单目录
+    let has_blacklisted_dir = blacklisted_dirs
+        .iter()
+        .any(|&dir| path.components().any(|c| c.as_os_str() == dir));
+    if has_blacklisted_dir {
+        return false;
     }
 
-    result
+    // 检查文件名是否在黑名单中
+    if let Some(file_name) = path.file_name() {
+        let name_str = file_name.to_string_lossy();
+        if blacklisted_files
+            .iter()
+            .any(|&f| name_str.eq_ignore_ascii_case(f))
+        {
+            return false;
+        }
+    }
+
+    // 检查扩展名，避免对 non-http/md 文件执行无谓的磁盘读取操作
+    let Some(ext) = path.extension() else {
+        return false;
+    };
+    let ext_str = ext.to_string_lossy();
+    let is_http = ext_str.eq_ignore_ascii_case("http");
+    let is_md = ext_str.eq_ignore_ascii_case("md");
+    if !is_http && !is_md {
+        return false;
+    }
+
+    // 2. 第二层过滤：轻量级启发式读盘检视
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+
+    use std::io::Read;
+    let mut buf = [0u8; 1024];
+    let Ok(bytes_read) = file.read(&mut buf) else {
+        return false;
+    };
+
+    let content = String::from_utf8_lossy(&buf[..bytes_read]);
+
+    if is_http {
+        content.lines().any(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with("GET ")
+                || trimmed.starts_with("POST ")
+                || trimmed.starts_with("PUT ")
+                || trimmed.starts_with("DELETE ")
+                || trimmed.starts_with("PATCH ")
+                || trimmed.starts_with("HEAD ")
+                || trimmed.starts_with("OPTIONS ")
+                || trimmed.starts_with("WEBSOCKET ")
+                || trimmed.starts_with("WS ")
+        })
+    } else {
+        // is_md
+        content.contains("```http") || content.contains("```rest")
+    }
 }
 
 #[cfg(test)]

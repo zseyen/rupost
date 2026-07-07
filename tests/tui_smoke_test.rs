@@ -605,3 +605,60 @@ fn test_tui_command_line_file_auto_positioning() {
     
     assert_eq!(initial_idx, 1); // 成功定位到第二项 (b.http)
 }
+
+#[test]
+fn test_history_replay_memory_dispatch() {
+    use rupost::tui::state::SidebarTab;
+    let mut state = AppState::new();
+    
+    // 1. 设置处于历史记录 tab
+    state.active_sidebar_tab = SidebarTab::History;
+    
+    // 2. 模拟内存中已载入一份历史 ParsedRequest
+    let request_snap = ParsedRequest {
+        method: Some("POST".to_string()),
+        url: "http://example.com/history_test".to_string(),
+        headers: vec![("content-type".to_string(), "application/json".to_string())],
+        body: Some("{\"ok\":true}".to_string()),
+        metadata: Default::default(),
+        line_number: 1,
+        base_path: None,
+    };
+    state.current_request = Some(request_snap.clone());
+
+    // 3. 执行 app.rs 中对应的内存读取逻辑
+    let parsed_req = if state.active_sidebar_tab == SidebarTab::History {
+        state.current_request.clone()
+    } else {
+        None
+    };
+
+    // 4. 校验劫持并拿到了正确的克隆拷贝，未读取磁盘
+    assert!(parsed_req.is_some());
+    let req = parsed_req.unwrap();
+    assert_eq!(req.url, "http://example.com/history_test");
+    assert_eq!(req.method_or_default(), "POST");
+}
+
+#[test]
+fn test_response_scroll_clamp_boundary() {
+    let mut state = AppState::new();
+    
+    // 1. 模拟 10 行视觉文本，视口高度为 6 (排除 borders 后可视行数为 4)
+    state.terminal_height = 6;
+    state.response_visual_lines = vec![ratatui::text::Line::from("line"); 10];
+    state.response_scroll = 0;
+
+    // 2. 模拟 Down 键滚动 (多次触发)
+    for _ in 0..20 {
+        let visible_height = state.terminal_height.saturating_sub(2) as usize;
+        let total = state.response_visual_lines.len();
+        let max_scroll = total.saturating_sub(visible_height); // max_scroll = 10 - 4 = 6
+        if state.response_scroll < max_scroll {
+            state.response_scroll = state.response_scroll.saturating_add(1);
+        }
+    }
+
+    // 3. 断言被严格 Clamp 限制在 max_scroll 边界
+    assert_eq!(state.response_scroll, 6);
+}

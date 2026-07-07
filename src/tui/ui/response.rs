@@ -223,9 +223,30 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             Style::default().fg(Color::Yellow),
         )));
 
-        // 拼接响应 Body 各行
+        // 拼接响应 Body 各行，若行数超限 1000 则进行截断保护
+        let max_body_lines = 1000;
+        let mut body_lines = Vec::new();
+        let mut is_truncated = false;
+        let mut total_body_lines = 0;
+
         for line in resp.body.lines() {
-            raw_lines.push(Line::from(line.to_string()));
+            total_body_lines += 1;
+            if body_lines.len() < max_body_lines {
+                body_lines.push(line.to_string());
+            } else {
+                is_truncated = true;
+            }
+        }
+
+        if is_truncated {
+            raw_lines.push(Line::from(Span::styled(
+                format!(" [WARNING: Response truncated from {} to 1000 lines. View full log in CLI] ", total_body_lines),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        for line in body_lines {
+            raw_lines.push(Line::from(line));
         }
 
         // 调用 pre-wrapper 折行处理器

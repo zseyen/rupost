@@ -453,3 +453,44 @@ fn test_external_file_modification_hot_reload() {
     state.check_and_reload_editor_file();
     assert_eq!(state.editor_text, "GET http://corrupted"); // 依然是内存值，说明防重复读盘机制正常工作
 }
+
+#[test]
+fn test_large_response_rendering_safety() {
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    
+    // 1. 构造一个 5000 行的超大型模拟响应
+    let huge_body = vec!["JSON line content data string example"; 5000].join("\n");
+    let response = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        huge_body,
+        std::time::Duration::from_millis(150),
+        std::time::Duration::from_millis(50),
+        std::time::Duration::from_millis(100),
+    )
+    .unwrap();
+    state.last_response = Some(response);
+
+    // 2. 模拟触发重绘。由于我们增加了截断处理，这个绘制必须在微秒级瞬间跑完
+    // 重复 draw 20 次压测以验证流畅度且不发生任何 panic
+    for _ in 0..20 {
+        let res = terminal.draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        });
+        assert!(res.is_ok());
+    }
+
+    // 3. 校验截断警告信息已正确拼入视觉行
+    assert!(state.response_visual_lines.len() > 1000);
+    let mut found_warning = false;
+    for line in &state.response_visual_lines {
+        if line.to_string().contains("WARNING: Response truncated") {
+            found_warning = true;
+            break;
+        }
+    }
+    assert!(found_warning);
+}

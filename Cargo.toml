@@ -3,6 +3,8 @@ name = "rupost"
 version = "0.2.0"
 edition = "2024"
 description = "A API test tool based on documents"
+default-run = "rupost"
+
 
 [workspace]
 members = [

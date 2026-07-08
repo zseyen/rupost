@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use super::url::resolve_final_url;
 use crate::history::model::RequestSnapshot;
 use crate::http::{Client, Request, Response};
@@ -41,6 +42,7 @@ pub struct TestExecutor {
     middlewares: Vec<ExecutorMiddleware>,
     pub debug: bool,
     pub debug_on_failure: bool,
+    pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
 }
 
 impl TestExecutor {
@@ -73,6 +75,7 @@ impl TestExecutor {
             middlewares: Vec::new(),
             debug: false,
             debug_on_failure: false,
+            stream_sender: None,
         }
     }
 
@@ -98,6 +101,15 @@ impl TestExecutor {
         self
     }
 
+    /// Set stream_sender for long-connection notifications
+    pub fn with_stream_sender(
+        mut self,
+        sender: tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>,
+    ) -> Self {
+        self.stream_sender = Some(sender);
+        self
+    }
+
     /// Create a new executor with cookie persistence.
     ///
     /// # Arguments
@@ -113,6 +125,7 @@ impl TestExecutor {
             middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
             debug: false,
             debug_on_failure: false,
+            stream_sender: None,
         })
     }
 
@@ -128,6 +141,7 @@ impl TestExecutor {
             middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
             debug: false,
             debug_on_failure: false,
+            stream_sender: None,
         }
     }
 
@@ -241,8 +255,14 @@ impl TestExecutor {
         }
 
         if parsed.metadata.websocket {
-            return WsRunner::execute(parsed, request_number, context, self.middlewares.clone())
-                .await;
+            return WsRunner::execute(
+                parsed,
+                request_number,
+                context,
+                self.middlewares.clone(),
+                self.stream_sender.clone(),
+            )
+            .await;
         }
 
         let method = parsed.method_or_default().to_string();
@@ -331,6 +351,7 @@ impl TestExecutor {
                         sse_max_events,
                         stream_to,
                         stream_to_append,
+                        stream_sender: self.stream_sender.clone(),
                     };
                     return crate::runner::SseRunner::execute(
                         response,

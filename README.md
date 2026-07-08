@@ -18,6 +18,7 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **WebSocket 协议调试**：支持 WebSocket 订阅流剧本、操作符软匹配断言与自动重连自愈。详见 [WebSocket 协议调试指南](file:///doc/guides/websocket_testing.md)。
 - **历史与追踪**：自动记录请求历史，支持从历史记录交互式生成测试文件。
 - **极致效率**：支持 curl 与 httpie 风格的命令行输入，并提供极短的别名（`t`, `h`, `g`）以提升操作流转速度。
+- **交互式终端 TUI 模式**：内置基于 Model-View-Update 单向数据流与自适应布局的交互式调试终端。支持文件与请求历史双 Tab 状态解耦切换、基于内存预折行 (Pre-wrapping) 算法的长 Response/WS/SSE 日志高精度垂直滚动、路径显示配置切换、以及历史快照一键 Enter 反向还原代码并重新加载运行。
 - **底层架构**：遵循 Clean Architecture 设计模式，代码结构清晰，易于扩展与维护。
 
 ---
@@ -67,6 +68,10 @@ RuPost 提供了直观且高效的命令行接口：
 * **SSE/LLM 模板快速生成**:
   ```bash
   rupost template sse -o my_sse.http
+  ```
+* **启动交互式终端 UI 调试模式 (TUI)**:
+  ```bash
+  rupost tui
   ```
 
 ---

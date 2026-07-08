@@ -3,6 +3,8 @@ name = "rupost"
 version = "0.2.0"
 edition = "2024"
 description = "A API test tool based on documents"
+default-run = "rupost"
+
 
 [workspace]
 members = [
@@ -48,6 +50,10 @@ x509-parser = "0.16"
 axum = "0.7"
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
+ratatui = "0.30"
+crossterm = "0.29"
+ratatui-textarea = "0.9"
+unicode-width = "0.1.13"
 
 [dev-dependencies]
 cookie = "0.18"
@@ -55,6 +61,7 @@ dirs = "6.0.0"
 tempfile = "3.24.0"
 wiremock = "0.6.5"
 criterion = { version = "0.5", features = ["html_reports"] }
+filetime = "0.2.29"
 
 [[bench]]
 name = "parser_bench"

@@ -15,3 +15,5 @@ pub mod ws;
 
 // Re-export commonly used types
 pub use error::{Result, RupostError};
+
+pub mod tui;

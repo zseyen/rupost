@@ -19,6 +19,7 @@ pub fn record_history(request: RequestSnapshot, response: &Response, source: Opt
         response: ResponseMeta {
             status: response.status.code(),
             headers: response.headers.clone(),
+            body: Some(response.body.clone()),
         },
     };
 

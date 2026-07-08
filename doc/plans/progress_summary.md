@@ -19,6 +19,8 @@
 | **Sprint 5: WebSocket 协议测试与调试** | 支持在 `.http`/`.md` 中以 `@websocket` 指令声明长连接，识别 `SEND` / `EXPECT` 流式剧本；提供双层后台心跳保活 Worker 协程，支持 MsgPack 二进制解码断言与级联捕获。 | 已完成 | `src/ws/`, `src/runner/ws_runner.rs`, `tests/websocket_integration_test.rs`, `examples/websocket.http`, `examples/websocket.md` |
 | **HTTP 快照录制与原样重放 (MVP)** | 增加测试时一键录制快照开关 `--save-snapshot`；新增顶层 `replay` 子命令与 `ReplayExecutor`，支持指定 `--target` 参数自动改写 Host/Port，对状态码进行比对高亮输出 | 已完成 | `src/cli.rs`, `src/main.rs`, `src/runner/replayer.rs`, `src/runner/types.rs`, `tests/snapshot_replay_test.rs` |
 | **架构重构与组件化分层** | 将 `httpie` 和 `curl` 的解析逻辑从 `CliRunner` 中抽离为独立的 `src/cli/parser.rs` 子组件；将测试文件 URL 智能拼接与补全算法从 `TestExecutor` 中抽离为独立的 `src/runner/url.rs` 子组件，降低模块耦合。 | 已完成 | `src/cli/parser.rs`, `src/runner/url.rs` |
+| **Sprint 7: TUI 引导、自适应与交互重构** | 实现底栏操作提示指示（lazygit 风格）、自适应窄屏三栏布局、鼠标点击捕获与面板切焦、以及同步预览与切焦编辑（Enter键脏确认拦截）。 | 已完成 | `src/tui/app.rs`, `src/tui/event.rs`, `src/tui/ui/mod.rs`, `tests/tui_smoke_test.rs` |
+| **TUI 性能优化与交互升级** | 内存预折行 (Pre-wrapping) 视觉切片算法，解决中英文混合/Emoji 超长 Response 滚动错位问题；侧边栏双 Tab (Files / History) 状态解耦，提供滚动视口边界保持 (Viewport clamping)；历史记录项 Enter 反向还原为 `.http` 代码重新载入编辑器运行；组件化拆分及 Wide/Narrow/Stacked 自适应重绘冒烟测试。 | 已完成 | `src/tui/state.rs`, `src/tui/app.rs`, `src/tui/ui/sidebar.rs`, `src/tui/ui/editor.rs`, `src/tui/ui/response.rs`, `src/tui/ui/mod.rs` |
 | **Sprint 6: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 
 ---
@@ -115,6 +117,36 @@
 3. **快照重放执行引擎 (`ReplayExecutor`)**：
    - 新增了重放引擎 `ReplayExecutor`，支持加载快照套件并发送真实流量，支持将原始请求的 Protocol/Host/Port 动态改写为指定的 `--target` 目标物理地址，保持 Path 和 Query 原样不变。
 4. **状态码比对诊断**：
-   - 自动比对新老响应状态码，并在终端高亮高颜值输出 Diff 分析结果。
+   - 自动比对新老响应状态码，并在终端高亮高颜值输出 Diff Diff 结果。
+
+### Sprint 7: TUI 引导、自适应与交互重构
+1. **底部常驻引导条 (lazygit 风格)**：
+   - 采用垂直布局分理出终端屏幕最底下一行作为动态指引栏。根据当前激活的 Panel 以及侧边栏当前的子 Tab (Files/History)，高亮实时提示对应的操作快捷键（例如 Tab/Enter/Click/p/j/k）。
+2. **窄屏自适应三栏布局**：
+   - 彻底重构自适应布局下的 `LayoutMode::Narrow`，当终端宽度在中窄屏范围（80~119）时不再隐藏 Sidebar，而是调整为三栏布局 (20% sidebar, 40% editor, 40% response)，保障在任何合适的分辨率下侧边栏和历史列表都清晰可见。
+3. **鼠标点击捕获与面板切焦**：
+   - 全程开启 `EnableMouseCapture`。捕获鼠标点击事件并计算点击的具体 X/Y 轴坐标，结合当前的自适应 LayoutMode，实现了鼠标点击侧边栏子 Tab 进行切换、点击列表中的文件/历史项进行预览高亮，以及点击主窗口对应的 Panel 区域直接切换焦点的顺畅体验。
+4. **同步预览与切焦编辑**：
+   - 当在 Files 或 History 列表中使用 `j/k` 移动光标或者使用鼠标点击选中时，只要当前编辑器不是脏的 (`!is_dirty`)，主编辑区和响应区就会同步加载文件/历史请求的内容与响应，仅做展示。
+   - 按下 `Enter` 键时，仅仅将焦点切入到 Editor 区域以开始编辑，从而实现了逻辑上的“只读预览”与“按回车才编辑”的高雅结合。
+   - 如果编辑器内有未保存的脏数据，而用户在侧边栏中切换或回车打开其他内容时，会拉起强确认拦截弹窗保护临时打字修改。
+5. **冒险性测试用例**：
+   - 编写了空历史按回车、脏编辑器下切历史拦截、Narrow 临界尺寸（90）三栏自适应等边界校验用例，全方位巩固了 TUI 的稳定性。
+
+### TUI 性能优化与交互升级
+1. **内存预折行 (Pre-wrapping) 机制**：
+   - 摒弃了 Ratatui Paragraph 自带的 `.wrap()` 机制，在文本加载和窗口大小发生变化时，利用 `unicode-width` 精确对中英文/Emoji 的视觉显示宽度进行剪切，并在内存中缓存折行结果。
+   - 实现了物理行与视觉行 1:1 的精确映射与垂直滚动，保证滚动永远不超过内容边界且能精准触底，彻底消除了 WS/SSE 流式日志在大视口局部加载下由于折行计算不齐导致的滚动崩溃。
+2. **侧边栏 Files & History 双 Tab 状态解耦**：
+   - 将侧边栏横向切分为 `[F] Files`（测试文件）和 `[H] History`（请求历史）两个独立 Tab，可用左右方向键或 `h/l` 无缝切换。
+   - 二者独立维护自身的 `selected_index` 和 `scroll_offset`，切换 Tab 时位置原样保留。引入滑动可视区边界保持算法，在通过 `Up/Down` 或 `j/k` 移动时，自动将选中项保持在屏幕可见区域内。
+3. **文件名优先与路径简显切换**：
+   - 文件列表默认仅高亮显示文件名本身，防止过长的父路径导致文件名被 `...` 截断。在侧边栏激活时，支持按 `p`/`P` 键一键切换展示完整相对路径。
+4. **历史快照 Enter 一键反向还原**：
+   - 历史面板精细化根据 HTTP 方法与状态码着色展示。在任意历史快照上按回车，自动调用 `format_request_snapshot_to_http` 算法将其逆向格式化为标准的 `.http` 源码并填充到编辑器，实现历史记录的零门槛重新编辑与发送。
+5. **测试保障与模块解耦**：
+   - 将单文件 `ui/mod.rs` 彻底重构组件化拆分为 `sidebar.rs`、`editor.rs` 和 `response.rs`。
+   - 新增了中英文折行切分、列表可视区边界修正、历史序列化还原等核心逻辑的单元测试；并在 `TestBackend` 终端下编写了自适应 Wide/Narrow/Stacked 三种布局模式及多种 Modal 重叠状态的子组件渲染冒烟测试，通过 `cargo test` 全量通过回归。
+
 
 

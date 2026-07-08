@@ -58,6 +58,15 @@ async fn main() -> Result<()> {
             HistoryCommands::List { limit, reverse } => {
                 rupost::history::printer::list_history(limit, reverse)?;
             }
+            HistoryCommands::Show { target } => {
+                rupost::history::printer::show_history(&target)?;
+            }
+            HistoryCommands::Prune { days, max_size } => {
+                rupost::history::printer::prune_history(days, max_size)?;
+            }
+            HistoryCommands::Clear { yes, all } => {
+                rupost::history::printer::clear_history(yes, all)?;
+            }
             HistoryCommands::Export { last: _, output: _ } => {
                 println!("History export is not implemented in MVP stage.");
             }
@@ -119,6 +128,9 @@ async fn main() -> Result<()> {
         }) => {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             replayer.replay_file(&file).await?;
+        }
+        Some(Commands::Tui { file }) => {
+            rupost::tui::run(file).await?;
         }
         None => {
             if cli.args.is_empty() {

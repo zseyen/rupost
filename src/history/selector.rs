@@ -102,6 +102,7 @@ mod tests {
             response: ResponseMeta {
                 status: 200,
                 headers: HeaderMap::new(),
+                body: None,
             },
         }
     }

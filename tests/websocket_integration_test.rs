@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if, clippy::result_large_err)]
 use futures_util::{SinkExt, StreamExt};
 use rupost::parser::HttpFileParser;
 use rupost::runner::TestExecutor;
@@ -503,11 +504,11 @@ CLOSE
         res.error
     );
 
-    // 统计：3个SEND，3个EXPECT，1个CLOSE，总计 7 个 actions 步。
+    // 统计：现在 response body 包含了全量收发帧历史
     assert!(res.response.is_some());
     let resp = res.response.as_ref().unwrap();
     assert!(
-        resp.body.contains("Run 7 actions."),
+        resp.body.contains("subscribe") && resp.body.contains("ticker"),
         "Actual body: {}",
         resp.body
     );

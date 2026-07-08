@@ -10,4 +10,3 @@ api_timeout = "3000ms"
 base_url = "https://api.example.com"
 # 支持从当前终端的系统环境中引用值，防止敏感凭证写死在代码仓库中
 token = "${PROD_TOKEN}"
-test-flag

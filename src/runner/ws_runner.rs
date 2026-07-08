@@ -1,8 +1,14 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::needless_borrow,
+    clippy::too_many_arguments
+)]
 use reqwest::header::HeaderMap;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 use crate::assertion::evaluate_assertions;
+use crate::history::model::RequestSnapshot;
 use crate::http::{Request, Response};
 use crate::middleware::Middleware;
 use crate::parser::types::ParsedRequest;
@@ -24,10 +30,34 @@ impl WsRunner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: Vec<ExecutorMiddleware>,
+        stream_sender: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
     ) -> TestResult {
         let start_time = Instant::now();
         let name = parsed.name().map(|s| s.to_string());
         let initial_url = parsed.url.clone();
+
+        let request_snapshot = RequestSnapshot::from_parsed(&parsed);
+
+        // 默认自动创建物理日志落盘文件，使用 request_number 或者是根据系统 UUID/时间戳命名
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let default_log_name = format!("ws_{}_{}.log", timestamp, request_number);
+        let log_path_str = parsed.metadata.stream_to.clone().unwrap_or_else(|| {
+            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
+            format!("{}/logs/{}", dir, default_log_name)
+        });
+        let log_path = std::path::PathBuf::from(&log_path_str);
+
+        // 如果在 TUI 下，把物理路径通知给前台
+        if let Some(ref sender) = stream_sender {
+            let _ = sender.send(crate::runner::types::StreamEvent::InitLogPath(
+                log_path_str.clone(),
+            ));
+        }
+
+        let mut accumulated_log: Vec<String> = Vec::new();
+        let max_bytes = 5 * 1024 * 1024; // 5MB limit
 
         // 保存断言、捕获列表与超时/Body信息
         let assertions_to_eval = parsed.metadata.assertions.clone();
@@ -87,7 +117,12 @@ impl WsRunner {
         };
 
         let client = match WsSession::connect(config).await {
-            Ok(c) => c,
+            Ok(c) => {
+                if let Some(parent) = log_path.parent() {
+                    crate::runner::gc::LogGc::try_trigger_lazy_gc(parent);
+                }
+                c
+            }
             Err(e) => {
                 error!("WebSocket connection failed: {}", e);
                 return TestResult::error(
@@ -131,8 +166,6 @@ impl WsRunner {
             None => None,
         };
 
-        let mut executed_actions_count = 0;
-
         if actions.is_empty() {
             // CLI 直接测试模式：如果有 body 则发包，然后持续打印 5 秒的入站流
             if !body_content.trim().is_empty() {
@@ -141,11 +174,21 @@ impl WsRunner {
                 let outbound_frame = WsFrame::new(
                     FrameDirection::Outbound,
                     WsFrameType::Text,
-                    resolved_payload.into_bytes(),
+                    resolved_payload.clone().into_bytes(),
                     0,
                 );
                 let _ = client.send_frame(outbound_frame).await;
-                executed_actions_count += 1;
+                let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
+                accumulated_log.push(log_line.trim_end().to_string());
+                let _ = write_ws_log_with_limit(&log_path, &log_line, max_bytes).await;
+
+                if let Some(ref sender) = stream_sender {
+                    let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                        is_send: true,
+                        content: resolved_payload,
+                    });
+                }
             }
 
             use colored::Colorize;
@@ -175,7 +218,18 @@ impl WsRunner {
                                         frame.payload_as_string()
                                     };
                                     println!("{} [INBOUND] [Type: {:?}] {}", "[WS]".green().bold(), frame.frame_type, payload_str);
-                                    executed_actions_count += 1;
+                                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                                    let log_line = format!("[←] {} | {}\n", ts, payload_str);
+                                    accumulated_log.push(log_line.trim_end().to_string());
+                                    let _ = write_ws_log_with_limit(&log_path, &log_line, max_bytes).await;
+
+                                    if let Some(ref sender) = stream_sender {
+                                        let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                                            is_send: false,
+                                            content: payload_str.clone(),
+                                        });
+                                    }
+
                                 }
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
@@ -194,11 +248,9 @@ impl WsRunner {
             let close_frame =
                 WsFrame::new(FrameDirection::Outbound, WsFrameType::Close, Vec::new(), 0);
             let _ = client.send_frame(close_frame).await;
-            executed_actions_count += 1;
         } else {
             // 6. 驱动 WsAction 执行流
             for (action_idx, action) in actions.into_iter().enumerate() {
-                executed_actions_count = action_idx + 1;
                 match Self::execute_action(
                     action,
                     action_idx,
@@ -209,6 +261,9 @@ impl WsRunner {
                     &assertions_to_eval,
                     &captures_to_eval,
                     &mut assertion_results,
+                    stream_sender.as_ref(),
+                    Some(&log_path),
+                    &mut accumulated_log,
                 )
                 .await
                 {
@@ -229,41 +284,38 @@ impl WsRunner {
         let duration = start_time.elapsed();
         let success = final_error.is_none() && assertion_results.iter().all(|a| a.passed);
 
-        let mut test_result = if let Some(err) = final_error {
-            TestResult::error(
-                request_number,
-                name,
-                "GET".to_string(),
-                resolved_url,
-                err,
-                duration,
-            )
-        } else {
-            // 成功时构建一个代表长连接总结的 Response
-            let summary_response = Response::new(
-                200,
-                HeaderMap::new(),
-                format!(
-                    "WebSocket Session Completed Successfully. Run {} actions.",
-                    executed_actions_count
-                ),
-                duration,
-                Duration::from_millis(0),
-                Duration::from_millis(0),
-            )
-            .unwrap();
+        let final_body = accumulated_log.join("\n");
+        let summary_response = Response::new(
+            if success { 200 } else { 500 },
+            HeaderMap::new(),
+            final_body,
+            duration,
+            Duration::from_millis(0),
+            Duration::from_millis(0),
+        )
+        .unwrap();
 
-            TestResult::success(
-                request_number,
-                name,
-                "GET".to_string(),
-                resolved_url,
-                summary_response,
-            )
+        let test_result = TestResult {
+            request_number,
+            name,
+            method: "GET".to_string(),
+            url: resolved_url,
+            status: Some(summary_response.status.code()),
+            duration,
+            success,
+            error: final_error.clone(),
+            response: Some(summary_response.clone()),
+            skipped: false,
+            assertions: assertion_results,
+            timing: None,
+            diagnose_report: None,
+            request: Some(request_snapshot.clone()),
         };
 
-        test_result.assertions = assertion_results;
-        test_result.success = success;
+        // 保存历史记录 (WebSocket 专用)
+        use crate::history::recorder::record_history;
+        record_history(request_snapshot, &summary_response, None);
+
         test_result
     }
 }
@@ -287,6 +339,11 @@ impl WsRunner {
         assertions_to_eval: &[String],
         captures_to_eval: &[VariableCapture],
         assertion_results: &mut Vec<crate::assertion::AssertionResult>,
+        stream_sender: Option<
+            &tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
+        log_path: Option<&std::path::Path>,
+        accumulated_log: &mut Vec<String>,
     ) -> Result<bool, String> {
         match action {
             WsAction::Connect { .. } => Ok(true),
@@ -298,13 +355,26 @@ impl WsRunner {
                 let outbound_frame = WsFrame::new(
                     FrameDirection::Outbound,
                     frame.frame_type,
-                    resolved_payload.into_bytes(),
+                    resolved_payload.clone().into_bytes(),
                     0,
                 );
 
                 if let Err(e) = client.send_frame(outbound_frame).await {
                     Err(format!("Send failed: {}", e))
                 } else {
+                    let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                    let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
+                    accumulated_log.push(log_line.trim_end().to_string());
+                    if let Some(path) = log_path {
+                        let _ = write_ws_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                    }
+
+                    if let Some(sender) = stream_sender {
+                        let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                            is_send: true,
+                            content: resolved_payload.clone(),
+                        });
+                    }
                     Ok(true)
                 }
             }
@@ -355,6 +425,30 @@ impl WsRunner {
                         maybe_frame = rx.recv() => {
                             match maybe_frame {
                                 Ok(frame) => {
+                                    if frame.direction == FrameDirection::Inbound {
+                                        let payload_str = if frame.frame_type == WsFrameType::Binary {
+                                            if let Some(dec) = decoder {
+                                                dec.decode(&frame.payload).map(|v| v.to_string()).unwrap_or_else(|_| format!("0x{}", hex::encode(&frame.payload)))
+                                            } else {
+                                                format!("0x{}", hex::encode(&frame.payload))
+                                            }
+                                        } else {
+                                            frame.payload_as_string()
+                                        };
+                                        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                                        let log_line = format!("[←] {} | {}\n", ts, payload_str);
+                                        accumulated_log.push(log_line.trim_end().to_string());
+                                        if let Some(path) = log_path {
+                                            let _ = write_ws_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                                        }
+
+                                        if let Some(sender) = stream_sender {
+                                            let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                                                is_send: false,
+                                                content: payload_str,
+                                            });
+                                        }
+                                    }
                                     if frame.direction == FrameDirection::Inbound
                                         && matcher.matches(&frame, decoder)
                                     {
@@ -470,6 +564,44 @@ impl WsRunner {
         }
         resolved
     }
+}
+
+async fn write_ws_log_with_limit(
+    log_path: &std::path::Path,
+    data: &str,
+    max_bytes: usize,
+) -> Result<(), std::io::Error> {
+    use tokio::fs::OpenOptions;
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(parent) = log_path.parent() {
+        if !parent.exists() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+    }
+
+    let file_len = log_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    if file_len >= max_bytes {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(log_path)
+        .await?;
+
+    let new_len = file_len + data.len();
+    if new_len > max_bytes {
+        let _ = file
+            .write_all(b"\n[SYSTEM] Log truncated due to size limit (5MB).\n")
+            .await;
+    } else {
+        let _ = file.write_all(data.as_bytes()).await;
+    }
+    let _ = file.flush().await;
+    Ok(())
 }
 
 #[cfg(test)]

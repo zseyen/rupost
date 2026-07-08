@@ -1,3 +1,4 @@
+#![allow(clippy::manual_strip)]
 use crate::variable::VariableContext;
 use crate::{Result, RupostError};
 

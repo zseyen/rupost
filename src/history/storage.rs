@@ -1,3 +1,4 @@
+#![allow(clippy::collapsible_if)]
 use super::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
@@ -305,6 +306,7 @@ mod tests {
             response: ResponseMeta {
                 status: 200,
                 headers: HeaderMap::new(),
+                body: None,
             },
         }
     }
@@ -400,5 +402,48 @@ mod tests {
         assert_eq!(suite.entries[0].request.method, "POST");
         assert_eq!(suite.entries[0].response.status, 201);
         assert_eq!(suite.entries[0].response.body, "{\"status\":\"ok\"}");
+    }
+
+    #[test]
+    fn test_history_entry_backward_compatibility() {
+        // 1. 旧版 JSON 字符串（缺失 response.body 字段）
+        let old_json = r#"{
+            "id": "test-uuid-old",
+            "timestamp": "2026-07-02T12:00:00Z",
+            "duration_ms": 120,
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/old",
+                "headers": {},
+                "body": null
+            },
+            "source": null,
+            "response": {
+                "status": 200,
+                "headers": {}
+            }
+        }"#;
+
+        let entry: HistoryEntry = serde_json::from_str(old_json).unwrap();
+        assert_eq!(entry.id, "test-uuid-old");
+        assert_eq!(entry.response.status, 200);
+        assert!(entry.response.body.is_none());
+
+        // 2. 新版包含 body 的历史数据测试
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("history_new.jsonl");
+        let storage = HistoryStorage { file_path };
+
+        let mut dummy = create_dummy_entry("new-1");
+        dummy.response.body = Some("{\"hello\":\"world\"}".to_string());
+
+        storage.append(&dummy).unwrap();
+        let list = storage.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "new-1");
+        assert_eq!(
+            list[0].response.body.as_deref().unwrap(),
+            "{\"hello\":\"world\"}"
+        );
     }
 }

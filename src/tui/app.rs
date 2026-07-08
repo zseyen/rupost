@@ -74,17 +74,15 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
         let root_canon = std::fs::canonicalize(&state.workspace_root)
             .unwrap_or_else(|_| state.workspace_root.clone());
         for f in &state.raw_file_list {
-            if let Ok(canon) = std::path::Path::new(f).canonicalize() {
-                if let Ok(rel) = canon.strip_prefix(&root_canon) {
-                    if let Some(first_comp) = rel.components().next() {
-                        if let std::path::Component::Normal(name) = first_comp {
-                            let name_str = name.to_string_lossy().into_owned();
-                            let dir_path = root_canon.join(&name_str);
-                            if dir_path.is_dir() {
-                                state.expanded_dirs.insert(name_str);
-                            }
-                        }
-                    }
+            if let Ok(canon) = std::path::Path::new(f).canonicalize()
+                && let Ok(rel) = canon.strip_prefix(&root_canon)
+                && let Some(first_comp) = rel.components().next()
+                && let std::path::Component::Normal(name) = first_comp
+            {
+                let name_str = name.to_string_lossy().into_owned();
+                let dir_path = root_canon.join(&name_str);
+                if dir_path.is_dir() {
+                    state.expanded_dirs.insert(name_str);
                 }
             }
         }
@@ -98,36 +96,38 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
 
     // 默认加载首个文件或指定的 initial_file
     let mut initial_idx = 0;
-    if let Some(init_path) = &initial_file {
-        if let Ok(canon_init) = std::path::Path::new(init_path).canonicalize() {
-            let root_canon = std::fs::canonicalize(&state.workspace_root)
-                .unwrap_or_else(|_| state.workspace_root.clone());
-            if let Ok(rel) = canon_init.strip_prefix(&root_canon) {
-                let mut current = std::path::PathBuf::new();
-                for comp in rel.components() {
-                    if let std::path::Component::Normal(name) = comp {
-                        let step = current.join(name);
-                        let step_abs = root_canon.join(&step);
-                        if step_abs.is_dir() {
-                            state.expanded_dirs.insert(step.to_string_lossy().replace('\\', "/"));
-                        }
-                        current = step;
+    if let Some(init_path) = &initial_file
+        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
+    {
+        let root_canon = std::fs::canonicalize(&state.workspace_root)
+            .unwrap_or_else(|_| state.workspace_root.clone());
+        if let Ok(rel) = canon_init.strip_prefix(&root_canon) {
+            let mut current = std::path::PathBuf::new();
+            for comp in rel.components() {
+                if let std::path::Component::Normal(name) = comp {
+                    let step = current.join(name);
+                    let step_abs = root_canon.join(&step);
+                    if step_abs.is_dir() {
+                        state
+                            .expanded_dirs
+                            .insert(step.to_string_lossy().replace('\\', "/"));
                     }
+                    current = step;
                 }
-                state.rebuild_visible_tree_nodes();
             }
+            state.rebuild_visible_tree_nodes();
+        }
 
-            let canon_init_str = canon_init.to_string_lossy().into_owned();
-            let matched = state.visible_file_nodes.iter().position(|n| {
-                if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
-                    c.to_string_lossy() == canon_init_str
-                } else {
-                    n.abs_path == canon_init_str
-                }
-            });
-            if let Some(pos) = matched {
-                initial_idx = pos;
+        let canon_init_str = canon_init.to_string_lossy().into_owned();
+        let matched = state.visible_file_nodes.iter().position(|n| {
+            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
+                c.to_string_lossy() == canon_init_str
+            } else {
+                n.abs_path == canon_init_str
             }
+        });
+        if let Some(pos) = matched {
+            initial_idx = pos;
         }
     }
 

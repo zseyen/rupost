@@ -595,18 +595,18 @@ fn test_tui_command_line_file_auto_positioning() {
     // 模拟命令行中传入了定位到 b.http 的参数，利用我们刚写的匹配算法
     let initial_file = Some(file_b.to_string_lossy().to_string());
     let mut initial_idx = 0;
-    if let Some(init_path) = &initial_file {
-        if let Ok(canon_init) = std::path::Path::new(init_path).canonicalize() {
-            let matched = state.visible_file_nodes.iter().position(|n| {
-                if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
-                    c.to_string_lossy() == canon_init.to_string_lossy()
-                } else {
-                    n.abs_path == canon_init.to_string_lossy()
-                }
-            });
-            if let Some(pos) = matched {
-                initial_idx = pos;
+    if let Some(init_path) = &initial_file
+        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
+    {
+        let matched = state.visible_file_nodes.iter().position(|n| {
+            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
+                c.to_string_lossy() == canon_init.to_string_lossy()
+            } else {
+                n.abs_path == canon_init.to_string_lossy()
             }
+        });
+        if let Some(pos) = matched {
+            initial_idx = pos;
         }
     }
 
@@ -939,7 +939,7 @@ fn test_file_tree_trie_construction() {
     state.expanded_dirs.insert("a/b".to_string());
     state.rebuild_visible_tree_nodes();
 
-    // 应该展示 "a"、"a/b"、"a/b/c.http"、"a/d.http"、"e.http" 
+    // 应该展示 "a"、"a/b"、"a/b/c.http"、"a/d.http"、"e.http"
     assert_eq!(state.visible_file_nodes.len(), 5);
 }
 
@@ -973,10 +973,13 @@ fn test_file_tree_selected_index_rebound() {
     // 1: a/b (dir, collapsed)
     // 2: a/d.http (file)
     assert_eq!(state.visible_file_nodes.len(), 3);
-    
+
     // 验证光标是否“回弹”定位到父目录 "a/b" (即新索引 1)
     assert_eq!(state.files_state.selected_index, 1);
-    assert_eq!(state.visible_file_nodes[state.files_state.selected_index].display_name, "b");
+    assert_eq!(
+        state.visible_file_nodes[state.files_state.selected_index].display_name,
+        "b"
+    );
 }
 
 #[test]
@@ -997,4 +1000,3 @@ fn test_file_tree_empty_state_guard() {
     });
     assert!(res.is_ok());
 }
-

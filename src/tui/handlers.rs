@@ -71,17 +71,17 @@ fn handle_confirm_key(state: &mut AppState, key: KeyEvent) {
                     PendingAction::SwitchFile(idx) => {
                         if idx < state.visible_file_nodes.len() {
                             let node = &state.visible_file_nodes[idx];
-                            if !node.is_dir {
-                                if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
-                                    state.editor_text = content;
-                                    state.editor_file_path = Some(node.abs_path.clone());
-                                    state.is_dirty = false;
-                                    state.loaded_file_index = idx;
-                                    state.selected_file_index = idx;
-                                    state.files_state.selected_index = idx;
-                                    state.editor_scroll = 0;
-                                    state.active_panel = Panel::Editor;
-                                }
+                            if !node.is_dir
+                                && let Ok(content) = std::fs::read_to_string(&node.abs_path)
+                            {
+                                state.editor_text = content;
+                                state.editor_file_path = Some(node.abs_path.clone());
+                                state.is_dirty = false;
+                                state.loaded_file_index = idx;
+                                state.selected_file_index = idx;
+                                state.files_state.selected_index = idx;
+                                state.editor_scroll = 0;
+                                state.active_panel = Panel::Editor;
                             }
                         }
                     }
@@ -121,7 +121,8 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
     }
     match key.code {
         KeyCode::Left | KeyCode::Char('h') => {
-            if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty() {
+            if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty()
+            {
                 let idx = state.files_state.selected_index;
                 if idx < state.visible_file_nodes.len() {
                     let node = &state.visible_file_nodes[idx];
@@ -135,7 +136,8 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
             sync_preview_to_editor(state);
         }
         KeyCode::Right | KeyCode::Char('l') => {
-            if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty() {
+            if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty()
+            {
                 let idx = state.files_state.selected_index;
                 if idx < state.visible_file_nodes.len() {
                     let node = &state.visible_file_nodes[idx];
@@ -552,19 +554,19 @@ fn sync_preview_to_editor(state: &mut AppState) {
                 && state.files_state.selected_index < state.visible_file_nodes.len()
             {
                 let node = &state.visible_file_nodes[state.files_state.selected_index];
-                if !node.is_dir {
-                    if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
-                        state.editor_text = content;
-                        state.editor_file_path = Some(node.abs_path.clone());
-                        if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
-                            state.editor_file_mtime = metadata.modified().ok();
-                        } else {
-                            state.editor_file_mtime = None;
-                        }
-                        state.is_dirty = false;
-                        state.loaded_file_index = state.files_state.selected_index;
-                        state.editor_scroll = 0;
+                if !node.is_dir
+                    && let Ok(content) = std::fs::read_to_string(&node.abs_path)
+                {
+                    state.editor_text = content;
+                    state.editor_file_path = Some(node.abs_path.clone());
+                    if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
+                        state.editor_file_mtime = metadata.modified().ok();
+                    } else {
+                        state.editor_file_mtime = None;
                     }
+                    state.is_dirty = false;
+                    state.loaded_file_index = state.files_state.selected_index;
+                    state.editor_scroll = 0;
                 }
             }
         }

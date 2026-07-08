@@ -79,7 +79,7 @@ impl TrieNode {
                 let name = name_os.to_string_lossy().into_owned();
                 current_rel = current_rel.join(&name);
                 let step_abs = current.abs_path.join(&name);
-                
+
                 let is_last = i == components.len() - 1;
                 let is_component_dir = if !is_last {
                     true
@@ -87,22 +87,23 @@ impl TrieNode {
                     if step_abs.exists() {
                         step_abs.is_dir()
                     } else {
-                        let ext = step_abs.extension()
+                        let ext = step_abs
+                            .extension()
                             .map(|e| e.to_string_lossy().to_string().to_lowercase());
-                        match ext.as_deref() {
-                            Some("http") | Some("md") => false,
-                            _ => true,
-                        }
+                        !matches!(ext.as_deref(), Some("http") | Some("md"))
                     }
                 };
 
-                current = current.children.entry(name.clone()).or_insert_with(|| TrieNode {
-                    abs_path: step_abs,
-                    rel_path: current_rel.clone(),
-                    display_name: name,
-                    is_dir: is_component_dir,
-                    children: BTreeMap::new(),
-                });
+                current = current
+                    .children
+                    .entry(name.clone())
+                    .or_insert_with(|| TrieNode {
+                        abs_path: step_abs,
+                        rel_path: current_rel.clone(),
+                        display_name: name,
+                        is_dir: is_component_dir,
+                        children: BTreeMap::new(),
+                    });
             }
         }
     }
@@ -228,9 +229,9 @@ pub struct AppState {
 
     // 数据模型
     pub visible_file_nodes: Vec<TuiFileNode>, // 展开可见的树节点列表
-    pub raw_file_list: Vec<String>,          // 扫描出的原始测试文件物理路径列表
-    pub expanded_dirs: HashSet<String>,      // 已展开相对目录路径的集合
-    pub workspace_root: PathBuf,             // 工作空间根路径
+    pub raw_file_list: Vec<String>,           // 扫描出的原始测试文件物理路径列表
+    pub expanded_dirs: HashSet<String>,       // 已展开相对目录路径的集合
+    pub workspace_root: PathBuf,              // 工作空间根路径
     pub selected_file_index: usize,
     pub current_request: Option<ParsedRequest>,
     pub last_response: Option<Response>,
@@ -350,8 +351,14 @@ impl AppState {
     }
 
     pub fn rebuild_visible_tree_nodes(&mut self) {
-        let last_selected_rel_path = if !self.visible_file_nodes.is_empty() && self.files_state.selected_index < self.visible_file_nodes.len() {
-            Some(self.visible_file_nodes[self.files_state.selected_index].rel_path.clone())
+        let last_selected_rel_path = if !self.visible_file_nodes.is_empty()
+            && self.files_state.selected_index < self.visible_file_nodes.len()
+        {
+            Some(
+                self.visible_file_nodes[self.files_state.selected_index]
+                    .rel_path
+                    .clone(),
+            )
         } else {
             None
         };
@@ -364,15 +371,15 @@ impl AppState {
 
         for path_str in &self.raw_file_list {
             let path_buf = PathBuf::from(path_str);
-            let path_canon = std::fs::canonicalize(&path_buf)
-                .unwrap_or(path_buf);
-            
+            let path_canon = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
+
             if let Ok(rel_path) = path_canon.strip_prefix(&root_canon) {
                 if unique_paths.insert(rel_path.to_path_buf()) {
                     root.insert(rel_path, &path_canon);
                 }
             } else {
-                let filename = path_canon.file_name()
+                let filename = path_canon
+                    .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "unknown.http".to_string());
                 let rel = Path::new(&filename);
@@ -383,7 +390,13 @@ impl AppState {
         }
 
         let mut new_visible_nodes = Vec::new();
-        root.project_to_visible(&self.expanded_dirs, &mut new_visible_nodes, 0, true, Vec::new());
+        root.project_to_visible(
+            &self.expanded_dirs,
+            &mut new_visible_nodes,
+            0,
+            true,
+            Vec::new(),
+        );
         self.visible_file_nodes = new_visible_nodes;
 
         // 优雅光标重定位（“向心回弹”算法）
@@ -396,7 +409,11 @@ impl AppState {
 
                 loop {
                     let search_str = current_search.to_string_lossy().replace('\\', "/");
-                    if let Some(idx) = self.visible_file_nodes.iter().position(|n| n.rel_path == search_str) {
+                    if let Some(idx) = self
+                        .visible_file_nodes
+                        .iter()
+                        .position(|n| n.rel_path == search_str)
+                    {
                         found_index = Some(idx);
                         break;
                     }
@@ -409,10 +426,15 @@ impl AppState {
                         break;
                     }
                 }
-                self.files_state.selected_index = found_index.unwrap_or(0).min(self.visible_file_nodes.len() - 1);
+                self.files_state.selected_index = found_index
+                    .unwrap_or(0)
+                    .min(self.visible_file_nodes.len() - 1);
             }
         } else {
-            self.files_state.selected_index = self.files_state.selected_index.min(self.visible_file_nodes.len().saturating_sub(1));
+            self.files_state.selected_index = self
+                .files_state
+                .selected_index
+                .min(self.visible_file_nodes.len().saturating_sub(1));
         }
     }
 

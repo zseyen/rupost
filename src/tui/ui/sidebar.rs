@@ -69,7 +69,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                     .map(|(idx, node)| {
                         let actual_idx = start + idx;
                         let is_selected = actual_idx == state.files_state.selected_index;
-                        
+
                         let base_style = if is_selected {
                             Style::default()
                                 .fg(Color::Yellow)
@@ -80,7 +80,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
                         // 1. 连线前缀 (使用淡灰色)
                         let prefix = node.render_prefix();
-                        
+
                         // 2. ▸ / ▾ 指示符
                         let indicator = if node.is_dir {
                             if state.expanded_dirs.contains(&node.rel_path) {
@@ -99,7 +99,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                             base_style
                         };
 
-                        let is_loaded = !node.is_dir && state.editor_file_path.as_ref() == Some(&node.abs_path);
+                        let is_loaded =
+                            !node.is_dir && state.editor_file_path.as_ref() == Some(&node.abs_path);
                         let name_text = if is_loaded {
                             format!("{} *", node.display_name)
                         } else {

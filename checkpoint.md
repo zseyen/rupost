@@ -12,14 +12,18 @@
 3. **只读 Preview 编辑器重构**：
    - 彻底废弃 `ratatui-textarea` 状态管理，改用只读 `Paragraph` 进行用例内容预览。完美规避了 crossterm 终端因无法桥接系统输入法而产生输入乱码的弊端，并支持键盘在 Editor 面板下进行 `Up/Down` 及 `PageUp/PageDown` 滚动与翻页偏移。
    - 该方案完美支持未来的 **“二级页面编辑” (或按 e 键拉起系统外部 `$EDITOR`（如 vim/nano）进程修改用例)** 架构。
-4. **自动化压测与回归**：
+4. **TUI 交互逻辑子组件解耦**：
+   - 将 `src/tui/app.rs` 中繁冗的按键事件和鼠标点击映射分发逻辑剥离到全新的 [handlers.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/tui/handlers.rs)。核心事件循环由 918 行精炼至 369 行，更符合 Clean Architecture 架构，并新增多组针对交互动作状态的单元测试。
+5. **文件扫描器路径误杀修复 (Bug Fix)**：
+   - 修复了当绝对路径的上层父级目录中含有黑名单关键字（如 `.gemini`）时，文件扫描器会将项目内合规的测试文件一并全部误杀过滤掉的严重 Bug。已重构为先将绝对路径剥离为 canonicalize 后的相对路径再进行目录黑名单判断。
+6. **自动化压测与回归**：
    - 编写了 `test_read_only_smoke_render_constraints` 内存重绘冒烟测试，覆盖从宽屏到极限窄高分辨率 `(35, 5)` 下的布局渲染，确保 Constraint 零 Panic。
-   - 运行全量 `cargo test`、`cargo clippy` 及 `cargo fmt` 校验，均 100% 成功通过，代码质量达到最高标准。
-5. **版本化提交**：
+   - 运行了全量 `cargo test`、`cargo clippy --fix` 及 `cargo fmt` 校验，警告全清零，100% 成功通过，代码质量达到最高标准。
+7. **版本化提交**：
    - 已使用 `jj` 完成分步原子提交。
 
 ## 下一步工作计划 (Next Steps)
 
-- **无遗留缺陷**：本期规划的所有 MVP 发布痛点与测试边界已全部成功闭环。
-- **发布到公域**：代码结构稳定、测试覆盖完备，已完全符合向公域发布发版的标准。
-- **等待新指令**：静候用户启动下一次功能迭代。
+- **主分支合并准备**：所有代码已通过最高质量校验（Clippy 警告全清、格式统一），可以安全合并。
+- **大功能演进**：将 TUI 支持真正的二级本地编辑（按 `e` 调用外部 `$EDITOR`）迁移到下一阶段大改动实现。
+- **等待新指令**：静候用户启动下一阶段的架构推进。

@@ -39,7 +39,9 @@ Always maintain these boundaries:
 - **`src/http`**: Low-level networking (wraps `reqwest`).
 - **`src/parser`**: File format grammars.
 - **`src/middleware`**: Feature extensions.
-- **`src/ui`**: TUI/CLI presentation.
+- **`src/tui`**: TUI presentation and views.
+
+*详细的物理文件分布与职责划分请参阅 [物理目录与文件结构说明文档](file:///Users/zsyzzx/project/rust/rupost/doc/architecture/directory_structure.md)。*
 
 ## Concurrency & Safety
 - **Async Strategy**: Use `Tokio`. Avoid blocking the main event loop.

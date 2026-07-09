@@ -48,6 +48,7 @@
 2. **关键代码与单元测试 (Stage 2 & 3)**：在动工前先设计核心 Trait 与数据模型，单元测试必须在 `mod tests` 编写，并通过 Mock 隔离外部网络与文件 IO。
 3. **具体实现与 E2E 校验 (Stage 4 & 5)**：极致简洁实现，利用 `jj` 命令进行原子化提交，并在 `tests/` 下编写真实环境的 E2E 校验。
 4. **进度归档与文档更新 (Stage 6)**：将已完成功能记录到唯一的进度事实来源 [progress_summary.md](file:///Users/zsyzzx/project/rust/rupost/doc/plans/progress_summary.md) 中，并同步更新 [README.md](file:///Users/zsyzzx/project/rust/rupost/README.md) 与 `checkpoint.md`。
+5. **代码结构学习与指引**：开发与功能维护前，应仔细阅读项目物理目录与文件职责说明 [directory_structure.md](file:///Users/zsyzzx/project/rust/rupost/doc/architecture/directory_structure.md)，明确理解核心文件的分工定位。
 
 ---
 

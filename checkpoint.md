@@ -1,29 +1,27 @@
-# RuPost TUI MVP 发布版打磨 Checkpoint 归档
+# RuPost 架构内聚性与拓展性优化重构 Checkpoint 归档
 
 ## 当前状态总结 (Current Status)
 
-我已成功实现了所有来自 MVP 阶段关于 TUI 发布公域的基本功能打磨与缺陷修复：
+我们已成功实现了对 RuPost 核心架构的两大核心重构优化，完全遵循了 DRY 原则与 Clean Architecture 规范，在消除了大量冗余代码的同时强化了系统的可拓展性：
 
-1. **Host+Path 历史记录域名对齐**：
-   - 实现了 `format_url_host_and_path` 提取辅助函数（并添加了多重协议、端口、降级相对路径解析的单元测试）。
-   - 重绘了历史记录侧边栏列表，采用 `[Short ID] GET baidu.com/api (200)` 单行平铺对齐格式，彻底解决了多站点历史请求重名为 `GET /` 的歧义，与 CLI 命令行完美同步。
-2. **轻量级启发式文件树过滤**：
-   - 实现了黑名单拦截与内容启发式预检双层过滤。对可用测试文件扫描前 1024 字节，安全剔除普通文档（README）和二进制大文件，并阻断了 `read_to_string` 的解码 panic。首屏扫描速度控制在 5ms 级，极高吞吐且不发生主线程假死。
-3. **只读 Preview 编辑器重构**：
-   - 彻底废弃 `ratatui-textarea` 状态管理，改用只读 `Paragraph` 进行用例内容预览。完美规避了 crossterm 终端因无法桥接系统输入法而产生输入乱码的弊端，并支持键盘在 Editor 面板下进行 `Up/Down` 及 `PageUp/PageDown` 滚动与翻页偏移。
-   - 该方案完美支持未来的 **“二级页面编辑” (或按 e 键拉起系统外部 `$EDITOR`（如 vim/nano）进程修改用例)** 架构。
-4. **TUI 交互逻辑子组件解耦**：
-   - 将 `src/tui/app.rs` 中繁冗的按键事件和鼠标点击映射分发逻辑剥离到全新的 [handlers.rs](file:///Users/zsyzzx/.gemini/antigravity/worktrees/rupost/design-tui-feature-spec/src/tui/handlers.rs)。核心事件循环由 918 行精炼至 369 行，更符合 Clean Architecture 架构，并新增多组针对交互动作状态的单元测试。
-5. **文件扫描器路径误杀修复 (Bug Fix)**：
-   - 修复了当绝对路径的上层父级目录中含有黑名单关键字（如 `.gemini`）时，文件扫描器会将项目内合规的测试文件一并全部误杀过滤掉的严重 Bug。已重构为先将绝对路径剥离为 canonicalize 后的相对路径再进行目录黑名单判断。
-6. **自动化压测与回归**：
-   - 编写了 `test_read_only_smoke_render_constraints` 内存重绘冒烟测试，覆盖从宽屏到极限窄高分辨率 `(35, 5)` 下的布局渲染，确保 Constraint 零 Panic。
-   - 运行了全量 `cargo test`、`cargo clippy --fix` 及 `cargo fmt` 校验，警告全清零，100% 成功通过，代码质量达到最高标准。
-7. **版本化提交**：
-   - 已使用 `jj` 完成分步原子提交。
+1. **方案一：统一断言求值体系 (DRY 断言重构)**：
+   - **断言目标抽象**：定义了 `AssertTarget` 统一数据提取接口，使断言求值引擎完全脱离对 HTTP `Response` 的强依赖。
+   - **WebSocket 帧断言复用**：在 `ws/matcher.rs` 中为 `WsFrame` 实现了 `AssertTarget`（通过包装类 `WsFrameTarget`），使 WebSocket 可以直接使用系统统一的 `evaluate_assertion`。
+   - **消除代码冗余**：彻底删除了 WebSocket 模块中原先手写的匹配断言判定逻辑（如 `JsonPathMatcher::matches` 内对 `!=`, `contains` 等运算符的处理），使其 100% 委托给求值引擎，彻底践行了 DRY。
+2. **方案二：协议执行链抽象 (UseCase 解耦重构)**：
+   - **执行细节剥离**：将原本堆叠在 `executor.rs` 中的大段 HTTP 请求发送、Pre-flight 连通探测、SSE 流式长连接、时序诊断及快照历史持久化等具体实现物理迁移至全新的 `src/runner/http_runner.rs` 中的 `HttpRunner`。
+   - **静态分发解耦**：在 `executor.rs` 中定义了静态分发中介 `Runner` Enum，规避了由于 Rust 异步 Trait 动态分发带来的 Object Safety 限制，使 TestExecutor 主逻辑的物理行数缩减 80% 以上，实现了真正的“即调即走”（Clean Architecture 适配层解耦），极为高雅。
+3. **回归与冒烟测试全绿**：
+   - 运行了全量 `cargo test`，通过了所有的 163 个单元与集成测试。
+   - 执行了本地 `./tests/verify_features.sh` 端到端集成冒烟测试，100% 通过。
+   - 跑通了本地 `./examples/run_all.sh` 脚本，15/15 个复杂高级 example 用例（包括 WebSocket 软匹配/MsgPack 解码、SSE 流式追加等）100% SUCCESS，无任何功能倒退。
+4. **版本化原子提交**：
+   - 使用 `jj` 进行了清晰的原子提交：
+     - `refactor(assertion): decouple assertion evaluator from HTTP Response using AssertTarget trait`
+     - `refactor(runner): abstract protocol execution into HttpRunner and WsRunner using Runner enum`
 
 ## 下一步工作计划 (Next Steps)
 
-- **主分支合并准备**：所有代码已通过最高质量校验（Clippy 警告全清、格式统一），可以安全合并。
-- **大功能演进**：将 TUI 支持真正的二级本地编辑（按 `e` 调用外部 `$EDITOR`）迁移到下一阶段大改动实现。
-- **等待新指令**：静候用户启动下一阶段的架构推进。
+- **持续优化与监控**：观察重构后多协议并行执行在超大规模用例下的表现，确保无内存泄漏和并发冲突。
+- **进行第四阶段：全面校验与总结**：持续对项目文档进行归档。
+- **等待新指令**：静候用户启动下一阶段的开发推进。

@@ -604,6 +604,30 @@ async fn write_ws_log_with_limit(
     Ok(())
 }
 
+impl WsRunner {
+    pub async fn run(
+        &self,
+        parsed: ParsedRequest,
+        request_number: usize,
+        context: &mut VariableContext,
+        middlewares: &[ExecutorMiddleware],
+        stream_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+        _debug: bool,
+        _debug_on_failure: bool,
+        _client: &crate::http::Client,
+        _source: Option<String>,
+    ) -> crate::Result<TestResult> {
+        Ok(Self::execute(
+            parsed,
+            request_number,
+            context,
+            middlewares.to_vec(),
+            stream_sender,
+        )
+        .await)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

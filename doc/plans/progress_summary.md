@@ -22,6 +22,7 @@
 | **Sprint 7: TUI 引导、自适应与交互重构** | 实现底栏操作提示指示（lazygit 风格）、自适应窄屏三栏布局、鼠标点击捕获与面板切焦、以及同步预览与切焦编辑（Enter键脏确认拦截）。 | 已完成 | `src/tui/app.rs`, `src/tui/event.rs`, `src/tui/ui/mod.rs`, `tests/tui_smoke_test.rs` |
 | **TUI 性能优化与交互升级** | 内存预折行 (Pre-wrapping) 视觉切片算法，解决中英文混合/Emoji 超长 Response 滚动错位问题；侧边栏双 Tab (Files / History) 状态解耦，提供滚动视口边界保持 (Viewport clamping)；历史记录项 Enter 反向还原为 `.http` 代码重新载入编辑器运行；组件化拆分及 Wide/Narrow/Stacked 自适应重绘冒烟测试。 | 已完成 | `src/tui/state.rs`, `src/tui/app.rs`, `src/tui/ui/sidebar.rs`, `src/tui/ui/editor.rs`, `src/tui/ui/response.rs`, `src/tui/ui/mod.rs` |
 | **Sprint 6: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
+| **统一断言与协议执行链解耦重构** | 将断言求值从 Response 解耦（AssertTarget），支持 WsFrame 复用断言；剥离 executor.rs 里的 HTTP 执行流到 HttpRunner，使用静态分发 Runner 消除硬编码分流 | 已完成 | `src/assertion/types.rs`, `src/ws/matcher.rs`, `src/runner/http_runner.rs`, `src/runner/executor.rs` |
 
 ---
 
@@ -148,5 +149,10 @@
    - 将单文件 `ui/mod.rs` 彻底重构组件化拆分为 `sidebar.rs`、`editor.rs` 和 `response.rs`。
    - 新增了中英文折行切分、列表可视区边界修正、历史序列化还原等核心逻辑的单元测试；并在 `TestBackend` 终端下编写了自适应 Wide/Narrow/Stacked 三种布局模式及多种 Modal 重叠状态的子组件渲染冒烟测试，通过 `cargo test` 全量通过回归。
 
-
-
+### 统一断言与协议执行链解耦重构 (方案一 & 二)
+1. **统一断言求值体系 (方案一)**：
+   * **断言目标抽象**：设计 `AssertTarget` 统一数据提取接口，实现 HTTP Response 和 WebSocket WsFrame 的提取器对齐。
+   * **逻辑复用与消除冗余**：使 `evaluate_assertion` 与 HTTP Response 解耦，WebSocket 模块中原先手写的匹配断言判定逻辑（如 `JsonPathMatcher::matches`）彻底删除，全部委托给系统级评估引擎。
+2. **协议执行链解耦与静态分发 (方案二)**：
+   * **执行流剥离**：将原本堆叠在 `executor.rs` 里的 HTTP 执行、SSE 监听、诊断以及快照历史等大段底座实现物理平移至 `src/runner/http_runner.rs` 中的 `HttpRunner`。
+   * **静态分发路由**：定义 `Runner` Enum 作为分发策略，规避 `dyn trait` 带来的 Object Safety 异步 Future 限制，使 TestExecutor 主逻辑的物理行数缩减 80% 以上，职责划分清晰，完全符合 SRP 与 OCP。

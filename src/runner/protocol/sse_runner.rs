@@ -58,7 +58,7 @@ impl SseRunner {
 
         // 懒触发概率后台 GC
         if let Some(parent) = log_path.parent() {
-            crate::runner::gc::LogGc::try_trigger_lazy_gc(parent);
+            crate::history::gc::LogGc::try_trigger_lazy_gc(parent);
         }
 
         let max_bytes = 5 * 1024 * 1024; // 5MB limit
@@ -123,7 +123,7 @@ impl SseRunner {
         let mut event_count = 0;
 
         let mut file_writer = options.stream_to.as_ref().map(|path_str| {
-            crate::runner::file_sync::FileSyncWriter::new(
+            crate::runner::FileSyncWriter::new(
                 std::path::PathBuf::from(path_str),
                 options.stream_to_append,
             )

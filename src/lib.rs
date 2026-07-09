@@ -10,6 +10,7 @@ pub mod parser;
 pub mod runner;
 pub mod template;
 pub mod utils;
+pub mod reporter;
 pub mod variable;
 pub mod ws;
 

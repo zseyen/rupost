@@ -262,7 +262,7 @@ async fn test_batch_report_json() {
     // 这里我们可以自己实现或升级 TestReporter::report_json。
     // 在这里我们主要测试 reporter 的 JSON 输出。
     let mut out = Vec::new();
-    rupost::runner::reporter::TestReporter::report_json(&results, &mut out).unwrap();
+    rupost::reporter::TestReporter::report_json(&results, &mut out).unwrap();
     let json_str = String::from_utf8(out).unwrap();
     let parsed_json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 

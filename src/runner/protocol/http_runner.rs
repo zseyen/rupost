@@ -99,7 +99,7 @@ impl HttpRunner {
                 let is_sse = is_sse_requested || is_sse_by_content_type;
 
                 if is_sse {
-                    let sse_options = crate::runner::sse_runner::SseRunnerOptions {
+                    let sse_options = crate::runner::SseRunnerOptions {
                         debug,
                         debug_on_failure,
                         request_number,
@@ -114,7 +114,7 @@ impl HttpRunner {
                         stream_to_append,
                         stream_sender,
                     };
-                    return Ok(crate::runner::sse_runner::SseRunner::execute(
+                    return Ok(crate::runner::SseRunner::execute(
                         response,
                         ttfb,
                         sse_options,

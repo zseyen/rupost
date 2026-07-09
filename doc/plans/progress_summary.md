@@ -22,6 +22,9 @@
 | **Sprint 7: TUI 引导、自适应与交互重构** | 实现底栏操作提示指示（lazygit 风格）、自适应窄屏三栏布局、鼠标点击捕获与面板切焦、以及同步预览与切焦编辑（Enter键脏确认拦截）。 | 已完成 | `src/tui/app.rs`, `src/tui/event.rs`, `src/tui/ui/mod.rs`, `tests/tui_smoke_test.rs` |
 | **TUI 性能优化与交互升级** | 内存预折行 (Pre-wrapping) 视觉切片算法，解决中英文混合/Emoji 超长 Response 滚动错位问题；侧边栏双 Tab (Files / History) 状态解耦，提供滚动视口边界保持 (Viewport clamping)；历史记录项 Enter 反向还原为 `.http` 代码重新载入编辑器运行；组件化拆分及 Wide/Narrow/Stacked 自适应重绘冒烟测试。 | 已完成 | `src/tui/state.rs`, `src/tui/app.rs`, `src/tui/ui/sidebar.rs`, `src/tui/ui/editor.rs`, `src/tui/ui/response.rs`, `src/tui/ui/mod.rs` |
 | **Sprint 6: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
+| **表现层与基础设施下沉 (方案二)** | 将表现层 `reporter.rs` 移入库层 `src/reporter.rs`，`url.rs` 下沉至 `src/http/url.rs`，`scanner.rs` 下沉至 `src/parser/scanner.rs`，`gc.rs` 下沉至 `src/history/gc.rs`，实现核心业务与基础设施、表现层的彻底解耦。 | 已完成 | `src/reporter.rs`, `src/http/url.rs`, `src/parser/scanner.rs`, `src/history/gc.rs` |
+| **二级子域目录划分与收拢 (方案一)** | 将 `src/runner` 下平铺的批量测试、并行调度、工作流拓扑、依赖补全、快照重放等文件，整理进 `src/runner/engine/`、`src/runner/protocol/` 和 `src/runner/utils/` 二级子目录下，注册各级 `mod.rs` 并通过 `src/runner/mod.rs` 桥接重导出。 | 已完成 | `src/runner/engine/`, `src/runner/protocol/`, `src/runner/utils/`, `src/runner/mod.rs` |
+| **关键逻辑单元测试与回归校验** | 为下沉至 `src/http/url.rs` 的 URL 解析逻辑新增 `test_resolve_final_url_edge_cases` 单元测试，覆盖 camelCase 优先级、根路径拼接和 WS/WSS 协议原样返回等场景，跑通全量 240+ 测试及端到端冒烟。 | 已完成 | `src/http/url.rs`, `tests/verify_features.sh` |
 | **统一断言与协议执行链解耦重构** | 将断言求值从 Response 解耦（AssertTarget），支持 WsFrame 复用断言；剥离 executor.rs 里的 HTTP 执行流到 HttpRunner，使用静态分发 Runner 消除硬编码分流 | 已完成 | `src/assertion/types.rs`, `src/ws/matcher.rs`, `src/runner/http_runner.rs`, `src/runner/executor.rs` |
 
 ---

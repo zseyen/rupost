@@ -20,3 +20,6 @@ pub fn parse_file<P: AsRef<std::path::Path>>(path: P) -> ParseResult<ParsedFile>
 pub fn parse_content(content: &str) -> ParseResult<ParsedFile> {
     HttpFileParser::parse_content(content)
 }
+
+pub mod scanner;
+pub use scanner::DirectoryScanner;

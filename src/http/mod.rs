@@ -19,3 +19,5 @@ pub use request_builder::to_request;
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
 pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};
+pub mod url;
+pub use url::resolve_final_url;

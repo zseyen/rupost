@@ -269,7 +269,7 @@ fn test_gc_probabilistic_simulation() {
     )
     .unwrap();
 
-    let (deleted_count, _) = rupost::runner::gc::perform_prune(temp_dir.path(), 7, 100).unwrap();
+    let (deleted_count, _) = rupost::history::gc::perform_prune(temp_dir.path(), 7, 100).unwrap();
     assert_eq!(deleted_count, 1);
     assert!(!old_file.exists());
 }
@@ -299,7 +299,7 @@ fn test_gc_perform_prune_size_limit() {
     )
     .unwrap();
 
-    let (deleted_count, _) = rupost::runner::gc::perform_prune(temp_dir.path(), 30, 1).unwrap();
+    let (deleted_count, _) = rupost::history::gc::perform_prune(temp_dir.path(), 30, 1).unwrap();
     assert_eq!(deleted_count, 1);
     assert!(!old_file.exists());
     assert!(new_file.exists());
@@ -313,7 +313,7 @@ fn test_gc_perform_clear() {
     std::fs::write(&file1, "hello").unwrap();
     std::fs::write(&file2, "world").unwrap();
 
-    let (deleted_count, _) = rupost::runner::gc::perform_clear(temp_dir.path()).unwrap();
+    let (deleted_count, _) = rupost::history::gc::perform_clear(temp_dir.path()).unwrap();
     assert_eq!(deleted_count, 2);
     assert!(!file1.exists());
     assert!(!file2.exists());

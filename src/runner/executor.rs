@@ -4,7 +4,7 @@ use crate::http::{Client, Request, Response};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::types::TestResult;
-use crate::runner::ws_runner::WsRunner;
+use crate::runner::WsRunner;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
 use std::path::PathBuf;
@@ -34,7 +34,7 @@ impl Middleware for ExecutorMiddleware {
 }
 
 pub enum Runner {
-    Http(crate::runner::http_runner::HttpRunner),
+    Http(crate::runner::HttpRunner),
     Ws(WsRunner),
 }
 
@@ -280,7 +280,7 @@ impl TestExecutor {
         let runner = if parsed.metadata.websocket {
             Runner::Ws(WsRunner)
         } else {
-            Runner::Http(crate::runner::http_runner::HttpRunner)
+            Runner::Http(crate::runner::HttpRunner)
         };
 
         let method = parsed.method_or_default().to_string();

@@ -119,7 +119,7 @@ impl WsRunner {
         let client = match WsSession::connect(config).await {
             Ok(c) => {
                 if let Some(parent) = log_path.parent() {
-                    crate::runner::gc::LogGc::try_trigger_lazy_gc(parent);
+                    crate::history::gc::LogGc::try_trigger_lazy_gc(parent);
                 }
                 c
             }

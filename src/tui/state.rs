@@ -707,7 +707,7 @@ pub fn write_log_with_limit(
 
 /// 自动清理 7 天前过期的日志目录文件
 pub fn cleanup_old_logs_dir(dir_path: &std::path::Path, days: u64) -> Result<(), std::io::Error> {
-    crate::runner::gc::perform_prune(dir_path, days, 999999).map(|_| ())
+    crate::history::gc::perform_prune(dir_path, days, 999999).map(|_| ())
 }
 
 impl Default for AppState {

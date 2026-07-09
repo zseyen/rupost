@@ -254,4 +254,47 @@ mod tests {
         // 报错情况：无 base_url 且非绝对
         assert!(resolve_final_url("/users", &empty_ctx, "http", Some("file.http"), None).is_err());
     }
+
+    #[test]
+    fn test_resolve_final_url_edge_cases() {
+        let mut ctx = VariableContext::new();
+        ctx.insert("baseUrl", "http://by-camelcase.com");
+        
+        // 1. 验证 camelCase 形式的 baseUrl 获取优先级
+        assert_eq!(
+            resolve_final_url("/users", &ctx, "http", Some("file.http"), None).unwrap(),
+            "http://by-camelcase.com/users"
+        );
+
+        // 2. 验证 base_url 优于 baseUrl
+        ctx.insert("base_url", "http://by-snakecase.com");
+        assert_eq!(
+            resolve_final_url("/users", &ctx, "http", Some("file.http"), None).unwrap(),
+            "http://by-snakecase.com/users"
+        );
+
+        // 3. 验证 BASE_URL 的优先级
+        let mut ctx2 = VariableContext::new();
+        ctx2.insert("BASE_URL", "http://by-uppercase.com");
+        assert_eq!(
+            resolve_final_url("/users", &ctx2, "http", Some("file.http"), None).unwrap(),
+            "http://by-uppercase.com/users"
+        );
+
+        // 4. raw_url 恰好为 "/"
+        assert_eq!(
+            resolve_final_url("/", &ctx, "http", Some("file.http"), None).unwrap(),
+            "http://by-snakecase.com"
+        );
+
+        // 5. WebSocket 协议原样返回
+        assert_eq!(
+            resolve_final_url("ws://example.com/ws", &ctx, "http", Some("file.http"), None).unwrap(),
+            "ws://example.com/ws"
+        );
+        assert_eq!(
+            resolve_final_url("wss://example.com/ws", &ctx, "http", Some("file.http"), None).unwrap(),
+            "wss://example.com/ws"
+        );
+    }
 }

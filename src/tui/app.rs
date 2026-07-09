@@ -68,7 +68,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     });
 
     let mut state = AppState::new();
-    if let Ok(files) = crate::runner::scanner::DirectoryScanner::scan(&[".".to_string()]) {
+    if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
         // 默认展开所有顶层目录
         let root_canon = std::fs::canonicalize(&state.workspace_root)

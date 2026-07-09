@@ -252,6 +252,25 @@ impl AssertValue {
     }
 }
 
+/// 断言数据提取接口
+pub trait AssertTarget {
+    fn extract_status(&self) -> Result<f64, AssertError>;
+    fn extract_header(&self, name: &str) -> Result<String, AssertError>;
+    fn extract_body(&self, segments: &[String]) -> Result<AssertValue, AssertError>;
+    fn extract_response_time(&self) -> Result<f64, AssertError>;
+    fn extract_stream_event(&self) -> Result<String, AssertError>;
+    fn extract_stream_id(&self) -> Result<String, AssertError>;
+    fn extract_stream_body(&self, segments: &[String]) -> Result<AssertValue, AssertError>;
+    fn extract_stream_llm_content(&self) -> Result<String, AssertError>;
+    fn extract_timing_dns(&self) -> Result<f64, AssertError>;
+    fn extract_timing_tcp(&self) -> Result<f64, AssertError>;
+    fn extract_timing_tls(&self) -> Result<f64, AssertError>;
+    fn extract_timing_ttfb(&self) -> Result<f64, AssertError>;
+    fn extract_cert_days(&self) -> Result<f64, AssertError>;
+    fn extract_cert_issuer(&self) -> Result<String, AssertError>;
+    fn extract_cert_subject(&self) -> Result<String, AssertError>;
+}
+
 /// 断言结果
 #[derive(Debug, Clone)]
 pub struct AssertionResult {

@@ -1,16 +1,15 @@
 #![allow(clippy::items_after_test_module)]
 use crate::assertion::extractor::extract_value;
-use crate::assertion::types::{AssertExpr, AssertionResult};
-use crate::http::Response;
+use crate::assertion::types::{AssertExpr, AssertionResult, AssertTarget};
 
 /// 执行断言求值
-pub fn evaluate_assertion(assertion: &AssertExpr, response: &Response) -> AssertionResult {
+pub fn evaluate_assertion(assertion: &AssertExpr, target: &dyn AssertTarget) -> AssertionResult {
     let raw = format_assertion(assertion);
 
     match assertion {
         AssertExpr::Compare { left, op, right } => {
             // 提取实际值
-            let actual_value = match extract_value(response, left) {
+            let actual_value = match extract_value(target, left) {
                 Ok(v) => v,
                 Err(e) => {
                     if let crate::assertion::types::AssertError::PathNotFound(_) = e {
@@ -49,7 +48,7 @@ pub fn evaluate_assertion(assertion: &AssertExpr, response: &Response) -> Assert
 
         AssertExpr::Exists { path } => {
             // 检查路径是否存在
-            match extract_value(response, path) {
+            match extract_value(target, path) {
                 Ok(value) => {
                     let actual_str = value.to_string();
                     let expected_str = "exists".to_string();
@@ -86,13 +85,13 @@ use crate::assertion::parser::parse_assertion;
 /// 评估常规的非流式断言
 pub fn evaluate_assertions(
     resolved_assertions: &[String],
-    response: &Response,
+    target: &dyn AssertTarget,
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
     for assertion_str in resolved_assertions {
         match parse_assertion(assertion_str) {
             Ok(assertion_expr) => {
-                let result = evaluate_assertion(&assertion_expr, response);
+                let result = evaluate_assertion(&assertion_expr, target);
                 assertion_results.push(result);
             }
             Err(e) => {
@@ -106,14 +105,14 @@ pub fn evaluate_assertions(
 /// 评估 SSE 握手断言 (过滤掉以 "stream." 开头的断言)
 pub fn evaluate_sse_handshake_assertions(
     resolved_assertions: &[String],
-    handshake_response: &Response,
+    handshake_target: &dyn AssertTarget,
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
     for assertion_str in resolved_assertions {
         if !assertion_str.contains("stream.") {
             match parse_assertion(assertion_str) {
                 Ok(assertion_expr) => {
-                    let result = evaluate_assertion(&assertion_expr, handshake_response);
+                    let result = evaluate_assertion(&assertion_expr, handshake_target);
                     assertion_results.push(result);
                 }
                 Err(e) => {
@@ -128,7 +127,7 @@ pub fn evaluate_sse_handshake_assertions(
 /// 评估实时流事件断言 (包含 "stream." 但排除 "stream.llm.content")
 pub fn evaluate_sse_event_assertions(
     resolved_assertions: &[String],
-    virtual_response: &Response,
+    virtual_target: &dyn AssertTarget,
     event_count: usize,
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
@@ -136,7 +135,7 @@ pub fn evaluate_sse_event_assertions(
         if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
             match parse_assertion(assertion_str) {
                 Ok(assertion_expr) => {
-                    let result = evaluate_assertion(&assertion_expr, virtual_response);
+                    let result = evaluate_assertion(&assertion_expr, virtual_target);
                     assertion_results.push(result.with_stream_index(event_count));
                 }
                 Err(e) => {
@@ -154,14 +153,14 @@ pub fn evaluate_sse_event_assertions(
 /// 评估包含 "stream.llm.content" 的断言
 pub fn evaluate_sse_llm_content_assertions(
     resolved_assertions: &[String],
-    final_response: &Response,
+    final_target: &dyn AssertTarget,
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
     for assertion_str in resolved_assertions {
         if assertion_str.contains("stream.llm.content") {
             match parse_assertion(assertion_str) {
                 Ok(assertion_expr) => {
-                    let result = evaluate_assertion(&assertion_expr, final_response);
+                    let result = evaluate_assertion(&assertion_expr, final_target);
                     assertion_results.push(result);
                 }
                 Err(e) => {

@@ -1,153 +1,175 @@
-use crate::assertion::types::{AssertError, AssertValue, ValuePath};
+use crate::assertion::types::{AssertError, AssertValue, ValuePath, AssertTarget};
 use crate::http::Response;
 
-/// 从响应中提取值
-pub fn extract_value(response: &Response, path: &ValuePath) -> Result<AssertValue, AssertError> {
+/// 从断言目标中提取值
+pub fn extract_value(target: &dyn AssertTarget, path: &ValuePath) -> Result<AssertValue, AssertError> {
     match path {
-        ValuePath::Status => Ok(AssertValue::Number(response.status.code() as f64)),
+        ValuePath::Status => target.extract_status().map(AssertValue::Number),
+        ValuePath::Header(name) => target.extract_header(name).map(AssertValue::String),
+        ValuePath::Body(segments) => target.extract_body(segments),
+        ValuePath::ResponseTime => target.extract_response_time().map(AssertValue::Number),
+        ValuePath::StreamEvent => target.extract_stream_event().map(AssertValue::String),
+        ValuePath::StreamId => target.extract_stream_id().map(AssertValue::String),
+        ValuePath::StreamBody(segments) => target.extract_stream_body(segments),
+        ValuePath::StreamLlmContent => target.extract_stream_llm_content().map(AssertValue::String),
+        ValuePath::TimingDns => target.extract_timing_dns().map(AssertValue::Number),
+        ValuePath::TimingTcp => target.extract_timing_tcp().map(AssertValue::Number),
+        ValuePath::TimingTls => target.extract_timing_tls().map(AssertValue::Number),
+        ValuePath::TimingTtfb => target.extract_timing_ttfb().map(AssertValue::Number),
+        ValuePath::CertDays => target.extract_cert_days().map(AssertValue::Number),
+        ValuePath::CertIssuer => target.extract_cert_issuer().map(AssertValue::String),
+        ValuePath::CertSubject => target.extract_cert_subject().map(AssertValue::String),
+    }
+}
 
-        ValuePath::Header(name) => {
-            let value = response
-                .headers
-                .get(name)
-                .ok_or_else(|| AssertError::PathNotFound(format!("Header '{}' not found", name)))?;
-            // HeaderValue 转换为 String
-            Ok(AssertValue::String(
-                value
-                    .to_str()
-                    .map_err(|e| {
-                        AssertError::ExtractionError(format!(
-                            "Failed to convert header value to string: {}",
-                            e
-                        ))
-                    })?
-                    .to_string(),
-            ))
-        }
+impl AssertTarget for Response {
+    fn extract_status(&self) -> Result<f64, AssertError> {
+        Ok(self.status.code() as f64)
+    }
 
-        ValuePath::Body(segments) => extract_from_json_body(&response.body, segments),
-
-        ValuePath::ResponseTime => Ok(AssertValue::Number(response.duration.as_millis() as f64)),
-
-        ValuePath::StreamEvent => {
-            let value = response
-                .headers
-                .get("x-sse-event")
-                .ok_or_else(|| AssertError::PathNotFound("stream.event not found".to_string()))?;
-            Ok(AssertValue::String(
-                value
-                    .to_str()
-                    .map_err(|e| {
-                        AssertError::ExtractionError(format!(
-                            "Failed to convert stream.event value to string: {}",
-                            e
-                        ))
-                    })?
-                    .to_string(),
-            ))
-        }
-
-        ValuePath::StreamId => {
-            let value = response
-                .headers
-                .get("x-sse-id")
-                .ok_or_else(|| AssertError::PathNotFound("stream.id not found".to_string()))?;
-            Ok(AssertValue::String(
-                value
-                    .to_str()
-                    .map_err(|e| {
-                        AssertError::ExtractionError(format!(
-                            "Failed to convert stream.id value to string: {}",
-                            e
-                        ))
-                    })?
-                    .to_string(),
-            ))
-        }
-
-        ValuePath::StreamBody(segments) => extract_from_json_body(&response.body, segments),
-        ValuePath::StreamLlmContent => {
-            let value = response.headers.get("x-sse-llm-content").ok_or_else(|| {
-                AssertError::PathNotFound("stream.llm.content not found".to_string())
-            })?;
-            let value_str = value.to_str().map_err(|e| {
+    fn extract_header(&self, name: &str) -> Result<String, AssertError> {
+        let value = self
+            .headers
+            .get(name)
+            .ok_or_else(|| AssertError::PathNotFound(format!("Header '{}' not found", name)))?;
+        value
+            .to_str()
+            .map(|s| s.to_string())
+            .map_err(|e| {
                 AssertError::ExtractionError(format!(
-                    "Failed to convert stream.llm.content value to string: {}",
+                    "Failed to convert header value to string: {}",
                     e
                 ))
-            })?;
-            let decoded = url::form_urlencoded::parse(value_str.as_bytes())
-                .map(|(key, _)| key)
-                .collect::<String>();
-            Ok(AssertValue::String(decoded))
-        }
+            })
+    }
 
-        ValuePath::TimingDns => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
-            })?;
-            Ok(AssertValue::Number(
-                report.dns_lookup_duration.as_millis() as f64
+    fn extract_body(&self, segments: &[String]) -> Result<AssertValue, AssertError> {
+        extract_from_json_body(&self.body, segments)
+    }
+
+    fn extract_response_time(&self) -> Result<f64, AssertError> {
+        Ok(self.duration.as_millis() as f64)
+    }
+
+    fn extract_stream_event(&self) -> Result<String, AssertError> {
+        let value = self
+            .headers
+            .get("x-sse-event")
+            .ok_or_else(|| AssertError::PathNotFound("stream.event not found".to_string()))?;
+        value
+            .to_str()
+            .map(|s| s.to_string())
+            .map_err(|e| {
+                AssertError::ExtractionError(format!(
+                    "Failed to convert stream.event value to string: {}",
+                    e
+                ))
+            })
+    }
+
+    fn extract_stream_id(&self) -> Result<String, AssertError> {
+        let value = self
+            .headers
+            .get("x-sse-id")
+            .ok_or_else(|| AssertError::PathNotFound("stream.id not found".to_string()))?;
+        value
+            .to_str()
+            .map(|s| s.to_string())
+            .map_err(|e| {
+                AssertError::ExtractionError(format!(
+                    "Failed to convert stream.id value to string: {}",
+                    e
+                ))
+            })
+    }
+
+    fn extract_stream_body(&self, segments: &[String]) -> Result<AssertValue, AssertError> {
+        extract_from_json_body(&self.body, segments)
+    }
+
+    fn extract_stream_llm_content(&self) -> Result<String, AssertError> {
+        let value = self.headers.get("x-sse-llm-content").ok_or_else(|| {
+            AssertError::PathNotFound("stream.llm.content not found".to_string())
+        })?;
+        let value_str = value.to_str().map_err(|e| {
+            AssertError::ExtractionError(format!(
+                "Failed to convert stream.llm.content value to string: {}",
+                e
             ))
-        }
-        ValuePath::TimingTcp => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
-            })?;
-            Ok(AssertValue::Number(
-                report.tcp_connect_duration.as_millis() as f64
-            ))
-        }
-        ValuePath::TimingTls => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
-            })?;
-            let ms = report
-                .tls_handshake_duration
-                .map(|d| d.as_millis() as f64)
-                .unwrap_or(0.0);
-            Ok(AssertValue::Number(ms))
-        }
-        ValuePath::TimingTtfb => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
-            })?;
-            let ms = report.ttfb.map(|d| d.as_millis() as f64).unwrap_or(0.0);
-            Ok(AssertValue::Number(ms))
-        }
-        ValuePath::CertDays => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
-            })?;
-            let days = report
-                .cert_info
-                .as_ref()
-                .map(|c| c.days_remaining as f64)
-                .unwrap_or(-1.0);
-            Ok(AssertValue::Number(days))
-        }
-        ValuePath::CertIssuer => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
-            })?;
-            let issuer = report
-                .cert_info
-                .as_ref()
-                .map(|c| c.issuer.clone())
-                .unwrap_or_default();
-            Ok(AssertValue::String(issuer))
-        }
-        ValuePath::CertSubject => {
-            let report = response.diagnose_report.as_ref().ok_or_else(|| {
-                AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
-            })?;
-            let subject = report
-                .cert_info
-                .as_ref()
-                .map(|c| c.subject.clone())
-                .unwrap_or_default();
-            Ok(AssertValue::String(subject))
-        }
+        })?;
+        let decoded = url::form_urlencoded::parse(value_str.as_bytes())
+            .map(|(key, _)| key)
+            .collect::<String>();
+        Ok(decoded)
+    }
+
+    fn extract_timing_dns(&self) -> Result<f64, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+        })?;
+        Ok(report.dns_lookup_duration.as_millis() as f64)
+    }
+
+    fn extract_timing_tcp(&self) -> Result<f64, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+        })?;
+        Ok(report.tcp_connect_duration.as_millis() as f64)
+    }
+
+    fn extract_timing_tls(&self) -> Result<f64, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+        })?;
+        let ms = report
+            .tls_handshake_duration
+            .map(|d| d.as_millis() as f64)
+            .unwrap_or(0.0);
+        Ok(ms)
+    }
+
+    fn extract_timing_ttfb(&self) -> Result<f64, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve timing metrics.".to_string())
+        })?;
+        let ms = report.ttfb.map(|d| d.as_millis() as f64).unwrap_or(0.0);
+        Ok(ms)
+    }
+
+    fn extract_cert_days(&self) -> Result<f64, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
+        })?;
+        let days = report
+            .cert_info
+            .as_ref()
+            .map(|c| c.days_remaining as f64)
+            .unwrap_or(-1.0);
+        Ok(days)
+    }
+
+    fn extract_cert_issuer(&self) -> Result<String, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
+        })?;
+        let issuer = report
+            .cert_info
+            .as_ref()
+            .map(|c| c.issuer.clone())
+            .unwrap_or_default();
+        Ok(issuer)
+    }
+
+    fn extract_cert_subject(&self) -> Result<String, AssertError> {
+        let report = self.diagnose_report.as_ref().ok_or_else(|| {
+            AssertError::PathNotFound("This request did not enable network diagnostics. Add '# @diagnose' to retrieve cert metrics.".to_string())
+        })?;
+        let subject = report
+            .cert_info
+            .as_ref()
+            .map(|c| c.subject.clone())
+            .unwrap_or_default();
+        Ok(subject)
     }
 }
 
@@ -174,7 +196,7 @@ fn extract_from_json_body(body: &str, segments: &[String]) -> Result<AssertValue
 }
 
 /// 将 serde_json::Value 转换为 AssertValue
-fn json_value_to_assert_value(value: &serde_json::Value) -> Result<AssertValue, AssertError> {
+pub fn json_value_to_assert_value(value: &serde_json::Value) -> Result<AssertValue, AssertError> {
     match value {
         serde_json::Value::Number(n) => {
             if let Some(f) = n.as_f64() {

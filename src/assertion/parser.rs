@@ -142,7 +142,7 @@ fn parse_value_path(input: &str) -> Result<ValuePath, AssertError> {
 }
 
 /// 解析断言值（右值）
-fn parse_assert_value(input: &str) -> Result<AssertValue, AssertError> {
+pub fn parse_assert_value(input: &str) -> Result<AssertValue, AssertError> {
     let input = input.trim();
 
     // Null

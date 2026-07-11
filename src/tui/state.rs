@@ -499,7 +499,109 @@ impl AppState {
     }
 
     pub fn create_test_from_input(&mut self) {
-        // Placeholder for new test creation logic, to be driven by smoke tests
+        let input = self.quick_input_value.trim();
+        if input.is_empty() {
+            return;
+        }
+
+        // 1. 判断是否是 URL 还是普通文件名
+        let is_url = input.starts_with("http://")
+            || input.starts_with("https://")
+            || (input.contains('.')
+                && !input.ends_with(".http")
+                && !input.ends_with(".md")
+                && !input.contains(' '));
+
+        let (filename, content) = if is_url {
+            // 规范化 URL 前缀
+            let normalized_url = if !input.starts_with("http://") && !input.starts_with("https://") {
+                format!("https://{}", input)
+            } else {
+                input.to_string()
+            };
+
+            // 尝试解析 URL 结构以推导文件名 (例如 google_com.http)
+            let file_base = if let Ok(parsed_url) = url::Url::parse(&normalized_url) {
+                let host = parsed_url.host_str().unwrap_or("quick_test");
+                let path = parsed_url.path().trim_matches('/');
+                let mut combined = host.to_string();
+                if !path.is_empty() {
+                    combined.push('_');
+                    combined.push_str(path);
+                }
+                // 将非字母数字字符替换为下划线，保持路径干净
+                let sanitized: String = combined
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                sanitized
+            } else {
+                "quick_test".to_string()
+            };
+
+            let file_name = format!("{}.http", file_base);
+            let http_content = format!("GET {}\n", normalized_url);
+            (file_name, http_content)
+        } else {
+            // 普通文件名
+            let mut file_base = input.to_string();
+            if !file_base.ends_with(".http") && !file_base.ends_with(".md") {
+                file_base.push_str(".http");
+            }
+            let default_template = "GET http://httpbingo.org/get\n".to_string();
+            (file_base, default_template)
+        };
+
+        // 2. 确定落盘目录
+        let mut target_dir = self.workspace_root.clone();
+        if !self.visible_file_nodes.is_empty()
+            && self.files_state.selected_index < self.visible_file_nodes.len()
+        {
+            let selected_node = &self.visible_file_nodes[self.files_state.selected_index];
+            let selected_path = PathBuf::from(&selected_node.abs_path);
+            if selected_node.is_dir {
+                target_dir = selected_path;
+            } else if let Some(parent) = selected_path.parent() {
+                target_dir = parent.to_path_buf();
+            }
+        }
+
+        let target_file_path = target_dir.join(&filename);
+
+        // 3. 物理写入文件
+        if !target_file_path.exists() {
+            let _ = std::fs::write(&target_file_path, content);
+        }
+
+        // 4. 重建可见树视图以包含新文件
+        let canon_path = std::fs::canonicalize(&target_file_path).unwrap_or(target_file_path);
+        let path_str = canon_path.to_string_lossy().into_owned();
+        if !self.raw_file_list.contains(&path_str) {
+            self.raw_file_list.push(path_str.clone());
+        }
+        self.rebuild_visible_tree_nodes();
+
+        // 5. 光标自动跳转定位到新建的文件行
+        if let Some(pos) = self
+            .visible_file_nodes
+            .iter()
+            .position(|n| n.abs_path == path_str)
+        {
+            self.files_state.selected_index = pos;
+            self.selected_file_index = pos;
+
+            // 6. 一气呵成：加载并切焦到 Editor，支持用户按 E 拉起 vim
+            if let Ok(new_content) = std::fs::read_to_string(&canon_path) {
+                self.editor_text = new_content;
+                self.editor_file_path = Some(path_str);
+                if let Ok(metadata) = std::fs::metadata(&canon_path) {
+                    self.editor_file_mtime = metadata.modified().ok();
+                }
+                self.is_dirty = false;
+                self.loaded_file_index = pos;
+                self.active_panel = Panel::Editor;
+            }
+        }
     }
 
     /// 单向状态机更新

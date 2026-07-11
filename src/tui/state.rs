@@ -12,6 +12,14 @@ pub enum SidebarTab {
     History,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetailTab {
+    #[default]
+    Response,
+    Headers,
+    Request,
+}
+
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -277,6 +285,12 @@ pub struct AppState {
     pub sse_last_processed_pos: usize,
     pub ws_visual_lines: Vec<ratatui::text::Line<'static>>,
     pub current_response_width: usize,
+
+    // Phase 4 新增基础交互字段
+    pub active_detail_tab: DetailTab,
+    pub show_quick_input: bool,
+    pub quick_input_value: String,
+    pub quick_input_title: String,
 }
 
 impl AppState {
@@ -331,6 +345,12 @@ impl AppState {
             sse_last_processed_pos: 0,
             ws_visual_lines: Vec::new(),
             current_response_width: 120, // 默认面板占宽
+
+            // Phase 4 字段初始化
+            active_detail_tab: DetailTab::Response,
+            show_quick_input: false,
+            quick_input_value: String::new(),
+            quick_input_title: String::new(),
         }
     }
 
@@ -476,6 +496,10 @@ impl AppState {
             self.sse_last_processed_pos = 0;
             self.ws_visual_lines.clear();
         }
+    }
+
+    pub fn create_test_from_input(&mut self) {
+        // Placeholder for new test creation logic, to be driven by smoke tests
     }
 
     /// 单向状态机更新

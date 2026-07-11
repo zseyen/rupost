@@ -218,6 +218,46 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
             }
         }
 
+        // C. 处理外部编辑器拉起请求 (Shift + E)
+        if state.pending_editor_launch {
+            state.pending_editor_launch = false;
+            if let Some(ref file_path) = state.editor_file_path {
+                let _ = disable_raw_mode();
+                let _ = crossterm::execute!(
+                    terminal.backend_mut(),
+                    LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture
+                );
+
+                let editor = std::env::var("VISUAL")
+                    .or_else(|_| std::env::var("EDITOR"))
+                    .unwrap_or_else(|_| "vim".to_string());
+
+                if let Ok(status) = std::process::Command::new(editor)
+                    .arg(file_path)
+                    .status()
+                {
+                    if status.success() {
+                        if let Ok(new_content) = std::fs::read_to_string(file_path) {
+                            state.editor_text = new_content;
+                            state.is_dirty = false;
+                            if let Ok(metadata) = std::fs::metadata(file_path) {
+                                state.editor_file_mtime = metadata.modified().ok();
+                            }
+                        }
+                    }
+                }
+
+                let _ = enable_raw_mode();
+                let _ = crossterm::execute!(
+                    terminal.backend_mut(),
+                    EnterAlternateScreen,
+                    crossterm::event::EnableMouseCapture
+                );
+                let _ = terminal.clear();
+            }
+        }
+
         if state.is_quitting {
             break;
         }

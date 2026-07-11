@@ -1082,3 +1082,23 @@ fn test_smart_url_test_creation() {
     assert_eq!(content_3, "GET http://httpbingo.org/get\n");
 }
 
+#[test]
+fn test_external_editor_key_trigger() {
+    let mut state = AppState::new();
+    state.editor_file_path = Some("/path/to/test.http".to_string());
+    state.active_panel = Panel::Editor;
+
+    let e_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('E'),
+        crossterm::event::KeyModifiers::SHIFT,
+    );
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, e_key, &tx).await;
+    });
+
+    assert!(state.pending_editor_launch);
+}
+

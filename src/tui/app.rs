@@ -236,15 +236,13 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                 if let Ok(status) = std::process::Command::new(editor)
                     .arg(file_path)
                     .status()
+                    && status.success()
+                    && let Ok(new_content) = std::fs::read_to_string(file_path)
                 {
-                    if status.success() {
-                        if let Ok(new_content) = std::fs::read_to_string(file_path) {
-                            state.editor_text = new_content;
-                            state.is_dirty = false;
-                            if let Ok(metadata) = std::fs::metadata(file_path) {
-                                state.editor_file_mtime = metadata.modified().ok();
-                            }
-                        }
+                    state.editor_text = new_content;
+                    state.is_dirty = false;
+                    if let Ok(metadata) = std::fs::metadata(file_path) {
+                        state.editor_file_mtime = metadata.modified().ok();
                     }
                 }
 

@@ -1,25 +1,28 @@
-use std::time::{Duration, Instant};
-use tracing::error;
 use crate::Result;
 use crate::RupostError;
-use crate::http::{Client, Request};
-use crate::parser::types::ParsedRequest;
-use crate::runner::types::TestResult;
-use crate::runner::executor::ExecutorMiddleware;
-use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
 use crate::history::model::RequestSnapshot;
+use crate::http::{Client, Request};
 use crate::middleware::Middleware;
+use crate::parser::types::ParsedRequest;
+use crate::runner::executor::ExecutorMiddleware;
+use crate::runner::types::TestResult;
+use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
+use std::time::{Duration, Instant};
+use tracing::error;
 
 pub struct HttpRunner;
 
 impl HttpRunner {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
         middlewares: &[ExecutorMiddleware],
-        stream_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+        stream_sender: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
         debug: bool,
         debug_on_failure: bool,
         client: &Client,

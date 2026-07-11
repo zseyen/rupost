@@ -148,8 +148,36 @@ fn handle_confirm_key(state: &mut AppState, key: KeyEvent) {
     }
 }
 
+async fn run_selected_sidebar_file(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
+    if state.active_sidebar_tab == SidebarTab::Files
+        && !state.visible_file_nodes.is_empty()
+    {
+        let idx = state.files_state.selected_index;
+        if idx < state.visible_file_nodes.len() {
+            let node = &state.visible_file_nodes[idx];
+            if !node.is_dir && let Ok(content) = std::fs::read_to_string(&node.abs_path) {
+                state.editor_text = content;
+                state.editor_file_path = Some(node.abs_path.clone());
+                state.editor_file_mtime = std::fs::metadata(&node.abs_path)
+                    .map(|m| m.modified().ok())
+                    .unwrap_or(None);
+                state.is_dirty = false;
+                state.loaded_file_index = idx;
+                state.selected_file_index = idx;
+                state.files_state.selected_index = idx;
+
+                trigger_request_execution(state, event_tx).await;
+            }
+        }
+    }
+}
+
 /// 处理侧边栏面板（文件树和历史记录 Tab）的按键
-async fn handle_sidebar_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
+async fn handle_sidebar_key(
+    state: &mut AppState,
+    key: KeyEvent,
+    event_tx: &mpsc::Sender<TuiEvent>,
+) {
     if state.show_help {
         return;
     }
@@ -196,59 +224,13 @@ async fn handle_sidebar_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc
                 state.quick_input_title = "New HTTP Test File or URL:".to_string();
             }
         }
-        KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if state.active_sidebar_tab == SidebarTab::Files {
-                if !state.visible_file_nodes.is_empty() {
-                    let idx = state.files_state.selected_index;
-                    if idx < state.visible_file_nodes.len() {
-                        let node = &state.visible_file_nodes[idx];
-                        if !node.is_dir {
-                            if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
-                                state.editor_text = content;
-                                state.editor_file_path = Some(node.abs_path.clone());
-                                if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
-                                    state.editor_file_mtime = metadata.modified().ok();
-                                } else {
-                                    state.editor_file_mtime = None;
-                                }
-                                state.is_dirty = false;
-                                state.loaded_file_index = idx;
-                                state.selected_file_index = idx;
-                                state.files_state.selected_index = idx;
-                                
-                                trigger_request_execution(state, event_tx).await;
-                            }
-                        }
-                    }
-                }
-            }
+        KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Enter
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            run_selected_sidebar_file(state, event_tx).await;
         }
         KeyCode::Char('r') | KeyCode::Char('R') => {
-            if state.active_sidebar_tab == SidebarTab::Files {
-                if !state.visible_file_nodes.is_empty() {
-                    let idx = state.files_state.selected_index;
-                    if idx < state.visible_file_nodes.len() {
-                        let node = &state.visible_file_nodes[idx];
-                        if !node.is_dir {
-                            if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
-                                state.editor_text = content;
-                                state.editor_file_path = Some(node.abs_path.clone());
-                                if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
-                                    state.editor_file_mtime = metadata.modified().ok();
-                                } else {
-                                    state.editor_file_mtime = None;
-                                }
-                                state.is_dirty = false;
-                                state.loaded_file_index = idx;
-                                state.selected_file_index = idx;
-                                state.files_state.selected_index = idx;
-                                
-                                trigger_request_execution(state, event_tx).await;
-                            }
-                        }
-                    }
-                }
-            }
+            run_selected_sidebar_file(state, event_tx).await;
         }
         KeyCode::Down | KeyCode::Char('j') => match state.active_sidebar_tab {
             SidebarTab::Files => {
@@ -333,8 +315,8 @@ pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Se
         var_context.insert("__default_scheme", "http");
 
         let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
-        let executor = crate::runner::TestExecutor::with_ephemeral_cookies()
-            .with_stream_sender(stream_tx);
+        let executor =
+            crate::runner::TestExecutor::with_ephemeral_cookies().with_stream_sender(stream_tx);
         let source = state
             .editor_file_path
             .clone()

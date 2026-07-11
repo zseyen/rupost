@@ -3,8 +3,8 @@ use crate::http::url::resolve_final_url;
 use crate::http::{Client, Request, Response};
 use crate::middleware::{CookieMiddleware, Middleware};
 use crate::parser::{ParsedFile, ParsedRequest};
-use crate::runner::types::TestResult;
 use crate::runner::WsRunner;
+use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
 use std::path::PathBuf;
@@ -39,21 +39,50 @@ pub enum Runner {
 }
 
 impl Runner {
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
         middlewares: &[ExecutorMiddleware],
-        stream_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+        stream_sender: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
         debug: bool,
         debug_on_failure: bool,
         client: &Client,
         source: Option<String>,
     ) -> Result<TestResult> {
         match self {
-            Self::Http(r) => r.run(parsed, request_number, context, middlewares, stream_sender, debug, debug_on_failure, client, source).await,
-            Self::Ws(r) => r.run(parsed, request_number, context, middlewares, stream_sender, debug, debug_on_failure, client, source).await,
+            Self::Http(r) => {
+                r.run(
+                    parsed,
+                    request_number,
+                    context,
+                    middlewares,
+                    stream_sender,
+                    debug,
+                    debug_on_failure,
+                    client,
+                    source,
+                )
+                .await
+            }
+            Self::Ws(r) => {
+                r.run(
+                    parsed,
+                    request_number,
+                    context,
+                    middlewares,
+                    stream_sender,
+                    debug,
+                    debug_on_failure,
+                    client,
+                    source,
+                )
+                .await
+            }
         }
     }
 }

@@ -1010,8 +1010,11 @@ fn test_detail_tab_switching() {
     assert_eq!(state.active_detail_tab, DetailTab::Response);
 
     // 模拟在 Response 面板下通过 handle_key (会调用 handle_response_key) 切换
-    let right_key = crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Right, crossterm::event::KeyModifiers::NONE);
-    
+    let right_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Right,
+        crossterm::event::KeyModifiers::NONE,
+    );
+
     state.active_panel = Panel::Response;
     state.response_visual_lines = vec![ratatui::text::Line::raw("temp_lines")];
     state.response_scroll = 5;
@@ -1019,7 +1022,7 @@ fn test_detail_tab_switching() {
     // 切换到 Headers 页
     // 我们需要把 tokio::sync::mpsc::channel 传给 handle_key
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    
+
     // 执行切换
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -1042,7 +1045,10 @@ fn test_detail_tab_switching() {
     assert_eq!(state.response_scroll, 0);
 
     // 向左切换回 Headers
-    let left_key = crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Left, crossterm::event::KeyModifiers::NONE);
+    let left_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Left,
+        crossterm::event::KeyModifiers::NONE,
+    );
     rt.block_on(async {
         rupost::tui::handlers::handle_key(&mut state, left_key, &tx).await;
     });
@@ -1061,7 +1067,10 @@ fn test_smart_url_test_creation() {
 
     // 应该推导出文件名 google_com_search.http 并自动创建在 workspace_root 目录下
     let expected_path = temp_dir.path().join("google_com_search.http");
-    assert!(expected_path.exists(), "Expected google_com_search.http to be created");
+    assert!(
+        expected_path.exists(),
+        "Expected google_com_search.http to be created"
+    );
     let content = std::fs::read_to_string(&expected_path).unwrap();
     assert_eq!(content, "GET https://google.com/search?q=rust\n");
 
@@ -1069,7 +1078,10 @@ fn test_smart_url_test_creation() {
     state.quick_input_value = "httpbin.org/get".to_string();
     state.create_test_from_input();
     let expected_path_2 = temp_dir.path().join("httpbin_org_get.http");
-    assert!(expected_path_2.exists(), "Expected httpbin_org_get.http to be created");
+    assert!(
+        expected_path_2.exists(),
+        "Expected httpbin_org_get.http to be created"
+    );
     let content_2 = std::fs::read_to_string(&expected_path_2).unwrap();
     assert_eq!(content_2, "GET https://httpbin.org/get\n");
 
@@ -1101,4 +1113,3 @@ fn test_external_editor_key_trigger() {
 
     assert!(state.pending_editor_launch);
 }
-

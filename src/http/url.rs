@@ -259,7 +259,7 @@ mod tests {
     fn test_resolve_final_url_edge_cases() {
         let mut ctx = VariableContext::new();
         ctx.insert("baseUrl", "http://by-camelcase.com");
-        
+
         // 1. 验证 camelCase 形式的 baseUrl 获取优先级
         assert_eq!(
             resolve_final_url("/users", &ctx, "http", Some("file.http"), None).unwrap(),
@@ -289,11 +289,19 @@ mod tests {
 
         // 5. WebSocket 协议原样返回
         assert_eq!(
-            resolve_final_url("ws://example.com/ws", &ctx, "http", Some("file.http"), None).unwrap(),
+            resolve_final_url("ws://example.com/ws", &ctx, "http", Some("file.http"), None)
+                .unwrap(),
             "ws://example.com/ws"
         );
         assert_eq!(
-            resolve_final_url("wss://example.com/ws", &ctx, "http", Some("file.http"), None).unwrap(),
+            resolve_final_url(
+                "wss://example.com/ws",
+                &ctx,
+                "http",
+                Some("file.http"),
+                None
+            )
+            .unwrap(),
             "wss://example.com/ws"
         );
     }

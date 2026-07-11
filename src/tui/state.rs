@@ -516,7 +516,8 @@ impl AppState {
 
         let (filename, content) = if is_url {
             // 规范化 URL 前缀
-            let normalized_url = if !input.starts_with("http://") && !input.starts_with("https://") {
+            let normalized_url = if !input.starts_with("http://") && !input.starts_with("https://")
+            {
                 format!("https://{}", input)
             } else {
                 input.to_string()

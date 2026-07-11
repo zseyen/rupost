@@ -1,7 +1,7 @@
+use super::parallel::ParallelScheduler;
 use crate::Result;
 use crate::parser::ParsedFile;
 use crate::runner::executor::TestExecutor;
-use super::parallel::ParallelScheduler;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
 use std::collections::HashMap;

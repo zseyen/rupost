@@ -16,13 +16,13 @@ pub use engine::resolver::DependencyResolver;
 pub use engine::workflow::WorkflowGraph;
 
 pub use protocol::http_runner::HttpRunner;
-pub use protocol::ws_runner::WsRunner;
 pub use protocol::sse_runner::{SseRunner, SseRunnerOptions};
+pub use protocol::ws_runner::WsRunner;
 
 pub use utils::file_sync::FileSyncWriter;
 pub use utils::path::{self, display_path};
 
 pub use crate::history::gc::{perform_clear, perform_prune};
-pub use crate::reporter::TestReporter;
-pub use crate::parser::scanner::DirectoryScanner;
 pub use crate::http::url;
+pub use crate::parser::scanner::DirectoryScanner;
+pub use crate::reporter::TestReporter;

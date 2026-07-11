@@ -611,7 +611,9 @@ impl WsRunner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: &[ExecutorMiddleware],
-        stream_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+        stream_sender: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
+        >,
         _debug: bool,
         _debug_on_failure: bool,
         _client: &crate::http::Client,

@@ -1,8 +1,11 @@
-use crate::assertion::types::{AssertError, AssertValue, ValuePath, AssertTarget};
+use crate::assertion::types::{AssertError, AssertTarget, AssertValue, ValuePath};
 use crate::http::Response;
 
 /// 从断言目标中提取值
-pub fn extract_value(target: &dyn AssertTarget, path: &ValuePath) -> Result<AssertValue, AssertError> {
+pub fn extract_value(
+    target: &dyn AssertTarget,
+    path: &ValuePath,
+) -> Result<AssertValue, AssertError> {
     match path {
         ValuePath::Status => target.extract_status().map(AssertValue::Number),
         ValuePath::Header(name) => target.extract_header(name).map(AssertValue::String),
@@ -32,15 +35,9 @@ impl AssertTarget for Response {
             .headers
             .get(name)
             .ok_or_else(|| AssertError::PathNotFound(format!("Header '{}' not found", name)))?;
-        value
-            .to_str()
-            .map(|s| s.to_string())
-            .map_err(|e| {
-                AssertError::ExtractionError(format!(
-                    "Failed to convert header value to string: {}",
-                    e
-                ))
-            })
+        value.to_str().map(|s| s.to_string()).map_err(|e| {
+            AssertError::ExtractionError(format!("Failed to convert header value to string: {}", e))
+        })
     }
 
     fn extract_body(&self, segments: &[String]) -> Result<AssertValue, AssertError> {
@@ -56,15 +53,12 @@ impl AssertTarget for Response {
             .headers
             .get("x-sse-event")
             .ok_or_else(|| AssertError::PathNotFound("stream.event not found".to_string()))?;
-        value
-            .to_str()
-            .map(|s| s.to_string())
-            .map_err(|e| {
-                AssertError::ExtractionError(format!(
-                    "Failed to convert stream.event value to string: {}",
-                    e
-                ))
-            })
+        value.to_str().map(|s| s.to_string()).map_err(|e| {
+            AssertError::ExtractionError(format!(
+                "Failed to convert stream.event value to string: {}",
+                e
+            ))
+        })
     }
 
     fn extract_stream_id(&self) -> Result<String, AssertError> {
@@ -72,15 +66,12 @@ impl AssertTarget for Response {
             .headers
             .get("x-sse-id")
             .ok_or_else(|| AssertError::PathNotFound("stream.id not found".to_string()))?;
-        value
-            .to_str()
-            .map(|s| s.to_string())
-            .map_err(|e| {
-                AssertError::ExtractionError(format!(
-                    "Failed to convert stream.id value to string: {}",
-                    e
-                ))
-            })
+        value.to_str().map(|s| s.to_string()).map_err(|e| {
+            AssertError::ExtractionError(format!(
+                "Failed to convert stream.id value to string: {}",
+                e
+            ))
+        })
     }
 
     fn extract_stream_body(&self, segments: &[String]) -> Result<AssertValue, AssertError> {
@@ -88,9 +79,10 @@ impl AssertTarget for Response {
     }
 
     fn extract_stream_llm_content(&self) -> Result<String, AssertError> {
-        let value = self.headers.get("x-sse-llm-content").ok_or_else(|| {
-            AssertError::PathNotFound("stream.llm.content not found".to_string())
-        })?;
+        let value = self
+            .headers
+            .get("x-sse-llm-content")
+            .ok_or_else(|| AssertError::PathNotFound("stream.llm.content not found".to_string()))?;
         let value_str = value.to_str().map_err(|e| {
             AssertError::ExtractionError(format!(
                 "Failed to convert stream.llm.content value to string: {}",

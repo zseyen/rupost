@@ -9,5 +9,7 @@ pub use evaluator::{
     evaluate_sse_handshake_assertions, evaluate_sse_llm_content_assertions,
 };
 pub use extractor::{extract_value, json_value_to_assert_value};
-pub use parser::{parse_assertion, parse_assert_value};
-pub use types::{AssertError, AssertExpr, AssertValue, AssertionResult, CompareOp, ValuePath, AssertTarget};
+pub use parser::{parse_assert_value, parse_assertion};
+pub use types::{
+    AssertError, AssertExpr, AssertTarget, AssertValue, AssertionResult, CompareOp, ValuePath,
+};

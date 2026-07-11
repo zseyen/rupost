@@ -1,7 +1,10 @@
+use crate::assertion::{
+    AssertError, AssertExpr, AssertTarget, AssertValue, CompareOp, ValuePath, evaluate_assertion,
+    json_value_to_assert_value, parse_assert_value,
+};
 use crate::utils::jsonpath::JsonPathResolver;
 use crate::ws::frame::WsFrame;
 use serde_json::Value;
-use crate::assertion::{AssertTarget, AssertError, AssertValue, AssertExpr, CompareOp, ValuePath, evaluate_assertion, json_value_to_assert_value, parse_assert_value};
 
 pub struct WsFrameTarget<'a> {
     pub frame: &'a WsFrame,
@@ -10,7 +13,9 @@ pub struct WsFrameTarget<'a> {
 
 impl<'a> AssertTarget for WsFrameTarget<'a> {
     fn extract_status(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("status not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "status not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_header(&self, name: &str) -> Result<String, AssertError> {
@@ -19,71 +24,102 @@ impl<'a> AssertTarget for WsFrameTarget<'a> {
         } else if name.eq_ignore_ascii_case("direction") {
             Ok(format!("{:?}", self.frame.direction))
         } else {
-            Err(AssertError::PathNotFound(format!("Header '{}' not applicable for WebSocket frames", name)))
+            Err(AssertError::PathNotFound(format!(
+                "Header '{}' not applicable for WebSocket frames",
+                name
+            )))
         }
     }
 
     fn extract_body(&self, segments: &[String]) -> Result<AssertValue, AssertError> {
         let json_val = if let Some(dec) = self.decoder {
-            dec.decode(&self.frame.payload)
-                .map_err(|e| AssertError::ExtractionError(format!("Failed to decode payload: {}", e)))?
+            dec.decode(&self.frame.payload).map_err(|e| {
+                AssertError::ExtractionError(format!("Failed to decode payload: {}", e))
+            })?
         } else {
             let txt = self.frame.payload_as_string();
-            serde_json::from_str(&txt).map_err(|e| AssertError::ExtractionError(format!("Failed to parse JSON: {}", e)))?
+            serde_json::from_str(&txt)
+                .map_err(|e| AssertError::ExtractionError(format!("Failed to parse JSON: {}", e)))?
         };
 
-        let target_val = JsonPathResolver::resolve_with_segments(&json_val, segments)
-            .ok_or_else(|| AssertError::PathNotFound(format!("Path 'body.{}' not found", segments.join("."))))?;
-        
-        json_value_to_assert_value(&target_val)
+        let target_val =
+            JsonPathResolver::resolve_with_segments(&json_val, segments).ok_or_else(|| {
+                AssertError::PathNotFound(format!("Path 'body.{}' not found", segments.join(".")))
+            })?;
+
+        json_value_to_assert_value(target_val)
     }
 
     fn extract_response_time(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("response.time not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "response.time not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_stream_event(&self) -> Result<String, AssertError> {
-        Err(AssertError::PathNotFound("stream.event not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "stream.event not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_stream_id(&self) -> Result<String, AssertError> {
-        Err(AssertError::PathNotFound("stream.id not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "stream.id not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_stream_body(&self, _segments: &[String]) -> Result<AssertValue, AssertError> {
-        Err(AssertError::PathNotFound("stream.body not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "stream.body not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_stream_llm_content(&self) -> Result<String, AssertError> {
-        Err(AssertError::PathNotFound("stream.llm.content not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "stream.llm.content not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_timing_dns(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("timing.dns not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "timing.dns not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_timing_tcp(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("timing.tcp not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "timing.tcp not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_timing_tls(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("timing.tls not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "timing.tls not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_timing_ttfb(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("timing.ttfb not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "timing.ttfb not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_cert_days(&self) -> Result<f64, AssertError> {
-        Err(AssertError::PathNotFound("cert.days not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "cert.days not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_cert_issuer(&self) -> Result<String, AssertError> {
-        Err(AssertError::PathNotFound("cert.issuer not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "cert.issuer not applicable for WebSocket frames".to_string(),
+        ))
     }
 
     fn extract_cert_subject(&self) -> Result<String, AssertError> {
-        Err(AssertError::PathNotFound("cert.subject not applicable for WebSocket frames".to_string()))
+        Err(AssertError::PathNotFound(
+            "cert.subject not applicable for WebSocket frames".to_string(),
+        ))
     }
 }
 

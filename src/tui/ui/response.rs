@@ -1,7 +1,7 @@
-use crate::tui::state::{AppState, Panel, DetailTab};
+use crate::tui::state::{AppState, DetailTab, Panel};
 use ratatui::{
     Frame,
-    layout::{Rect, Layout, Direction, Constraint},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Tabs},
@@ -364,7 +364,9 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             DetailTab::Headers => {
                 raw_lines.push(Line::from(Span::styled(
                     "--- Request Headers ---",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 if let Some(ref req) = state.current_request {
                     for (k, v) in &req.headers {
@@ -376,7 +378,9 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 raw_lines.push(Line::from(""));
                 raw_lines.push(Line::from(Span::styled(
                     "--- Response Headers ---",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 let mut resp_keys: Vec<String> = resp
                     .headers
@@ -394,7 +398,9 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             DetailTab::Request => {
                 raw_lines.push(Line::from(Span::styled(
                     "--- Request Body ---",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 if let Some(ref req) = state.current_request {
                     if let Some(ref body) = req.body {

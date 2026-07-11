@@ -146,7 +146,11 @@ fn render_quick_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
     let block = Block::default()
         .title(format!(" {} ", state.quick_input_title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        .border_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
 
     let input_display = format!("{}█", state.quick_input_value);
     let paragraph = Paragraph::new(input_display)

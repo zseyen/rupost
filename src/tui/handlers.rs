@@ -3,11 +3,45 @@ use super::state::{AppState, Panel, PendingAction, SidebarTab};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc;
 
+fn handle_quick_input_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            state.show_quick_input = false;
+            state.quick_input_value.clear();
+        }
+        KeyCode::Backspace => {
+            state.quick_input_value.pop();
+        }
+        KeyCode::Char(c) => {
+            state.quick_input_value.push(c);
+        }
+        KeyCode::Enter => {
+            state.create_test_from_input();
+            state.show_quick_input = false;
+        }
+        _ => {}
+    }
+}
+
 /// 处理 TUI 按键输入事件
 pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
+    // 0. 快速输入条状态的前置处理
+    if state.show_quick_input {
+        handle_quick_input_key(state, key);
+        return;
+    }
+
     // 1. 未保存确认弹窗的前置处理
     if state.show_unsaved_confirm {
         handle_confirm_key(state, key);
+        return;
+    }
+
+    // 全局大写 E 键拦截，用于拉起外部编辑器
+    if key.code == KeyCode::Char('E') {
+        if state.active_panel != Panel::Response && state.editor_file_path.is_some() {
+            state.pending_editor_launch = true;
+        }
         return;
     }
 
@@ -53,7 +87,7 @@ pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Se
 
     // 3. 根据当前激活的面板分发特定的键盘操作
     match state.active_panel {
-        Panel::Files => handle_sidebar_key(state, key),
+        Panel::Files => handle_sidebar_key(state, key, event_tx).await,
         Panel::Editor => handle_editor_key(state, key, event_tx).await,
         Panel::Response => handle_response_key(state, key),
     }
@@ -115,7 +149,7 @@ fn handle_confirm_key(state: &mut AppState, key: KeyEvent) {
 }
 
 /// 处理侧边栏面板（文件树和历史记录 Tab）的按键
-fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
+async fn handle_sidebar_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
     if state.show_help {
         return;
     }
@@ -153,6 +187,67 @@ fn handle_sidebar_key(state: &mut AppState, key: KeyEvent) {
         KeyCode::Char('p') | KeyCode::Char('P') => {
             if state.active_sidebar_tab == SidebarTab::Files {
                 state.show_full_path = !state.show_full_path;
+            }
+        }
+        KeyCode::Char('n') => {
+            if state.active_sidebar_tab == SidebarTab::Files {
+                state.show_quick_input = true;
+                state.quick_input_value.clear();
+                state.quick_input_title = "New HTTP Test File or URL:".to_string();
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if state.active_sidebar_tab == SidebarTab::Files {
+                if !state.visible_file_nodes.is_empty() {
+                    let idx = state.files_state.selected_index;
+                    if idx < state.visible_file_nodes.len() {
+                        let node = &state.visible_file_nodes[idx];
+                        if !node.is_dir {
+                            if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
+                                state.editor_text = content;
+                                state.editor_file_path = Some(node.abs_path.clone());
+                                if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
+                                    state.editor_file_mtime = metadata.modified().ok();
+                                } else {
+                                    state.editor_file_mtime = None;
+                                }
+                                state.is_dirty = false;
+                                state.loaded_file_index = idx;
+                                state.selected_file_index = idx;
+                                state.files_state.selected_index = idx;
+                                
+                                trigger_request_execution(state, event_tx).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            if state.active_sidebar_tab == SidebarTab::Files {
+                if !state.visible_file_nodes.is_empty() {
+                    let idx = state.files_state.selected_index;
+                    if idx < state.visible_file_nodes.len() {
+                        let node = &state.visible_file_nodes[idx];
+                        if !node.is_dir {
+                            if let Ok(content) = std::fs::read_to_string(&node.abs_path) {
+                                state.editor_text = content;
+                                state.editor_file_path = Some(node.abs_path.clone());
+                                if let Ok(metadata) = std::fs::metadata(&node.abs_path) {
+                                    state.editor_file_mtime = metadata.modified().ok();
+                                } else {
+                                    state.editor_file_mtime = None;
+                                }
+                                state.is_dirty = false;
+                                state.loaded_file_index = idx;
+                                state.selected_file_index = idx;
+                                state.files_state.selected_index = idx;
+                                
+                                trigger_request_execution(state, event_tx).await;
+                            }
+                        }
+                    }
+                }
             }
         }
         KeyCode::Down | KeyCode::Char('j') => match state.active_sidebar_tab {

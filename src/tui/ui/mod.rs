@@ -113,8 +113,47 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         render_unsaved_popup(frame, main_area);
     }
 
+    // 4.5. 渲染新建测试用例快速输入框 (Quick Input Modal)
+    if state.show_quick_input {
+        render_quick_input_popup(frame, main_area, state);
+    }
+
     // 5. 渲染底部 lazygit 风格状态栏
     render_help_bar(frame, help_bar_area, state);
+}
+
+fn render_quick_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppState) {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(3), // 高度为 3
+            Constraint::Min(0),
+        ])
+        .split(screen_size);
+
+    let popup_area = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60), // 宽度占 60%
+            Constraint::Percentage(20),
+        ])
+        .split(popup_layout[1])[1];
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .title(format!(" {} ", state.quick_input_title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+
+    let input_display = format!("{}█", state.quick_input_value);
+    let paragraph = Paragraph::new(input_display)
+        .block(block)
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(paragraph, popup_area);
 }
 
 fn render_help_popup(frame: &mut Frame, screen_size: Rect) {

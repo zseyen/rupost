@@ -291,6 +291,7 @@ pub struct AppState {
     pub show_quick_input: bool,
     pub quick_input_value: String,
     pub quick_input_title: String,
+    pub pending_editor_launch: bool,
 }
 
 impl AppState {
@@ -351,6 +352,7 @@ impl AppState {
             show_quick_input: false,
             quick_input_value: String::new(),
             quick_input_title: String::new(),
+            pending_editor_launch: false,
         }
     }
 

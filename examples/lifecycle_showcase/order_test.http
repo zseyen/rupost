@@ -1,0 +1,56 @@
+### @extends-spec order_spec.md (version >= 1.1.0)
+
+# =========================================================================
+# RuPost 开发阶段可运行集成测试用例 (order_test.http)
+# =========================================================================
+# 本地测试与 Mock 服务的主机基准
+@base_url = http://localhost:9000
+@auth_token = dev_admin_token_xyz
+
+### 用例 1: 创建普通订单 (匹配本地契约校验)
+# 运行时校验：
+# 1. 匹配契约路由：POST /api/v1/orders
+# 2. 校验返回结果符合 @spec-response-schema 的超集定义
+POST {{base_url}}/api/v1/orders
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "item_count": 5,
+  "amount": 15000
+}
+
+@assert status == 201
+@assert body.discount_applied == false
+
+
+### 用例 2: 微信支付下单 (辅助第三方请求，触发智能逃逸机制)
+# 运行时判定：
+# 1. 检查域名 api.mch.weixin.qq.com 不属于本地契约定义的 Host (api.orderservice.local 或 localhost)
+# 2. 自动逃逸，直接通过不进行契约匹配校验
+POST https://api.mch.weixin.qq.com/v3/pay/transactions/jsapi
+Content-Type: application/json
+
+{
+  "mchid": "1900006891",
+  "out_trade_no": "rupost_tx_9999",
+  "appid": "wxd678efh567hg6787",
+  "description": "RuPost Test Order Payment",
+  "notify_url": "https://www.weixin.qq.com/wxpay/pay.php",
+  "amount": {
+    "total": 15000,
+    "currency": "CNY"
+  }
+}
+
+@assert status == 200
+
+
+### 用例 3: 违规调用废弃的旧版本订单接口
+# 运行时判定：
+# 1. 匹配到 GetOrderLegacy 路由契约
+# 2. 控制台输出高亮黄色废弃警告 [DEPRECATION WARNING]
+GET {{base_url}}/api/v1/orders/legacy/old_vip_123
+Authorization: Bearer {{auth_token}}
+
+@assert status == 200

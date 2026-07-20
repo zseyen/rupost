@@ -2,7 +2,15 @@
 name = "rupost"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
 description = "A API test tool based on documents"
+authors = ["RuPost Contributors"]
+license = "MIT"
+repository = "https://github.com/zseyen/rupost"
+homepage = "https://github.com/zseyen/rupost"
+keywords = ["api", "testing", "http", "websocket", "cli"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
 default-run = "rupost"
 
 

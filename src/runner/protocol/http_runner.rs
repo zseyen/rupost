@@ -54,13 +54,14 @@ impl HttpRunner {
         // 转换为 Request
         let mut request = match Request::try_from(parsed) {
             Ok(req) => req,
+            // e 已是 RupostError，直接渲染，避免二次包装导致前缀重复
             Err(e) => {
                 return Ok(TestResult::error(
                     request_number,
                     name,
                     method,
                     url,
-                    RupostError::RequestBuildFailed(e.to_string()).to_user_friendly_string(),
+                    e.to_user_friendly_string(),
                     start.elapsed(),
                 ));
             }

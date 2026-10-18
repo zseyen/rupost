@@ -15,7 +15,7 @@ impl TryFrom<ParsedRequest> for Request {
 
         // 3. 添加 headers
         for (key, value) in &parsed.headers {
-            request = request.with_header(key, value);
+            request = request.with_header(key, value)?;
         }
 
         // 4. 添加 body（自动推断类型）

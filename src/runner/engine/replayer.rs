@@ -115,7 +115,7 @@ impl ReplayExecutor {
         // 还原 Headers
         for (name, val) in &entry.request.headers {
             if let Ok(val_str) = val.to_str() {
-                req = req.with_header(name.as_str(), val_str);
+                req = req.with_header(name.as_str(), val_str)?;
             }
         }
         // 还原 Body

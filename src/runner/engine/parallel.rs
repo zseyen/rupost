@@ -225,7 +225,7 @@ impl<'a> ParallelScheduler<'a> {
         my_sender: watch::Sender<Option<TaskOutput>>,
     ) -> Option<(HashMap<String, String>, Option<serde_json::Value>)> {
         let mut merged_vars = HashMap::new();
-        let mut last_cookie_state = None;
+        let mut cookie_states: Vec<serde_json::Value> = Vec::new();
 
         for mut rx in dep_receivers {
             loop {
@@ -242,8 +242,8 @@ impl<'a> ParallelScheduler<'a> {
                             return None;
                         }
                         merged_vars.extend(output.captured_vars);
-                        if output.cookie_state.is_some() {
-                            last_cookie_state = output.cookie_state;
+                        if let Some(state) = output.cookie_state {
+                            cookie_states.push(state);
                         }
                         break;
                     }
@@ -261,6 +261,19 @@ impl<'a> ParallelScheduler<'a> {
                 }
             }
         }
+
+        // 变量可以合并，Cookie 罐不能安全合并（域/路径/过期冲突无通用裁决）：
+        // 多父节点时只继承依赖声明顺序中的最后一个。此前这里静默覆盖，钻石依赖
+        // （A→B, A→C, B+C→D）会悄悄丢掉一半会话状态；现在差异时显式警告。
+        if cookie_states.len() > 1 && cookie_states.windows(2).any(|w| w[0] != w[1]) {
+            tracing::warn!(
+                "{} 个前置依赖均携带 Cookie 状态且内容不一致：仅继承最后一个（按依赖声明顺序），\
+                 其余父节点的会话 Cookie 不会合并",
+                cookie_states.len()
+            );
+        }
+        let last_cookie_state = cookie_states.pop();
+
         Some((merged_vars, last_cookie_state))
     }
 
@@ -304,6 +317,61 @@ impl<'a> ParallelScheduler<'a> {
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    /// 构造一个已完成的前置依赖通道；返回 sender 由调用方持有，保证通道存活
+    #[allow(clippy::type_complexity)]
+    fn ready_dep(
+        vars: &[(&str, &str)],
+        cookie_state: Option<serde_json::Value>,
+    ) -> (
+        watch::Sender<Option<TaskOutput>>,
+        watch::Receiver<Option<TaskOutput>>,
+    ) {
+        let (tx, rx) = watch::channel::<Option<TaskOutput>>(None);
+        let captured_vars = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        tx.send(Some(TaskOutput {
+            success: true,
+            captured_vars,
+            cookie_state,
+        }))
+        .unwrap();
+        (tx, rx)
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_deps_merges_vars_but_keeps_last_cookie_state() {
+        // 钻石依赖：两个父节点都携带 Cookie 状态且不一致。变量合并；Cookie 只保留
+        // 依赖声明顺序中的最后一个（并打 warn，此前为静默覆盖）。
+        let (_tx_b, dep_b) =
+            ready_dep(&[("from_b", "1")], Some(serde_json::json!([{"name": "b"}])));
+        let (_tx_c, dep_c) =
+            ready_dep(&[("from_c", "2")], Some(serde_json::json!([{"name": "c"}])));
+        let (my_tx, _my_rx) = watch::channel::<Option<TaskOutput>>(None);
+
+        let (vars, cookie) = ParallelScheduler::wait_for_deps(vec![dep_b, dep_c], my_tx)
+            .await
+            .expect("deps succeeded");
+
+        assert_eq!(vars.get("from_b").map(String::as_str), Some("1"));
+        assert_eq!(vars.get("from_c").map(String::as_str), Some("2"));
+        assert_eq!(cookie, Some(serde_json::json!([{"name": "c"}])));
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_deps_single_cookie_parent_passes_through() {
+        let (_tx_a, dep_a) = ready_dep(&[], Some(serde_json::json!([{"name": "a"}])));
+        let (_tx_n, dep_no_cookie) = ready_dep(&[("x", "y")], None);
+        let (my_tx, _my_rx) = watch::channel::<Option<TaskOutput>>(None);
+
+        let (_vars, cookie) = ParallelScheduler::wait_for_deps(vec![dep_a, dep_no_cookie], my_tx)
+            .await
+            .expect("deps succeeded");
+        // 无 Cookie 的父节点不应把已有状态覆盖成 None
+        assert_eq!(cookie, Some(serde_json::json!([{"name": "a"}])));
+    }
 
     #[test]
     fn test_extract_changed_vars() {

@@ -9,23 +9,45 @@ use std::path::{Path, PathBuf};
 pub struct DependencyResolver;
 
 impl DependencyResolver {
-    /// 递归解析所有物理依赖文件，并实施安全沙箱检查
+    /// 从用户显式提供的输入路径推导依赖解析的允许根：目录取自身，文件取其父目录。
+    /// 采用多根 allowlist 而非最小公共祖先——不相交路径（/a/x.http 与 /b/y.http）
+    /// 的 LCA 会退化为 `/`，校验形同虚设。
+    pub fn sandbox_roots_from_inputs<P: AsRef<Path>>(inputs: &[P]) -> Vec<PathBuf> {
+        inputs
+            .iter()
+            .filter_map(|p| {
+                let p = p.as_ref();
+                let root = if p.is_dir() {
+                    p.to_path_buf()
+                } else {
+                    p.parent()?.to_path_buf()
+                };
+                let root = if root.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    root
+                };
+                root.canonicalize().ok()
+            })
+            .collect()
+    }
+
+    /// 递归解析所有物理依赖文件。
+    ///
+    /// 用户显式传入的 `initial_paths` 完全信任（此前以 cwd 为根校验，导致
+    /// `cd /tmp && rupost t /abs/path.http` 被误拒）；`@depends-on` 递归解析出的
+    /// 依赖必须落在 `sandbox_roots` 任一根之下。这不是安全边界（对网络零限制），
+    /// 而是依赖路径写错/越界时的快速失败校验。
     pub fn resolve_and_parse(
         initial_paths: &[PathBuf],
-        sandbox_root: &Path,
+        sandbox_roots: &[PathBuf],
     ) -> Result<HashMap<PathBuf, ParsedFile>> {
         let mut files_map = HashMap::new();
         let mut visited = HashSet::new();
         let mut pending = Vec::new();
 
-        // 规范化 sandbox_root
-        let canonical_sandbox = sandbox_root
-            .canonicalize()
-            .unwrap_or_else(|_| sandbox_root.to_path_buf());
-
         for path in initial_paths {
             let canonical_path = path.canonicalize()?;
-            Self::validate_sandbox(&canonical_path, &canonical_sandbox)?;
             Self::validate_extension(&canonical_path)?;
             pending.push(canonical_path);
         }
@@ -51,9 +73,9 @@ impl DependencyResolver {
                     });
                 }
 
-                // 安全沙箱校验
+                // 依赖路径合理性校验
                 let canonical_dep_file = canonical_dep.canonicalize()?;
-                Self::validate_sandbox(&canonical_dep_file, &canonical_sandbox)?;
+                Self::validate_sandbox(&canonical_dep_file, sandbox_roots)?;
                 Self::validate_extension(&canonical_dep_file)?;
 
                 if !visited.contains(&canonical_dep_file) {
@@ -67,11 +89,11 @@ impl DependencyResolver {
         Ok(files_map)
     }
 
-    /// 校验沙箱路径范围，防止路径穿越 (Path Traversal)
-    fn validate_sandbox(path: &Path, sandbox_root: &Path) -> Result<()> {
-        if !path.starts_with(sandbox_root) {
+    /// 校验依赖落在任一允许根之下，防止 `@depends-on ../../..` 式越界引用
+    fn validate_sandbox(path: &Path, sandbox_roots: &[PathBuf]) -> Result<()> {
+        if !sandbox_roots.iter().any(|root| path.starts_with(root)) {
             return Err(RupostError::Other(format!(
-                "安全违规：依赖文件不在沙箱目录内，拒绝加载！文件: {}",
+                "依赖路径越界：@depends-on 引用的文件不在任何输入路径的目录之下，拒绝加载！文件: {}",
                 display_path(path)
             )));
         }
@@ -129,16 +151,51 @@ mod tests {
 
     #[test]
     fn test_validate_sandbox_ok() {
-        let root = Path::new("/tmp/sandbox");
+        let roots = vec![PathBuf::from("/tmp/sandbox")];
         let path = Path::new("/tmp/sandbox/sub/file.http");
-        assert!(DependencyResolver::validate_sandbox(path, root).is_ok());
+        assert!(DependencyResolver::validate_sandbox(path, &roots).is_ok());
     }
 
     #[test]
     fn test_validate_sandbox_escape() {
-        let root = Path::new("/tmp/sandbox");
+        let roots = vec![PathBuf::from("/tmp/sandbox")];
         let path = Path::new("/tmp/other/file.http");
-        assert!(DependencyResolver::validate_sandbox(path, root).is_err());
+        assert!(DependencyResolver::validate_sandbox(path, &roots).is_err());
+    }
+
+    #[test]
+    fn test_validate_sandbox_multi_root_does_not_degrade() {
+        // 多根 allowlist：不相交的根各自生效，且不会退化为 "/" 放行一切
+        let roots = vec![PathBuf::from("/a/tests"), PathBuf::from("/b/tests")];
+        assert!(DependencyResolver::validate_sandbox(Path::new("/a/tests/x.http"), &roots).is_ok());
+        assert!(DependencyResolver::validate_sandbox(Path::new("/b/tests/y.http"), &roots).is_ok());
+        assert!(
+            DependencyResolver::validate_sandbox(Path::new("/etc/passwd.http"), &roots).is_err()
+        );
+        // 前缀必须按路径分量匹配：/a/tests-evil 不在 /a/tests 之下
+        assert!(
+            DependencyResolver::validate_sandbox(Path::new("/a/tests-evil/z.http"), &roots)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_explicit_file_outside_cwd_is_trusted() {
+        // 回归：此前以 current_dir() 为沙箱根，`cd /tmp && rupost t /abs/file.http`
+        // 被当成"安全违规"拒绝。显式传入的文件必须信任。
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("remote.http");
+        fs::write(&file, "GET https://api.example.com/remote").unwrap();
+
+        // 根从输入推导（文件 → 父目录），与 cwd 无关
+        let roots = DependencyResolver::sandbox_roots_from_inputs(std::slice::from_ref(&file));
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0], dir.path().canonicalize().unwrap());
+
+        let resolved =
+            DependencyResolver::resolve_and_parse(std::slice::from_ref(&file), &roots).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved.contains_key(&file.canonicalize().unwrap()));
     }
 
     #[test]
@@ -174,7 +231,9 @@ mod tests {
         let b_canonical = b_path.canonicalize().unwrap();
 
         let initial = vec![a_path];
-        let resolved = DependencyResolver::resolve_and_parse(&initial, &sandbox_path).unwrap();
+        let resolved =
+            DependencyResolver::resolve_and_parse(&initial, std::slice::from_ref(&sandbox_path))
+                .unwrap();
 
         assert_eq!(resolved.len(), 2);
         assert!(resolved.contains_key(&a_canonical));
@@ -199,9 +258,10 @@ mod tests {
         fs::write(&external_path, "GET https://api.example.com/external").unwrap();
 
         let initial = vec![a_path];
-        let result = DependencyResolver::resolve_and_parse(&initial, dir_sandbox.path());
+        let roots = vec![dir_sandbox.path().canonicalize().unwrap()];
+        let result = DependencyResolver::resolve_and_parse(&initial, &roots);
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("安全违规"));
+        assert!(err_msg.contains("依赖路径越界"));
     }
 }

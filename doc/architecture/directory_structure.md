@@ -129,10 +129,10 @@ graph TD
     *   [executor.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs)：单用例的核心执行器（协调变量渲染、中间件链拦截、HTTP 请求发出、断言求值和变量捕获这 5 大主干流程）。
     *   [batch.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/batch.rs)：多测试用例文件的批量顺序（串行）运行调度器。
     *   [parallel.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/parallel.rs)：批量并行（并发）执行引擎。管理 `JoinSet` 协程池，并在父子依赖用例间执行多线程安全的会话状态与 Cookie 字段单向克隆（State Cloning）。
-    *   [resolver.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/resolver.rs)：依赖补偿加载器。扫描测试文件，自动解析并递归补全它们缺失的前置 `depends-on` 用例。
+    *   [resolver.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/resolver.rs)：依赖补偿加载器。扫描测试文件，自动解析并递归补全它们缺失的前置 `depends-on` 用例；对递归解析出的依赖做"依赖路径合理性校验"（必须落在用户输入路径的目录之下，防止 `@depends-on ../../..` 式越界引用）。用户显式传入的路径完全信任。注意该校验不是安全边界（对网络访问零限制）。
     *   [workflow.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/workflow.rs)：将测试文件集映射为有向无环图 (DAG)，通过 Kahn 拓扑排序进行防成环自检，输出最终的拓扑执行序列。
     *   [scanner.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/scanner.rs)：目录文件遍历器。递归扫描测试目录，过滤非 `.http`/`.md` 后缀文件，并自动规避 `.git/`、`.rupost/`、`target/` 等被忽略路径。
-    *   [path.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/path.rs)：安全沙箱目录路径校验（防止通过路径穿越 `../` 访问沙箱外文件）。
+    *   [path.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/path.rs)：路径工具（受支持文件类型判断、`@depends-on` 相对路径解析为 canonical 绝对路径、展示用相对路径格式化）。
     *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/reporter.rs)：将运行结果整理成 CLI 终端彩色摘要报告或输出标准的 JSON 结构化报告。
     *   [file_sync.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/file_sync.rs)：为大模型流数据提供非阻塞的文件物理增量追加写入器 (`@stream_to`)。
     *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs)：执行结果相关的数据结构（`TestResult`、`BatchResult`）。

@@ -68,9 +68,10 @@ pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
         || file_path.ends_with(".http");
 
     let file_config = if is_doc {
-        let scanned_files = DirectoryScanner::scan(&[file_path.to_string()])?;
-        let sandbox_root = std::env::current_dir()?;
-        let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
+        let inputs = [file_path.to_string()];
+        let scanned_files = DirectoryScanner::scan(&inputs)?;
+        let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&inputs);
+        let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots)?;
 
         let parse_pairs: Vec<_> = files_map
             .iter()

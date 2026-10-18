@@ -37,9 +37,10 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         return Ok(false);
     }
 
-    // 2. 递归自动补全加载所有依赖（带安全沙箱限制）
-    let sandbox_root = std::env::current_dir()?;
-    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
+    // 2. 递归自动补全加载所有依赖。显式传入的路径完全信任，
+    //    @depends-on 只能落在这些输入路径的目录之下（依赖路径合理性校验）
+    let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&options.paths);
+    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots)?;
 
     // 3. 拓扑排序解析依赖
     let parse_pairs: Vec<_> = files_map

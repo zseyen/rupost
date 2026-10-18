@@ -165,8 +165,11 @@ pub fn parse_assert_value(input: &str) -> Result<AssertValue, AssertError> {
     }
 
     // 字符串（带引号）
-    if (input.starts_with('"') && input.ends_with('"'))
-        || (input.starts_with('\'') && input.ends_with('\''))
+    // len() >= 2 守卫：单字符 "\"" 同时满足 starts_with/ends_with，
+    // 直接切片会 panic（byte range starts at 1 but ends at 0）
+    if ((input.starts_with('"') && input.ends_with('"'))
+        || (input.starts_with('\'') && input.ends_with('\'')))
+        && input.len() >= 2
     {
         let s = &input[1..input.len() - 1];
         return Ok(AssertValue::String(s.to_string()));
@@ -184,6 +187,22 @@ pub fn parse_assert_value(input: &str) -> Result<AssertValue, AssertError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_lone_quote_value_does_not_panic() {
+        // 回归：期望值为单个引号字符时（如 `@assert body.path contains "<"`），
+        // 此前在 parse_assert_value 的引号剥离切片处 panic（range 1..0）。
+        // 注意：运算符被引号内字符误切属 2.1 范畴，此处只锁定"不 panic"。
+        let expr = parse_assertion(r#"body.path contains "<""#).unwrap();
+        assert!(matches!(expr, AssertExpr::Compare { .. }));
+
+        let expr2 = parse_assertion(r#"body.x == "'""#).unwrap();
+        assert!(matches!(expr2, AssertExpr::Compare { .. }));
+
+        // 直接守卫验证：单字符引号按未包裹字符串处理
+        let v = parse_assert_value("\"").unwrap();
+        assert_eq!(v, AssertValue::String("\"".to_string()));
+    }
 
     #[test]
     fn test_parse_status_assertion() {

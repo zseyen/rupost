@@ -25,7 +25,6 @@ fn test_cookie_filename_resolution_by_env() {
 #[tokio::test]
 async fn test_cookie_physical_isolation_on_disk() {
     use rupost::middleware::CookieMiddleware;
-    use rupost::middleware::Middleware;
 
     let dir = tempdir().unwrap();
     let base_cookie_file = dir.path().join("cookies.json");
@@ -45,9 +44,8 @@ async fn test_cookie_physical_isolation_on_disk() {
         lock.insert_raw(&cookie, &url).unwrap();
     }
 
-    // 触发保存
-    let dummy_resp = rupost::http::Response::error("".to_string());
-    dev_mw.after_response(&dummy_resp).await.unwrap();
+    // 触发保存（按文件粒度；after_response 不再逐响应写盘）
+    dev_mw.save().unwrap();
 
     // 模拟运行 prod 环境下的请求并保存
     let prod_resolved_path = resolve_cookie_path(base_cookie_file.clone(), Some("prod"));
@@ -65,7 +63,7 @@ async fn test_cookie_physical_isolation_on_disk() {
     }
 
     // 触发保存
-    prod_mw.after_response(&dummy_resp).await.unwrap();
+    prod_mw.save().unwrap();
 
     // 验证物理盘上产生了两个被隔离的文件
     assert!(dev_resolved_path.exists());

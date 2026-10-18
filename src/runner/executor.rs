@@ -118,6 +118,17 @@ impl TestExecutor {
         Ok(())
     }
 
+    /// 将持久化模式的 Cookie 落盘。由 BatchExecutor 在每个测试文件执行完后调用，
+    /// 使崩溃时的丢失窗口为一个文件而不是整个批次；并行模式（worker 均为临时
+    /// 仓库）不调用。Drop 时仍有兜底保存。
+    pub fn persist_cookies(&self) {
+        if let Some(mw) = &self.cookie_middleware
+            && let Err(e) = mw.save()
+        {
+            tracing::warn!("Failed to persist cookies: {}", e);
+        }
+    }
+
     /// Create a new executor without cookie support.
     pub fn new() -> Self {
         Self {

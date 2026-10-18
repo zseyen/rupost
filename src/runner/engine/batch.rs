@@ -75,6 +75,10 @@ impl BatchExecutor {
                         let has_failure = res.iter().any(|r| !r.success);
                         results.push((file_path.clone(), res));
 
+                        // 每个文件落盘一次：崩溃丢失窗口 = 单个文件（并行模式的
+                        // worker 均为临时仓库，不在其作用范围内）
+                        self.executor.persist_cookies();
+
                         if has_failure && request.fail_fast {
                             break;
                         }

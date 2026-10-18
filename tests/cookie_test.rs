@@ -115,9 +115,8 @@ async fn test_cookie_persistence() {
         let response = client.execute(request).await.unwrap();
         assert_eq!(response.status.code(), 200);
 
-        // Trigger persistence by calling after_response
-        use rupost::middleware::Middleware;
-        middleware.after_response(&response).await.unwrap();
+        // 显式持久化（按文件粒度；after_response 不再逐响应写盘，Drop 兜底仍在）
+        middleware.save().unwrap();
     }
 
     // Verify file was created and contains the cookie

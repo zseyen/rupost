@@ -121,7 +121,7 @@ impl CookieMiddleware {
     ///   并静默回退空仓库丢会话；
     /// - flush 在解锁**之前**：BufWriter 的隐式 flush 发生在 Drop（本函数 unlock
     ///   之后且忽略错误），会留下"他进程拿到锁却读到半截 JSON"的窗口。
-    fn save(&self) -> Result<()> {
+    pub fn save(&self) -> Result<()> {
         let Some(path) = &self.file_path else {
             return Ok(()); // Ephemeral mode, nothing to save
         };
@@ -205,11 +205,10 @@ impl Middleware for CookieMiddleware {
     }
 
     async fn after_response(&self, _resp: &Response) -> Result<()> {
-        // Cookie extraction is handled by reqwest's cookie_provider.
-        // Here we persist to disk if in AutoPersist mode.
-        if matches!(self.mode, CookieMode::AutoPersist) {
-            self.save()?;
-        }
+        // Cookie 注入/提取由 reqwest 的 cookie_provider 完成；落盘不再在此处
+        // 逐响应触发（每个响应全量重写文件且阻塞 async 线程），改由
+        // BatchExecutor 在每个测试文件执行完后调用 `persist` 统一落盘，
+        // Drop 时兜底。并行模式的 worker 全部使用临时仓库，不落盘。
         Ok(())
     }
 }

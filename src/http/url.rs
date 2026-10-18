@@ -2,6 +2,18 @@
 use crate::variable::VariableContext;
 use crate::{Result, RupostError};
 
+/// 判断是否以合法 scheme 开头（RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) 后紧跟 "://"）。
+/// 不能用 `contains("://")`：`/oauth/cb?redirect=https://x` 这类 query 内含 URL 的相对路径会被误判为绝对地址。
+fn has_scheme_prefix(url: &str) -> bool {
+    let Some(pos) = url.find("://") else {
+        return false;
+    };
+    let scheme = &url[..pos];
+    let mut chars = scheme.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 /// 智能解析最终请求 URL，处理绝对/相对路径和本地/CLI 协议快捷简写
 pub fn resolve_final_url(
     raw_url: &str,
@@ -13,8 +25,7 @@ pub fn resolve_final_url(
     let is_cli = source == Some("cli");
 
     // 1. 处理绝对 URL
-    if raw_url.contains("://") || raw_url.starts_with("http://") || raw_url.starts_with("https://")
-    {
+    if has_scheme_prefix(raw_url) {
         return Ok(raw_url.to_string());
     }
 
@@ -66,7 +77,7 @@ pub fn resolve_final_url(
 
     match (global_base, file_base_path) {
         (Some(g), Some(f)) => {
-            if f.contains("://") {
+            if has_scheme_prefix(f) {
                 Ok(join_paths(&[f, relative_url]))
             } else {
                 Ok(join_paths(&[g.as_str(), f, relative_url]))
@@ -74,7 +85,7 @@ pub fn resolve_final_url(
         }
         (Some(g), None) => Ok(join_paths(&[g.as_str(), relative_url])),
         (None, Some(f)) => {
-            if f.contains("://") {
+            if has_scheme_prefix(f) {
                 Ok(join_paths(&[f, relative_url]))
             } else {
                 Err(RupostError::BaseUrlNotConfigured)
@@ -117,6 +128,36 @@ pub fn join_paths(parts: &[&str]) -> String {
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    #[test]
+    fn test_relative_path_with_url_in_query_is_not_absolute() {
+        // 回归：此前 contains("://") 把 query 里含 URL 的相对路径当成绝对地址原样返回，
+        // reqwest 随后报 "relative URL without a base"，OAuth 回调类参数极常见。
+        let mut ctx = VariableContext::new();
+        ctx.insert("base_url", "https://api.example.com");
+
+        let resolved = resolve_final_url(
+            "/oauth/callback?redirect=https://app.example.com/done",
+            &ctx,
+            "http",
+            Some("file"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved,
+            "https://api.example.com/oauth/callback?redirect=https://app.example.com/done"
+        );
+
+        // 真正的绝对地址（含 query 里再带 URL）仍被识别为绝对
+        assert!(has_scheme_prefix("https://a.com/x?u=http://b.com"));
+        assert!(has_scheme_prefix("wss://a.com/ws"));
+        // 非 scheme 形态一律不算绝对
+        assert!(!has_scheme_prefix("/path?u=http://b.com"));
+        assert!(!has_scheme_prefix("example.com/?x=http://a"));
+        assert!(!has_scheme_prefix("localhost:8080/x"));
+        assert!(!has_scheme_prefix("no-scheme-here"));
+    }
 
     #[test]
     fn test_join_paths() {

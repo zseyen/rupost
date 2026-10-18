@@ -9,8 +9,8 @@ use crate::middleware::Middleware;
 use cookie_store::CookieStore;
 use cookie_store::serde::json::{load_all, save_incl_expired_and_nonpersistent};
 use reqwest_cookie_store::CookieStoreMutex;
-use std::fs::{self, File};
-use std::io::BufReader;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -112,7 +112,15 @@ impl CookieMiddleware {
         }
     }
 
-    /// Save cookies to file (with file lock for safety).
+    /// 将当前 Cookie 罐安全落盘（仅持久化模式；临时模式为 no-op）。
+    ///
+    /// 安全写盘序列：打开不截断 → 拿排他锁 → 收紧权限 → 截断 + 回卷 → 写入 →
+    /// 显式 flush → 解锁。两处顺序是刻意的：
+    ///
+    /// - 截断发生在拿锁**之后**：`File::create` 会立即截断，并发读者会看到空文件
+    ///   并静默回退空仓库丢会话；
+    /// - flush 在解锁**之前**：BufWriter 的隐式 flush 发生在 Drop（本函数 unlock
+    ///   之后且忽略错误），会留下"他进程拿到锁却读到半截 JSON"的窗口。
     fn save(&self) -> Result<()> {
         let Some(path) = &self.file_path else {
             return Ok(()); // Ephemeral mode, nothing to save
@@ -123,22 +131,44 @@ impl CookieMiddleware {
             fs::create_dir_all(parent)?;
         }
 
-        // Open with file lock
-        let file = File::create(path)?;
+        // 打开但明确不截断（截断延迟到拿锁之后）
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
         file.lock()?;
 
-        // Save as JSON
+        // 0600 仅作用于新建文件（受 umask 影响的旧文件在持锁后显式收紧）：
+        // cookie 文件含会话级凭据，不能是组/其他用户可读
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = file.metadata()?.permissions();
+            if perm.mode() & 0o777 != 0o600 {
+                perm.set_mode(0o600);
+                file.set_permissions(perm)?;
+            }
+        }
+
         let store = self.store.lock().unwrap();
 
-        // Debug print
         tracing::debug!(
             "Cookies in store before save: {:?}",
             store.iter_any().collect::<Vec<_>>()
         );
 
-        let mut writer = std::io::BufWriter::new(&file);
-        save_incl_expired_and_nonpersistent(&store, &mut writer)
-            .map_err(|e| anyhow::anyhow!("Failed to save cookies: {}", e))?;
+        // 截断并回卷到起始位置（set_len 不移动游标）
+        file.set_len(0)?;
+        let mut file = file;
+        file.seek(SeekFrom::Start(0))?;
+
+        {
+            let mut writer = std::io::BufWriter::new(&file);
+            save_incl_expired_and_nonpersistent(&store, &mut writer)
+                .map_err(|e| anyhow::anyhow!("Failed to save cookies: {}", e))?;
+            writer.flush()?;
+        }
 
         file.unlock()?;
         tracing::debug!("Saved cookies to: {:?}", path);
@@ -254,10 +284,61 @@ mod tests {
         middleware2.import_cookie_state(state).unwrap();
 
         // 验证导入成功
-        let store2 = middleware2.store.lock().unwrap();
+        let store2 = middleware.store.lock().unwrap();
         let cookies: Vec<_> = store2.iter_any().collect();
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0].name(), "session");
         assert_eq!(cookies[0].value(), "123456");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_permissions_are_0600() {
+        // 回归：cookie 文件含会话级凭据，此前 File::create 受 umask 影响
+        // 落盘为 0644（组/其他用户可读）
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+
+        let middleware = CookieMiddleware::new_with_persistence(path.clone()).unwrap();
+        middleware.save().unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "cookie 文件权限必须为 0600，实际 {:o}", mode);
+
+        // 旧的宽松权限文件在重新保存时被收紧
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        middleware.save().unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "已存在的宽松权限文件应被收紧为 0600");
+    }
+
+    #[test]
+    fn test_save_truncates_stale_longer_content() {
+        // 回归：旧实现先截断后拿锁，且 BufWriter 在 unlock 后才隐式 flush。
+        // 新序列（锁内 set_len + seek + 显式 flush）必须保证：残留的更长旧内容
+        // 不出现在新文件尾部，且解锁前数据已完整落盘。
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cookies.json");
+        std::fs::write(&path, "X".repeat(4096)).unwrap();
+
+        let middleware = CookieMiddleware::new_with_persistence(path.clone()).unwrap();
+        {
+            let mut store = middleware.store.lock().unwrap();
+            let cookie = cookie::Cookie::build(("session", "abcdef"))
+                .domain("example.com")
+                .path("/")
+                .build();
+            let url = url::Url::parse("https://example.com/").unwrap();
+            store.insert_raw(&cookie, &url).unwrap();
+        }
+        middleware.save().unwrap();
+
+        // 解锁后文件立即可解析（不依赖 BufWriter 的 Drop 时机）且无残留 "X"
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains('X'), "截断失败：旧内容残留在新文件中");
+        let reloaded = CookieMiddleware::new_with_persistence(path).unwrap();
+        let count = reloaded.store.lock().unwrap().iter_any().count();
+        assert_eq!(count, 1, "重载后应恰好有 1 条 cookie");
     }
 }

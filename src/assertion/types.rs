@@ -172,10 +172,11 @@ impl AssertValue {
     /// 比较两个值
     pub fn compare(&self, op: CompareOp, other: &AssertValue) -> Result<bool, AssertError> {
         match (self, other) {
-            // 数字比较
+            // 数字比较：两侧均由十进制文本解析而来，精确相等即是正确语义。
+            // f64::EPSILON 是 1.0 附近的 ULP，不是通用容差——会让 1e-20 == 0 假相等。
             (AssertValue::Number(a), AssertValue::Number(b)) => Ok(match op {
-                CompareOp::Equal => (a - b).abs() < f64::EPSILON,
-                CompareOp::NotEqual => (a - b).abs() >= f64::EPSILON,
+                CompareOp::Equal => a == b,
+                CompareOp::NotEqual => a != b,
                 CompareOp::Greater => a > b,
                 CompareOp::Less => a < b,
                 CompareOp::GreaterOrEqual => a >= b,
@@ -340,6 +341,26 @@ impl AssertionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_number_equality_is_exact_not_epsilon() {
+        // 回归：此前 (a-b).abs() < f64::EPSILON 让极小值与 0 假相等
+        let tiny = AssertValue::Number(1e-20);
+        let zero = AssertValue::Number(0.0);
+        assert!(!tiny.compare(CompareOp::Equal, &zero).unwrap());
+        assert!(tiny.compare(CompareOp::NotEqual, &zero).unwrap());
+
+        // 正常相等/不等语义不受影响
+        let a = AssertValue::Number(42.0);
+        assert!(
+            a.compare(CompareOp::Equal, &AssertValue::Number(42.0))
+                .unwrap()
+        );
+        assert!(
+            !a.compare(CompareOp::Equal, &AssertValue::Number(42.5))
+                .unwrap()
+        );
+    }
 
     #[test]
     fn test_compare_op_from_str() {

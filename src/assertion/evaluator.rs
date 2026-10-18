@@ -102,14 +102,37 @@ pub fn evaluate_assertions(
     assertion_results
 }
 
-/// 评估 SSE 握手断言 (过滤掉以 "stream." 开头的断言)
+/// SSE 断言按左值路径前缀分类。此前用整串 `contains("stream.")` 判断，
+/// `headers.x-stream-id == "x"` 或 `body.data.stream.x == 1` 会被误归入流事件断言。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SseAssertionKind {
+    /// 对握手响应求值（左值不以 stream. 开头）
+    Handshake,
+    /// 对每个流事件求值（stream.* 但非 stream.llm.content）
+    Event,
+    /// 对流结束后累计的 LLM 内容求值
+    LlmContent,
+}
+
+fn classify_sse_assertion(assertion_str: &str) -> SseAssertionKind {
+    let lhs = assertion_str.trim_start();
+    if lhs.starts_with("stream.llm.content") {
+        SseAssertionKind::LlmContent
+    } else if lhs.starts_with("stream.") {
+        SseAssertionKind::Event
+    } else {
+        SseAssertionKind::Handshake
+    }
+}
+
+/// 评估 SSE 握手断言 (左值不以 "stream." 开头的断言)
 pub fn evaluate_sse_handshake_assertions(
     resolved_assertions: &[String],
     handshake_target: &dyn AssertTarget,
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
     for assertion_str in resolved_assertions {
-        if !assertion_str.contains("stream.") {
+        if classify_sse_assertion(assertion_str) == SseAssertionKind::Handshake {
             match parse_assertion(assertion_str) {
                 Ok(assertion_expr) => {
                     let result = evaluate_assertion(&assertion_expr, handshake_target);
@@ -124,7 +147,7 @@ pub fn evaluate_sse_handshake_assertions(
     assertion_results
 }
 
-/// 评估实时流事件断言 (包含 "stream." 但排除 "stream.llm.content")
+/// 评估实时流事件断言 (左值以 "stream." 开头但非 "stream.llm.content")
 pub fn evaluate_sse_event_assertions(
     resolved_assertions: &[String],
     virtual_target: &dyn AssertTarget,
@@ -132,7 +155,7 @@ pub fn evaluate_sse_event_assertions(
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
     for assertion_str in resolved_assertions {
-        if assertion_str.contains("stream.") && !assertion_str.contains("stream.llm.content") {
+        if classify_sse_assertion(assertion_str) == SseAssertionKind::Event {
             match parse_assertion(assertion_str) {
                 Ok(assertion_expr) => {
                     let result = evaluate_assertion(&assertion_expr, virtual_target);
@@ -150,14 +173,14 @@ pub fn evaluate_sse_event_assertions(
     assertion_results
 }
 
-/// 评估包含 "stream.llm.content" 的断言
+/// 评估左值为 "stream.llm.content" 的断言
 pub fn evaluate_sse_llm_content_assertions(
     resolved_assertions: &[String],
     final_target: &dyn AssertTarget,
 ) -> Vec<AssertionResult> {
     let mut assertion_results = Vec::new();
     for assertion_str in resolved_assertions {
-        if assertion_str.contains("stream.llm.content") {
+        if classify_sse_assertion(assertion_str) == SseAssertionKind::LlmContent {
             match parse_assertion(assertion_str) {
                 Ok(assertion_expr) => {
                     let result = evaluate_assertion(&assertion_expr, final_target);
@@ -177,6 +200,41 @@ mod tests {
     use super::*;
     use crate::assertion::parser::parse_assertion;
     use crate::http::Response;
+
+    #[test]
+    fn test_sse_assertion_classification_uses_lhs_prefix() {
+        // 回归：此前整串 contains("stream.") 把 header 名/body 路径里含 "stream." 的
+        // 握手断言误归入流事件断言，导致在错误目标上求值。
+        assert_eq!(
+            classify_sse_assertion(r#"headers.x-stream-id == "abc""#),
+            SseAssertionKind::Handshake
+        );
+        assert_eq!(
+            classify_sse_assertion("body.data.stream.x == 1"),
+            SseAssertionKind::Handshake
+        );
+        assert_eq!(
+            classify_sse_assertion("status == 200"),
+            SseAssertionKind::Handshake
+        );
+        assert_eq!(
+            classify_sse_assertion(r#"stream.event == "message""#),
+            SseAssertionKind::Event
+        );
+        assert_eq!(
+            classify_sse_assertion("stream.body.delta exists"),
+            SseAssertionKind::Event
+        );
+        assert_eq!(
+            classify_sse_assertion(r#"stream.llm.content contains "hi""#),
+            SseAssertionKind::LlmContent
+        );
+        // 前导空白容忍
+        assert_eq!(
+            classify_sse_assertion("  stream.event exists"),
+            SseAssertionKind::Event
+        );
+    }
     use crate::http::types::Status;
     use reqwest::header::HeaderMap;
     use std::time::Duration;

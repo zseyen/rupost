@@ -154,6 +154,7 @@ impl WsRunner {
 
         let mut rx = client.subscribe();
         let mut assertion_results = Vec::new();
+        let mut capture_warnings: Vec<String> = Vec::new();
         let mut final_error = None;
 
         // 获取解码器适配器
@@ -261,6 +262,7 @@ impl WsRunner {
                     &assertions_to_eval,
                     &captures_to_eval,
                     &mut assertion_results,
+                    &mut capture_warnings,
                     stream_sender.as_ref(),
                     Some(&log_path),
                     &mut accumulated_log,
@@ -310,6 +312,11 @@ impl WsRunner {
             timing: None,
             diagnose_report: None,
             request: Some(request_snapshot.clone()),
+            warnings: {
+                capture_warnings.sort();
+                capture_warnings.dedup();
+                capture_warnings
+            },
         };
 
         // 保存历史记录 (WebSocket 专用)
@@ -339,6 +346,7 @@ impl WsRunner {
         assertions_to_eval: &[String],
         captures_to_eval: &[VariableCapture],
         assertion_results: &mut Vec<crate::assertion::AssertionResult>,
+        warnings: &mut Vec<String>,
         stream_sender: Option<
             &tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -504,12 +512,12 @@ impl WsRunner {
                     .unwrap();
 
                     if !captures.is_empty() {
-                        VariableCapture::capture_normal(
+                        warnings.extend(VariableCapture::capture_normal(
                             &captures,
                             &virtual_response.body,
                             &virtual_response.headers,
                             context,
-                        );
+                        ));
                     }
 
                     if !assertions.is_empty() {
@@ -525,12 +533,12 @@ impl WsRunner {
                         }
                     }
 
-                    VariableCapture::capture_normal(
+                    warnings.extend(VariableCapture::capture_normal(
                         captures_to_eval,
                         &virtual_response.body,
                         &virtual_response.headers,
                         context,
-                    );
+                    ));
 
                     let resolved_assertions: Vec<String> = assertions_to_eval
                         .iter()

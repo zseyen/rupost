@@ -178,8 +178,8 @@ impl HttpRunner {
                 use crate::history::recorder::record_history;
                 record_history(request_snapshot.clone(), &response_obj, source);
 
-                // 2. 变量捕获
-                VariableCapture::capture_normal(
+                // 2. 变量捕获（失败项收集为警告，不影响其余捕获）
+                let capture_warnings = VariableCapture::capture_normal(
                     &captures_to_eval,
                     &response_obj.body,
                     &response_obj.headers,
@@ -204,6 +204,7 @@ impl HttpRunner {
                 );
                 test_result.request = Some(request_snapshot);
                 test_result.assertions = assertion_results;
+                test_result.warnings = capture_warnings;
 
                 if !test_result.assertions.is_empty() {
                     test_result.success = test_result.assertions.iter().all(|a| a.passed);

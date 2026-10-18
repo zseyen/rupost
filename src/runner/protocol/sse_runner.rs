@@ -85,6 +85,8 @@ impl SseRunner {
         }
 
         let mut assertion_results = Vec::new();
+        // 逐事件捕获的失败信息；同一 capture 在每个事件上重复失败时去重后再呈现
+        let mut capture_warnings: Vec<String> = Vec::new();
 
         // 评估非 stream 握手断言
         let handshake_response = Response::new(
@@ -193,13 +195,13 @@ impl SseRunner {
                                     Duration::from_millis(0),
                                 ).unwrap();
 
-                                // 1. 实时变量捕获
-                                VariableCapture::capture_sse_frame(
+                                // 1. 实时变量捕获（失败项收集为警告）
+                                capture_warnings.extend(VariableCapture::capture_sse_frame(
                                     &options.captures_to_eval,
                                     &virtual_response.body,
                                     &virtual_response.headers,
                                     context,
-                                );
+                                ));
 
                                 // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
                                 let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
@@ -261,13 +263,13 @@ impl SseRunner {
                                     Duration::from_millis(0),
                                 ).unwrap();
 
-                                // 1. 实时变量捕获
-                                VariableCapture::capture_sse_frame(
+                                // 1. 实时变量捕获（失败项收集为警告）
+                                capture_warnings.extend(VariableCapture::capture_sse_frame(
                                     &options.captures_to_eval,
                                     &virtual_response.body,
                                     &virtual_response.headers,
                                     context,
-                                );
+                                ));
 
                                 // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
                                 let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
@@ -315,12 +317,12 @@ impl SseRunner {
         assertion_results.extend(final_assertions);
 
         // 4. 评估包含 stream.llm.content 的捕获
-        VariableCapture::capture_sse_llm_content(
+        capture_warnings.extend(VariableCapture::capture_sse_llm_content(
             &options.captures_to_eval,
             &final_response.body,
             &final_response.headers,
             context,
-        );
+        ));
 
         // [History] 保存历史记录 (Best Effort)
         use crate::history::recorder::record_history;
@@ -335,6 +337,9 @@ impl SseRunner {
             final_response.clone(),
         );
         test_result.assertions = assertion_results;
+        capture_warnings.sort();
+        capture_warnings.dedup();
+        test_result.warnings = capture_warnings;
 
         if !test_result.assertions.is_empty() {
             test_result.success = test_result.assertions.iter().all(|a| a.passed);

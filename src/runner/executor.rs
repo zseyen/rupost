@@ -260,6 +260,9 @@ impl TestExecutor {
         // 1. 变量替换
         VariableResolver::resolve_parsed_request(&mut parsed, context);
 
+        // 检测渲染后仍残留的占位符（未定义变量），收集为可见警告避免静默假通过
+        let unresolved = VariableResolver::unresolved_placeholders(&parsed);
+
         // 检查未配置的 base_url/baseUrl 占位符
         if parsed.url.contains("{{base_url}}") || parsed.url.contains("{{baseUrl}}") {
             let method = parsed.method_or_default().to_string();
@@ -316,7 +319,7 @@ impl TestExecutor {
         let url = parsed.url.clone();
         let name = parsed.name().map(|s| s.to_string());
 
-        match runner
+        let mut result = match runner
             .run(
                 parsed,
                 request_number,
@@ -339,7 +342,9 @@ impl TestExecutor {
                 e.to_user_friendly_string(),
                 start.elapsed(),
             ),
-        }
+        };
+        result.warnings.extend(unresolved);
+        result
     }
 }
 

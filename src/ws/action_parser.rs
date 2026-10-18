@@ -97,8 +97,11 @@ impl WsActionParser {
                         let parts: Vec<&str> = content.split_whitespace().collect();
                         if parts.len() >= 3 && parts[1] == "from" {
                             let var_name = parts[0];
-                            if let Some(from_idx) = content.find("from") {
-                                let source_str = content[from_idx + 4..].trim();
+                            // 跳过变量名再定位 from，避免变量名含 "from" 子串（如 from_id）时错位
+                            let after_var = &content[var_name.len()..];
+                            if let Some(rel) = after_var.find("from") {
+                                let source_str =
+                                    content[var_name.len() + rel + "from".len()..].trim();
                                 if !var_name.is_empty() && !source_str.is_empty() {
                                     captures.push(
                                         crate::variable::capture::VariableCapture::parse(
@@ -309,6 +312,26 @@ mod tests {
             assert_eq!(assertions[0], "body.price > 100");
             assert_eq!(captures.len(), 1);
             assert_eq!(captures[0].name, "btc_val");
+        } else {
+            panic!("Expected Expect action");
+        }
+    }
+
+    #[test]
+    fn test_parse_expect_capture_var_name_containing_from() {
+        // 回归：变量名含 "from" 时源表达式错位（与 metadata.rs 同源缺陷）
+        let body = r#"
+        EXPECT $.event == "ticker"
+        @capture from_price from body.price
+        "#;
+        let actions = WsActionParser::parse_body(body).unwrap();
+        if let WsAction::Expect { captures, .. } = &actions[0] {
+            assert_eq!(captures.len(), 1);
+            assert_eq!(captures[0].name, "from_price");
+            assert_eq!(
+                captures[0].source,
+                crate::variable::capture::CaptureSource::Body("price".to_string())
+            );
         } else {
             panic!("Expected Expect action");
         }

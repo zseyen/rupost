@@ -141,9 +141,12 @@ fn parse_capture(content: &str) -> ParseResult<Metadata> {
         });
     }
 
-    // 提取 from 后面的所有内容（保留空格，如正则表达式）
-    let from_idx = content.find("from").unwrap();
-    let source = content[from_idx + 4..].trim();
+    // 提取 from 后面的所有内容（保留空格，如正则表达式）。
+    // 必须跳过变量名再定位 `from`：变量名本身含 "from"（如 from_id）时，
+    // content.find("from") 会命中变量名内的子串导致源表达式错位。
+    let after_var = &content[var_name.len()..];
+    let from_idx = var_name.len() + after_var.find("from").unwrap();
+    let source = content[from_idx + "from".len()..].trim();
 
     if source.is_empty() {
         return Err(ParseError::InvalidMetadata {
@@ -315,6 +318,40 @@ mod tests {
             result,
             Metadata::Capture { ref var_name, ref source }
             if var_name == "token" && source == "body.token"
+        ));
+    }
+
+    #[test]
+    fn test_parse_capture_var_name_containing_from() {
+        // 回归：变量名含 "from" 子串时，此前 content.find("from") 命中变量名，
+        // 源表达式被错切成 "_id from body.id"，捕获静默失效。
+        let result = parse_metadata("@capture from_id from body.id")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            Metadata::Capture { ref var_name, ref source }
+            if var_name == "from_id" && source == "body.id"
+        ));
+
+        // 变量名恰好叫 from
+        let result = parse_metadata("@capture from from body.x")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            Metadata::Capture { ref var_name, ref source }
+            if var_name == "from" && source == "body.x"
+        ));
+
+        // regex 源内部的 "from" 不受影响
+        let result = parse_metadata(r#"@capture from_date from regex "from (\d+)""#)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            result,
+            Metadata::Capture { ref var_name, ref source }
+            if var_name == "from_date" && source == r#"regex "from (\d+)""#
         ));
     }
 

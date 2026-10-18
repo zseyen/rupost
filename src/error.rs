@@ -47,7 +47,7 @@ impl RupostError {
     pub fn suggestion(&self) -> Option<&'static str> {
         match self {
             RupostError::BaseUrlNotConfigured => Some(
-                "请在 rupost.toml 对应的环境配置 base_url，或者在执行命令时使用 --env 选项指定环境 (如 `--env dev`)，或使用 `-v base_url=...` 传入变量。",
+                "请在 rupost.toml 对应的环境配置 base_url，或者在执行命令时使用 --env 选项指定环境 (如 `--env dev`)，或使用 `--var base_url=...` 传入变量。",
             ),
             RupostError::DependencyNotFound { .. } => Some(
                 "请检查 @depends-on 指令中声明的依赖文件路径是否正确，并确认执行测试时指定了该依赖文件所在的目录或路径。",

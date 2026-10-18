@@ -163,3 +163,51 @@ async fn capture_failure_is_isolated_and_surfaced_as_warning() {
         results[1].warnings
     );
 }
+
+/// 域：cookie_hardening
+///
+/// 原复现：`rupost --cookie-file ck.json --env dev http://.../login`（内联路径此前
+/// 绕过 resolve_cookie_path，无视环境隔离读写同一个文件）；cookie 文件此前以
+/// 0644 落盘（session 凭据组/其他用户可读）。
+#[tokio::test]
+async fn inline_request_cookie_file_is_env_isolated_and_0600() {
+    use wiremock::matchers::method;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Set-Cookie", "session=DEV1; Path=/; Max-Age=3600"),
+        )
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cookie_file = dir.path().join("ck.json");
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        // 子进程的请求历史写入临时目录，不污染仓库的 .rupost/
+        .env("RUPOST_HISTORY_DIR", dir.path())
+        .arg("--cookie-file")
+        .arg(&cookie_file)
+        .arg("--env")
+        .arg("dev")
+        .arg(format!("{}/login", server.uri()))
+        .output()
+        .expect("failed to spawn rupost binary");
+    assert!(output.status.success(), "inline request should succeed");
+
+    // 环境隔离：文件名带 _dev 后缀
+    let env_file = dir.path().join("ck_dev.json");
+    assert!(env_file.exists(), "内联请求 + --env dev 应生成 ck_dev.json");
+    let content = std::fs::read_to_string(&env_file).unwrap();
+    assert!(content.contains("session=DEV1"));
+
+    // 权限收紧：0600（unix）
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&env_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "cookie 文件权限必须为 0600");
+    }
+}

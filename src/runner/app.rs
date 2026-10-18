@@ -74,6 +74,14 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref());
         TestExecutor::with_cookies(resolved)?
     } else {
+        // 默认为临时会话（运行内共享、进程退出即失），与 Postman 等的"默认持久化"
+        // 心智不同——不提示会让用户误以为会话已保存
+        if options.verbose {
+            println!(
+                "[i] 会话 Cookie 为临时模式（仅本次运行内共享）；加 --cookie-file <FILE> 可跨运行持久化"
+            );
+        }
+        tracing::debug!("Cookies are ephemeral for this run; pass --cookie-file to persist");
         TestExecutor::with_ephemeral_cookies()
     };
 

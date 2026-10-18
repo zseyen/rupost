@@ -65,6 +65,16 @@ RuPost 提供了直观且高效的命令行接口：
   ```bash
   rupost history list --limit 10
   ```
+* **Cookie 会话管理**:
+  ```bash
+  # 默认为临时会话：同一运行内的请求共享 Cookie，进程退出即失效
+  rupost t login.http
+  # 传入 --cookie-file 跨运行持久化（-e dev 会按环境隔离为 cookies_dev.json）
+  rupost t login.http --cookie-file cookies.json -e dev
+  rupost t whoami.http --cookie-file cookies.json -e dev
+  # 完全禁用自动 Cookie
+  rupost t api.http --no-cookies
+  ```
 * **SSE/LLM 模板快速生成**:
   ```bash
   rupost template sse -o my_sse.http

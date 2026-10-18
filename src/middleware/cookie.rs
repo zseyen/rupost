@@ -151,7 +151,7 @@ impl CookieMiddleware {
             }
         }
 
-        let store = self.store.lock().unwrap();
+        let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
 
         tracing::debug!(
             "Cookies in store before save: {:?}",
@@ -177,7 +177,7 @@ impl CookieMiddleware {
 
     /// 导出当前 CookieStore 的序列化状态为 JSON Value (包含 Session Cookies)
     pub fn export_cookie_state(&self) -> Result<serde_json::Value> {
-        let store = self.store.lock().unwrap();
+        let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         let mut buffer = Vec::new();
         save_incl_expired_and_nonpersistent(&store, &mut buffer)
             .map_err(|e| anyhow::anyhow!("Failed to serialize cookie store: {}", e))?;
@@ -191,7 +191,7 @@ impl CookieMiddleware {
         let reader = std::io::BufReader::new(&bytes[..]);
         let new_store = load_all(reader)
             .map_err(|e| anyhow::anyhow!("Failed to deserialize cookie store: {}", e))?;
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         *store = new_store;
         Ok(())
     }
@@ -257,7 +257,15 @@ mod tests {
 
         // Load again
         let middleware = CookieMiddleware::new_with_persistence(path).unwrap();
-        assert!(middleware.store.lock().unwrap().iter_any().count() == 0);
+        assert!(
+            middleware
+                .store
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter_any()
+                .count()
+                == 0
+        );
     }
 
     #[test]
@@ -266,7 +274,7 @@ mod tests {
 
         // 往里面塞一个 cookie 测试
         {
-            let mut store = middleware.store.lock().unwrap();
+            let mut store = middleware.store.lock().unwrap_or_else(|e| e.into_inner());
             let cookie = cookie::Cookie::build(("session", "123456"))
                 .domain("example.com")
                 .path("/")
@@ -283,7 +291,7 @@ mod tests {
         middleware2.import_cookie_state(state).unwrap();
 
         // 验证导入成功
-        let store2 = middleware.store.lock().unwrap();
+        let store2 = middleware.store.lock().unwrap_or_else(|e| e.into_inner());
         let cookies: Vec<_> = store2.iter_any().collect();
         assert_eq!(cookies.len(), 1);
         assert_eq!(cookies[0].name(), "session");
@@ -323,7 +331,7 @@ mod tests {
 
         let middleware = CookieMiddleware::new_with_persistence(path.clone()).unwrap();
         {
-            let mut store = middleware.store.lock().unwrap();
+            let mut store = middleware.store.lock().unwrap_or_else(|e| e.into_inner());
             let cookie = cookie::Cookie::build(("session", "abcdef"))
                 .domain("example.com")
                 .path("/")
@@ -337,7 +345,12 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(!content.contains('X'), "截断失败：旧内容残留在新文件中");
         let reloaded = CookieMiddleware::new_with_persistence(path).unwrap();
-        let count = reloaded.store.lock().unwrap().iter_any().count();
+        let count = reloaded
+            .store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter_any()
+            .count();
         assert_eq!(count, 1, "重载后应恰好有 1 条 cookie");
     }
 }

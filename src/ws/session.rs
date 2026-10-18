@@ -1,3 +1,4 @@
+use crate::RupostError;
 use crate::ws::client::{WsClient, WsClientConfig};
 use crate::ws::frame::WsFrame;
 use std::collections::VecDeque;
@@ -63,14 +64,16 @@ pub struct WsSession {
 
 impl WsSession {
     /// 发起连接并初始化后台 SessionManager
-    pub async fn connect(config: WsClientConfig) -> Result<Self, String> {
+    pub async fn connect(config: WsClientConfig) -> Result<Self, RupostError> {
         let (send_tx, send_rx) = mpsc::channel::<WsFrame>(128);
         let (broadcast_tx, _) = broadcast::channel::<WsFrame>(1024);
         let state = Arc::new(Mutex::new(SessionState::Connected));
         let history_buffer = Arc::new(Mutex::new(BoundedFrameBuffer::new(1000)));
 
         // 首次建连：如果首次直接失败，则直接返回错误
-        let initial_client = WsClient::connect(config.clone()).await?;
+        let initial_client = WsClient::connect(config.clone())
+            .await
+            .map_err(RupostError::NetworkError)?;
 
         let session = Self {
             send_tx,
@@ -98,11 +101,10 @@ impl WsSession {
     }
 
     /// 发送帧，若在重连中，则会缓存到 pending_send_queue
-    pub async fn send_frame(&self, frame: WsFrame) -> Result<(), String> {
-        self.send_tx
-            .send(frame)
-            .await
-            .map_err(|e| format!("Failed to send frame to SessionManager: {}", e))
+    pub async fn send_frame(&self, frame: WsFrame) -> Result<(), RupostError> {
+        self.send_tx.send(frame).await.map_err(|e| {
+            RupostError::NetworkError(format!("Failed to send frame to SessionManager: {}", e))
+        })
     }
 
     /// 获取融合重连后的广播接收器
@@ -112,12 +114,15 @@ impl WsSession {
 
     /// 获取当前会话状态
     pub fn state(&self) -> SessionState {
-        *self.state.lock().unwrap()
+        *self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// 获取当前缓存的历史收发帧数据 (Stage 6)
     pub fn get_history(&self) -> Vec<WsFrame> {
-        self.history_buffer.lock().unwrap().get_all()
+        self.history_buffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_all()
     }
 }
 
@@ -164,18 +169,20 @@ impl SessionManager {
         let mut physical_rx = self.client.subscribe();
 
         loop {
-            let current_state = *self.state.lock().unwrap();
+            let current_state = *self.state.lock().unwrap_or_else(|e| e.into_inner());
 
             match current_state {
                 SessionState::Connected => {
-                    while *self.state.lock().unwrap() == SessionState::Connected {
+                    while *self.state.lock().unwrap_or_else(|e| e.into_inner())
+                        == SessionState::Connected
+                    {
                         tokio::select! {
                             // 1. 处理上层逻辑写请求
                             maybe_frame = self.send_rx.recv() => {
                                 match maybe_frame {
                                     Some(frame) => {
                                         // 记录到历史缓冲区中 (Outbound)
-                                        self.history_buffer.lock().unwrap().push(frame.clone());
+                                        self.history_buffer.lock().unwrap_or_else(|e| e.into_inner()).push(frame.clone());
 
                                         if let Err(e) = self.client.send_frame(frame.clone()).await {
                                             warn!("Physical send failed: {}. Triggering reconnect.", e);
@@ -189,7 +196,7 @@ impl SessionManager {
                                     }
                                     None => {
                                         // WsSession 被释放，退出协程
-                                        *self.state.lock().unwrap() = SessionState::Disconnected;
+                                        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = SessionState::Disconnected;
                                         break;
                                     }
                                 }
@@ -199,12 +206,12 @@ impl SessionManager {
                                 match maybe_inbound {
                                     Ok(frame) => {
                                         // 记录到历史缓冲区中 (Inbound)
-                                        self.history_buffer.lock().unwrap().push(frame.clone());
+                                        self.history_buffer.lock().unwrap_or_else(|e| e.into_inner()).push(frame.clone());
 
                                         let is_close = matches!(frame.frame_type, crate::ws::WsFrameType::Close);
                                         let _ = self.broadcast_tx.send(frame);
                                         if is_close {
-                                            *self.state.lock().unwrap() = SessionState::Disconnected;
+                                            *self.state.lock().unwrap_or_else(|e| e.into_inner()) = SessionState::Disconnected;
                                             break;
                                         }
                                     }
@@ -227,7 +234,8 @@ impl SessionManager {
                         self.flush_pending_queue().await;
                     } else {
                         error!("Max reconnect attempts reached. Disconnecting session.");
-                        *self.state.lock().unwrap() = SessionState::Disconnected;
+                        *self.state.lock().unwrap_or_else(|e| e.into_inner()) =
+                            SessionState::Disconnected;
                         let _ = self.broadcast_tx.send(WsFrame::new(
                             crate::ws::frame::FrameDirection::Inbound,
                             crate::ws::WsFrameType::Close,
@@ -245,7 +253,7 @@ impl SessionManager {
     }
 
     fn transition_to_reconnecting(&mut self) {
-        let mut guard = self.state.lock().unwrap();
+        let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if *guard == SessionState::Connected {
             *guard = SessionState::Reconnecting;
             info!("WsSession transition to RECONNECTING state.");
@@ -306,7 +314,7 @@ impl SessionManager {
             match WsClient::connect(self.config.clone()).await {
                 Ok(new_client) => {
                     self.client = new_client;
-                    *self.state.lock().unwrap() = SessionState::Connected;
+                    *self.state.lock().unwrap_or_else(|e| e.into_inner()) = SessionState::Connected;
                     info!("Successfully reconnected to WebSocket server!");
                     return true;
                 }

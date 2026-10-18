@@ -2,7 +2,6 @@
 use super::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
-use fs2::FileExt;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -55,7 +54,7 @@ impl HistoryStorage {
     /// Append a new entry to history
     ///
     /// # Concurrency Strategy
-    /// Uses `fs2::lock_exclusive` to ensure atomic writes across multiple processes.
+    /// Uses `File::lock` (std, exclusive) to ensure atomic writes across multiple processes.
     /// This is safer than relying on `O_APPEND` across different OSs (e.g. Windows).
     ///
     /// # Performance
@@ -86,7 +85,7 @@ impl HistoryStorage {
 
         // Lock for writing
         // On Windows, this waits appropriately.
-        file.lock_exclusive().map_err(RupostError::IoError)?;
+        file.lock().map_err(RupostError::IoError)?;
 
         // Need mut file for writeln!
         let mut file = file;
@@ -129,7 +128,7 @@ impl HistoryStorage {
 
     fn read_all(&self) -> Result<Vec<HistoryEntry>> {
         // Read lock? Append only is atomic, but to be sure we don't read partial line from a writer
-        // we can take shared lock. `fs2` supports shared lock.
+        // we can take shared lock. `std::fs::File::lock_shared` supports shared lock.
         // However, standard `BufReader` with `File` needs `File` object.
         let file = fs::File::open(&self.file_path).map_err(RupostError::IoError)?;
         file.lock_shared().map_err(RupostError::IoError)?;
@@ -168,7 +167,7 @@ impl HistoryStorage {
 
         // Need compaction. Acquire Exclusive Lock.
         // We use TRUNCATE strategy instead of Rename for better Windows compatibility with locks.
-        file.lock_exclusive().map_err(RupostError::IoError)?;
+        file.lock().map_err(RupostError::IoError)?;
 
         // critical section
         // ... (read-truncate-rewrite)

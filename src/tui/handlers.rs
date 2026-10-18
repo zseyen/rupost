@@ -149,13 +149,13 @@ fn handle_confirm_key(state: &mut AppState, key: KeyEvent) {
 }
 
 async fn run_selected_sidebar_file(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
-    if state.active_sidebar_tab == SidebarTab::Files
-        && !state.visible_file_nodes.is_empty()
-    {
+    if state.active_sidebar_tab == SidebarTab::Files && !state.visible_file_nodes.is_empty() {
         let idx = state.files_state.selected_index;
         if idx < state.visible_file_nodes.len() {
             let node = &state.visible_file_nodes[idx];
-            if !node.is_dir && let Ok(content) = std::fs::read_to_string(&node.abs_path) {
+            if !node.is_dir
+                && let Ok(content) = std::fs::read_to_string(&node.abs_path)
+            {
                 state.editor_text = content;
                 state.editor_file_path = Some(node.abs_path.clone());
                 state.editor_file_mtime = std::fs::metadata(&node.abs_path)

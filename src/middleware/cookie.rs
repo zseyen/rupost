@@ -8,7 +8,6 @@ use crate::http::response::Response;
 use crate::middleware::Middleware;
 use cookie_store::CookieStore;
 use cookie_store::serde::json::{load_all, save_incl_expired_and_nonpersistent};
-use fs2::FileExt;
 use reqwest_cookie_store::CookieStoreMutex;
 use std::fs::{self, File};
 use std::io::BufReader;
@@ -126,7 +125,7 @@ impl CookieMiddleware {
 
         // Open with file lock
         let file = File::create(path)?;
-        file.lock_exclusive()?;
+        file.lock()?;
 
         // Save as JSON
         let store = self.store.lock().unwrap();

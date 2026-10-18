@@ -233,9 +233,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                     .or_else(|_| std::env::var("EDITOR"))
                     .unwrap_or_else(|_| "vim".to_string());
 
-                if let Ok(status) = std::process::Command::new(editor)
-                    .arg(file_path)
-                    .status()
+                if let Ok(status) = std::process::Command::new(editor).arg(file_path).status()
                     && status.success()
                     && let Ok(new_content) = std::fs::read_to_string(file_path)
                 {

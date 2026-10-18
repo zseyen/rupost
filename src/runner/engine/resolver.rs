@@ -89,9 +89,13 @@ impl DependencyResolver {
         Ok(())
     }
 
-    /// 根据扩展名选择解析器解析文件
+    /// 根据扩展名选择解析器解析文件（大小写不敏感，与 `is_supported_file` 的准入判断一致）
     fn parse_file(path: &Path) -> Result<ParsedFile> {
-        let parsed = if path.extension().and_then(|s| s.to_str()) == Some("md") {
+        let is_markdown = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+        let parsed = if is_markdown {
             MarkdownFileParser::parse_file(path)?
         } else {
             HttpFileParser::parse_file(path)?
@@ -105,6 +109,23 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_uppercase_md_routes_to_markdown_parser() {
+        // 回归：准入检查大小写不敏感但解析器路由区分大小写，
+        // CASE.MD 被送进 HTTP 解析器后把 "```http" 当 URL 执行。
+        let dir = tempdir().unwrap();
+        let md_path = dir.path().join("CASE.MD");
+        fs::write(
+            &md_path,
+            "# Doc\n\n```http\nGET https://api.example.com/upper\n```\n",
+        )
+        .unwrap();
+
+        let parsed = DependencyResolver::parse_file(&md_path).unwrap();
+        assert_eq!(parsed.requests.len(), 1);
+        assert_eq!(parsed.requests[0].url, "https://api.example.com/upper");
+    }
 
     #[test]
     fn test_validate_sandbox_ok() {

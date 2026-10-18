@@ -176,19 +176,19 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>,
     }
 
     if condition.starts_with('$') || condition.contains('.') || condition.contains('[') {
-        let operators = ["==", "!=", "contains"];
-        for op in &operators {
-            if let Some(pos) = condition.find(op) {
-                let path_part = condition[..pos].trim();
-                let val_part = condition[pos + op.len()..].trim();
-                let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
-                if !segments.is_empty() {
-                    return (
-                        Some(segments),
-                        Some(val_part.to_string()),
-                        Some(op.to_string()),
-                    );
-                }
+        // 与 @assert 共用最左运算符扫描（引号感知、支持 >= <= > < == != contains）。
+        // 此前仅识别 == != contains 且按列表顺序 find：`$.price >= 100` 会被整串当作
+        // jsonpath key 永远匹配不到，`contains "a==b"` 会在引号内误切。
+        if let Some((pos, op)) = crate::assertion::find_operator(condition) {
+            let path_part = condition[..pos].trim();
+            let val_part = condition[pos + op.len()..].trim();
+            let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
+            if !segments.is_empty() {
+                return (
+                    Some(segments),
+                    Some(val_part.to_string()),
+                    Some(op.to_string()),
+                );
             }
         }
         let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(condition);
@@ -332,6 +332,42 @@ mod tests {
                 captures[0].source,
                 crate::variable::capture::CaptureSource::Body("price".to_string())
             );
+        } else {
+            panic!("Expected Expect action");
+        }
+    }
+
+    #[test]
+    fn test_expect_supports_comparison_operators_and_quoted_values() {
+        // 回归：此前 precompile_jsonpath 只认 == != contains，`$.price >= 100` 被整串
+        // 当作 jsonpath key → 永远 PathNotFound → 静默超时假阴性
+        let actions = WsActionParser::parse_body("EXPECT $.price >= 100").unwrap();
+        if let WsAction::Expect {
+            segments,
+            expected_value,
+            operator,
+            ..
+        } = &actions[0]
+        {
+            assert_eq!(segments.as_ref().unwrap(), &vec!["price".to_string()]);
+            assert_eq!(expected_value.as_deref(), Some("100"));
+            assert_eq!(operator.as_deref(), Some(">="));
+        } else {
+            panic!("Expected Expect action");
+        }
+
+        // 引号内的 == 不再误切（与 @assert 同源缺陷）
+        let actions = WsActionParser::parse_body(r#"EXPECT $.msg contains "a==b""#).unwrap();
+        if let WsAction::Expect {
+            segments,
+            expected_value,
+            operator,
+            ..
+        } = &actions[0]
+        {
+            assert_eq!(segments.as_ref().unwrap(), &vec!["msg".to_string()]);
+            assert_eq!(expected_value.as_deref(), Some("\"a==b\""));
+            assert_eq!(operator.as_deref(), Some("contains"));
         } else {
             panic!("Expected Expect action");
         }

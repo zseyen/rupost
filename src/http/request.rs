@@ -15,6 +15,9 @@ pub struct Request {
     pub headers: Headers,
     pub body: Option<Body>,
     pub query_params: HashMap<String, String>,
+    /// 单请求总时长超时（覆盖 client 级 30s 默认）；流式请求（SSE/WS）不设置，
+    /// 否则 reqwest 的总时长语义会在中途切断本应长连的流。
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl Request {
@@ -25,7 +28,13 @@ impl Request {
             headers: Headers::new(),
             body: None,
             query_params: HashMap::new(),
+            timeout: None,
         })
+    }
+
+    pub fn with_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     fn insert_header(&mut self, key: &str, value: &str) -> Result<()> {

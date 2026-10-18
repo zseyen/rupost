@@ -234,12 +234,22 @@ impl HttpRunner {
                 Ok(test_result)
             }
             Err(e) => {
+                // reqwest 顶层错误只说 "error sending request"，超时原因藏在 source 链里；
+                // 单独识别出来，否则用户看不出是自己的 @timeout 触发的。
+                let message = match &e {
+                    RupostError::HttpError(re) if re.is_timeout() => {
+                        "请求超时 (request timed out)".to_string()
+                    }
+                    _ => {
+                        RupostError::RequestExecutionFailed(e.to_string()).to_user_friendly_string()
+                    }
+                };
                 let mut test_result = TestResult::error(
                     request_number,
                     name,
                     method,
                     url.clone(),
-                    RupostError::RequestExecutionFailed(e.to_string()).to_user_friendly_string(),
+                    message,
                     start.elapsed(),
                 );
                 test_result.request = Some(request_snapshot);

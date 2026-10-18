@@ -23,6 +23,18 @@ impl TryFrom<ParsedRequest> for Request {
             request = add_body(request, body, &parsed.headers)?;
         }
 
+        // 5. @timeout：仅对非流式请求生效。SSE（@sse 或 Accept: text/event-stream）
+        //    与 WebSocket 是长连接，reqwest 的 per-request timeout 是总时长语义，
+        //    套上去会把本应长连的流在中途切断；SSE 有专属 @sse_timeout。
+        let accepts_event_stream = parsed
+            .headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
+        let is_streaming = parsed.metadata.sse || parsed.metadata.websocket || accepts_event_stream;
+        if !is_streaming {
+            request = request.with_timeout(parsed.metadata.timeout);
+        }
+
         Ok(request)
     }
 }
@@ -84,6 +96,52 @@ pub fn to_request(parsed: ParsedRequest) -> Result<Request> {
 mod tests {
     use super::*;
     use crate::parser::ParsedRequest;
+    use std::time::Duration;
+
+    #[test]
+    fn test_timeout_propagates_for_plain_requests() {
+        // 回归：@timeout 此前只被解析、从未应用到 HTTP 请求（client 硬编码 30s）
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com".to_string();
+        parsed.metadata.timeout = Some(Duration::from_millis(500));
+
+        let request: Request = parsed.try_into().unwrap();
+        assert_eq!(request.timeout, Some(Duration::from_millis(500)));
+
+        // 未声明 @timeout 时保持 None（走 client 级默认）
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com".to_string();
+        let request: Request = parsed.try_into().unwrap();
+        assert_eq!(request.timeout, None);
+    }
+
+    #[test]
+    fn test_timeout_exempted_for_streaming_requests() {
+        // reqwest 的 per-request timeout 是总时长语义，套在长连流上会误杀：
+        // @sse / @websocket / Accept: text/event-stream 三种流式信号均豁免
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com/stream".to_string();
+        parsed.metadata.timeout = Some(Duration::from_secs(5));
+        parsed.metadata.sse = true;
+        let request: Request = parsed.try_into().unwrap();
+        assert_eq!(request.timeout, None);
+
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com/ws".to_string();
+        parsed.metadata.timeout = Some(Duration::from_secs(5));
+        parsed.metadata.websocket = true;
+        let request: Request = parsed.try_into().unwrap();
+        assert_eq!(request.timeout, None);
+
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com/events".to_string();
+        parsed.metadata.timeout = Some(Duration::from_secs(5));
+        parsed
+            .headers
+            .push(("Accept".to_string(), "text/event-stream".to_string()));
+        let request: Request = parsed.try_into().unwrap();
+        assert_eq!(request.timeout, None);
+    }
 
     #[test]
     fn test_convert_simple_get() {

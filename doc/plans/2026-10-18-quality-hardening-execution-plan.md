@@ -1,9 +1,21 @@
 # RuPost 质量加固与 Cookie 加固执行方案
 
-> **创建日期**: 2026-10-18（v2，经三路子代理独立审查后修订）
-> **来源**: 三轮审查（代码质量 → 对抗性测试 → Cookie 评估）+ 子代理审查（可行性核查 / 完整性核查 / 风险评审）
-> **状态**: 待执行
-> **验证基线**: 237 单元测试 + 81 集成测试全绿（clippy 完整命令：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk cargo clippy --all-targets`，aws-lc-sys 与 macOS 27 SDK 不兼容，属上游问题）
+> **创建日期**: 2026-10-18（v3，Phase 4 执行前三视角查漏补缺后修订）
+> **来源**: 三轮审查 + 子代理审查 + Phase 4 前自查（可行性核查 / 攻面复查 / 交叉影响面）
+> **进度**: Phase 0-3 已完成（里程碑 B 达成）；Phase 4 待执行
+> **验证基线**: 全量 412 测试 0 失败，clippy 零警告（完整命令：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk cargo clippy --all-targets`，aws-lc-sys 与 macOS 27 SDK 不兼容，属上游问题）
+
+## v3 修订摘要（Phase 4 前查漏补缺）
+
+子代理配额超限，改为三视角自查（实测探针 + 代码验证），发现并纳入：
+
+- **【遗漏-实测】C2 前置验证通过**：chunked 中途断开 reqwest 报 `Some(Err("error decoding response body"))` 且断开前数据完整送达——TcpListener 测试方案落地无障碍
+- **【遗漏-实锤】JSON 报告丢 warnings**：`reporter.rs report_json` 手写字段清单（246–290 行）无 `warnings`——CI 用户全部警告静默丢失 → **新增 C9**
+- **【遗漏-实锤】快照/重放丢 timeout**：`RequestSnapshot`（history/model.rs:31）无 timeout 字段，重放带 `@timeout` 的请求退回 30s 默认 → 归入 **C6 顺带**（快照加字段 + replayer 透传）
+- **【修正】C1 字段清单不全**：缺 `log_path`、`max_bytes`（每事件写日志）；且 `process_event` 内的 `sse_max_events` break 无法跳出外层 loop——改为**返回 bool（达到上限即 true）由调用方 break**
+- **【遗漏-实锤】`--env` 路径注入**：`resolve_cookie_path` 对 env 名无校验，`--env "dev/../prod"` 生成 `ck_dev/../prod.json` 逃逸预期目录（实测确认；低危但与 0600 加固初衷矛盾）→ 归入 **C7**：env 名含 `/`、`\`、`..` 时报错拒绝
+- **【确认】flush() 同步改**：C3 的派发条件修改必须同时落在 `feed()` 与 `flush()` 两处（方案 v2 只写了 feed）
+- **【排除的怀疑点】**：examples 无含 `<`/`>`/`==` 的 contains 断言（无语义翻转存量）；TUI 不读 TestResult 新字段但 assertions 路径未受影响（warnings 盲区已列为独立项 D1）；CI 用 stable toolchain 不受 MSRV 1.89 影响；rupost-ai 不依赖主 crate；`sse_timeout`（框架层中断）与被豁免的 `@timeout` 语义正交不冲突；并行分支本就不落盘（文档化限制，persist_cookies 仅在 Serial 分支调用是正确的）
 
 ## v2 修订摘要（子代理审查成果）
 
@@ -182,7 +194,43 @@
 - 动态变量状态更新：progress_summary / Pending_Features 改为已完成，**注意实现的变量名是 `$random_int`（下划线），文档旧写法 `{{$randomInt}}` 照抄会二次误导**
 - README/guides 补全 7 个断言运算符清单（实际支持 `>= <= > < contains == != exists`）
 
-**提交**: 4.0+4.1 同提交序列、4.2/4.3/4.4/4.5 各 1 个 + docs 1 个 = 6 个
+### C1 SseRunner 事件处理去重（前置重构）
+提取 `SseEventContext`（字段：options 借用、resolved_assertions、headers、status_code、**log_path、max_bytes**、file_writer、capture_warnings、assertion_results、accumulated_body、accumulated_llm_content、context、llm_provider、stream_sender 借用），`process_event(&mut self, event, event_count) -> bool`（返回是否达到 sse_max_events 上限，**由调用方 break 外层 loop**）。两分支各缩为一行。纯行为不变 refactor，全量测试保持全绿证明等价。
+
+### C2 SSE 出错分支 flush 尾帧
+`Some(Err(e))` break 前 `sse_parser.flush()` 并走 `process_event`。
+**测试已验证可行**（探针实测）：裸 TcpListener 发 `Transfer-Encoding: chunked` 响应——完整事件 + 无空行结尾的 `data: tail` 后关闭连接 → reqwest 报 `Some(Err("error decoding response body"))` 且 tail 数据完整送达 parser。断言 tail 事件被捕获/断言到。
+
+### C3 空 data 帧不派发（breaking，WHATWG 对齐）
+**feed() 与 flush() 两处同步改**：仅 `!current_data.is_empty()` 时派发；未派发时只重置 `current_event`，`current_id` 保留（lastEventId 规范语义：跨帧留存，随下次派发带走）。测试：`event: ping\n\n` 不派发；`id: 1\n\n` 不派发且 id 留存；`data:\n\n` 照常派发空串；正常帧不受影响。
+
+### C4 SSE 内存上限
+`buffer` 与 `current_data` 累计字节双 1MB 上限。超限语义（可实现化）：置 `truncated` 标志 + warn；**丢弃后续 `data:` 行直到下一个空行**（事件边界自然复位标志），已累积部分正常派发——避免截断点落在 join("\n") 中间产生畸形 data。
+
+### C5 markdown info string 首 token 匹配
+`lang.split_whitespace().next()` 再比较 `http`/`rest`。
+
+### C6 畸形 JSON 降级发送 + 快照 timeout 透传
+- `Request::try_from_parsed_with_warnings(parsed) -> Result<(Request, Vec<String>)>`，`TryFrom` 委托；http_runner 改用新入口，warnings 挂 `test_result.warnings`。畸形 JSON → `with_text` 原样发送 + 警告；**用户声明的 Content-Type 保留**。调用方全景已核：仅 http_runner.rs:55 与 examples/parse_and_execute.rs（后者只 try_into，不受影响）
+- **（v3 新增）RequestSnapshot 加 `timeout: Option<Duration>`**（serde 默认兼容旧快照），`from_parsed` 记录；replayer 还原 Request 时透传——否则重放带 `@timeout` 的请求静默退回 30s
+
+### C7 死代码删除、env 校验与文档同步
+- 删 `utils/security.rs`（连带 `utils/mod.rs` 的 `pub mod security;`）+ `parser/metadata_types.rs`（孤儿文件）
+- **（v3 新增）`resolve_cookie_path` 校验 env 名**：含 `/`、`\`、空或 `..` 组件时报错拒绝（实测 `--env "dev/../prod"` 会生成逃逸路径）
+- `directory_structure.md` 过期路径修正（engine/protocol/utils 二级化、reporter/scanner 下沉位置，改前 ls 核实）；routing.rs "API Key 扫描"宣称删除
+- `progress_summary.md`/`Pending_Features.md`：动态变量已完成 + 实名 `$uuid`/`$timestamp`/`$random_int`
+- README：7 运算符清单、`@timeout` 非流式语义、SSE breaking 说明；CHANGELOG 4.2 移入 Changed
+
+### C9（v3 新增）JSON 报告输出 warnings
+`report_json` 的手写字段清单加 `"warnings": r.warnings`——CI/jq 用户否则拿不到任何警告。归入 C7 提交或独立小提交。
+
+### C8 战役归档（Stage 6）
+progress_summary.md 战役条目、checkpoint.md、方案状态改"已完成"。
+
+### 独立项 D1（不进 Phase 4，后续排期）
+- TUI 渲染 `TestResult.warnings`（当前 TUI 用户看不到任何警告；动 tui/handlers.rs:388 的状态传递 + ui/response.rs 渲染）
+- `ws/client.rs`、`ws/frame.rs`、`action_parser.rs` 的 `Result<_, String>` 残留（3.5 只改了 session.rs；client 的 String 在内部链路消费，改动收益低）
+- 并行模式 + `--cookie-file` 的行为已文档化（worker 均为临时仓库），若用户反馈强烈再考虑主 executor 终态落盘
 
 ---
 

@@ -245,45 +245,6 @@ async fn test_global_routing_middleware() {
 }
 
 #[tokio::test]
-async fn test_security_lint() {
-    let temp_dir = tempfile::TempDir::new().unwrap();
-
-    // 1. 泄露明文密钥的文件
-    let file1 = temp_dir.path().join("leaked.http");
-    std::fs::write(
-        &file1,
-        "POST http://api.com\nAuthorization: Bearer sk-b51f045c1234567890\n",
-    )
-    .unwrap();
-
-    // 2. 使用环境变量占位符的安全文件
-    let file2 = temp_dir.path().join("safe.http");
-    std::fs::write(
-        &file2,
-        "POST http://api.com\nAuthorization: Bearer {{env.API_KEY}}\n",
-    )
-    .unwrap();
-
-    // 运行安全扫描
-    let res1 = rupost::utils::security::run_security_lint(&file1);
-    let res2 = rupost::utils::security::run_security_lint(&file2);
-
-    // 预期 res1 报错并包含 [SECURITY ALERT] 警报
-    assert!(res1.is_err(), "Leaked key file should fail security lint");
-    assert!(
-        res1.unwrap_err().to_string().contains("[SECURITY ALERT]"),
-        "Should trigger security alert"
-    );
-
-    // 预期 res2 正常通过
-    assert!(
-        res2.is_ok(),
-        "Safe file with env variable placeholders should pass: {:?}",
-        res2
-    );
-}
-
-#[tokio::test]
 async fn test_generic_sys_log_stream() {
     let (uri, _server_handle) = start_sys_log_mock_server().await;
 

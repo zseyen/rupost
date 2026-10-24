@@ -274,6 +274,7 @@ impl TestReporter {
                     "error": r.error,
                     "skipped": r.skipped,
                     "assertions": assertions_json,
+                    "warnings": r.warnings,
                     "diagnose_report": r.diagnose_report,
                 }));
             }
@@ -343,5 +344,40 @@ impl TestReporter {
 impl Default for TestReporter {
     fn default() -> Self {
         Self::new(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::TestResult;
+    use std::time::Duration;
+
+    #[test]
+    fn test_json_report_includes_warnings() {
+        // 回归：JSON 报告此前手写字段清单漏掉 warnings——CI 用户（jq 解析）
+        // 拿不到任何捕获失败/未定义变量警告
+        let mut result = TestResult::error(
+            1,
+            Some("t".to_string()),
+            "GET".to_string(),
+            "http://example.com".to_string(),
+            "boom".to_string(),
+            Duration::from_millis(1),
+        );
+        result
+            .warnings
+            .push("变量 {{x}} 未定义，已按字面量发送".to_string());
+
+        let results = vec![(std::path::PathBuf::from("a.http"), vec![result])];
+        let mut out = Vec::new();
+        TestReporter::report_json(&results, &mut out).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("\"warnings\""),
+            "JSON 报告应包含 warnings 字段"
+        );
+        assert!(text.contains("未定义"), "警告内容应完整输出: {text}");
     }
 }

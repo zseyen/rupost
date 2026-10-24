@@ -211,3 +211,57 @@ async fn inline_request_cookie_file_is_env_isolated_and_0600() {
         assert_eq!(mode, 0o600, "cookie 文件权限必须为 0600");
     }
 }
+
+/// 域：streaming_protocol
+///
+/// 原复现（探针实测）：chunked SSE 响应在发出无空行结尾的 `data: tail` 后直接断开，
+/// reqwest 报 `Err("error decoding response body")`；修复前 Err 分支直接 break，
+/// parser 内尚未完结的尾帧被静默丢弃。wiremock 无法模拟中途断流，故用裸 TcpListener。
+#[tokio::test]
+async fn sse_stream_error_still_flushes_pending_tail_event() {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut conn, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = conn.read(&mut buf);
+        let body = b"id: 1\ndata: hello\n\ndata: tail";
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n",
+            body.len()
+        );
+        conn.write_all(head.as_bytes()).unwrap();
+        conn.write_all(body).unwrap();
+        conn.write_all(b"\r\n").unwrap();
+        conn.flush().unwrap();
+        // 不发送终止 chunk（0\r\n\r\n）直接断开 → 客户端进入 Some(Err) 分支
+        drop(conn);
+    });
+
+    let content = format!("@sse\nGET http://{}/stream\n", addr);
+    let parsed = HttpFileParser::parse_content(&content).unwrap();
+    let executor = TestExecutor::new();
+    let mut ctx = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut ctx).await.unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].success,
+        "断流不应判定为请求失败: {:?}",
+        results[0].error
+    );
+    // process_event 把每个事件的 data 累积进最终响应 body：尾帧被 flush 处理过的
+    // 直接证据就是 body 含 "tail"
+    let body = &results[0]
+        .response
+        .as_ref()
+        .expect("should have response")
+        .body;
+    assert!(body.contains("hello"), "首个完整事件应已处理: {body:?}");
+    assert!(
+        body.contains("tail"),
+        "传输错误后的尾帧必须被 flush 并处理: {body:?}"
+    );
+}

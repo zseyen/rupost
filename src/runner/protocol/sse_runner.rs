@@ -278,6 +278,13 @@ impl SseRunner {
                             }
                             Some(Err(e)) => {
                                 error!("Error reading SSE chunk: {}", e);
+                                // 传输层出错（如服务端在 `data: tail` 之后直接断开）时，
+                                // parser 里往往还留着一帧未完结的事件——必须 flush 出来
+                                // 照常处理，此前直接 break 导致尾帧静默丢失
+                                if let Some(event) = sse_parser.flush() {
+                                    event_count += 1;
+                                    evt.process_event(event, event_count).await;
+                                }
                                 break;
                             }
                             None => {

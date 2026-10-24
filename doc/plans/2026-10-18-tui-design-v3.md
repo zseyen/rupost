@@ -1,6 +1,6 @@
 # TUI 设计 v3.1：架构还债与迭代规划（含对抗性审查修订）
 
-- **状态**：待评审（Stage 0/1 产出；v3.1 完成对抗性审查修订，v3.2 完成项目最新实践对照审查——两轮记录均见第八节）
+- **状态**：待评审（Stage 0/1 产出；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏——三轮记录见第八、九节）
 - **日期**：2026-10-18
 - **关联文档**：`doc/plans/tui_iteration_v2.md`（已交付，未回写进度）、`doc/tui/implementation_plan.md`、`doc/tui/keybindings.md`、`doc/tui/plugin_interface.md`、`doc/plans/progress_summary.md`、`doc/dev/development_workflow.md`
 - **原则**：Clean Architecture / DRY / TDD（红-绿-重构）/ YAGNI
@@ -97,10 +97,13 @@
 
 ```rust
 /// TUI 写路径端口（依赖倒置：Core 只见抽象）
-/// 返回 io::Result 而非 bool，让权限/磁盘错误可浮出到状态区（修 A8）
+/// v3.3 修订（G1/G2）：exists()+write() 存在 TOCTOU 竞态，canonicalize 无法作用于
+/// 尚未创建的目标文件——改为原子 create_exclusive 与"规范化父目录"两个原语。
 pub trait FileRepository: Send + Sync {
-    fn write_file(&self, path: &Path, content: &str) -> std::io::Result<()>;
-    fn try_exists(&self, path: &Path) -> std::io::Result<bool>;
+    /// 原子创建并写入；文件已存在时返回 io::ErrorKind::AlreadyExists（不覆盖），
+    /// 权限/磁盘错误原样浮出（修 A8）
+    fn create_exclusive(&self, path: &Path, content: &str) -> std::io::Result<()>;
+    /// 规范化已存在路径（workspace_root、已存在的父目录）
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
 }
 pub struct FsRepository;                    // Adapter：真实文件系统
@@ -294,3 +297,246 @@ src/tui/
 | F17 | "先还债后功能"顺序与加固计划 Phase 4"前置 SseRunner 去重避免复制第三份重复块"同原则 | 通过 | Phase 1 → Phase 3 顺序保持 |
 
 第二轮审查同样未推翻任何主干决策；四项修订均已回写正文。
+
+---
+
+## 九、执行细化与示例代码（v3.3）
+
+> 以下代码均为**示意实现**（贴合现有 API 核实结果），落地时以红测试为准。
+
+### 9.1 Phase 1 提交 1：ports.rs（完整骨架）
+
+```rust
+// src/tui/ports.rs
+use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+pub trait FileRepository: Send + Sync {
+    fn create_exclusive(&self, path: &Path, content: &str) -> std::io::Result<()>;
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+}
+
+/// Adapter：真实文件系统
+pub struct FsRepository;
+
+impl FileRepository for FsRepository {
+    fn create_exclusive(&self, path: &Path, content: &str) -> std::io::Result<()> {
+        let mut f = OpenOptions::new().write(true).create_new(true).open(path)?;
+        f.write_all(content.as_bytes())
+    }
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+}
+
+/// 测试替身：内存文件系统
+#[derive(Default)]
+pub struct InMemoryRepository(Mutex<HashMap<PathBuf, String>>);
+
+impl FileRepository for InMemoryRepository {
+    fn create_exclusive(&self, path: &Path, content: &str) -> std::io::Result<()> {
+        let mut map = self.0.lock().unwrap();
+        if map.contains_key(path) {
+            return Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists));
+        }
+        map.insert(path.to_path_buf(), content.to_string());
+        Ok(())
+    }
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        Ok(path.to_path_buf()) // 身份映射：不做 symlink 解析（已知局限，trait 文档注明）
+    }
+}
+
+pub type SharedRepo = Arc<dyn FileRepository>;
+```
+
+AppState 装配（39 个冒烟测试零改动）：
+
+```rust
+pub fn new() -> Self { Self::with_ports(Arc::new(FsRepository)) }
+pub fn with_ports(repo: SharedRepo) -> Self { /* ... repo 字段初始化 ... */ }
+```
+
+### 9.2 提交 2：纯函数 + 安全三防线
+
+文件名推导与截断（纯函数，表格驱动测试的直接对象）：
+
+```rust
+// src/tui/state/files.rs
+pub struct DerivedTest { pub filename: String, pub content: String }
+
+/// 输入 → (文件名, 模板内容)。URL 判定经 http::url::normalize_input_url。
+pub fn derive_test_file(input: &str) -> DerivedTest {
+    match normalize_input_url(input, "https") {
+        NormalizedInput::Absolute(u) | NormalizedInput::HostName(u)
+        | NormalizedInput::LocalhostShorthand(u) => DerivedTest {
+            filename: format!("{}.http", sanitize(&u)),
+            content: format!("GET {u}\n"),
+        },
+        NormalizedInput::NotUrl(name) => DerivedTest {
+            filename: ensure_ext(name),
+            content: "GET http://httpbingo.org/get\n".into(), // 债务：硬编码模板已登记
+        },
+    }
+}
+
+/// sanitize：URL → 合法文件名；超 80 字符截断并追加 8 位短哈希（修 A9）
+fn sanitize(url: &str) -> String { /* map 非字母数字 → '_'；超限截断 + hash 后缀 */ }
+```
+
+jail 判定复用 resolver 提取的共用函数；目标文件尚不存在，故**规范化父目录再 join**（G2）：
+
+```rust
+// src/utils/path_guard.rs（从 resolver.rs:93 提取，两处共用）
+pub fn is_within_roots(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|r| path.starts_with(r))
+}
+
+// files.rs 内：创建前的围栏检查（修 A7）
+fn resolve_target_in_jail(repo: &dyn FileRepository, dir: &Path, filename: &str,
+                          root: &Path) -> Result<PathBuf, String> {
+    let canon_root = repo.canonicalize(root).map_err(|e| e.to_string())?;
+    let canon_dir  = repo.canonicalize(dir).map_err(|e| e.to_string())?;
+    let target = canon_dir.join(filename);
+    if !is_within_roots(&target, &[canon_root]) {
+        return Err("path must stay inside the workspace".into());
+    }
+    Ok(target)
+}
+```
+
+改写后的 `create_test_from_input` 骨架（错误浮出修 A8）：
+
+```rust
+pub fn create_test_from_input(&mut self) {
+    let Some(input) = self.take_quick_input() else { return };
+    let derived = derive_test_file(&input);
+    let dir = self.selected_target_dir();          // 选中目录/父目录/workspace_root
+    match resolve_target_in_jail(self.repo.as_ref(), &dir, &derived.filename, &self.workspace_root)
+        .and_then(|p| self.repo.create_exclusive(&p, &derived.content).map_err(|e| (p, e)))
+    {
+        Ok(()) => { self.last_error = None; /* 重建树 + 光标定位（现有逻辑保留） */ }
+        Err((p, e)) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            self.last_error = None;                // 已存在不覆盖，仍定位（行为锁定）
+            /* 光标定位到 p */
+        }
+        Err((_, e)) => self.last_error = Some(format!("create failed: {e}")),
+    }
+}
+```
+
+### 9.3 提交 3：URL 归一化（http/url.rs）
+
+```rust
+// src/http/url.rs 新增
+pub enum NormalizedInput { Absolute(String), LocalhostShorthand(String),
+                           HostName(String), NotUrl(String) }
+
+pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput {
+    if has_scheme_prefix(input) {
+        return NormalizedInput::Absolute(input.to_string());
+    }
+    if input.starts_with(':') {
+        return NormalizedInput::LocalhostShorthand( // 复用 resolve_final_url 的缩写语义
+            resolve_final_url(input, &VariableContext::new(), "http", Some("cli"), None)
+                .unwrap_or_else(|_| input.to_string()));
+    }
+    let looks_like_host = input.split('/').next().unwrap_or("").contains('.')
+        && !input.contains(' ') && !input.ends_with(".http") && !input.ends_with(".md");
+    if looks_like_host {
+        NormalizedInput::HostName(format!("{default_scheme}://{input}"))
+    } else {
+        NormalizedInput::NotUrl(input.to_string())
+    }
+}
+```
+
+决策表（第四节）逐行落为 `http/url.rs::tests` 的表格驱动测试；`v1.2/users` 由 NotUrl 分支自然修正。
+
+### 9.4 提交 6：quick input 换 ratatui-textarea（修 A6/G3/G4）
+
+用 `InputMode` 枚举消灭两个互斥 bool（G3），textarea 自带多字节正确的编辑与光标：
+
+```rust
+// state.rs
+pub enum InputMode { None, QuickCreate(TextArea<'static>), Filter(TextArea<'static>) }
+
+// handlers/quick_input.rs —— 替换手写 Backspace/Char 处理
+pub fn handle_input(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => *state.input_mode() = InputMode::None,
+        KeyCode::Enter if matches!(state.input_mode(), InputMode::QuickCreate(_)) => {
+            let value = state.quick_input_text();
+            *state.input_mode() = InputMode::None;
+            state.set_quick_input_value(value);   // 兼容旧字段，后续 create_test_from_input 用
+            state.create_test_from_input();
+        }
+        _ => {
+            if let InputMode::QuickCreate(ta) | InputMode::Filter(ta) = state.input_mode_mut() {
+                ta.input(crossterm::event::Event::Key(key));
+            }
+        }
+    }
+}
+
+// ui/mod.rs —— 假光标 "█"（mod.rs:155）删除，改真实光标
+if let InputMode::QuickCreate(ta) = state.input_mode() {
+    let popup = centered_rect(60, 3, main_area);
+    frame.render_widget(ta, popup);
+    let (row, col) = ta.cursor();
+    frame.set_cursor_position((popup.x + col as u16 + 1, popup.y + 1));
+}
+```
+
+### 9.5 Phase 3 P1：过滤搜索（复用既有投影机制，G7）
+
+`visible_file_nodes` 本就是 `rebuild_visible_tree_nodes()` 重建的投影——过滤即"带谓词重建"，**不引入第二份索引**，从根上规避 selected_index 双重寻址：
+
+```rust
+// state/files.rs
+pub fn set_filter(&mut self, q: &str) {
+    self.filter_query = q.to_lowercase();
+    self.rebuild_visible_tree_nodes();  // 内部改为：rel_path.to_lowercase().contains(&self.filter_query)
+    self.files_state.selected_index = 0; // 过滤变化重置选中（行为写入特征测试）
+}
+```
+
+### 9.6 Phase 3 P2/P3：主题与设置
+
+```rust
+// src/tui/theme.rs —— 先盘点 ui/* 中全部 Color:: 硬编码（G8），收敛为两套调色板
+pub struct Theme { pub border: Color, pub accent: Color, pub ok: Color, pub err: Color }
+pub const DARK: Theme = Theme { border: Color::Rgb(63,63,63),  /* ... */ .. };
+pub const LIGHT: Theme = Theme { border: Color::Gray,          /* ... */ .. };
+
+// src/tui/settings.rs —— ~/.rupost/tui.toml，serde default 兼容缺失文件
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct TuiSettings { pub theme: String }   // "dark" | "light"
+impl TuiSettings {
+    pub fn load() -> Self { /* 读失败(含写保护 home) → Default + last_error 提示（G9） */ }
+    pub fn save(&self) -> std::io::Result<()> { /* ... */ }
+}
+```
+
+---
+
+## 十、第三轮查漏（v3.3 新发现）
+
+| # | 缺口 | 等级 | 处置 |
+|---|------|------|------|
+| G1 | **TOCTOU 竞态**：`exists()` 检查与 `write()` 之间文件可能被并发创建，原设计的 `write_file`+`try_exists` 两原语组合不原子 | 设计缺陷 | 端口 API 改为 `create_exclusive`（`OpenOptions::create_new`，内核级原子），AlreadyExists 映射为"不覆盖 + 仍定位"（已回写决策 2） |
+| G2 | **canonicalize 无法作用于不存在的目标文件**：新建文件的围栏检查若直接 canonicalize 目标路径必然 Err | 设计缺陷 | 检查改为 canonicalize 已存在的父目录 + join 文件名（9.2 示例） |
+| G3 | 快速输入与未来过滤输入是**互斥模态**，两个独立 bool 会出现同时为真的非法状态 | 设计缺陷 | `InputMode` 枚举建模（9.4），旧 `show_quick_input` 字段过渡期保留兼容渲染 |
+| G4 | 现快速输入用假光标 `█`（`ui/mod.rs:155`），换 textarea 后需 `frame.set_cursor_position` 真实光标 | 实现细节 | 9.4 示例；app.rs:271 的 `.show_cursor()` 已确认无需改 |
+| G5 | `?` 帮助面板与 keybindings.md 均未列 `n`/`/`/`,` 新键 | 文档缺口 | Phase 2 文档对齐 + ui 帮助文本同步更新（已并入 Phase 2 验收） |
+| G6 | 文件写入发生在 UI 线程（同步 IO），慢磁盘会短暂卡顿渲染 | 已接受的取舍 | 单个小文件、频次极低，YAGNI 不上 spawn_blocking；此处显式记录 |
+| G7 | 过滤后 `selected_index` 若指向两套列表会产生寻址错乱 | 实现陷阱 | 复用"重建投影"机制不引入第二索引；过滤变化重置选中并写特征测试（9.5） |
+| G8 | ui/* 四个文件散布 `Color::` 硬编码，主题化需先盘点 | 工作量风险 | P2 第一件事：盘点清单进 PR 描述，收敛为 Theme 常量 |
+| G9 | `~/.rupost/tui.toml` 在写保护 home 下保存失败会静默 | 健壮性 | 设置读写失败同样走 `last_error` 浮出（9.6） |
+| G10 | 输入 `tests/auth.http` 这类**含子目录的相对文件名**：jail 允许（仍在工作区内），但父目录缺失时写入失败 | 行为决策 | 不自动 mkdir（用户输入即意图）；失败经 A8 浮出，决策表补一行特征测试 |
+
+三轮审查累计 F1–F17、G1–G10，主干决策（渐进重构、端口方向、模块边界、TDD 阶段）均未被推翻。

@@ -20,9 +20,8 @@ Extracted from `next_phase_plan.md.resolved` as of 2026-01-24，已根据实际�
 - 基于 `handlebars-rust` / `tera` 对 `BatchExecutor` JSON 结果渲染单页 HTML
 - 用于 Jenkins / GitHub Pages / 团队展示
 
-### 2. 动态变量
-- Built-in: `{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`
-- 新增 `DynamicVariableProvider` trait + 注册到 `VariableResolver`
+### ~~2. 动态变量~~ 已实现
+- 已内置于 `src/variable/resolver.rs`：`$uuid` / `$timestamp` / `$random_int`（2026-10 勘误：旧文档的 `{{$randomInt}}` 写法有误，实现是下划线风格）
 
 ### 3. JUnit XML 报告
 - `--format junit` 输出

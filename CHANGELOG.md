@@ -14,18 +14,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - Cookie files are now written with `0600` permissions (they hold session credentials; previously `0644` via umask) and saved with a lock-safe sequence: truncation happens under the file lock and buffered data is flushed before unlock, eliminating a window where a concurrent reader could see an empty or half-written file.
 - Cookie persistence granularity moved from per-response to per-test-file completion in serial batch runs — crash-loss window widens from one request to one file. `after_response` no longer writes; parallel mode has never persisted `--cookie-file` state (workers use ephemeral stores). Every response no longer triggers a synchronous full-file rewrite.
 - Inline (curl/httpie-style) requests now resolve `--cookie-file` through `--env` (`cookies_dev.json`), matching the test-suite path; a new global `--env` flag was added.
+- **Breaking**: SSE events with no `data:` line are no longer dispatched (WHATWG conformance). Previously `event: ping` heartbeats produced empty events and counted toward `sse_max_events`. On such frames the event type resets; the id (lastEventId) persists and travels with the next dispatched event.
+- `Content-Type: application/json` bodies that are not valid JSON are now sent as-is with a visible warning instead of being rejected locally — a test tool must be able to deliver malformed payloads to verify a server's 400/422 handling. The user-declared Content-Type is preserved.
+- HTTP snapshots now record `@timeout` and replay honors it (previously replays silently fell back to the client-wide 30s cap); the `.http` generator re-emits the directive. Old snapshots without the field replay as before.
+- Assertions are now evaluated against the leftmost operator with quote awareness, so `contains "<b>x</b>"` style assertions parse exactly as written (shared implementation with WS `EXPECT`).
+- `--env` names containing path separators or `..` are rejected — they would write cookie files outside the expected directory.
 
 ### Fixed
 
 - Non-standard HTTP status codes (600–999) are accepted and reported as failed test results instead of panicking.
 - Assertions whose expected value is a lone quote character (e.g. `@assert body contains "<"`) no longer panic.
 - Invalid HTTP header names (e.g. containing spaces) produce a failed test result instead of panicking.
-- Assertion operators are now located at the leftmost position with quote awareness — `@assert body.path contains "<b>x</b>"` is parsed as written instead of being mis-split on `<`; WS `EXPECT` conditions additionally support `>=`, `<=`, `>`, `<` (previously silently never matched).
 - Relative URLs whose query string contains `://` (e.g. OAuth callback params) are joined against `base_url` again instead of being treated as absolute.
 - Explicitly passed test files outside the current working directory run instead of being rejected as "safety violation"; uppercase `.MD` files route to the Markdown parser.
 - Request timeouts produce a clear "请求超时 (request timed out)" error instead of a generic send failure.
+- SSE streams that error mid-flight now flush and process the pending tail event (e.g. a `data: tail` line followed by an abrupt disconnect) instead of silently dropping it.
+- The SSE parser's line buffer and per-event data accumulation are capped at 1 MB each (warn + truncate, reset at event boundaries) — hostile streams could previously grow both without bound.
+- Markdown code fences with info strings like ```` ```http title="demo" ```` are recognized (language matched by first token).
+- The JSON report (`--report json`) now includes the per-request `warnings` field — CI consumers previously lost all capture/unresolved-variable warnings.
 - The `BaseUrlNotConfigured` suggestion now points to `--var` instead of the non-existent `-v` variable flag.
 
-### Planned (hardening campaign, see `doc/plans/2026-10-18-quality-hardening-execution-plan.md`)
+### Removed
 
-- **Breaking**: SSE events with no `data:` line will no longer be dispatched (WHATWG conformance); `event:` field resets, `id` (lastEventId) persists.
+- Dead code: the never-invoked `run_security_lint` utility and an orphaned `metadata_types.rs` module.

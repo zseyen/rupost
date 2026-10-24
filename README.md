@@ -102,6 +102,10 @@ Authorization: Bearer {{token}}
 @capture user_id from body.id
 ```
 
+**断言运算符**：`==`、`!=`、`contains`、`>`、`>=`、`<`、`<=`、`exists`（目标支持 `status`、`headers.*`、`body.<jsonpath>`、`response.time`）。
+**动态变量**：`$uuid`、`$timestamp`、`$random_int` 可直接内插（如 `X-Request-Id: {{$uuid}}`）。
+**超时**：`@timeout 500ms`（或 `1s`/`2m`）对非流式请求生效；SSE 用 `@sse_timeout`、WebSocket 握手用 `@timeout`。
+
 ### 2. `.md` 文件格式
 
 可以直接在 Markdown 文档中书写测试代码块：

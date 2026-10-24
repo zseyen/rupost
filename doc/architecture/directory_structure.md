@@ -127,14 +127,16 @@ graph TD
 
 *   #### [src/runner/](file:///Users/zsyzzx/project/rust/rupost/src/runner)（生命周期与批量调度层）
     *   [executor.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/executor.rs)：单用例的核心执行器（协调变量渲染、中间件链拦截、HTTP 请求发出、断言求值和变量捕获这 5 大主干流程）。
-    *   [batch.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/batch.rs)：多测试用例文件的批量顺序（串行）运行调度器。
-    *   [parallel.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/parallel.rs)：批量并行（并发）执行引擎。管理 `JoinSet` 协程池，并在父子依赖用例间执行多线程安全的会话状态与 Cookie 字段单向克隆（State Cloning）。
+    *   [batch.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/batch.rs)：多测试用例文件的批量顺序（串行）运行调度器。
+    *   [parallel.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/parallel.rs)：批量并行（并发）执行引擎。管理 `JoinSet` 协程池，并在父子依赖用例间执行多线程安全的会话状态与 Cookie 字段单向克隆（State Cloning）。
     *   [resolver.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/resolver.rs)：依赖补偿加载器。扫描测试文件，自动解析并递归补全它们缺失的前置 `depends-on` 用例；对递归解析出的依赖做"依赖路径合理性校验"（必须落在用户输入路径的目录之下，防止 `@depends-on ../../..` 式越界引用）。用户显式传入的路径完全信任。注意该校验不是安全边界（对网络访问零限制）。
-    *   [workflow.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/workflow.rs)：将测试文件集映射为有向无环图 (DAG)，通过 Kahn 拓扑排序进行防成环自检，输出最终的拓扑执行序列。
-    *   [scanner.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/scanner.rs)：目录文件遍历器。递归扫描测试目录，过滤非 `.http`/`.md` 后缀文件，并自动规避 `.git/`、`.rupost/`、`target/` 等被忽略路径。
-    *   [path.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/path.rs)：路径工具（受支持文件类型判断、`@depends-on` 相对路径解析为 canonical 绝对路径、展示用相对路径格式化）。
-    *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/reporter.rs)：将运行结果整理成 CLI 终端彩色摘要报告或输出标准的 JSON 结构化报告。
-    *   [file_sync.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/file_sync.rs)：为大模型流数据提供非阻塞的文件物理增量追加写入器 (`@stream_to`)。
+    *   [workflow.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/workflow.rs)：将测试文件集映射为有向无环图 (DAG)，通过 Kahn 拓扑排序进行防成环自检，输出最终的拓扑执行序列。
+    *   [scanner.rs](file:///Users/zsyzzx/project/rust/rupost/src/parser/scanner.rs)：目录文件遍历器。递归扫描测试目录，过滤非 `.http`/`.md` 后缀文件，并自动规避 `.git/`、`.rupost/`、`target/` 等被忽略路径。
+    *   [path.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/utils/path.rs)：路径工具（受支持文件类型判断、`@depends-on` 相对路径解析为 canonical 绝对路径、展示用相对路径格式化）。
+    *   [replayer.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/replayer.rs)：快照重放执行器。按录制的 HTTP 交互原样重放（`--target` 自动改写 Host/Port），透传快照中记录的 `@timeout` 语义。
+    *   二级子目录划分：`src/runner/engine/`（批量/并行/拓扑/依赖解析/重放）、`src/runner/protocol/`（http/sse/ws 三个协议执行器）、`src/runner/utils/`（file_sync/path 等），由 `src/runner/mod.rs` 桥接重导出。
+    *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)：将运行结果整理成 CLI 终端彩色摘要报告或输出标准的 JSON 结构化报告。
+    *   [file_sync.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/utils/file_sync.rs)：为大模型流数据提供非阻塞的文件物理增量追加写入器 (`@stream_to`)。
     *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs)：执行结果相关的数据结构（`TestResult`、`BatchResult`）。
 
 *   #### [src/http/](file:///Users/zsyzzx/project/rust/rupost/src/http)（底层网络适配与大模型网关层）
@@ -146,13 +148,14 @@ graph TD
     *   [stream.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/stream.rs)：流式数据（Server-Sent Events 与大模型流式 JSON 帧）解析捕获与事件流提取分发。
     *   [llm_adapter.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/llm_adapter.rs)：对接 `rupost-ai` 的客户端适配类，处理通用大模型协议的转换。
     *   [timing.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/timing.rs)：高精度耗时测量辅助结构。
+    *   [url.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/url.rs)：URL 智能解析与分层拼接（绝对/相对判定、`:` 端口缩写、CLI 独立主机协议补全、base_url/base_path 拼接）。
     *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/types.rs)：底层网络协议定义与大模型适配协议。
     *   [mock.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/mock.rs)：在测试用例里适配大模型 Mock 所用的网络抽象。
 
 *   #### [src/middleware/](file:///Users/zsyzzx/project/rust/rupost/src/middleware)（拦截中间件链）
     *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/middleware/mod.rs)：定义中间件 Trait `Middleware`（包含 `before_request` 和 `after_response` 生命回调），维护中间件链的串联调度。
     *   [cookie.rs](file:///Users/zsyzzx/project/rust/rupost/src/middleware/cookie.rs)：Cookie 管理中间件。负责在请求前根据域名注入有效 Cookie，在请求后将 `Set-Cookie` 字段更新至会话存储中。
-    *   [routing.rs](file:///Users/zsyzzx/project/rust/rupost/src/middleware/routing.rs)：Mock 拦截与路由重定向中间件。静态安全扫描 API Key，并在需要大模型 Mock 时自动重定向请求的 Host 为本地 Mock 服务。
+    *   [routing.rs](file:///Users/zsyzzx/project/rust/rupost/src/middleware/routing.rs)：Mock 拦截与路由重定向中间件。在需要大模型 Mock 时自动重定向请求的 Host 为本地 Mock 服务。
 
 *   #### [src/mock/](file:///Users/zsyzzx/project/rust/rupost/src/mock)（本地 Mock 匹配引擎）
     *   [compiler.rs](file:///Users/zsyzzx/project/rust/rupost/src/mock/compiler.rs)：Mock 编译器。将用例文件中的 `@mock-when` 等断言元数据，编译解析成内存匹配变体 `MockVariant`。

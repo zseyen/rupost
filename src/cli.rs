@@ -270,7 +270,7 @@ impl CliRunner {
             let resolved = rupost::middleware::resolve_cookie_path(
                 std::path::PathBuf::from(path),
                 env.as_deref(),
-            );
+            )?;
             TestExecutor::with_cookies(resolved)?
         } else {
             TestExecutor::with_ephemeral_cookies()

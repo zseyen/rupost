@@ -71,7 +71,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
     let mut executor = if options.no_cookies {
         TestExecutor::new()
     } else if let Some(cookie_path) = &options.cookie_file {
-        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref());
+        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref())?;
         TestExecutor::with_cookies(resolved)?
     } else {
         // 默认为临时会话（运行内共享、进程退出即失），与 Postman 等的"默认持久化"

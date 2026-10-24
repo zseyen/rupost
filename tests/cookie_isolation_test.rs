@@ -10,16 +10,25 @@ fn test_cookie_filename_resolution_by_env() {
     let base = PathBuf::from("/path/to/cookies.json");
 
     // 1. 无环境名称，保持原样
-    let path_no_env = resolve_cookie_path(base.clone(), None);
+    let path_no_env = resolve_cookie_path(base.clone(), None).unwrap();
     assert_eq!(path_no_env, base);
 
     // 2. dev 环境，拼入环境后缀
-    let path_dev = resolve_cookie_path(base.clone(), Some("dev"));
+    let path_dev = resolve_cookie_path(base.clone(), Some("dev")).unwrap();
     assert_eq!(path_dev, PathBuf::from("/path/to/cookies_dev.json"));
 
     // 3. prod 环境，拼入环境后缀
-    let path_prod = resolve_cookie_path(base.clone(), Some("prod"));
+    let path_prod = resolve_cookie_path(base.clone(), Some("prod")).unwrap();
     assert_eq!(path_prod, PathBuf::from("/path/to/cookies_prod.json"));
+
+    // 4. 回归：env 名含路径分隔符或 .. 会把 cookie 文件写去预期目录之外，必须拒绝
+    for evil in ["../evil", "dev/../prod", "", "a/b", "a\\b", "."] {
+        let err = resolve_cookie_path(base.clone(), Some(evil)).unwrap_err();
+        assert!(
+            err.to_string().contains("非法的 --env 名称"),
+            "{evil}: {err}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -30,7 +39,7 @@ async fn test_cookie_physical_isolation_on_disk() {
     let base_cookie_file = dir.path().join("cookies.json");
 
     // 模拟运行 dev 环境下的请求并保存
-    let dev_resolved_path = resolve_cookie_path(base_cookie_file.clone(), Some("dev"));
+    let dev_resolved_path = resolve_cookie_path(base_cookie_file.clone(), Some("dev")).unwrap();
     let dev_mw = CookieMiddleware::new_with_persistence(dev_resolved_path.clone()).unwrap();
     {
         let store = dev_mw.cookie_store();
@@ -48,7 +57,7 @@ async fn test_cookie_physical_isolation_on_disk() {
     dev_mw.save().unwrap();
 
     // 模拟运行 prod 环境下的请求并保存
-    let prod_resolved_path = resolve_cookie_path(base_cookie_file.clone(), Some("prod"));
+    let prod_resolved_path = resolve_cookie_path(base_cookie_file.clone(), Some("prod")).unwrap();
     let prod_mw = CookieMiddleware::new_with_persistence(prod_resolved_path.clone()).unwrap();
     {
         let store = prod_mw.cookie_store();

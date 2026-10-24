@@ -14,22 +14,38 @@ use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// 根据环境名自动重构 Cookie 文件名，实现环境间隔离
-pub fn resolve_cookie_path(base_path: PathBuf, env_name: Option<&str>) -> PathBuf {
-    if let Some(env) = env_name {
-        let parent = base_path.parent().unwrap_or_else(|| Path::new(""));
-        let file_stem = base_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("cookies");
-        let extension = base_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("json");
-        parent.join(format!("{}_{}.{}", file_stem, env, extension))
-    } else {
-        base_path
+/// 根据环境名自动重构 Cookie 文件名，实现环境间隔离。
+///
+/// env 名会直接拼进文件名，因此必须校验：为空、含路径分隔符或 `..` 时会把
+/// cookie 文件写去预期目录之外（实测 `--env "dev/../prod"` 会生成逃逸路径），
+/// 拒绝而不是静默逃逸。
+pub fn resolve_cookie_path(base_path: PathBuf, env_name: Option<&str>) -> Result<PathBuf> {
+    let Some(env) = env_name else {
+        return Ok(base_path);
+    };
+    let invalid = env.is_empty()
+        || env.contains('/')
+        || env.contains('\\')
+        || env
+            .split(['/', '\\'])
+            .chain(std::iter::once(""))
+            .any(|seg| seg == "..")
+        || env == ".";
+    if invalid {
+        return Err(crate::RupostError::Other(format!(
+            "非法的 --env 名称：{env:?} 不能为空、包含路径分隔符或 '..'"
+        )));
     }
+    let parent = base_path.parent().unwrap_or_else(|| Path::new(""));
+    let file_stem = base_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("cookies");
+    let extension = base_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("json");
+    Ok(parent.join(format!("{file_stem}_{env}.{extension}")))
 }
 
 /// Cookie operation mode.

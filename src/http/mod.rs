@@ -15,7 +15,7 @@ pub use diagnose::{CertInfo, DiagnosticsReport, diagnose_url, print_diagnose_rep
 pub use llm_adapter::{LlmProvider, LlmStreamAdapter};
 pub use mock::MockLlmServer;
 pub use request::Request;
-pub use request_builder::to_request;
+pub use request_builder::{to_request, try_from_parsed_with_warnings};
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
 pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};

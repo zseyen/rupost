@@ -1015,6 +1015,7 @@ mod tests {
         headers.insert("x-custom", "value".parse().unwrap());
 
         let req = RequestSnapshot {
+            timeout: None,
             method: "POST".to_string(),
             url: "http://example.com/api".to_string(),
             headers,

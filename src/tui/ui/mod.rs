@@ -480,6 +480,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             duration_ms: 15,
             request: crate::history::model::RequestSnapshot {
+                timeout: None,
                 method: "GET".to_string(),
                 url: "http://example.com/api".to_string(),
                 headers: reqwest::header::HeaderMap::new(),

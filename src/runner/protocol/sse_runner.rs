@@ -24,6 +24,8 @@ pub struct SseRunnerOptions {
     pub stream_to_append: bool,
     pub stream_sender:
         Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+    /// 请求构建期的非致命警告（如畸形 JSON 降级发送），随流结果一起呈现
+    pub warnings: Vec<String>,
 }
 
 /// 单个 SSE 事件的处理上下文。
@@ -352,9 +354,13 @@ impl SseRunner {
             final_response.clone(),
         );
         test_result.assertions = assertion_results;
-        capture_warnings.sort();
-        capture_warnings.dedup();
-        test_result.warnings = capture_warnings;
+        // 构建期警告（请求级）在前，逐事件捕获警告在后；排序去重避免同一
+        // capture 在每个事件上重复刷屏
+        let mut all_warnings = options.warnings.clone();
+        all_warnings.extend(capture_warnings);
+        all_warnings.sort();
+        all_warnings.dedup();
+        test_result.warnings = all_warnings;
 
         if !test_result.assertions.is_empty() {
             test_result.success = test_result.assertions.iter().all(|a| a.passed);

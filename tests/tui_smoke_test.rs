@@ -348,6 +348,7 @@ fn test_dirty_editor_history_switch_interception() {
         timestamp: chrono::Utc::now(),
         duration_ms: 10,
         request: rupost::history::model::RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com".to_string(),
             headers: reqwest::header::HeaderMap::new(),
@@ -851,6 +852,7 @@ fn test_history_sidebar_render_no_id_prefix() {
         timestamp: chrono::Utc::now(),
         duration_ms: 10,
         request: rupost::history::model::RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com/api".to_string(),
             headers: reqwest::header::HeaderMap::new(),
@@ -889,6 +891,7 @@ fn test_history_editor_title_id_display() {
         timestamp: chrono::Utc::now(),
         duration_ms: 10,
         request: rupost::history::model::RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com/api".to_string(),
             headers: reqwest::header::HeaderMap::new(),

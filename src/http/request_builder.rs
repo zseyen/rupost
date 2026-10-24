@@ -2,45 +2,66 @@ use crate::http::Request;
 use crate::parser::ParsedRequest;
 use crate::{Result, RupostError};
 
-/// 将 ParsedRequest 转换为可执行的 Request
+/// 将 ParsedRequest 转换为可执行的 Request，同时返回构建期的非致命警告。
+///
+/// 目前唯一的警告来源：`Content-Type: application/json` 但 body 不是合法 JSON——
+/// 此时按原文发送并保留用户声明的 Content-Type（测试工具必须能把坏负载发给
+/// 服务端验证其 400/422 处理，此前这会被本地直接拒绝）。
+pub fn try_from_parsed_with_warnings(parsed: ParsedRequest) -> Result<(Request, Vec<String>)> {
+    let mut warnings = Vec::new();
+    // 1. 获取方法（默认 GET）
+    let method = parsed.method_or_default();
+
+    // 2. 创建基础请求
+    let mut request = Request::new(method, &parsed.url)?;
+
+    // 3. 添加 headers
+    for (key, value) in &parsed.headers {
+        request = request.with_header(key, value)?;
+    }
+
+    // 4. 添加 body（自动推断类型）
+    if let Some(body) = &parsed.body {
+        request = add_body(request, body, &parsed.headers, &mut warnings)?;
+    }
+
+    // 5. @timeout：仅对非流式请求生效。SSE（@sse 或 Accept: text/event-stream）
+    //    与 WebSocket 是长连接，reqwest 的 per-request timeout 是总时长语义，
+    //    套上去会把本应长连的流在中途切断；SSE 有专属 @sse_timeout。
+    let accepts_event_stream = parsed
+        .headers
+        .iter()
+        .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
+    let is_streaming = parsed.metadata.sse || parsed.metadata.websocket || accepts_event_stream;
+    if !is_streaming {
+        request = request.with_timeout(parsed.metadata.timeout);
+    }
+
+    Ok((request, warnings))
+}
+
+impl Request {
+    /// 便捷入口：只要 Request、不关心警告（警告被丢弃）
+    pub fn try_from_parsed(parsed: ParsedRequest) -> Result<Self> {
+        Ok(crate::http::try_from_parsed_with_warnings(parsed)?.0)
+    }
+}
+
 impl TryFrom<ParsedRequest> for Request {
     type Error = RupostError;
 
     fn try_from(parsed: ParsedRequest) -> Result<Self> {
-        // 1. 获取方法（默认 GET）
-        let method = parsed.method_or_default();
-
-        // 2. 创建基础请求
-        let mut request = Request::new(method, &parsed.url)?;
-
-        // 3. 添加 headers
-        for (key, value) in &parsed.headers {
-            request = request.with_header(key, value)?;
-        }
-
-        // 4. 添加 body（自动推断类型）
-        if let Some(body) = &parsed.body {
-            request = add_body(request, body, &parsed.headers)?;
-        }
-
-        // 5. @timeout：仅对非流式请求生效。SSE（@sse 或 Accept: text/event-stream）
-        //    与 WebSocket 是长连接，reqwest 的 per-request timeout 是总时长语义，
-        //    套上去会把本应长连的流在中途切断；SSE 有专属 @sse_timeout。
-        let accepts_event_stream = parsed
-            .headers
-            .iter()
-            .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
-        let is_streaming = parsed.metadata.sse || parsed.metadata.websocket || accepts_event_stream;
-        if !is_streaming {
-            request = request.with_timeout(parsed.metadata.timeout);
-        }
-
-        Ok(request)
+        Request::try_from_parsed(parsed)
     }
 }
 
 /// Body 类型推断和添加
-fn add_body(mut request: Request, body: &str, headers: &[(String, String)]) -> Result<Request> {
+fn add_body(
+    mut request: Request,
+    body: &str,
+    headers: &[(String, String)],
+    warnings: &mut Vec<String>,
+) -> Result<Request> {
     // 检查 Content-Type header
     let content_type = headers
         .iter()
@@ -49,9 +70,18 @@ fn add_body(mut request: Request, body: &str, headers: &[(String, String)]) -> R
 
     match content_type {
         Some(ct) if ct.contains("application/json") => {
-            // 显式指定 JSON：验证格式并使用 with_json
-            let json: serde_json::Value = serde_json::from_str(body)?;
-            request = request.with_json(&json)?;
+            // 显式指定 JSON：能解析就用 with_json；畸形时按原文发送
+            match serde_json::from_str::<serde_json::Value>(body) {
+                Ok(json) => {
+                    request = request.with_json(&json)?;
+                }
+                Err(e) => {
+                    warnings.push(format!(
+                        "body 不是合法 JSON（{e}），已按原文发送（Content-Type 声明保留）"
+                    ));
+                    request = request.with_text(body);
+                }
+            }
         }
         Some(ct) if ct.contains("application/x-www-form-urlencoded") => {
             // 显式指定 Form：直接使用文本
@@ -113,6 +143,37 @@ mod tests {
         parsed.url = "http://example.com".to_string();
         let request: Request = parsed.try_into().unwrap();
         assert_eq!(request.timeout, None);
+    }
+
+    #[test]
+    fn test_malformed_json_body_falls_back_to_text_with_warning() {
+        // 回归：显式 application/json + 畸形 body 此前被本地直接拒绝，
+        // 无法故意发送坏负载验证服务端的 400/422 处理
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com".to_string();
+        parsed.headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        parsed.body = Some("{\"broken\": ".to_string());
+
+        let (request, warnings) = try_from_parsed_with_warnings(parsed).unwrap();
+        assert!(request.body.is_some(), "畸形 body 应按原文发送而非丢弃");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("不是合法 JSON"), "{warnings:?}");
+        // 用户声明的 Content-Type 保留
+        assert_eq!(
+            request.headers.get("content-type").unwrap(),
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn test_valid_json_body_produces_no_warning() {
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com".to_string();
+        parsed.headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        parsed.body = Some(r#"{"ok": true}"#.to_string());
+
+        let (_request, warnings) = try_from_parsed_with_warnings(parsed).unwrap();
+        assert!(warnings.is_empty());
     }
 
     #[test]

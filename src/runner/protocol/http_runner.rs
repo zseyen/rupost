@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::RupostError;
 use crate::history::model::RequestSnapshot;
-use crate::http::{Client, Request};
+use crate::http::Client;
 use crate::middleware::Middleware;
 use crate::parser::types::ParsedRequest;
 use crate::runner::executor::ExecutorMiddleware;
@@ -51,9 +51,10 @@ impl HttpRunner {
         // [History] 创建请求快照 (在 parsed 被 move 之前)
         let request_snapshot = RequestSnapshot::from_parsed(&parsed);
 
-        // 转换为 Request
-        let mut request = match Request::try_from(parsed) {
-            Ok(req) => req,
+        // 转换为 Request（同时收集构建期警告，如畸形 JSON 降级发送）
+        let (mut request, build_warnings) = match crate::http::try_from_parsed_with_warnings(parsed)
+        {
+            Ok(v) => v,
             // e 已是 RupostError，直接渲染，避免二次包装导致前缀重复
             Err(e) => {
                 return Ok(TestResult::error(
@@ -117,6 +118,7 @@ impl HttpRunner {
                         stream_to,
                         stream_to_append,
                         stream_sender,
+                        warnings: build_warnings,
                     };
                     return Ok(crate::runner::SseRunner::execute(
                         response,
@@ -204,7 +206,10 @@ impl HttpRunner {
                 );
                 test_result.request = Some(request_snapshot);
                 test_result.assertions = assertion_results;
-                test_result.warnings = capture_warnings;
+                // 构建期警告（畸形 JSON 降级等）在前，捕获警告在后
+                let mut all_warnings = build_warnings;
+                all_warnings.extend(capture_warnings);
+                test_result.warnings = all_warnings;
 
                 if !test_result.assertions.is_empty() {
                     test_result.success = test_result.assertions.iter().all(|a| a.passed);

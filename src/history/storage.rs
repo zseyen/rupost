@@ -296,6 +296,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             duration_ms: 100,
             request: RequestSnapshot {
+                timeout: None,
                 method: "GET".to_string(),
                 url: "https://example.com".to_string(),
                 headers: HeaderMap::new(),
@@ -361,6 +362,7 @@ mod tests {
         headers.insert("content-type", "application/json".parse().unwrap());
 
         let req_snap = RequestSnapshot {
+            timeout: None,
             method: "POST".to_string(),
             url: "http://example.com/test".to_string(),
             headers: headers.clone(),

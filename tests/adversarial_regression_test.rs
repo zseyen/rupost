@@ -265,3 +265,41 @@ async fn sse_stream_error_still_flushes_pending_tail_event() {
         "传输错误后的尾帧必须被 flush 并处理: {body:?}"
     );
 }
+
+/// 域：streaming_protocol（请求构建）
+///
+/// 原复现：`Content-Type: application/json` + 畸形 body → 修复前被本地拒绝
+/// （"构建请求失败: JSON 解析错误"），无法故意发送坏负载验证服务端的 400 处理。
+#[tokio::test]
+async fn malformed_json_body_reaches_server_unchanged_with_warning() {
+    use wiremock::matchers::{body_string_contains, method, path};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/j"))
+        .and(body_string_contains("{\"broken\":"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("bad json"))
+        .mount(&server)
+        .await;
+
+    let content = format!(
+        "POST {}/j\nContent-Type: application/json\n\n{{\"broken\": \n",
+        server.uri()
+    );
+    let parsed = HttpFileParser::parse_content(&content).unwrap();
+    let executor = TestExecutor::new();
+    let mut ctx = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut ctx).await.unwrap();
+
+    assert_eq!(results.len(), 1);
+    // 服务端收到了原样的畸形 body 并返回 400
+    assert_eq!(results[0].status, Some(400));
+    assert!(
+        results[0]
+            .warnings
+            .iter()
+            .any(|w| w.contains("不是合法 JSON")),
+        "畸形 JSON 应产生可见警告: {:?}",
+        results[0].warnings
+    );
+}

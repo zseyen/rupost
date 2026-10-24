@@ -1,6 +1,6 @@
 # TUI 设计 v3.1：架构还债与迭代规划（含对抗性审查修订）
 
-- **状态**：待评审（Stage 0/1 产出；v3.1 已完成一轮对抗性审查修订，见第八节）
+- **状态**：待评审（Stage 0/1 产出；v3.1 完成对抗性审查修订，v3.2 完成项目最新实践对照审查——两轮记录均见第八节）
 - **日期**：2026-10-18
 - **关联文档**：`doc/plans/tui_iteration_v2.md`（已交付，未回写进度）、`doc/tui/implementation_plan.md`、`doc/tui/keybindings.md`、`doc/tui/plugin_interface.md`、`doc/plans/progress_summary.md`、`doc/dev/development_workflow.md`
 - **原则**：Clean Architecture / DRY / TDD（红-绿-重构）/ YAGNI
@@ -165,7 +165,7 @@ src/tui/
 ### 决策 5：写路径安全加固（修 A7/A8/A9，对接 US-T2）
 
 在 `derive_test_file` 与落盘之间加两道防线：
-1. **工作区围栏（jail）**：目标路径 `canonicalize` 后必须以 `workspace_root` 的 canonical 路径为前缀，否则拒绝并在状态区提示。复用 DAG 沙箱的判定语义（路径必须为 CWD 子集）。
+1. **工作区围栏（jail）**：目标路径 `canonicalize` 后必须落在 `workspace_root` 根之下，否则拒绝并在状态区提示。**复用而非重写** DAG 沙箱实现：`DependencyResolver::validate_sandbox`（`src/runner/engine/resolver.rs:93`，多根 allowlist + canonical `starts_with` 判定）——将其核心判定提取为 `src/utils` 下的 `pub(crate) fn is_within_roots(path, roots) -> bool`，resolver 与 TUI ports 共用同一实现（DRY）。注意沿用 resolver.rs:39 的诚实口径：这是正确性护栏而非安全边界；TUI 场景下它保护的是用户文件系统，拒绝时必须给出可见提示。
 2. **文件名截断**：sanitize 后超过 80 字符时截断并追加 8 位短哈希后缀，保证 `<255` 字节且不破坏扩展名。
 3. 写入结果 `io::Result` 一路浮出到 `last_error`，成功时清除。
 
@@ -195,7 +195,7 @@ src/tui/
 ### Phase 1 — 架构还债（1.5d，6 个原子提交）
 
 1. `feat(tui): add FileRepository port with Fs/InMemory impls`（ports.rs + 单测）
-2. `fix(tui): confine quick-input file creation to workspace and surface write errors`（安全三防线，修 A7/A8/A9）
+2. `fix(tui): confine quick-input file creation to workspace and surface write errors`（安全三防线；含提取 `utils::is_within_roots` 共用判定，修 A7/A8/A9）
 3. `refactor(tui): unify URL normalization via http::url::normalize_input_url`（修 A2，删手写判断）
 4. `refactor(tui): split state.rs into state/ domain modules`（修 A3）
 5. `refactor(tui): split handlers.rs into handlers/ modules`（修 A4）
@@ -212,7 +212,8 @@ src/tui/
 - `keybindings.md` 按实现裁剪，未实现项移至"规划中"并标注 Phase；
 - `progress_summary.md` 回写：tui_iteration_v2 三特性 + 本设计各阶段交付；
 - `tui_iteration_v2.md` 头部标注"已交付"；
-- **`checkpoint.md` 归档本次重构状态；README 若涉 TUI 能力表述则同步**（v3 遗漏，此处补齐）。
+- **`checkpoint.md` 归档本次重构状态；README 若涉 TUI 能力表述则同步**（v3 遗漏，此处补齐）；
+- **`doc/architecture/directory_structure.md` 的 tui 小节（mod/app/event/handlers/state 平铺描述）在 state//handlers/ 拆分后即失效，必须同步改写**（v3.1 遗漏，v3.2 补齐）。
 
 **验收**：文档无未实现承诺；四个文档状态一致。
 
@@ -254,6 +255,8 @@ src/tui/
 | 默认模板硬编码 `httpbingo.org`（离线即失败） | 现状 | 提供本地 mock 默认模板时 |
 | `my.file` 判定为 URL 的语义争议 | 决策 3 表 | 用户反馈 |
 | keybindings.toml 自定义按键（文档承诺） | Phase 3 缓期 | 设置持久化落地后 |
+| TUI 非测试代码约 14 处 `unwrap()/expect()` | 现状扫描 | 按质量加固战役口径（对照 `nusvywluxqvt` 锁中毒改映射）逐步清零，不阻塞本迭代 |
+| `is_loading`/`loading_tick` 等 spinner 状态与业务状态混存 | 拆分期顺手观察 | 若 Phase 3 引入更多异步任务（如搜索防抖）再抽离 |
 
 ---
 
@@ -275,3 +278,19 @@ src/tui/
 | F10 | textarea 复用可行性未验证即写入设计 | 事实风险 | 已核实 `ratatui-textarea = "0.9"` 在 Cargo.toml、AppState 为 Clone 兼容 |
 
 未发现需要推翻决策 1（渐进重构）、决策 4（模块边界）的攻击路径。
+
+### 审查第二轮：对照项目最新实践（v3.1 → v3.2）
+
+方法：以质量加固执行计划（同日 `2026-10-18-quality-hardening-execution-plan.md`）与近 20 个 jj 提交为基准逐条对照。
+
+| # | 对照项 | 结论 | 处置 |
+|---|--------|------|------|
+| F11 | 决策 5 原写"复用 DAG 沙箱判定语义"——实际实现已固化：`DependencyResolver::sandbox_roots_from_inputs` + `validate_sandbox`（多根 allowlist，正是加固计划 Phase 2 废弃 LCA 方案后的产物） | 对齐但不够 DRY | 明确提取 `utils::is_within_roots` 共用函数（决策 5、Phase 1 提交 2） |
+| F12 | 沙箱注释口径：resolver.rs:39 自述"非安全边界" | 设计需诚实沿用口径 | 已并入决策 5 表述 |
+| F13 | Phase 2 文档同步清单漏掉 `directory_structure.md`——归档提交刚更新过 tui 小节，拆分后必失效 | 文档缺口 | 已补进 Phase 2 |
+| F14 | TUI 非测试代码 14 处 `unwrap()/expect()`，与加固战役"消灭 panic"方向相悖 | 债务 | 登记债务表，不阻塞迭代 |
+| F15 | 提交信息惯例核验：近期 log 均为 `type(scope): 祈使句`（含 `docs(plans):`、`refactor(ws):`），本计划 6 提交与文档提交信息符合 | 通过 | 无需改 |
+| F16 | A7（路径穿越写）与战役近期 `kovyvuoozpqt fix(cookie): reject path-traversing --env names` 同类同向，拒绝+可见错误的模式已有先例 | 设计方向正确 | 决策 5 保持 |
+| F17 | "先还债后功能"顺序与加固计划 Phase 4"前置 SseRunner 去重避免复制第三份重复块"同原则 | 通过 | Phase 1 → Phase 3 顺序保持 |
+
+第二轮审查同样未推翻任何主干决策；四项修订均已回写正文。

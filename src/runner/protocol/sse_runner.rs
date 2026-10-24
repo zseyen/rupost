@@ -1,6 +1,6 @@
 #![allow(clippy::collapsible_if)]
 use crate::history::model::RequestSnapshot;
-use crate::http::{Response, SseParser};
+use crate::http::{Response, SseEvent, SseParser};
 use crate::middleware::Middleware;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
@@ -24,6 +24,110 @@ pub struct SseRunnerOptions {
     pub stream_to_append: bool,
     pub stream_sender:
         Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+}
+
+/// 单个 SSE 事件的处理上下文。
+///
+/// 把 `Some(Ok(chunk))` 分支与流结束 flush 分支共用的可变状态收拢到一处，
+/// 事件处理逻辑只存在一份（出错分支的尾帧 flush 同样复用），避免此前
+/// ~60 行逐字复制导致的三份漂移。
+struct SseEventContext<'a> {
+    options: &'a SseRunnerOptions,
+    resolved_assertions: &'a [String],
+    headers: &'a HeaderMap,
+    status_code: u16,
+    log_path: &'a std::path::Path,
+    max_bytes: usize,
+    llm_provider: crate::http::llm_adapter::LlmProvider,
+    file_writer: &'a mut Option<crate::runner::FileSyncWriter>,
+    capture_warnings: &'a mut Vec<String>,
+    assertion_results: &'a mut Vec<crate::assertion::AssertionResult>,
+    accumulated_body: &'a mut String,
+    accumulated_llm_content: &'a mut String,
+    context: &'a mut VariableContext,
+}
+
+impl SseEventContext<'_> {
+    /// 处理一个已解析完成的 SSE 事件：累计正文、写日志、推送 TUI、提取 LLM 增量、
+    /// 实时捕获与断言。返回是否已达到 `sse_max_events` 上限（由调用方决定 break）。
+    async fn process_event(&mut self, event: SseEvent, event_count: usize) -> bool {
+        self.accumulated_body.push_str(&event.data);
+        self.accumulated_body.push('\n');
+
+        let log_line = format!("data: {}\n\n", event.data);
+        let _ = write_sse_log_with_limit(self.log_path, &log_line, self.max_bytes).await;
+
+        if let Some(ref sender) = self.options.stream_sender {
+            let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(
+                event.data.clone(),
+            ));
+        }
+
+        if self.options.debug {
+            println!(
+                "[SSE Event #{}] event: {:?}, data: {}",
+                event_count, event.event, event.data
+            );
+        }
+
+        let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
+        if let Some(w) = self.file_writer.as_mut() {
+            if let Ok(Some(delta)) = w.write_sse_event(&event.data, self.llm_provider).await {
+                self.accumulated_llm_content.push_str(&delta);
+            }
+        } else if let Some(delta) = llm_adapter.extract_delta(self.llm_provider, &event.data) {
+            self.accumulated_llm_content.push_str(&delta);
+        }
+
+        // 构造虚拟响应帧以供 capture & assertions
+        let mut sse_headers = HeaderMap::new();
+        if let Some(ref ev) = event.event {
+            sse_headers.insert(
+                "x-sse-event",
+                HeaderValue::from_str(ev).unwrap_or(HeaderValue::from_static("")),
+            );
+        }
+        if let Some(ref id) = event.id {
+            sse_headers.insert(
+                "x-sse-id",
+                HeaderValue::from_str(id).unwrap_or(HeaderValue::from_static("")),
+            );
+        }
+        for (k, v) in self.headers.iter() {
+            sse_headers.insert(k.clone(), v.clone());
+        }
+
+        let virtual_response = Response::new(
+            self.status_code,
+            sse_headers,
+            event.data.clone(),
+            Duration::ZERO,
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .unwrap();
+
+        // 1. 实时变量捕获（失败项收集为警告）
+        self.capture_warnings
+            .extend(VariableCapture::capture_sse_frame(
+                &self.options.captures_to_eval,
+                &virtual_response.body,
+                &virtual_response.headers,
+                self.context,
+            ));
+
+        // 2. 实时流断言 (排除 stream.llm.content 的断言)
+        let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
+            self.resolved_assertions,
+            &virtual_response,
+            event_count,
+        );
+        self.assertion_results.extend(frame_assertions);
+
+        self.options
+            .sse_max_events
+            .is_some_and(|max| event_count >= max)
+    }
 }
 
 pub struct SseRunner;
@@ -119,7 +223,6 @@ impl SseRunner {
         let mut sse_parser = SseParser::new();
         let mut accumulated_body = String::new();
         let mut accumulated_llm_content = String::new();
-        let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
         let llm_provider =
             crate::http::llm_adapter::LlmStreamAdapter::detect_provider(&options.url, &headers);
         let mut event_count = 0;
@@ -131,155 +234,60 @@ impl SseRunner {
             )
         });
 
-        loop {
-            if options.sse_max_events.is_some_and(|max| event_count >= max) {
-                info!(
-                    "SSE max events limit reached: {}",
-                    options.sse_max_events.unwrap()
-                );
-                break;
-            }
+        {
+            let mut evt = SseEventContext {
+                options: &options,
+                resolved_assertions: &resolved_assertions,
+                headers: &headers,
+                status_code,
+                log_path: &log_path,
+                max_bytes,
+                llm_provider,
+                file_writer: &mut file_writer,
+                capture_warnings: &mut capture_warnings,
+                assertion_results: &mut assertion_results,
+                accumulated_body: &mut accumulated_body,
+                accumulated_llm_content: &mut accumulated_llm_content,
+                context: &mut *context,
+            };
 
-            tokio::select! {
-                _ = &mut sleep_timer => {
-                    info!("SSE stream execution timed out after {:?}", timeout_duration);
+            loop {
+                if options.sse_max_events.is_some_and(|max| event_count >= max) {
+                    info!(
+                        "SSE max events limit reached: {}",
+                        options.sse_max_events.unwrap()
+                    );
                     break;
                 }
-                maybe_chunk = byte_stream.next() => {
-                    match maybe_chunk {
-                        Some(Ok(chunk)) => {
-                            let chunk_str = String::from_utf8_lossy(&chunk);
-                            let events = sse_parser.feed(&chunk_str);
-                            for event in events {
-                                event_count += 1;
-                                accumulated_body.push_str(&event.data);
-                                accumulated_body.push('\n');
 
-                                let log_line = format!("data: {}\n\n", event.data);
-                                let _ = write_sse_log_with_limit(&log_path, &log_line, max_bytes).await;
-
-                                if let Some(ref sender) = options.stream_sender {
-                                    let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(event.data.clone()));
-                                }
-
-                                if options.debug {
-                                    println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
-                                }
-
-                                if let Some(ref mut w) = file_writer {
-                                    if let Ok(Some(delta)) = w.write_sse_event(&event.data, llm_provider).await {
-                                        accumulated_llm_content.push_str(&delta);
+                tokio::select! {
+                    _ = &mut sleep_timer => {
+                        info!("SSE stream execution timed out after {:?}", timeout_duration);
+                        break;
+                    }
+                    maybe_chunk = byte_stream.next() => {
+                        match maybe_chunk {
+                            Some(Ok(chunk)) => {
+                                let chunk_str = String::from_utf8_lossy(&chunk);
+                                for event in sse_parser.feed(&chunk_str) {
+                                    event_count += 1;
+                                    if evt.process_event(event, event_count).await {
+                                        break;
                                     }
-                                } else if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
-                                    accumulated_llm_content.push_str(&delta);
-                                }
-
-                                // 构造虚拟响应帧以供 capture & assertions
-                                let mut sse_headers = HeaderMap::new();
-                                if let Some(ref ev) = event.event {
-                                    sse_headers.insert("x-sse-event", HeaderValue::from_str(ev).unwrap_or(HeaderValue::from_static("")));
-                                }
-                                if let Some(ref id) = event.id {
-                                    sse_headers.insert("x-sse-id", HeaderValue::from_str(id).unwrap_or(HeaderValue::from_static("")));
-                                }
-                                for (k, v) in headers.iter() {
-                                    sse_headers.insert(k.clone(), v.clone());
-                                }
-
-                                let virtual_response = Response::new(
-                                    status_code,
-                                    sse_headers,
-                                    event.data.clone(),
-                                    Duration::from_millis(0),
-                                    Duration::from_millis(0),
-                                    Duration::from_millis(0),
-                                ).unwrap();
-
-                                // 1. 实时变量捕获（失败项收集为警告）
-                                capture_warnings.extend(VariableCapture::capture_sse_frame(
-                                    &options.captures_to_eval,
-                                    &virtual_response.body,
-                                    &virtual_response.headers,
-                                    context,
-                                ));
-
-                                // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
-                                let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
-                                    &resolved_assertions,
-                                    &virtual_response,
-                                    event_count,
-                                );
-                                assertion_results.extend(frame_assertions);
-
-                                if options.sse_max_events.is_some_and(|max| event_count >= max) {
-                                    break;
                                 }
                             }
-                        }
-                        Some(Err(e)) => {
-                            error!("Error reading SSE chunk: {}", e);
-                            break;
-                        }
-                        None => {
-                            // 自然结束流，刷新可能未完成的事件
-                            if let Some(event) = sse_parser.flush() {
-                                event_count += 1;
-                                accumulated_body.push_str(&event.data);
-                                accumulated_body.push('\n');
-
-                                if let Some(ref sender) = options.stream_sender {
-                                    let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(event.data.clone()));
-                                }
-
-                                if options.debug {
-                                    println!("[SSE Event #{}] event: {:?}, data: {}", event_count, event.event, event.data);
-                                }
-
-                                if let Some(ref mut w) = file_writer {
-                                    if let Ok(Some(delta)) = w.write_sse_event(&event.data, llm_provider).await {
-                                        accumulated_llm_content.push_str(&delta);
-                                    }
-                                } else if let Some(delta) = llm_adapter.extract_delta(llm_provider, &event.data) {
-                                    accumulated_llm_content.push_str(&delta);
-                                }
-
-                                let mut sse_headers = HeaderMap::new();
-                                if let Some(ref ev) = event.event {
-                                    sse_headers.insert("x-sse-event", HeaderValue::from_str(ev).unwrap_or(HeaderValue::from_static("")));
-                                }
-                                if let Some(ref id) = event.id {
-                                    sse_headers.insert("x-sse-id", HeaderValue::from_str(id).unwrap_or(HeaderValue::from_static("")));
-                                }
-                                for (k, v) in headers.iter() {
-                                    sse_headers.insert(k.clone(), v.clone());
-                                }
-
-                                let virtual_response = Response::new(
-                                    status_code,
-                                    sse_headers,
-                                    event.data.clone(),
-                                    Duration::from_millis(0),
-                                    Duration::from_millis(0),
-                                    Duration::from_millis(0),
-                                ).unwrap();
-
-                                // 1. 实时变量捕获（失败项收集为警告）
-                                capture_warnings.extend(VariableCapture::capture_sse_frame(
-                                    &options.captures_to_eval,
-                                    &virtual_response.body,
-                                    &virtual_response.headers,
-                                    context,
-                                ));
-
-                                // 2. 实时流断言 (排除包含 stream.llm.content 的断言)
-                                let frame_assertions = crate::assertion::evaluate_sse_event_assertions(
-                                    &resolved_assertions,
-                                    &virtual_response,
-                                    event_count,
-                                );
-                                assertion_results.extend(frame_assertions);
+                            Some(Err(e)) => {
+                                error!("Error reading SSE chunk: {}", e);
+                                break;
                             }
-                            break;
+                            None => {
+                                // 自然结束流，刷新可能未完成的事件
+                                if let Some(event) = sse_parser.flush() {
+                                    event_count += 1;
+                                    evt.process_event(event, event_count).await;
+                                }
+                                break;
+                            }
                         }
                     }
                 }

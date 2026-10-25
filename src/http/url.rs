@@ -95,6 +95,54 @@ pub fn resolve_final_url(
     }
 }
 
+/// 自由输入（CLI 参数 / TUI 快速输入）的归一化结果。
+/// 同一谓词服务 CLI 与 TUI，保证两处语义一致（US-T3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NormalizedInput {
+    /// 携带合法 scheme（RFC 3986）的绝对地址，原样返回
+    Absolute(String),
+    /// `:3000/x` 冒号 localhost 缩写 → `http://localhost:3000/x`
+    LocalhostShorthand(String),
+    /// 独立主机（含端口或域名，如 `api.github.com/users`）→ 补全 scheme
+    HostName(String),
+    /// 非 URL：按文件名处理
+    NotUrl(String),
+}
+
+/// 把自由文本输入归一化为绝对 URL 或文件名判定。
+/// 冒号缩写复用 resolve_final_url 的 CLI 语义；独立主机判定与 CLI is_independent 同一规则
+/// （含空格、`.http`/`.md` 后缀的输入按文件名处理——这是 TUI 快速新建的文件名通道）。
+pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput {
+    if has_scheme_prefix(input) {
+        return NormalizedInput::Absolute(input.to_string());
+    }
+    if input.starts_with(':') {
+        let resolved = resolve_final_url(input, &VariableContext::new(), "http", Some("cli"), None)
+            .unwrap_or_else(|_| format!("http://localhost{input}"));
+        return NormalizedInput::LocalhostShorthand(resolved);
+    }
+    let first = input.split('/').next().unwrap_or("");
+    let is_independent = first.contains('.')
+        || first
+            .find(':')
+            .map(|p| {
+                let after = &first[p + 1..];
+                !after.is_empty() && after.chars().all(|c| c.is_ascii_digit())
+            })
+            .unwrap_or(false);
+    let file_like = input.contains(' ') || input.ends_with(".http") || input.ends_with(".md");
+    if is_independent && !file_like {
+        // 本地主机没有 TLS，强行补默认 scheme 会制造必败请求
+        let scheme = if first.starts_with("localhost") || first.starts_with("127.") {
+            "http"
+        } else {
+            default_scheme
+        };
+        return NormalizedInput::HostName(format!("{scheme}://{input}"));
+    }
+    NormalizedInput::NotUrl(input.to_string())
+}
+
 pub fn join_paths(parts: &[&str]) -> String {
     let mut result = String::new();
     for part in parts {
@@ -128,6 +176,48 @@ pub fn join_paths(parts: &[&str]) -> String {
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    #[test]
+    fn test_normalize_input_url_decision_table() {
+        use NormalizedInput::*;
+        // (输入, 期望)——判定表与设计文档 v3.3 决策表一致
+        let cases: Vec<(&str, NormalizedInput)> = vec![
+            ("https://a.com/x", Absolute("https://a.com/x".into())),
+            ("ws://a.com", Absolute("ws://a.com".into())),
+            ("wss://a.com/ws?t=1", Absolute("wss://a.com/ws?t=1".into())),
+            (
+                ":3000/x",
+                LocalhostShorthand("http://localhost:3000/x".into()),
+            ),
+            (
+                ":/health",
+                LocalhostShorthand("http://localhost/health".into()),
+            ),
+            (
+                "localhost:3000/x",
+                HostName("http://localhost:3000/x".into()),
+            ),
+            (
+                "api.github.com/users",
+                HostName("https://api.github.com/users".into()),
+            ),
+            // 与 CLI is_independent 同规则：首段含点即主机（v1.2/users 同 CLI 判为主机）
+            ("v1.2/users", HostName("https://v1.2/users".into())),
+            ("my.file", HostName("https://my.file".into())),
+            // 文件名通道
+            ("tests/auth.http", NotUrl("tests/auth.http".into())),
+            ("auth", NotUrl("auth".into())),
+            ("my notes", NotUrl("my notes".into())),
+            ("/users", NotUrl("/users".into())),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                normalize_input_url(input, "https"),
+                expected,
+                "input={input}"
+            );
+        }
+    }
 
     #[test]
     fn test_relative_path_with_url_in_query_is_not_absolute() {

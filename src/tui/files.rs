@@ -11,26 +11,29 @@ pub struct DerivedTest {
     pub content: String,
 }
 
-/// 输入 → (文件名, 模板内容)。URL 判定语义与 CLI 保持一致（行为锁定，commit 3 统一为共用函数）。
+use crate::http::url::{NormalizedInput, normalize_input_url};
+
+/// 输入 → (文件名, 模板内容)。URL 判定复用 http::url::normalize_input_url（与 CLI 同一语义）。
 pub fn derive_test_file(input: &str) -> DerivedTest {
-    let is_url = input.starts_with("http://")
-        || input.starts_with("https://")
-        || (input.contains('.')
-            && !input.ends_with(".http")
-            && !input.ends_with(".md")
-            && !input.contains(' '));
+    match normalize_input_url(input, "https") {
+        NormalizedInput::Absolute(normalized_url)
+        | NormalizedInput::LocalhostShorthand(normalized_url)
+        | NormalizedInput::HostName(normalized_url) => derive_url_test_file(&normalized_url),
+        NormalizedInput::NotUrl(name) => derive_filename_test_file(&name),
+    }
+}
 
-    if is_url {
-        let normalized_url = if !input.starts_with("http://") && !input.starts_with("https://") {
-            format!("https://{input}")
-        } else {
-            input.to_string()
-        };
-
-        let file_base = if let Ok(parsed) = url::Url::parse(&normalized_url) {
+fn derive_url_test_file(normalized_url: &str) -> DerivedTest {
+    {
+        let file_base = if let Ok(parsed) = url::Url::parse(normalized_url) {
             let host = parsed.host_str().unwrap_or("quick_test");
             let path = parsed.path().trim_matches('/');
             let mut combined = host.to_string();
+            // host_str 不含端口；显式端口参与命名（localhost:3000 → localhost_3000_x）
+            if let Some(port) = parsed.port() {
+                combined.push(':');
+                combined.push_str(&port.to_string());
+            }
             if !path.is_empty() {
                 combined.push('_');
                 combined.push_str(path);
@@ -44,16 +47,18 @@ pub fn derive_test_file(input: &str) -> DerivedTest {
             filename: format!("{file_base}.http"),
             content: format!("GET {normalized_url}\n"),
         }
-    } else {
-        let mut file_base = input.to_string();
-        if !file_base.ends_with(".http") && !file_base.ends_with(".md") {
-            file_base.push_str(".http");
-        }
-        DerivedTest {
-            filename: file_base,
-            // 债务：默认模板硬编码外网地址，离线即失败（设计文档债务登记）
-            content: "GET http://httpbingo.org/get\n".to_string(),
-        }
+    }
+}
+
+fn derive_filename_test_file(name: &str) -> DerivedTest {
+    let mut file_base = name.to_string();
+    if !file_base.ends_with(".http") && !file_base.ends_with(".md") {
+        file_base.push_str(".http");
+    }
+    DerivedTest {
+        filename: file_base,
+        // 债务：默认模板硬编码外网地址，离线即失败（设计文档债务登记）
+        content: "GET http://httpbingo.org/get\n".to_string(),
     }
 }
 
@@ -146,6 +151,18 @@ mod tests {
         let d = derive_test_file("http://example.com");
         assert_eq!(d.filename, "example_com.http");
         assert_eq!(d.content, "GET http://example.com\n");
+    }
+
+    #[test]
+    fn test_derive_localhost_shorthand() {
+        // CLI 语义一致：:3000/x 与 localhost:3000/x 均识别为本地 URL（commit 3 统一）
+        let d = derive_test_file(":3000/x");
+        assert_eq!(d.filename, "localhost_3000_x.http");
+        assert_eq!(d.content, "GET http://localhost:3000/x\n");
+
+        let d = derive_test_file("localhost:3000/x");
+        assert_eq!(d.filename, "localhost_3000_x.http");
+        assert_eq!(d.content, "GET http://localhost:3000/x\n");
     }
 
     #[test]

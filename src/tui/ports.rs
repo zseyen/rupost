@@ -14,6 +14,12 @@ pub trait FileRepository: Send + Sync {
 
     /// 规范化已存在的路径（workspace_root、已存在的父目录）。
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+
+    /// 文件字节长度；不存在时为 0（供限额决策，不做 IO 错误区分）
+    fn file_len(&self, path: &Path) -> u64;
+
+    /// 追加写入；文件不存在则创建（对应 OpenOptions::create(true).append(true)）
+    fn append(&self, path: &Path, data: &str) -> std::io::Result<()>;
 }
 
 /// Adapter：真实文件系统
@@ -27,6 +33,19 @@ impl FileRepository for FsRepository {
 
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         std::fs::canonicalize(path)
+    }
+
+    fn file_len(&self, path: &Path) -> u64 {
+        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+    }
+
+    fn append(&self, path: &Path, data: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        file.write_all(data.as_bytes())
     }
 }
 
@@ -47,6 +66,21 @@ impl FileRepository for InMemoryRepository {
 
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         Ok(path.to_path_buf())
+    }
+
+    fn file_len(&self, path: &Path) -> u64 {
+        self.0
+            .lock()
+            .expect("in-memory repo poisoned")
+            .get(path)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0)
+    }
+
+    fn append(&self, path: &Path, data: &str) -> std::io::Result<()> {
+        let mut map = self.0.lock().expect("in-memory repo poisoned");
+        map.entry(path.to_path_buf()).or_default().push_str(data);
+        Ok(())
     }
 }
 
@@ -82,6 +116,18 @@ impl Default for Repo {
 pub struct FailingRepository;
 
 #[cfg(test)]
+impl InMemoryRepository {
+    pub fn read_file(&self, path: &Path) -> std::io::Result<String> {
+        self.0
+            .lock()
+            .expect("in-memory repo poisoned")
+            .get(path)
+            .cloned()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+    }
+}
+
+#[cfg(test)]
 impl FileRepository for FailingRepository {
     fn create_exclusive(&self, _path: &Path, _content: &str) -> std::io::Result<()> {
         Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
@@ -89,6 +135,14 @@ impl FileRepository for FailingRepository {
 
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         Ok(path.to_path_buf())
+    }
+
+    fn file_len(&self, _path: &Path) -> u64 {
+        0
+    }
+
+    fn append(&self, _path: &Path, _data: &str) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
     }
 }
 

@@ -220,7 +220,12 @@ fn test_log_rotation_and_size_limit() {
     // 连续写入，直到超出 100 字节
     let data = "A".repeat(40);
     for _ in 0..5 {
-        let _ = rupost::tui::state::write_log_with_limit(&file_path, &data, max_bytes);
+        let _ = rupost::tui::state::write_log_with_limit(
+            &rupost::tui::ports::FsRepository,
+            &file_path,
+            &data,
+            max_bytes,
+        );
     }
 
     // 读取物理文件大小，断言它应该被阻断拦截，且以警告结尾

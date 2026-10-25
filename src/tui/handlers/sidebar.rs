@@ -81,7 +81,8 @@ pub(super) async fn handle_sidebar_key(
         }
         KeyCode::Char('n') => {
             if state.active_sidebar_tab == SidebarTab::Files {
-                state.input_mode = InputMode::QuickCreate(Box::new(new_input_textarea()));
+                state.input_mode =
+                    InputMode::QuickCreate(Box::new(new_input_textarea(state.palette())));
                 state.quick_input_title = "New HTTP Test File or URL:".to_string();
             }
         }
@@ -148,8 +149,8 @@ pub(super) async fn handle_sidebar_key(
 }
 
 /// 统一构造模态输入框样式
-fn new_input_textarea() -> ratatui_textarea::TextArea<'static> {
+fn new_input_textarea(t: &crate::tui::theme::Theme) -> ratatui_textarea::TextArea<'static> {
     let mut textarea = ratatui_textarea::TextArea::default();
-    textarea.set_style(ratatui::style::Style::default().fg(ratatui::style::Color::White));
+    textarea.set_style(ratatui::style::Style::default().fg(t.text));
     textarea
 }

@@ -2,14 +2,15 @@ use crate::tui::state::{AppState, DetailTab, Panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let t = state.palette();
     let focus = state.active_panel == Panel::Response;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
+    let border_color = if focus { t.info } else { t.dim };
 
     // 1. 垂直划分选项卡 Tab 栏和内容显示区
     let chunks = Layout::default()
@@ -31,12 +32,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     };
     let tabs = Tabs::new(tab_titles)
         .select(active_idx)
-        .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .style(Style::default().fg(t.dim))
+        .highlight_style(Style::default().fg(t.info).add_modifier(Modifier::BOLD));
     frame.render_widget(tabs, tab_area);
 
     let is_ws = !state.ws_frames.is_empty()
@@ -85,11 +82,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
             let mut lines = Vec::new();
             for f in &state.viewport_cache {
                 let arrow = if f.is_send { "[→] " } else { "[←] " };
-                let arrow_color = if f.is_send {
-                    Color::Cyan
-                } else {
-                    Color::Yellow
-                };
+                let arrow_color = if f.is_send { t.info } else { t.accent };
                 let text_line = format!("{} {} {}", arrow, f.timestamp, f.content);
                 let wrapped =
                     crate::tui::state::VisualLineProcessor::wrap_text(&text_line, max_width);
@@ -103,10 +96,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                                     .fg(arrow_color)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(
-                                format!("{} ", f.timestamp),
-                                Style::default().fg(Color::DarkGray),
-                            ),
+                            Span::styled(format!("{} ", f.timestamp), Style::default().fg(t.dim)),
                             Span::raw(raw_str[15..].to_string()),
                         ]));
                     } else if raw_str.starts_with("[←]") {
@@ -117,10 +107,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                                     .fg(arrow_color)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(
-                                format!("{} ", f.timestamp),
-                                Style::default().fg(Color::DarkGray),
-                            ),
+                            Span::styled(format!("{} ", f.timestamp), Style::default().fg(t.dim)),
                             Span::raw(raw_str[15..].to_string()),
                         ]));
                     } else {
@@ -135,7 +122,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         if visual_lines_final.is_empty() {
             visual_lines_final.push(Line::from(Span::styled(
                 "WebSocket connected. Listening for frames...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             )));
         }
 
@@ -204,7 +191,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         if visual_lines_final.is_empty() {
             visual_lines_final.push(Line::from(Span::styled(
                 "SSE streaming connected...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             )));
         }
 
@@ -222,11 +209,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 "[RUNNING] Sending request... {}",
                 state.get_spinner_char()
             ))
-            .style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
             .block(block),
             area,
         );
@@ -247,7 +230,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     } else {
         frame.render_widget(
             Paragraph::new("No response data. Trigger execution via Ctrl+Enter.")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(t.dim))
                 .block(block),
             content_area,
         );
@@ -255,17 +238,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 }
 
 fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
+    let t = state.palette();
     use crate::tui::state::DetailTab;
     if let Some(ref resp) = state.last_response {
         let mut raw_lines = Vec::new();
 
         match state.active_detail_tab {
             DetailTab::Response => {
-                let status_color = if resp.is_success() {
-                    Color::Green
-                } else {
-                    Color::Red
-                };
+                let status_color = if resp.is_success() { t.ok } else { t.err };
 
                 let has_failures = !resp.is_success() || state.assertions.iter().any(|a| !a.passed);
                 let status_text = if has_failures {
@@ -273,11 +253,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 } else {
                     "[SUCCESS]"
                 };
-                let status_text_color = if has_failures {
-                    Color::Red
-                } else {
-                    Color::Green
-                };
+                let status_text_color = if has_failures { t.err } else { t.ok };
 
                 // 拼接任务诊断状态栏
                 raw_lines.push(Line::from(vec![
@@ -298,9 +274,9 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 ]));
 
                 let mut time_size_spans = vec![
-                    Span::styled("Time: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Time: ", Style::default().fg(t.dim)),
                     Span::raw(format!("{}ms  ", resp.duration.as_millis())),
-                    Span::styled("Size: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Size: ", Style::default().fg(t.dim)),
                     Span::raw(format!("{} bytes  ", resp.body.len())),
                 ];
 
@@ -309,11 +285,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 if total_assertions > 0 {
                     let passed_assertions = state.assertions.iter().filter(|a| a.passed).count();
                     let failed_assertions = total_assertions - passed_assertions;
-                    let assertions_color = if failed_assertions > 0 {
-                        Color::Red
-                    } else {
-                        Color::Green
-                    };
+                    let assertions_color = if failed_assertions > 0 { t.err } else { t.ok };
 
                     time_size_spans.push(Span::styled(
                         format!(
@@ -327,7 +299,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 raw_lines.push(Line::from(""));
                 raw_lines.push(Line::from(Span::styled(
                     "Body:",
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(t.accent),
                 )));
 
                 // 拼接响应 Body 各行，若行数超限 1000 则进行截断保护
@@ -352,7 +324,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                             total_body_lines
                         ),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(t.accent)
                             .add_modifier(Modifier::BOLD),
                     )));
                 }
@@ -364,9 +336,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             DetailTab::Headers => {
                 raw_lines.push(Line::from(Span::styled(
                     "--- Request Headers ---",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 )));
                 if let Some(ref req) = state.current_request {
                     for (k, v) in &req.headers {
@@ -378,9 +348,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 raw_lines.push(Line::from(""));
                 raw_lines.push(Line::from(Span::styled(
                     "--- Response Headers ---",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
                 )));
                 let mut resp_keys: Vec<String> = resp
                     .headers
@@ -398,9 +366,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             DetailTab::Request => {
                 raw_lines.push(Line::from(Span::styled(
                     "--- Request Body ---",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 )));
                 if let Some(ref req) = state.current_request {
                     if let Some(ref body) = req.body {
@@ -410,13 +376,13 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                     } else {
                         raw_lines.push(Line::from(Span::styled(
                             "  (No request body)",
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(t.dim),
                         )));
                     }
                 } else {
                     raw_lines.push(Line::from(Span::styled(
                         "  (No request body)",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.dim),
                     )));
                 }
             }

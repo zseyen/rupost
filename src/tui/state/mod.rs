@@ -2,6 +2,7 @@
 use super::event::Action;
 use super::files;
 use super::ports::Repo;
+use super::theme::{Theme, ThemeKind, palette};
 
 mod history;
 mod layout;
@@ -139,6 +140,9 @@ pub struct AppState {
     // Phase 3 过滤状态（空串 = 不过滤）
     pub filter_query: String,
 
+    /// 主题种类（`,` 切换）；取色经 palette()
+    pub theme: ThemeKind,
+
     // Phase 4 新增基础交互字段
     pub active_detail_tab: DetailTab,
     /// 模态输入状态：互斥建模（快速新建 / 未来的过滤输入），textarea 自带编辑与光标
@@ -207,6 +211,8 @@ impl AppState {
             // Phase 3 过滤
             filter_query: String::new(),
 
+            theme: ThemeKind::Dark,
+
             // Phase 4 字段初始化
             active_detail_tab: DetailTab::Response,
             input_mode: InputMode::None,
@@ -216,6 +222,11 @@ impl AppState {
             repo: Repo::default(),
             last_error: None,
         }
+    }
+
+    /// 当前主题调色板
+    pub fn palette(&self) -> &'static Theme {
+        palette(self.theme)
     }
 
     /// 注入文件端口（单测用 InMemoryRepository 隔离真实磁盘）

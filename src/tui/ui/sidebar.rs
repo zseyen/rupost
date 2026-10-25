@@ -2,14 +2,15 @@ use crate::tui::state::{AppState, SidebarTab};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let t = state.palette();
     let focus = state.active_panel == crate::tui::state::Panel::Files;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
+    let border_color = if focus { t.info } else { t.dim };
 
     // 侧边栏垂直拆分：1行用于 Tab 头部，其余用于列表内容
     let chunks = Layout::default()
@@ -26,12 +27,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
     let tabs = Tabs::new(tab_titles)
         .select(select_idx)
-        .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
+        .style(Style::default().fg(t.dim))
+        .highlight_style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD));
     frame.render_widget(tabs, chunks[0]);
 
     // 2. 根据 Tab 内容切片渲染
@@ -55,11 +52,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                     Line::raw(""),
                     Line::from(Span::styled(
                         " (No HTTP files found in workspace)",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.dim),
                     )),
                     Line::from(Span::styled(
                         " Press '?' for help",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.dim),
                     )),
                 ]
             } else {
@@ -72,7 +69,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
                         let base_style = if is_selected {
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(t.accent)
                                 .add_modifier(Modifier::REVERSED)
                         } else {
                             Style::default()
@@ -108,8 +105,8 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                         };
 
                         let mut spans = vec![
-                            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
-                            Span::styled(indicator, Style::default().fg(Color::DarkGray)),
+                            Span::styled(prefix, Style::default().fg(t.dim)),
+                            Span::styled(indicator, Style::default().fg(t.dim)),
                             Span::styled(name_text, name_style),
                         ];
 
@@ -120,25 +117,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                                 FileExecState::Running => {
                                     spans.push(Span::styled(
                                         format!(" [RUNNING] {}", state.get_spinner_char()),
-                                        Style::default()
-                                            .fg(Color::Yellow)
-                                            .add_modifier(Modifier::BOLD),
+                                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                                     ));
                                 }
                                 FileExecState::Success => {
                                     spans.push(Span::styled(
                                         " [SUCCESS]",
-                                        Style::default()
-                                            .fg(Color::Green)
-                                            .add_modifier(Modifier::BOLD),
+                                        Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
                                     ));
                                 }
                                 FileExecState::Failed => {
                                     spans.push(Span::styled(
                                         " [FAILED]",
-                                        Style::default()
-                                            .fg(Color::Red)
-                                            .add_modifier(Modifier::BOLD),
+                                        Style::default().fg(t.err).add_modifier(Modifier::BOLD),
                                     ));
                                 }
                             }
@@ -166,7 +157,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
             let lines: Vec<Line> = if state.history_list.is_empty() {
                 vec![Line::from(Span::styled(
                     "No request history recorded.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ))]
             } else {
                 state.history_list[start..end]
@@ -177,7 +168,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                         let is_selected = actual_idx == state.history_state.selected_index;
                         let base_style = if is_selected {
                             Style::default()
-                                .fg(Color::Yellow)
+                                .fg(t.accent)
                                 .add_modifier(Modifier::REVERSED)
                         } else {
                             Style::default()
@@ -185,18 +176,18 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
 
                         let method = &entry.request.method;
                         let method_color = match method.as_str() {
-                            "GET" => Color::Cyan,
-                            "POST" => Color::Yellow,
-                            "PUT" => Color::Magenta,
-                            "DELETE" => Color::Red,
-                            _ => Color::White,
+                            "GET" => t.info,
+                            "POST" => t.accent,
+                            "PUT" => t.accent2,
+                            "DELETE" => t.err,
+                            _ => t.text,
                         };
 
                         let status = entry.response.status;
                         let status_color = if (200..400).contains(&status) {
-                            Color::Green
+                            t.ok
                         } else {
-                            Color::Red
+                            t.err
                         };
 
                         let host_and_path =

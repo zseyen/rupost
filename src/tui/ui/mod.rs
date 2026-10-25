@@ -6,19 +6,20 @@ use super::state::{AppState, LayoutMode, Panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Tabs},
 };
 
 /// 渲染 TUI 面板布局主入口
 pub fn render(frame: &mut Frame, state: &mut AppState) {
+    let t = state.palette();
     let size = frame.area();
 
     // 1. 终端超小防御机制
     if size.width < 40 || size.height < 10 {
         let warning = Paragraph::new("Terminal too small. Please enlarge the window.")
-            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(t.err).add_modifier(Modifier::BOLD))
             .alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(warning, size);
         return;
@@ -85,12 +86,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
             let tabs = Tabs::new(titles)
                 .block(Block::default().borders(Borders::BOTTOM))
                 .select(active_idx)
-                .style(Style::default().fg(Color::DarkGray))
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                );
+                .style(Style::default().fg(t.dim))
+                .highlight_style(Style::default().fg(t.info).add_modifier(Modifier::BOLD));
 
             frame.render_widget(tabs, chunks[0]);
 
@@ -105,12 +102,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
 
     // 3. 渲染全局帮助悬浮窗 (Modal Panel)
     if state.show_help {
-        render_help_popup(frame, main_area);
+        render_help_popup(frame, main_area, t);
     }
 
     // 4. 渲染未保存强确认弹窗 (Unsaved Changes Alert Modal)
     if state.show_unsaved_confirm {
-        render_unsaved_popup(frame, main_area);
+        render_unsaved_popup(frame, main_area, t);
     }
 
     // 4.5. 模态输入弹窗（快速新建 / 文件过滤）
@@ -123,6 +120,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
 }
 
 fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppState) {
+    let t = state.palette();
     use crate::tui::state::InputMode;
     let title = match &state.input_mode {
         InputMode::QuickCreate(_) => format!(" {} ", state.quick_input_title),
@@ -151,11 +149,9 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
         ])
         .split(popup_layout[1])[1];
 
-    let block = Block::default().borders(Borders::ALL).border_style(
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD));
 
     frame.render_widget(Clear, popup_area);
     let block = block.title(title);
@@ -173,55 +169,53 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
     frame.set_cursor_position((inner.x + cursor.col as u16, inner.y + cursor.row as u16));
 }
 
-fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
+fn render_help_popup(frame: &mut Frame, screen_size: Rect, t: &crate::tui::theme::Theme) {
     let help_text = vec![
         Line::from(Span::styled(
             " RuPost TUI Shortcuts Reference ",
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Yellow),
+            Style::default().add_modifier(Modifier::BOLD).fg(t.accent),
         )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("  Tab        ", Style::default().fg(Color::Cyan)),
+            Span::styled("  Tab        ", Style::default().fg(t.info)),
             Span::raw(" Switch active panels (Files -> Editor -> Response)"),
         ]),
         Line::from(vec![
-            Span::styled("  Left/Right ", Style::default().fg(Color::Cyan)),
+            Span::styled("  Left/Right ", Style::default().fg(t.info)),
             Span::raw(" Switch Sidebar sub-tabs (Files <-> History)"),
         ]),
         Line::from(vec![
-            Span::styled("  p          ", Style::default().fg(Color::Cyan)),
+            Span::styled("  p          ", Style::default().fg(t.info)),
             Span::raw(" Toggle display full file path in Files tab"),
         ]),
         Line::from(vec![
-            Span::styled("  Ctrl+Enter ", Style::default().fg(Color::Cyan)),
+            Span::styled("  Ctrl+Enter ", Style::default().fg(t.info)),
             Span::raw(" Send current HTTP request"),
         ]),
         Line::from(vec![
-            Span::styled("  Ctrl+R     ", Style::default().fg(Color::Cyan)),
+            Span::styled("  Ctrl+R     ", Style::default().fg(t.info)),
             Span::raw(" Send current HTTP request (Backup key)"),
         ]),
         Line::from(vec![
-            Span::styled("  Enter      ", Style::default().fg(Color::Cyan)),
+            Span::styled("  Enter      ", Style::default().fg(t.info)),
             Span::raw(" In History tab, restore request to Preview"),
         ]),
         Line::from(vec![
-            Span::styled("  ?          ", Style::default().fg(Color::Cyan)),
+            Span::styled("  ?          ", Style::default().fg(t.info)),
             Span::raw(" Toggle this help panel"),
         ]),
         Line::from(vec![
-            Span::styled("  q          ", Style::default().fg(Color::Cyan)),
+            Span::styled("  q          ", Style::default().fg(t.info)),
             Span::raw(" Safe exit TUI mode"),
         ]),
         Line::from(""),
         Line::from(Span::styled(
             "  * History Storage: ~/.rupost/history.jsonl",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.dim),
         )),
         Line::from(Span::styled(
             "  * Run `rupost history show <Short ID>` in terminal to view details.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.dim),
         )),
     ];
 
@@ -237,7 +231,7 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(t.accent));
 
     let paragraph = Paragraph::new(help_text).block(block);
 
@@ -246,12 +240,12 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
+fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect, t: &crate::tui::theme::Theme) {
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(
             " WARNING: Unsaved Changes! ",
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+            Style::default().add_modifier(Modifier::BOLD).fg(t.err),
         )),
         Line::from(""),
         Line::from(" You have unsaved modifications in the editor."),
@@ -260,14 +254,12 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
         Line::from(vec![
             Span::styled(
                 "  [y] ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" Yes, discard changes"),
             Span::styled(
                 "     [n/Esc] ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(t.err).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" No, keep editing"),
         ]),
@@ -285,7 +277,7 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
+        .border_style(Style::default().fg(t.err).add_modifier(Modifier::BOLD));
 
     let paragraph = Paragraph::new(text)
         .block(block)
@@ -296,20 +288,19 @@ fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect) {
 }
 
 fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
+    let t = state.palette();
     use crate::tui::state::{Panel, SidebarTab};
 
-    let style = Style::default()
-        .bg(Color::Rgb(30, 30, 46))
-        .fg(Color::Rgb(205, 214, 244));
+    let style = Style::default().bg(t.status_bg).fg(t.status_fg);
 
     // 写路径失败优先呈现（替代快捷键提示；下一次成功操作清除）
     if let Some(err) = &state.last_error {
         let spans = vec![
             Span::styled(
                 " ! ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(t.err).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(err.clone(), Style::default().fg(Color::Red)),
+            Span::styled(err.clone(), Style::default().fg(t.err)),
         ];
         frame.render_widget(Paragraph::new(Line::from(spans)).style(style), area);
         return;
@@ -320,95 +311,69 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
             SidebarTab::Files => vec![
                 Span::styled(
                     " q ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Quit │ "),
                 Span::styled(
                     " ? ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Help │ "),
                 Span::styled(
                     " Tab ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Focus Editor │ "),
                 Span::styled(
                     " h/l (←/→) ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Switch Tab │ "),
                 Span::styled(
                     " j/k (↑/↓) / Click ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Select │ "),
                 Span::styled(
                     " Enter ",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Edit File │ "),
                 Span::styled(
                     " p ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Toggle Path"),
             ],
             SidebarTab::History => vec![
                 Span::styled(
                     " q ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Quit │ "),
                 Span::styled(
                     " ? ",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Help │ "),
                 Span::styled(
                     " Tab ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Focus Editor │ "),
                 Span::styled(
                     " h/l (←/→) ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Switch Tab │ "),
                 Span::styled(
                     " j/k (↑/↓) / Click ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Select │ "),
                 Span::styled(
                     " Enter ",
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("Load History"),
             ],
@@ -416,67 +381,49 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         Panel::Editor => vec![
             Span::styled(
                 " q ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Quit │ "),
             Span::styled(
                 " ? ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Help │ "),
             Span::styled(
                 " Tab ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Focus Response │ "),
             Span::styled(
                 " Ctrl+Enter / Ctrl+R ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Run Request │ "),
             Span::styled(
                 " Ctrl+S ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Save"),
         ],
         Panel::Response => vec![
             Span::styled(
                 " q ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Quit │ "),
             Span::styled(
                 " ? ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Help │ "),
             Span::styled(
                 " Tab ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Focus Sidebar │ "),
             Span::styled(
                 " j/k (↑/↓) ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
             ),
             Span::raw("Scroll Response"),
         ],
@@ -490,6 +437,7 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 mod tests {
     use super::*;
     use crate::tui::state::{AppState, LayoutMode, Panel, SidebarTab};
+    use crate::tui::theme::ThemeKind;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -520,30 +468,33 @@ mod tests {
             },
         }];
 
-        for last_error in &[None, Some("create failed: permission denied".to_string())] {
-            state.last_error = last_error.clone();
-            for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
-                for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
-                    for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
-                        state.layout_mode = *layout;
-                        state.active_sidebar_tab = *sidebar_tab;
-                        state.active_panel = *active_panel;
+        for theme in &[ThemeKind::Dark, ThemeKind::Light] {
+            state.theme = *theme;
+            for last_error in &[None, Some("create failed: permission denied".to_string())] {
+                state.last_error = last_error.clone();
+                for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
+                    for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
+                        for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
+                            state.layout_mode = *layout;
+                            state.active_sidebar_tab = *sidebar_tab;
+                            state.active_panel = *active_panel;
 
-                        state.show_help = true;
-                        state.show_unsaved_confirm = false;
-                        terminal
-                            .draw(|f| {
-                                render(f, &mut state);
-                            })
-                            .unwrap();
+                            state.show_help = true;
+                            state.show_unsaved_confirm = false;
+                            terminal
+                                .draw(|f| {
+                                    render(f, &mut state);
+                                })
+                                .unwrap();
 
-                        state.show_help = false;
-                        state.show_unsaved_confirm = true;
-                        terminal
-                            .draw(|f| {
-                                render(f, &mut state);
-                            })
-                            .unwrap();
+                            state.show_help = false;
+                            state.show_unsaved_confirm = true;
+                            terminal
+                                .draw(|f| {
+                                    render(f, &mut state);
+                                })
+                                .unwrap();
+                        }
                     }
                 }
             }

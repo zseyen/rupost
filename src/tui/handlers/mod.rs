@@ -37,6 +37,12 @@ pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Se
         return;
     }
 
+    // 全局 `,` 键切换明暗主题（弹窗内不生效）
+    if key.code == KeyCode::Char(',') {
+        state.theme = state.theme.toggled();
+        return;
+    }
+
     // 全局大写 E 键拦截，用于拉起外部编辑器
     if key.code == KeyCode::Char('E') {
         if state.active_panel != Panel::Response && state.editor_file_path.is_some() {
@@ -199,6 +205,42 @@ mod tests {
             state.input_mode,
             crate::tui::state::InputMode::QuickCreate(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn test_comma_toggles_theme_everywhere_except_modal() {
+        use crate::tui::theme::ThemeKind;
+        use ratatui_textarea::TextArea;
+
+        let mut state = AppState::new();
+        let (tx, _rx) = mpsc::channel(1);
+        assert_eq!(state.theme, ThemeKind::Dark);
+
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert_eq!(state.theme, ThemeKind::Light);
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert_eq!(state.theme, ThemeKind::Dark);
+
+        // 模态打开时 `,` 是输入字符，不切换主题
+        state.input_mode = InputMode::QuickCreate(Box::new(TextArea::default()));
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert_eq!(state.theme, ThemeKind::Dark);
+        assert!(matches!(state.input_mode, InputMode::QuickCreate(_)));
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ pub mod files;
 pub mod handlers;
 pub mod ports;
 pub mod state;
+pub mod theme;
 pub mod ui;
 
 /// TUI 模式入口点

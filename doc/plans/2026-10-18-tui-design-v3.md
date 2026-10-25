@@ -1,6 +1,6 @@
 # TUI 设计 v3.1：架构还债与迭代规划（含对抗性审查修订）
 
-- **状态**：Phase 0/1 已执行并经第四轮三代理代码审查修复；Phase 2 文档对齐完成；Step 1 合流、Step 3 CI 门控、Step 4 retention 端口化、Step 5-P1 `/` 过滤已执行（2026-10-25）；Step 5-P2 主题（盘点：ui 四文件 93 处 `Color::` + 86 处 `Style::default()`，全量 sweep 需独立一片）与 P3 设置持久化按可砍规则留档（2026-10-25，jj workspace `rupost-tui`：端口化、安全三防线、URL 统一、textarea/InputMode、state/ 首片拆分；state 剩余域与 handlers 拆分留下一片）；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏记录见第八、九、十节，第四轮记录见第十一节
+- **状态**：Phase 0/1 已执行并经第四轮三代理代码审查修复；Phase 2 文档对齐完成；Step 1 合流、Step 3 CI 门控、Step 4 retention 端口化、Step 5-P1 `/` 过滤已执行（2026-10-25）；Step 5-P2 主题已执行（`tui/theme.rs` 9 槽位 × 明暗双调色板，ui 93 处字面色清零，`,` 切换 + smoke 矩阵 theme 维度）；P3 设置持久化按可砍规则留档（2026-10-25，jj workspace `rupost-tui`：端口化、安全三防线、URL 统一、textarea/InputMode、state/ 首片拆分；state 剩余域与 handlers 拆分留下一片）；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏记录见第八、九、十节，第四轮记录见第十一节
 - **日期**：2026-10-18
 - **关联文档**：`doc/plans/tui_iteration_v2.md`（已交付，未回写进度）、`doc/tui/implementation_plan.md`、`doc/tui/keybindings.md`、`doc/tui/plugin_interface.md`、`doc/plans/progress_summary.md`、`doc/dev/development_workflow.md`
 - **原则**：Clean Architecture / DRY / TDD（红-绿-重构）/ YAGNI

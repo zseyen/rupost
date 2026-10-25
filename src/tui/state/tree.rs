@@ -274,3 +274,30 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sidebar_scroll_bounds_clamp() {
+        let mut state = SidebarTabState::new();
+        let viewport_height = 5;
+
+        state.clamp_scroll_offset(0, viewport_height);
+        assert_eq!(state.selected_index, 0);
+        assert_eq!(state.scroll_offset, 0);
+
+        state.selected_index = 2;
+        state.clamp_scroll_offset(10, viewport_height);
+        assert_eq!(state.scroll_offset, 0);
+
+        state.selected_index = 6;
+        state.clamp_scroll_offset(10, viewport_height);
+        assert_eq!(state.scroll_offset, 2);
+
+        state.selected_index = 1;
+        state.clamp_scroll_offset(10, viewport_height);
+        assert_eq!(state.scroll_offset, 1);
+    }
+}

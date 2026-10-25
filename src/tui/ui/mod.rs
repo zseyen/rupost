@@ -114,7 +114,10 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     }
 
     // 4.5. 渲染新建测试用例快速输入框 (Quick Input Modal)
-    if state.show_quick_input {
+    if matches!(
+        state.input_mode,
+        crate::tui::state::InputMode::QuickCreate(_)
+    ) {
         render_quick_input_popup(frame, main_area, state);
     }
 
@@ -152,12 +155,21 @@ fn render_quick_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
                 .add_modifier(Modifier::BOLD),
         );
 
-    let input_display = format!("{}█", state.quick_input_value);
-    let paragraph = Paragraph::new(input_display)
-        .block(block)
-        .style(Style::default().fg(Color::White));
+    frame.render_widget(Clear, popup_area);
+    frame.render_widget(block, popup_area);
 
-    frame.render_widget(paragraph, popup_area);
+    if let crate::tui::state::InputMode::QuickCreate(textarea) = &state.input_mode {
+        let inner = Rect {
+            x: popup_area.x + 1,
+            y: popup_area.y + 1,
+            width: popup_area.width.saturating_sub(2),
+            height: popup_area.height.saturating_sub(2),
+        };
+        frame.render_widget(textarea.as_ref(), inner);
+        // 真实光标替代旧的 "█" 伪光标（screen_cursor 给出渲染后的绝对坐标）
+        let cursor = textarea.screen_cursor();
+        frame.set_cursor_position((inner.x + cursor.col as u16, inner.y + cursor.row as u16));
+    }
 }
 
 fn render_help_popup(frame: &mut Frame, screen_size: Rect) {

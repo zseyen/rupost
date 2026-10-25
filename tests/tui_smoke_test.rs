@@ -1065,8 +1065,7 @@ fn test_smart_url_test_creation() {
     state.workspace_root = temp_dir.path().to_path_buf();
 
     // 场景 1：输入完整的 URL
-    state.quick_input_value = "https://google.com/search?q=rust".to_string();
-    state.create_test_from_input();
+    state.create_test_from_input("https://google.com/search?q=rust");
 
     // 应该推导出文件名 google_com_search.http 并自动创建在 workspace_root 目录下
     let expected_path = temp_dir.path().join("google_com_search.http");
@@ -1078,8 +1077,7 @@ fn test_smart_url_test_creation() {
     assert_eq!(content, "GET https://google.com/search?q=rust\n");
 
     // 场景 2：输入一个没有协议头但显式是域名的 URL
-    state.quick_input_value = "httpbin.org/get".to_string();
-    state.create_test_from_input();
+    state.create_test_from_input("httpbin.org/get");
     let expected_path_2 = temp_dir.path().join("httpbin_org_get.http");
     assert!(
         expected_path_2.exists(),
@@ -1089,8 +1087,7 @@ fn test_smart_url_test_creation() {
     assert_eq!(content_2, "GET https://httpbin.org/get\n");
 
     // 场景 3：输入普通的文件名，应该创建带有模板的文件
-    state.quick_input_value = "auth".to_string();
-    state.create_test_from_input();
+    state.create_test_from_input("auth");
     let expected_path_3 = temp_dir.path().join("auth.http");
     assert!(expected_path_3.exists(), "Expected auth.http to be created");
     let content_3 = std::fs::read_to_string(&expected_path_3).unwrap();

@@ -1,32 +1,31 @@
 use super::event::{Action, TuiEvent};
-use super::state::{AppState, Panel, PendingAction, SidebarTab};
+use super::state::{AppState, InputMode, Panel, PendingAction, SidebarTab};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc;
 
 fn handle_quick_input_key(state: &mut AppState, key: KeyEvent) {
     match key.code {
-        KeyCode::Esc => {
-            state.show_quick_input = false;
-            state.quick_input_value.clear();
-        }
-        KeyCode::Backspace => {
-            state.quick_input_value.pop();
-        }
-        KeyCode::Char(c) => {
-            state.quick_input_value.push(c);
-        }
+        KeyCode::Esc => state.input_mode = InputMode::None,
         KeyCode::Enter => {
-            state.create_test_from_input();
-            state.show_quick_input = false;
+            if let InputMode::QuickCreate(textarea) = &state.input_mode {
+                let value = textarea.lines().concat();
+                state.input_mode = InputMode::None;
+                state.create_test_from_input(&value);
+            }
         }
-        _ => {}
+        // 其余按键（含 Backspace/方向键/多字节字符）交给 textarea 处理
+        _ => {
+            if let InputMode::QuickCreate(textarea) = &mut state.input_mode {
+                textarea.input(crossterm::event::Event::Key(key));
+            }
+        }
     }
 }
 
 /// 处理 TUI 按键输入事件
 pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
-    // 0. 快速输入条状态的前置处理
-    if state.show_quick_input {
+    // 0. 模态输入状态的前置处理
+    if !matches!(state.input_mode, InputMode::None) {
         handle_quick_input_key(state, key);
         return;
     }
@@ -219,8 +218,10 @@ async fn handle_sidebar_key(
         }
         KeyCode::Char('n') => {
             if state.active_sidebar_tab == SidebarTab::Files {
-                state.show_quick_input = true;
-                state.quick_input_value.clear();
+                let mut textarea = ratatui_textarea::TextArea::default();
+                textarea
+                    .set_style(ratatui::style::Style::default().fg(ratatui::style::Color::White));
+                state.input_mode = InputMode::QuickCreate(Box::new(textarea));
                 state.quick_input_title = "New HTTP Test File or URL:".to_string();
             }
         }
@@ -806,5 +807,72 @@ mod tests {
         };
         handle_mouse(&mut state, click_response);
         assert_eq!(state.active_panel, Panel::Response);
+    }
+
+    #[test]
+    fn test_quick_create_flow_via_key_events() {
+        use ratatui_textarea::TextArea;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.workspace_root = dir.path().to_path_buf();
+
+        // n 键等价状态：打开快速输入模态
+        state.input_mode =
+            super::super::state::InputMode::QuickCreate(Box::new(TextArea::default()));
+        assert!(matches!(
+            state.input_mode,
+            super::super::state::InputMode::QuickCreate(_)
+        ));
+
+        // 逐键输入（多字节字符交给 textarea 处理，此处验证 ASCII 主路径）
+        for c in "google.com".chars() {
+            handle_quick_input_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        handle_quick_input_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(
+            state.input_mode,
+            super::super::state::InputMode::None
+        ));
+        assert_eq!(state.last_error, None);
+        assert!(dir.path().join("google_com.http").exists());
+        assert!(
+            state
+                .editor_file_path
+                .as_deref()
+                .unwrap()
+                .ends_with("google_com.http")
+        );
+    }
+
+    #[test]
+    fn test_quick_create_esc_discards() {
+        use ratatui_textarea::TextArea;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.workspace_root = dir.path().to_path_buf();
+        state.input_mode =
+            super::super::state::InputMode::QuickCreate(Box::new(TextArea::default()));
+
+        handle_quick_input_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        handle_quick_input_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(matches!(
+            state.input_mode,
+            super::super::state::InputMode::None
+        ));
+        // Esc 丢弃：什么都不创建
+        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
     }
 }

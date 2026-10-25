@@ -207,6 +207,14 @@ pub enum LayoutMode {
     Stacked,
 }
 
+/// 模态输入互斥状态：同一时刻至多一个输入通道打开
+#[derive(Debug, Clone)]
+pub enum InputMode {
+    None,
+    /// Box 装箱避免 TextArea（~624B）撑大每次 AppState 克隆
+    QuickCreate(Box<ratatui_textarea::TextArea<'static>>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingAction {
     Quit,
@@ -247,7 +255,6 @@ pub struct AppState {
     pub last_response: Option<Response>,
     pub assertions: Vec<AssertionResult>,
     pub variables: VariableContext,
-    pub quick_input: Option<String>,
     pub is_quitting: bool,
 
     // 编辑器及未保存确认状态
@@ -290,8 +297,8 @@ pub struct AppState {
 
     // Phase 4 新增基础交互字段
     pub active_detail_tab: DetailTab,
-    pub show_quick_input: bool,
-    pub quick_input_value: String,
+    /// 模态输入状态：互斥建模（快速新建 / 未来的过滤输入），textarea 自带编辑与光标
+    pub input_mode: InputMode,
     pub quick_input_title: String,
     pub pending_editor_launch: bool,
 
@@ -319,7 +326,6 @@ impl AppState {
             last_response: None,
             assertions: Vec::new(),
             variables: VariableContext::new(),
-            quick_input: None,
             is_quitting: false,
             editor_text: String::new(),
             editor_file_path: None,
@@ -356,8 +362,7 @@ impl AppState {
 
             // Phase 4 字段初始化
             active_detail_tab: DetailTab::Response,
-            show_quick_input: false,
-            quick_input_value: String::new(),
+            input_mode: InputMode::None,
             quick_input_title: String::new(),
             pending_editor_launch: false,
 
@@ -517,8 +522,8 @@ impl AppState {
         }
     }
 
-    pub fn create_test_from_input(&mut self) {
-        let input = self.quick_input_value.trim().to_string();
+    pub fn create_test_from_input(&mut self, raw_input: &str) {
+        let input = raw_input.trim().to_string();
         if input.is_empty() {
             return;
         }
@@ -621,9 +626,6 @@ impl AppState {
                             .insert(path.clone(), FileExecState::Running);
                     }
                 }
-            }
-            Action::UpdateQuickInput(val) => {
-                self.quick_input = Some(val);
             }
         }
     }
@@ -1028,9 +1030,7 @@ mod tests {
     fn test_quick_create_success_lock_behavior() {
         let dir = tempfile::tempdir().unwrap();
         let mut state = state_in_workspace(dir.path());
-        state.quick_input_value = "google.com".to_string();
-
-        state.create_test_from_input();
+        state.create_test_from_input("google.com");
 
         assert_eq!(state.last_error, None);
         let created = dir.path().join("google_com.http");
@@ -1055,9 +1055,7 @@ mod tests {
         let mut state = state_in_workspace(dir.path());
         // 唯一文件名保证测试密闭：工作区外绝无同名残留（红阶段曾实证旧代码会写出该文件）
         let escape_name = format!("escape_{}.http", std::process::id());
-        state.quick_input_value = format!("../../{escape_name}");
-
-        state.create_test_from_input();
+        state.create_test_from_input(&format!("../../{escape_name}"));
 
         assert!(
             state.last_error.is_some(),
@@ -1080,9 +1078,7 @@ mod tests {
         std::fs::set_permissions(&ro, perms).unwrap();
 
         let mut state = state_in_workspace(&ro);
-        state.quick_input_value = "google.com".to_string();
-
-        state.create_test_from_input();
+        state.create_test_from_input("google.com");
 
         assert!(
             state.last_error.is_some(),
@@ -1097,8 +1093,7 @@ mod tests {
         std::fs::write(&target, "SENTINEL").unwrap();
 
         let mut state = state_in_workspace(dir.path());
-        state.quick_input_value = "google.com".to_string();
-        state.create_test_from_input();
+        state.create_test_from_input("google.com");
 
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "SENTINEL");
         assert_eq!(state.editor_text, "SENTINEL"); // 仍定位并加载已有文件
@@ -1109,8 +1104,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut state = state_in_workspace(dir.path());
         let long_path = "a".repeat(300);
-        state.quick_input_value = format!("https://example.com/{long_path}");
-        state.create_test_from_input();
+        state.create_test_from_input(&format!("https://example.com/{long_path}"));
 
         assert_eq!(state.last_error, None);
         let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();

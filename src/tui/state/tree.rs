@@ -207,11 +207,16 @@ impl AppState {
         let mut root = TrieNode::new_root(&root_canon);
         let mut unique_paths = HashSet::new();
 
+        let query = self.filter_query.to_lowercase();
         for path_str in &self.raw_file_list {
             let path_buf = PathBuf::from(path_str);
             let path_canon = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
 
             if let Ok(rel_path) = path_canon.strip_prefix(&root_canon) {
+                // 过滤在 Trie 插入前做：命中文件的祖先目录由投影自动保留
+                if !filter_matches(&rel_path.to_string_lossy(), &query) {
+                    continue;
+                }
                 if unique_paths.insert(rel_path.to_path_buf()) {
                     root.insert(rel_path, &path_canon);
                 }
@@ -261,6 +266,22 @@ fn relocate_selection(prev_rel_path: &str, visible: &[TuiFileNode]) -> Option<us
         visible.iter().position(|node| node.rel_path == key)
     })
     .next()
+}
+
+/// 过滤谓词（纯函数）：空查询匹配一切；否则大小写不敏感子串匹配
+pub fn filter_matches(rel_path: &str, query: &str) -> bool {
+    query.is_empty() || rel_path.to_lowercase().contains(query)
+}
+
+impl AppState {
+    /// 设置侧边栏过滤词并重建投影；过滤变化重置选中到顶部
+    pub fn set_filter(&mut self, query: &str) {
+        self.filter_query = query.to_lowercase();
+        self.rebuild_visible_tree_nodes();
+        self.files_state.selected_index = 0;
+        self.selected_file_index = 0;
+        self.files_state.scroll_offset = 0;
+    }
 }
 
 #[cfg(test)]
@@ -326,5 +347,56 @@ mod tests {
         // Windows 反斜杠路径归一
         let visible = nodes(&["sub/b.http"]);
         assert_eq!(relocate_selection("sub\\b.http", &visible), Some(0));
+    }
+
+    #[test]
+    fn test_filter_matches_case_insensitive() {
+        assert!(filter_matches("tests/Auth.HTTP", "auth"));
+        assert!(filter_matches("SUB/deep/x.http", "b/de"));
+        assert!(!filter_matches("auth.http", "token"));
+        assert!(filter_matches("anything.http", "")); // 空查询 = 全量
+    }
+
+    #[test]
+    fn test_set_filter_projects_and_resets() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("tests");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("auth.http"), "GET http://x").unwrap();
+        std::fs::write(dir.path().join("readme.http"), "GET http://y").unwrap();
+
+        let mut state = AppState::new();
+        state.workspace_root = dir.path().to_path_buf();
+        state.raw_file_list = vec![
+            sub.join("auth.http").to_string_lossy().into_owned(),
+            dir.path()
+                .join("readme.http")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        state.rebuild_visible_tree_nodes();
+        assert_eq!(state.visible_file_nodes.len(), 2); // tests 目录(未展开) + readme.http
+
+        // 展开 tests 目录后可见其子文件
+        state.expanded_dirs.insert("tests".to_string());
+        state.rebuild_visible_tree_nodes();
+        assert_eq!(state.visible_file_nodes.len(), 3);
+
+        // 过滤 "auth" → 仅命中文件及其祖先链，readme 被滤除
+        state.files_state.selected_index = 2;
+        state.set_filter("auth");
+        let rels: Vec<&str> = state
+            .visible_file_nodes
+            .iter()
+            .map(|n| n.rel_path.as_str())
+            .collect();
+        assert!(rels.contains(&"tests/auth.http"), "{rels:?}");
+        assert!(!rels.contains(&"readme.http"), "{rels:?}");
+        assert_eq!(state.files_state.selected_index, 0); // 过滤变化重置选中
+        assert_eq!(state.filter_query, "auth");
+
+        // 清空恢复全量（展开状态保留）
+        state.set_filter("");
+        assert_eq!(state.visible_file_nodes.len(), 3);
     }
 }

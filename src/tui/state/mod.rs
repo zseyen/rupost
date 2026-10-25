@@ -52,6 +52,8 @@ pub enum InputMode {
     None,
     /// Box 装箱避免 TextArea（~624B）撑大每次 AppState 克隆
     QuickCreate(Box<ratatui_textarea::TextArea<'static>>),
+    /// 侧边栏 `/` 过滤（实时过滤，Esc 清除）
+    Filter(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +136,9 @@ pub struct AppState {
     pub ws_visual_lines: Vec<ratatui::text::Line<'static>>,
     pub current_response_width: usize,
 
+    // Phase 3 过滤状态（空串 = 不过滤）
+    pub filter_query: String,
+
     // Phase 4 新增基础交互字段
     pub active_detail_tab: DetailTab,
     /// 模态输入状态：互斥建模（快速新建 / 未来的过滤输入），textarea 自带编辑与光标
@@ -198,6 +203,9 @@ impl AppState {
             sse_last_processed_pos: 0,
             ws_visual_lines: Vec::new(),
             current_response_width: 120, // 默认面板占宽
+
+            // Phase 3 过滤
+            filter_query: String::new(),
 
             // Phase 4 字段初始化
             active_detail_tab: DetailTab::Response,

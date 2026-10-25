@@ -18,7 +18,7 @@ use crate::tui::state::{AppState, InputMode, Panel};
 use confirm::handle_confirm_key;
 use crossterm::event::{KeyCode, KeyEvent};
 use editor::handle_editor_key;
-use modal::handle_quick_input_key;
+use modal::handle_modal_key;
 use response::handle_response_key;
 use sidebar::handle_sidebar_key;
 use tokio::sync::mpsc;
@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Sender<TuiEvent>) {
     // 0. 模态输入状态的前置处理
     if !matches!(state.input_mode, InputMode::None) {
-        handle_quick_input_key(state, key);
+        handle_modal_key(state, key);
         return;
     }
 

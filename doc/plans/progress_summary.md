@@ -21,6 +21,7 @@
 | **架构重构与组件化分层** | 将 `httpie` 和 `curl` 的解析逻辑从 `CliRunner` 中抽离为独立的 `src/cli/parser.rs` 子组件；将测试文件 URL 智能拼接与补全算法从 `TestExecutor` 中抽离为独立的 `src/runner/url.rs` 子组件，降低模块耦合。 | 已完成 | `src/cli/parser.rs`, `src/runner/url.rs` |
 | **Sprint 7: TUI 引导、自适应与交互重构** | 实现底栏操作提示指示（lazygit 风格）、自适应窄屏三栏布局、鼠标点击捕获与面板切焦、以及同步预览与切焦编辑（Enter键脏确认拦截）。 | 已完成 | `src/tui/app.rs`, `src/tui/event.rs`, `src/tui/ui/mod.rs`, `tests/tui_smoke_test.rs` |
 | **TUI 性能优化与交互升级** | 内存预折行 (Pre-wrapping) 视觉切片算法，解决中英文混合/Emoji 超长 Response 滚动错位问题；侧边栏双 Tab (Files / History) 状态解耦，提供滚动视口边界保持 (Viewport clamping)；历史记录项 Enter 反向还原为 `.http` 代码重新载入编辑器运行；组件化拆分及 Wide/Narrow/Stacked 自适应重绘冒烟测试。 | 已完成 | `src/tui/state.rs`, `src/tui/app.rs`, `src/tui/ui/sidebar.rs`, `src/tui/ui/editor.rs`, `src/tui/ui/response.rs`, `src/tui/ui/mod.rs` |
+| **TUI v3.3 加固迭代 Phase 1：安全防线与写路径端口化** | 快速新建用例三防线（工作区围栏拒路径穿越、io 错误浮出状态栏、超长文件名截断+哈希后缀）；写路径 I/O 经 `FileRepository` 端口（Fs/InMemory 双实现，`create_exclusive` 原子创建消灭 TOCTOU）；URL 归一化统一到 `http::url::normalize_input_url`（CLI/TUI 同一语义，支持 `:3000` 缩写与端口命名）；quick input 换 ratatui-textarea + `InputMode` 互斥模态（真实光标替代伪 `█`）；`state.rs` 拆出 `state/{tree,layout}` 首片。 | 已完成 | `src/tui/ports.rs`, `src/tui/files.rs`, `src/utils/path_guard.rs`, `src/http/url.rs`, `src/tui/state/`, `tests/tui_smoke_test.rs` |
 | **Sprint 6: HTML 报告与高级表现层** | 导出可视化 HTML 报告与模板表现层 | 未开始 | - |
 | **质量加固战役 Phase 0-4**（2026-10） | 三轮审查（代码质量/对抗性测试/Cookie 评估）+ 子代理评审发现的 25 项问题全部闭环：3 个 panic 修复、断言运算符最左扫描（含 WS `EXPECT` 运算符补全）、`@timeout` 接线与流式豁免、沙箱多根 allowlist、capture 逐条化 + `TestResult.warnings`、未定义变量警告、URL `://` 误判、SSE 出错分支 flush/空 data 帧语义（WHATWG，breaking）/内存上限、markdown info string、畸形 JSON 降级发送、Cookie 全套加固（0600/落盘粒度/TOCTOU/内联 `--env` 隔离/锁中毒/DAG 告警）、`--env` 路径注入校验、JSON 报告 warnings、死代码清理（`security.rs`/`metadata_types.rs`） | 已完成 | `tests/adversarial_regression_test.rs`、`doc/plans/2026-10-18-quality-hardening-execution-plan.md`、`CHANGELOG.md` |
 | **表现层与基础设施下沉 (方案二)** | 将表现层 `reporter.rs` 移入库层 `src/reporter.rs`，`url.rs` 下沉至 `src/http/url.rs`，`scanner.rs` 下沉至 `src/parser/scanner.rs`，`gc.rs` 下沉至 `src/history/gc.rs`，实现核心业务与基础设施、表现层的彻底解耦。 | 已完成 | `src/reporter.rs`, `src/http/url.rs`, `src/parser/scanner.rs`, `src/history/gc.rs` |
@@ -160,3 +161,13 @@
 2. **协议执行链解耦与静态分发 (方案二)**：
    * **执行流剥离**：将原本堆叠在 `executor.rs` 里的 HTTP 执行、SSE 监听、诊断以及快照历史等大段底座实现物理平移至 `src/runner/http_runner.rs` 中的 `HttpRunner`。
    * **静态分发路由**：定义 `Runner` Enum 作为分发策略，规避 `dyn trait` 带来的 Object Safety 异步 Future 限制，使 TestExecutor 主逻辑的物理行数缩减 80% 以上，职责划分清晰，完全符合 SRP 与 OCP。
+
+### TUI v3.3 加固迭代 Phase 1：安全防线与写路径端口化
+1. **安全三防线（红测试先行，旧代码实测会逃逸工作区并吞错）**：
+   - 拒绝携带路径语义的文件名（`..`/反斜杠/绝对路径）；围栏判定复用从 DAG resolver 提取的 `utils::path_guard::is_within_roots`（两处共用一份实现）。
+   - `exists()+write()` 组合的 TOCTOU 竞态改为 `OpenOptions::create_new` 原子创建；已存在不覆盖仍定位；其余 io 错误浮出到 `last_error` 状态栏红字呈现。
+   - URL 推导文件名超 80 字符截断并追加 8 位短哈希，远离 255 字节上限。
+2. **URL 归一化 DRY**：`http::url::normalize_input_url` + `NormalizedInput` 枚举成为 CLI 与 TUI 共用的自由输入判定谓词；决策表以表格驱动测试锁定。设计文档 v1.2/users→NotUrl 的行在实现期修正为 HostName（与 CLI `is_independent` 同规则优先）。
+3. **InputMode 模态输入**：`show_quick_input`/`quick_input_value` 双字段删除，代之以 `InputMode::QuickCreate(Box<TextArea>)` 互斥枚举；textarea 带来多字节正确编辑与真实光标；死代码 `Action::UpdateQuickInput` 与 `quick_input` 字段移除。
+4. **回归**：单测 30 + 冒烟 39 + 全量 443 全绿；`verify_features.sh` PASS、`examples/run_all.sh` 15/15（本机需 `SDKROOT=.../MacOSX26.5.sdk` 规避 CommandLineTools 27.0 SDK 的 .tbd 损坏——环境问题与本次改动无关）。
+5. **遗留（下一片）**：`state/mod.rs` 剩余域（wrap/stream/history/reload）与 `handlers.rs` 的拆分；读路径 I/O 端口化（设计文档债务登记）。

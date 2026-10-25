@@ -103,7 +103,12 @@ graph TD
     *   [app.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/app.rs)：TUI 的渲染驱动和核心事件循环体，整合终端缓存并响应绘制事件。
     *   [event.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/event.rs)：提供终端输入（键盘按键、鼠标、时钟滴答）的多线程信道事件分发机制。
     *   [handlers.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/handlers.rs)：交互逻辑处理器。处理用户按键事件（如 Tab 键切换焦点、上下键列表滚动、Enter 执行、Esc 退出、目录折叠切换），将交互映射并修改 ViewModel 状态。
-    *   [state.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/state.rs)：**核心 ViewModel 状态机**。管理选中的测试文件、目录展开状态、全局并发锁、历史记录选中项以及响应输出缓冲区等状态。
+    *   #### [src/tui/state/](file:///Users/zsyzzx/project/rust/rupost/src/tui/state)（核心 ViewModel 状态机，自单一 state.rs 渐进拆分中）
+        *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/state/mod.rs)：`AppState` 聚合根与事件归约、快速新建用例流程、热重载；再导出子模块类型保持 `crate::tui::state::*` 路径稳定。
+        *   [tree.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/state/tree.rs)：文件树领域——Trie 构建、可见投影、侧边栏选中态。
+        *   [layout.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/state/layout.rs)：视口断点（Wide/Narrow/Stacked）与响应面板宽度计算。
+    *   [files.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/files.rs)：快速新建用例的领域纯函数（输入→文件名/模板推导）与工作区围栏内创建。
+    *   [ports.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/ports.rs)：`FileRepository` 写路径端口（Fs/InMemory 双实现），ViewModel 依赖抽象而非磁盘。
     *   #### [src/tui/ui/](file:///Users/zsyzzx/project/rust/rupost/src/tui/ui)（无状态视图组件 View）
         *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/ui/mod.rs)：视图渲染总装配器。在 `Terminal::draw` 时负责切分总体布局（如侧边栏、主体编辑器与响应输出窗口）。
         *   [sidebar.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/ui/sidebar.rs)：侧边栏 Widget。负责渲染以树状图展现的文件夹及待测试用例文件结构。

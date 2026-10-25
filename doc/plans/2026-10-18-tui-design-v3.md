@@ -1,6 +1,6 @@
 # TUI 设计 v3.1：架构还债与迭代规划（含对抗性审查修订）
 
-- **状态**：待评审（Stage 0/1 产出；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏——三轮记录见第八、九节）
+- **状态**：Phase 0/1 已执行（2026-10-25，jj workspace `rupost-tui`：端口化、安全三防线、URL 统一、textarea/InputMode、state/ 首片拆分；state 剩余域与 handlers 拆分留下一片）；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏记录见第八、九、十节
 - **日期**：2026-10-18
 - **关联文档**：`doc/plans/tui_iteration_v2.md`（已交付，未回写进度）、`doc/tui/implementation_plan.md`、`doc/tui/keybindings.md`、`doc/tui/plugin_interface.md`、`doc/plans/progress_summary.md`、`doc/dev/development_workflow.md`
 - **原则**：Clean Architecture / DRY / TDD（红-绿-重构）/ YAGNI

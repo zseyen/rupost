@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if)]
 use super::event::Action;
+use super::ports::Repo;
 use crate::assertion::AssertionResult;
 use crate::http::Response;
 use crate::parser::ParsedRequest;
@@ -292,6 +293,11 @@ pub struct AppState {
     pub quick_input_value: String,
     pub quick_input_title: String,
     pub pending_editor_launch: bool,
+
+    // 写路径端口（见 ports.rs）；默认 FsRepository，测试注入 InMemoryRepository
+    pub repo: Repo,
+    /// 最近一次写路径失败的可读信息，由状态栏渲染；成功路径清除
+    pub last_error: Option<String>,
 }
 
 impl AppState {
@@ -353,7 +359,17 @@ impl AppState {
             quick_input_value: String::new(),
             quick_input_title: String::new(),
             pending_editor_launch: false,
+
+            repo: Repo::default(),
+            last_error: None,
         }
+    }
+
+    /// 注入文件端口（单测用 InMemoryRepository 隔离真实磁盘）
+    pub fn with_ports(repo: Repo) -> Self {
+        let mut state = Self::new();
+        state.repo = repo;
+        state
     }
 
     pub fn toggle_directory(&mut self, index: usize) {

@@ -65,7 +65,7 @@ impl Repo {
         Self(Arc::new(repo))
     }
 
-    pub fn as_ref(&self) -> &dyn FileRepository {
+    pub fn file_repo(&self) -> &dyn FileRepository {
         self.0.as_ref()
     }
 }

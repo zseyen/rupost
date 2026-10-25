@@ -1,5 +1,6 @@
 pub mod app;
 pub mod event;
+pub mod files;
 pub mod handlers;
 pub mod ports;
 pub mod state;

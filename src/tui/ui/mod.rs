@@ -289,6 +289,19 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         .bg(Color::Rgb(30, 30, 46))
         .fg(Color::Rgb(205, 214, 244));
 
+    // 写路径失败优先呈现（替代快捷键提示；下一次成功操作清除）
+    if let Some(err) = &state.last_error {
+        let spans = vec![
+            Span::styled(
+                " ! ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(err.clone(), Style::default().fg(Color::Red)),
+        ];
+        frame.render_widget(Paragraph::new(Line::from(spans)).style(style), area);
+        return;
+    }
+
     let spans = match state.active_panel {
         Panel::Files => match state.active_sidebar_tab {
             SidebarTab::Files => vec![

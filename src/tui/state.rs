@@ -1,5 +1,6 @@
 #![allow(clippy::collapsible_if)]
 use super::event::Action;
+use super::files;
 use super::ports::Repo;
 use crate::assertion::AssertionResult;
 use crate::http::Response;
@@ -517,61 +518,14 @@ impl AppState {
     }
 
     pub fn create_test_from_input(&mut self) {
-        let input = self.quick_input_value.trim();
+        let input = self.quick_input_value.trim().to_string();
         if input.is_empty() {
             return;
         }
 
-        // 1. 判断是否是 URL 还是普通文件名
-        let is_url = input.starts_with("http://")
-            || input.starts_with("https://")
-            || (input.contains('.')
-                && !input.ends_with(".http")
-                && !input.ends_with(".md")
-                && !input.contains(' '));
+        let derived = files::derive_test_file(&input);
 
-        let (filename, content) = if is_url {
-            // 规范化 URL 前缀
-            let normalized_url = if !input.starts_with("http://") && !input.starts_with("https://")
-            {
-                format!("https://{}", input)
-            } else {
-                input.to_string()
-            };
-
-            // 尝试解析 URL 结构以推导文件名 (例如 google_com.http)
-            let file_base = if let Ok(parsed_url) = url::Url::parse(&normalized_url) {
-                let host = parsed_url.host_str().unwrap_or("quick_test");
-                let path = parsed_url.path().trim_matches('/');
-                let mut combined = host.to_string();
-                if !path.is_empty() {
-                    combined.push('_');
-                    combined.push_str(path);
-                }
-                // 将非字母数字字符替换为下划线，保持路径干净
-                let sanitized: String = combined
-                    .chars()
-                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                    .collect();
-                sanitized
-            } else {
-                "quick_test".to_string()
-            };
-
-            let file_name = format!("{}.http", file_base);
-            let http_content = format!("GET {}\n", normalized_url);
-            (file_name, http_content)
-        } else {
-            // 普通文件名
-            let mut file_base = input.to_string();
-            if !file_base.ends_with(".http") && !file_base.ends_with(".md") {
-                file_base.push_str(".http");
-            }
-            let default_template = "GET http://httpbingo.org/get\n".to_string();
-            (file_base, default_template)
-        };
-
-        // 2. 确定落盘目录
+        // 落盘目录：选中的目录取自身，选中的文件取父目录，无选中回退 workspace_root
         let mut target_dir = self.workspace_root.clone();
         if !self.visible_file_nodes.is_empty()
             && self.files_state.selected_index < self.visible_file_nodes.len()
@@ -585,22 +539,32 @@ impl AppState {
             }
         }
 
-        let target_file_path = target_dir.join(&filename);
-
-        // 3. 物理写入文件
-        if !target_file_path.exists() {
-            let _ = std::fs::write(&target_file_path, content);
+        match files::create_test_in_workspace(
+            self.repo.file_repo(),
+            &target_dir,
+            &self.workspace_root,
+            &derived,
+        ) {
+            Ok(files::CreateOutcome::Created(path)) => {
+                self.last_error = None;
+                self.locate_created_file(&path, Some(&derived.content));
+            }
+            Ok(files::CreateOutcome::AlreadyExists(path)) => {
+                self.last_error = None;
+                self.locate_created_file(&path, None);
+            }
+            Err(msg) => self.last_error = Some(msg),
         }
+    }
 
-        // 4. 重建可见树视图以包含新文件
-        let canon_path = std::fs::canonicalize(&target_file_path).unwrap_or(target_file_path);
+    /// 重建树视图并把光标定位到新建/已存在的文件行，加载内容并切焦 Editor
+    fn locate_created_file(&mut self, canon_path: &Path, content: Option<&str>) {
         let path_str = canon_path.to_string_lossy().into_owned();
         if !self.raw_file_list.contains(&path_str) {
             self.raw_file_list.push(path_str.clone());
         }
         self.rebuild_visible_tree_nodes();
 
-        // 5. 光标自动跳转定位到新建的文件行
         if let Some(pos) = self
             .visible_file_nodes
             .iter()
@@ -609,13 +573,17 @@ impl AppState {
             self.files_state.selected_index = pos;
             self.selected_file_index = pos;
 
-            // 6. 一气呵成：加载并切焦到 Editor，支持用户按 E 拉起 vim
-            if let Ok(new_content) = std::fs::read_to_string(&canon_path) {
+            // 刚写入的内容直接复用；已存在文件须回读磁盘
+            let new_content = match content {
+                Some(c) => Some(c.to_string()),
+                None => std::fs::read_to_string(canon_path).ok(),
+            };
+            if let Some(new_content) = new_content {
                 self.editor_text = new_content;
                 self.editor_file_path = Some(path_str);
-                if let Ok(metadata) = std::fs::metadata(&canon_path) {
-                    self.editor_file_mtime = metadata.modified().ok();
-                }
+                self.editor_file_mtime = std::fs::metadata(canon_path)
+                    .ok()
+                    .and_then(|m| m.modified().ok());
                 self.is_dirty = false;
                 self.loaded_file_index = pos;
                 self.active_panel = Panel::Editor;
@@ -1046,5 +1014,117 @@ mod tests {
         assert_eq!(requests[0].url, "http://example.com/api");
         assert_eq!(requests[0].headers.len(), 2);
         assert_eq!(requests[0].body, Some("{\"test\":true}".to_string()));
+    }
+
+    // ---- 快速新建用例：安全与错误浮出（设计文档 Phase 0 特征测试）----
+
+    fn state_in_workspace(root: &Path) -> AppState {
+        let mut state = AppState::new();
+        state.workspace_root = root.to_path_buf();
+        state
+    }
+
+    #[test]
+    fn test_quick_create_success_lock_behavior() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_in_workspace(dir.path());
+        state.quick_input_value = "google.com".to_string();
+
+        state.create_test_from_input();
+
+        assert_eq!(state.last_error, None);
+        let created = dir.path().join("google_com.http");
+        assert!(created.exists());
+        assert_eq!(
+            std::fs::read_to_string(&created).unwrap(),
+            "GET https://google.com\n"
+        );
+        assert!(
+            state
+                .editor_file_path
+                .as_deref()
+                .unwrap()
+                .ends_with("google_com.http")
+        );
+        assert_eq!(state.active_panel, Panel::Editor);
+    }
+
+    #[test]
+    fn test_quick_create_path_traversal_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_in_workspace(dir.path());
+        // 唯一文件名保证测试密闭：工作区外绝无同名残留（红阶段曾实证旧代码会写出该文件）
+        let escape_name = format!("escape_{}.http", std::process::id());
+        state.quick_input_value = format!("../../{escape_name}");
+
+        state.create_test_from_input();
+
+        assert!(
+            state.last_error.is_some(),
+            "traversal must surface an error"
+        );
+        assert!(!dir.path().join("../../{escape_name}").exists());
+    }
+
+    #[test]
+    fn test_quick_create_write_error_surfaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let ro = dir.path().join("ro");
+        std::fs::create_dir(&ro).unwrap();
+        let mut perms = std::fs::metadata(&ro).unwrap().permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o555);
+        }
+        std::fs::set_permissions(&ro, perms).unwrap();
+
+        let mut state = state_in_workspace(&ro);
+        state.quick_input_value = "google.com".to_string();
+
+        state.create_test_from_input();
+
+        assert!(
+            state.last_error.is_some(),
+            "write failure must surface, not be swallowed"
+        );
+    }
+
+    #[test]
+    fn test_quick_create_existing_file_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("google_com.http");
+        std::fs::write(&target, "SENTINEL").unwrap();
+
+        let mut state = state_in_workspace(dir.path());
+        state.quick_input_value = "google.com".to_string();
+        state.create_test_from_input();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "SENTINEL");
+        assert_eq!(state.editor_text, "SENTINEL"); // 仍定位并加载已有文件
+    }
+
+    #[test]
+    fn test_quick_create_filename_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_in_workspace(dir.path());
+        let long_path = "a".repeat(300);
+        state.quick_input_value = format!("https://example.com/{long_path}");
+        state.create_test_from_input();
+
+        assert_eq!(state.last_error, None);
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+        let name = entries[0]
+            .as_ref()
+            .unwrap()
+            .file_name()
+            .into_string()
+            .unwrap();
+        // base(≤80) + '_' + 8 hex + ".http"
+        assert!(
+            name.len() <= 80 + 1 + 8 + 5,
+            "sanitized name must be bounded: {name}"
+        );
     }
 }

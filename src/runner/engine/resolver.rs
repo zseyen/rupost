@@ -91,7 +91,7 @@ impl DependencyResolver {
 
     /// 校验依赖落在任一允许根之下，防止 `@depends-on ../../..` 式越界引用
     fn validate_sandbox(path: &Path, sandbox_roots: &[PathBuf]) -> Result<()> {
-        if !sandbox_roots.iter().any(|root| path.starts_with(root)) {
+        if !crate::utils::path_guard::is_within_roots(path, sandbox_roots) {
             return Err(RupostError::Other(format!(
                 "依赖路径越界：@depends-on 引用的文件不在任何输入路径的目录之下，拒绝加载！文件: {}",
                 display_path(path)

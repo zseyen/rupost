@@ -8,6 +8,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Changed
 
+- TUI: file creation I/O is routed through a `FileRepository` port (atomic
+  `create_new`, Fs/InMemory implementations) — the ViewModel no longer touches the
+  filesystem directly on the write path.
+- TUI: free-form input (CLI arguments and TUI quick input) now shares one URL
+  normalization predicate (`http::url::normalize_input_url`); `:3000/x` localhost
+  shorthand and explicit ports in derived filenames work in both.
+- TUI: quick input uses `ratatui-textarea` behind an exclusive `InputMode` state
+  (correct multibyte/IME editing, real terminal cursor instead of a fake block glyph).
+- TUI: handlers split into component modules behind a pure navigation layer
+  (`nav.rs`); state split into `state/{tree,layout,stream,history,wrap,retention}`.
+
 - **MSRV raised to Rust 1.89** — the codebase now uses std file-locking APIs (`File::lock` / `File::lock_shared` / `File::unlock`) stabilized in 1.89; the `fs2` dependency has been removed.
 - `@timeout` is now enforced per-request on non-streaming HTTP requests (previously parsed but never applied; the client-wide 30s cap still applies as fallback). Requests declaring `@sse`, `@websocket`, or `Accept: text/event-stream` are exempt — reqwest's per-request timeout is a total-duration cap that would otherwise kill long-lived streams mid-flight.
 - Failed `@capture` directives and unresolved `{{variable}}` placeholders are now surfaced as visible per-request warnings instead of being silently dropped / sent as literals.
@@ -21,6 +32,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - `--env` names containing path separators or `..` are rejected — they would write cookie files outside the expected directory.
 
 ### Fixed
+
+- **TUI quick-input file creation no longer escapes the workspace**: paths with `../`,
+  absolute paths or backslashes are rejected with a visible status-bar error (previously
+  written outside the workspace and failures were silently swallowed via `let _ =`).
+- Quick-input write failures (permissions, disk full) surface as a red status-bar message
+  instead of being dropped; already-existing files keep the not-overwrite behavior.
+- URL-derived test filenames are bounded (≤80 chars + short hash) instead of overflowing
+  filesystem name limits; plain filename input gets the same bound.
 
 - Non-standard HTTP status codes (600–999) are accepted and reported as failed test results instead of panicking.
 - Assertions whose expected value is a lone quote character (e.g. `@assert body contains "<"`) no longer panic.

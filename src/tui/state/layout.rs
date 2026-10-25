@@ -1,6 +1,6 @@
 //! 布局领域：视口断点与响应面板宽度计算（自 state/mod.rs 拆出）。
 
-use super::*;
+use super::AppState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {

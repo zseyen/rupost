@@ -35,7 +35,7 @@ pub enum DetailTab {
     Request,
 }
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// 树状文件夹节点表示，用于可见行的树状渲染

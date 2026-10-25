@@ -1,6 +1,8 @@
 //! 文件树领域：Trie 构建、可见投影与侧边栏选中态（自 state/mod.rs 拆出）。
 
-use super::*;
+use super::AppState;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TuiFileNode {
@@ -235,44 +237,30 @@ impl AppState {
         );
         self.visible_file_nodes = new_visible_nodes;
 
-        // 优雅光标重定位（“向心回弹”算法）
-        if let Some(prev_path) = last_selected_rel_path {
-            if self.visible_file_nodes.is_empty() {
-                self.files_state.selected_index = 0;
-            } else {
-                let mut found_index = None;
-                let mut current_search = PathBuf::from(&prev_path);
-
-                loop {
-                    let search_str = current_search.to_string_lossy().replace('\\', "/");
-                    if let Some(idx) = self
-                        .visible_file_nodes
-                        .iter()
-                        .position(|n| n.rel_path == search_str)
-                    {
-                        found_index = Some(idx);
-                        break;
-                    }
-                    if let Some(parent) = current_search.parent() {
-                        if parent.as_os_str().is_empty() {
-                            break;
-                        }
-                        current_search = parent.to_path_buf();
-                    } else {
-                        break;
-                    }
-                }
-                self.files_state.selected_index = found_index
-                    .unwrap_or(0)
-                    .min(self.visible_file_nodes.len() - 1);
-            }
-        } else {
-            self.files_state.selected_index = self
-                .files_state
-                .selected_index
-                .min(self.visible_file_nodes.len().saturating_sub(1));
-        }
+        // 优雅光标重定位（“向心回弹”算法）：纯函数求新下标，此处仅做状态写回
+        let len = self.visible_file_nodes.len();
+        self.files_state.selected_index = match last_selected_rel_path {
+            Some(prev_path) => relocate_selection(&prev_path, &self.visible_file_nodes)
+                .unwrap_or(0)
+                .min(len.saturating_sub(1)),
+            None => self.files_state.selected_index.min(len.saturating_sub(1)),
+        };
     }
+}
+
+/// “向心回弹”光标重定位（纯函数）：自原选中路径沿祖先链向上寻找第一个仍可见的节点，
+/// 找不到返回 None（调用方回卷到树根）。路径分隔符统一为 '/' 比较。
+fn relocate_selection(prev_rel_path: &str, visible: &[TuiFileNode]) -> Option<usize> {
+    std::iter::successors(Some(std::path::PathBuf::from(prev_rel_path)), |path| {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(std::path::Path::to_path_buf)
+    })
+    .filter_map(|ancestor| {
+        let key = ancestor.to_string_lossy().replace('\\', "/");
+        visible.iter().position(|node| node.rel_path == key)
+    })
+    .next()
 }
 
 #[cfg(test)]
@@ -299,5 +287,44 @@ mod tests {
         state.selected_index = 1;
         state.clamp_scroll_offset(10, viewport_height);
         assert_eq!(state.scroll_offset, 1);
+    }
+
+    #[test]
+    fn test_relocate_selection_table() {
+        let nodes = |paths: &[&str]| -> Vec<TuiFileNode> {
+            paths
+                .iter()
+                .map(|p| TuiFileNode {
+                    abs_path: format!("/w/{p}"),
+                    rel_path: p.to_string(),
+                    display_name: p.rsplit('/').next().unwrap_or(p).to_string(),
+                    is_dir: false,
+                    depth: 0,
+                    is_last: false,
+                    parent_lasts: Vec::new(),
+                })
+                .collect()
+        };
+
+        // 精确命中
+        let visible = nodes(&["a.http", "sub/b.http"]);
+        assert_eq!(relocate_selection("a.http", &visible), Some(0));
+        assert_eq!(relocate_selection("sub/b.http", &visible), Some(1));
+
+        // 文件被删 → 回弹到可见父目录
+        let visible = nodes(&["sub", "other.http"]);
+        assert_eq!(relocate_selection("sub/b.http", &visible), Some(0));
+
+        // 全链不可见 → None（调用方回卷 0）
+        let visible = nodes(&["x.http"]);
+        assert_eq!(relocate_selection("sub/b.http", &visible), None);
+        assert_eq!(relocate_selection("a.http", &visible), None);
+
+        // 空投影 → None
+        assert_eq!(relocate_selection("a.http", &[]), None);
+
+        // Windows 反斜杠路径归一
+        let visible = nodes(&["sub/b.http"]);
+        assert_eq!(relocate_selection("sub\\b.http", &visible), Some(0));
     }
 }

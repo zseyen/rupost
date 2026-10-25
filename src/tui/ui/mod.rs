@@ -2,7 +2,7 @@ pub mod editor;
 pub mod response;
 pub mod sidebar;
 
-use super::state::{AppState, LayoutMode, Panel};
+use super::state::{AppState, InputMode, LayoutMode, Panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -111,7 +111,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     }
 
     // 4.5. 模态输入弹窗（快速新建 / 文件过滤）
-    if !matches!(state.input_mode, crate::tui::state::InputMode::None) {
+    if !matches!(state.input_mode, InputMode::None) {
         render_modal_input_popup(frame, main_area, state);
     }
 
@@ -121,7 +121,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
 
 fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppState) {
     let t = state.palette();
-    use crate::tui::state::InputMode;
+    use InputMode;
     let title = match &state.input_mode {
         InputMode::QuickCreate(_) => format!(" {} ", state.quick_input_title),
         InputMode::Filter(_) => " Filter files (substring, live): ".to_string(),
@@ -199,6 +199,14 @@ fn render_help_popup(frame: &mut Frame, screen_size: Rect, t: &crate::tui::theme
         Line::from(vec![
             Span::styled("  Enter      ", Style::default().fg(t.info)),
             Span::raw(" In History tab, restore request to Preview"),
+        ]),
+        Line::from(vec![
+            Span::styled("  /          ", Style::default().fg(t.info)),
+            Span::raw(" Filter files (live, Esc clears)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ,          ", Style::default().fg(t.accent)),
+            Span::raw(" Toggle dark/light theme"),
         ]),
         Line::from(vec![
             Span::styled("  ?          ", Style::default().fg(t.info)),
@@ -436,10 +444,11 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::state::{AppState, LayoutMode, Panel, SidebarTab};
+    use crate::tui::state::{AppState, InputMode, LayoutMode, Panel, SidebarTab};
     use crate::tui::theme::ThemeKind;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui_textarea::TextArea;
 
     #[test]
     fn smoke_test_components_render() {
@@ -472,28 +481,35 @@ mod tests {
             state.theme = *theme;
             for last_error in &[None, Some("create failed: permission denied".to_string())] {
                 state.last_error = last_error.clone();
-                for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
-                    for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
-                        for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
-                            state.layout_mode = *layout;
-                            state.active_sidebar_tab = *sidebar_tab;
-                            state.active_panel = *active_panel;
+                for input_mode in &[0u8, 1, 2] {
+                    state.input_mode = match input_mode {
+                        1 => InputMode::QuickCreate(Box::new(TextArea::default())),
+                        2 => InputMode::Filter(Box::new(TextArea::default())),
+                        _ => InputMode::None,
+                    };
+                    for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
+                        for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
+                            for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
+                                state.layout_mode = *layout;
+                                state.active_sidebar_tab = *sidebar_tab;
+                                state.active_panel = *active_panel;
 
-                            state.show_help = true;
-                            state.show_unsaved_confirm = false;
-                            terminal
-                                .draw(|f| {
-                                    render(f, &mut state);
-                                })
-                                .unwrap();
+                                state.show_help = true;
+                                state.show_unsaved_confirm = false;
+                                terminal
+                                    .draw(|f| {
+                                        render(f, &mut state);
+                                    })
+                                    .unwrap();
 
-                            state.show_help = false;
-                            state.show_unsaved_confirm = true;
-                            terminal
-                                .draw(|f| {
-                                    render(f, &mut state);
-                                })
-                                .unwrap();
+                                state.show_help = false;
+                                state.show_unsaved_confirm = true;
+                                terminal
+                                    .draw(|f| {
+                                        render(f, &mut state);
+                                    })
+                                    .unwrap();
+                            }
                         }
                     }
                 }

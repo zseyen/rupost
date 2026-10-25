@@ -99,16 +99,42 @@ mod tests {
         assert_eq!(ThemeKind::Dark.toggled(), ThemeKind::Light);
         assert_eq!(ThemeKind::Light.toggled(), ThemeKind::Dark);
         assert_ne!(palette(ThemeKind::Dark), palette(ThemeKind::Light));
-        // 亮色关键槽位必须暗化（浅底可读性约束）
-        for (slot, name) in [
-            (LIGHT.accent, "accent"),
-            (LIGHT.info, "info"),
-            (LIGHT.text, "text"),
-        ] {
-            let dark_luma = palette(ThemeKind::Dark);
-            let _ = (slot, name, dark_luma);
+    }
+
+    /// WCAG 相对亮度对白底对比度。LIGHT 槽位必须达到可读阈值：
+    /// 正文槽位（text/info/ok/err）≥ 4.0，次级/加粗槽位（dim/accent/accent2）≥ 3.5。
+    /// 若调整 LIGHT 色值，此测试防止"浅底下看不清"的回归。
+    #[test]
+    fn test_light_palette_readability_on_white() {
+        fn contrast_on_white(c: Color) -> f64 {
+            let (r, g, b) = match c {
+                Color::Rgb(r, g, b) => (r, g, b),
+                other => panic!("LIGHT slots must be explicit Rgb, got {other:?}"),
+            };
+            let lin = |v: u8| {
+                let s = f64::from(v) / 255.0;
+                if s <= 0.03928 {
+                    s / 12.92
+                } else {
+                    ((s + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let luma = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+            1.05 / (luma + 0.05)
         }
-        assert_ne!(LIGHT.accent, DARK.accent);
-        assert_ne!(LIGHT.text, DARK.text);
+
+        let cases = [
+            (LIGHT.text, 4.0, "text"),
+            (LIGHT.info, 4.0, "info"),
+            (LIGHT.ok, 4.0, "ok"),
+            (LIGHT.err, 4.0, "err"),
+            (LIGHT.dim, 3.5, "dim"),
+            (LIGHT.accent, 3.5, "accent(bold)"),
+            (LIGHT.accent2, 3.5, "accent2"),
+        ];
+        for (color, min, name) in cases {
+            let c = contrast_on_white(color);
+            assert!(c >= min, "{name} contrast {c:.2} < {min}");
+        }
     }
 }

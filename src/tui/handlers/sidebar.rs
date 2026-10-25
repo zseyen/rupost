@@ -86,6 +86,11 @@ pub(super) async fn handle_sidebar_key(
                 state.quick_input_title = "New HTTP Test File or URL:".to_string();
             }
         }
+        KeyCode::Char('/') => {
+            if state.active_sidebar_tab == SidebarTab::Files {
+                state.input_mode = InputMode::Filter(Box::new(new_input_textarea(state.palette())));
+            }
+        }
         KeyCode::Char('r') | KeyCode::Char('R') | KeyCode::Enter
             if key.modifiers.contains(KeyModifiers::CONTROL) =>
         {

@@ -56,7 +56,6 @@ pub fn cleanup_old_logs_dir(dir_path: &std::path::Path, days: u64) -> Result<(),
 mod tests {
     use super::*;
     use crate::tui::ports::InMemoryRepository;
-    use std::path::Path;
 
     #[test]
     fn test_log_decision_table() {
@@ -80,24 +79,27 @@ mod tests {
     #[test]
     fn test_write_log_via_repository() {
         let repo = InMemoryRepository::default();
-        let path = Path::new("/w/conn.log");
+        // tempdir 而非绝对路径：InMemory 的 file_len(parent)==0 会触发真实的
+        // create_dir_all——用 /w 这类根路径会让 root CI 容器在真实文件系统建目录
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conn.log");
 
-        write_log_with_limit(&repo, path, "line1\n", 100).unwrap();
-        write_log_with_limit(&repo, path, "line2\n", 100).unwrap();
-        assert_eq!(repo.read_file(path).unwrap(), "line1\nline2\n");
+        write_log_with_limit(&repo, &path, "line1\n", 100).unwrap();
+        write_log_with_limit(&repo, &path, "line2\n", 100).unwrap();
+        assert_eq!(repo.read_file(&path).unwrap(), "line1\nline2\n");
 
         // 越限（max=60：12B 内容 + 200B 数据 > 60）→ 只写截断通告（43B，总 55B）
-        write_log_with_limit(&repo, path, "x".repeat(200).as_str(), 60).unwrap();
-        let content = repo.read_file(path).unwrap();
+        write_log_with_limit(&repo, &path, "x".repeat(200).as_str(), 60).unwrap();
+        let content = repo.read_file(&path).unwrap();
         assert!(content.contains("Log truncated"), "{content:?}");
 
         // 已达上限（max=50 < 55B）→ 跳过，内容不再变化
         let before = content.clone();
-        write_log_with_limit(&repo, path, "y", 50).unwrap();
-        assert_eq!(repo.read_file(path).unwrap(), before);
+        write_log_with_limit(&repo, &path, "y", 50).unwrap();
+        assert_eq!(repo.read_file(&path).unwrap(), before);
 
         // 未达限（max=100 > 55B）→ 继续正常追加
-        write_log_with_limit(&repo, path, "y", 100).unwrap();
-        assert_eq!(repo.read_file(path).unwrap(), format!("{before}y"));
+        write_log_with_limit(&repo, &path, "y", 100).unwrap();
+        assert_eq!(repo.read_file(&path).unwrap(), format!("{before}y"));
     }
 }

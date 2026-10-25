@@ -40,7 +40,6 @@ impl FileRepository for FsRepository {
     }
 
     fn append(&self, path: &Path, data: &str) -> std::io::Result<()> {
-        use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

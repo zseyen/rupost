@@ -19,7 +19,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .split(area);
 
     // 1. 渲染子 Tab 导航头
-    let tab_titles = vec!["[F] Files", "[H] History"];
+    let files_title = if state.filter_query.is_empty() {
+        "[F] Files".to_string()
+    } else {
+        format!("[F] Files (filter: {})", state.filter_query)
+    };
+    let tab_titles = vec![files_title, "[H] History".to_string()];
     let select_idx = match state.active_sidebar_tab {
         SidebarTab::Files => 0,
         SidebarTab::History => 1,

@@ -29,13 +29,17 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 InputMode::None => return,
             };
             textarea.input(crossterm::event::Event::Key(key));
-            let query = textarea.lines().concat();
+            let query = if is_filter {
+                Some(textarea.lines().concat())
+            } else {
+                None
+            };
             state.input_mode = if is_filter {
                 InputMode::Filter(textarea)
             } else {
                 InputMode::QuickCreate(textarea)
             };
-            if is_filter {
+            if let Some(query) = query {
                 state.set_filter(&query); // 实时过滤
             }
         }
@@ -140,5 +144,55 @@ mod tests {
         assert!(matches!(state.input_mode, InputMode::None));
         // Esc 丢弃：什么都不创建
         assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn test_enter_keeps_filter_applied() {
+        let dir = tempdir().unwrap();
+        let mut state = AppState::new();
+        state.workspace_root = dir.path().to_path_buf();
+        std::fs::write(dir.path().join("auth.http"), "GET http://x").unwrap();
+        state.raw_file_list = vec![dir.path().join("auth.http").to_string_lossy().into_owned()];
+        state.rebuild_visible_tree_nodes();
+        state.input_mode = InputMode::Filter(Box::new(TextArea::default()));
+
+        for c in "auth".chars() {
+            handle_modal_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        handle_modal_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        // Enter 仅关闭模态：过滤保留、投影仍被过滤
+        assert!(matches!(state.input_mode, InputMode::None));
+        assert_eq!(state.filter_query, "auth");
+        let rels: Vec<&str> = state
+            .visible_file_nodes
+            .iter()
+            .map(|n| n.rel_path.as_str())
+            .collect();
+        assert!(rels.contains(&"auth.http"), "{rels:?}");
+    }
+
+    #[test]
+    fn test_slash_key_opens_filter_modal() {
+        let dir = tempdir().unwrap();
+        let mut state = AppState::new();
+        state.workspace_root = dir.path().to_path_buf();
+        state.active_panel = crate::tui::state::Panel::Files;
+        state.active_sidebar_tab = crate::tui::state::SidebarTab::Files;
+
+        // 侧栏 '/' → Filter 模态（经 handle_key 全链路而非手工构造）
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (tx, _rx) = tokio::sync::mpsc::channel(1);
+            let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+            crate::tui::handlers::handle_key(&mut state, key, &tx).await;
+        });
+        assert!(matches!(state.input_mode, InputMode::Filter(_)));
     }
 }

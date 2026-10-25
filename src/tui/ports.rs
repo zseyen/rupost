@@ -136,6 +136,8 @@ mod tests {
     }
 
     #[test]
+    // Windows 上 chmod 是 no-op，拿不到 PermissionDenied；CI 矩阵包含 Windows。
+    #[cfg(unix)]
     fn test_fs_repository_permission_error_surfaces() {
         // 只读目录下的创建必须以 io::Error 浮出，而不是被吞掉
         let dir = tempfile::tempdir().unwrap();

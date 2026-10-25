@@ -569,3 +569,89 @@ impl TuiSettings {
 **审查排除的疑点**（核实为干净）：path_guard 提取无语义漂移；ports 未被 UI 误用；files.rs 领域函数纯；旧手写判定零残留；mod.rs 再导出语义完整；19 个新测试中行为锁覆盖成功创建/已存在不覆盖/错误浮出/截断四主路径。
 
 **验证**：修复后 35 单测 + 39 冒烟 + 全量 448 全绿，clippy -D warnings 零输出。
+
+---
+
+## 十二、后续执行方案（2026-10-25 定稿）
+
+> 前置事实（已核实）：主工作区并行会话的归档工作已定格于 `qkymovyl`（含 CHANGELOG/README/
+> checkpoint/directory_structure/Pending_Features/progress_summary 六文件的修改），与
+> rupost-tui 提交链（`okpulotw..txtupnmy`，11 个提交）呈兄弟分叉，共同父提交 `uuqzqlpz`。
+
+### Step 1 · 合流（0.5h，阻塞项）
+
+```bash
+# 1) 把 rupost-tui 整条链 rebase 到主工作区定格提交之上（线性历史，不用 merge 提交）
+jj -R ../rupost-tui rebase -s okpulotw -d default@
+
+# 2) 冲突落点仅两处，均为"双方文末追加"型，保留双方段落即可：
+#    doc/plans/progress_summary.md（对方追加战役归档 / 我追加 TUI 各片条目）
+#    doc/architecture/directory_structure.md（对方更新目录 / 我改写 tui 小节）
+#    逐个提交解决：jj -R ../rupost-tui 处于冲突的 working copy 中直接改文件后 jj squash
+
+# 3) 主工作区切换到链尾，使 default@ 指向最新
+cd ../rupost && jj edit <rebase 后链尾 change_id>
+```
+
+**验收**：`jj log` 单头线性；主工作区 457 测试 + `verify_features.sh` + `run_all.sh` 全绿；
+`CHANGELOG.md` 无重复条目（对方战役条目与我的 TUI 条目同在 Unreleased，人工去重）。
+**回滚**：`jj rebase -s okpulotw -d uuqzqlpz` 即还原分叉。
+
+### Step 2 · 真机冒烟（用户，5 分钟）
+
+按 `doc/tui/usage_and_testing.md` 新增的 7 步清单执行，重点第 2 步（中文输入法组合键）。
+发现 IME 问题则登记，不阻塞合流。
+
+### Step 3 · push 前修补 + 三平台 CI（0.5h + 等 CI）
+
+push 前必做一处修补（静态推演已发现）：`ports.rs::test_fs_repository_permission_error_surfaces`
+依赖 chmod 0o555，**Windows 上 chmod 是 no-op，拿不到 PermissionDenied 必红**——加 `#[cfg(unix)]`。
+（state 层写失败测试已用 FailingRepository 注入，无平台问题。）
+
+```bash
+jj git push   # 推送前需用户确认（外发动作）
+```
+
+**验收**：GitHub Actions 三平台矩阵全绿；Windows job 是 `is_safe_filename`/`bound_filename`
+路径语义的首个真实验证。红了按平台逐条修，不得跳过矩阵。
+
+### Step 4 · retention.rs 端口化（0.5d，触发即做）
+
+保持 FP 风格，把"决策"与"执行"分离：
+
+```rust
+// ports.rs 增补端口方法
+fn append_capped(&self, path: &Path, data: &str, max_bytes: usize) -> std::io::Result<()>;
+
+// retention.rs：决策逻辑提为纯函数（表格测试先行——红）
+pub enum LogDecision { Append, AppendTruncated, Skip }
+pub fn log_decision(file_len: usize, data_len: usize, max_bytes: usize) -> LogDecision {
+    if file_len >= max_bytes { LogDecision::Skip }
+    else if file_len + data_len > max_bytes { LogDecision::AppendTruncated }
+    else { LogDecision::Append }
+}
+```
+
+`write_log_with_limit` 改为：`metadata` 探测经端口新增 `file_len(path)`，写经 `append_capped`，
+决策走纯函数。**验收**：`grep -rn "std::fs" src/tui/state/` 归零（含读路径则另计）；
+decision 表 + InMemory append 双实现测试绿。
+
+### Step 5 · Phase 3 功能迭代（1.5-2d，每特性独立提交可砍）
+
+| 特性 | 要点 | TDD 红测试 |
+|------|------|-----------|
+| P1 `/` 过滤 | `InputMode::Filter(Box<TextArea>)`（G3 预留位）；`filter_query` 字段 + `set_filter()` 复用 `rebuild_visible_tree_nodes` 投影（G7：不引入第二索引）；过滤变化重置选中 | 空查询=全量；大小写不敏感子串；选中重置 0；Esc 恢复全量且光标保持 |
+| P2 主题最小版 | 先盘点 ui/* 全部 `Color::` 硬编码（G8，清单进 PR）；`Theme` 常量结构 dark/light；`,` 切换 | TestBackend smoke 矩阵加 theme 维度 |
+| P3 设置持久化 | `~/.rupost/tui.toml`（theme），serde default 兼容缺失；读写失败走 `last_error`（G9） | 缺文件/坏 TOML/写保护三分支 |
+
+每特性：红测试 → 实现 → `fmt+clippy+test` 全绿 → jj 原子提交 → progress_summary 补行。
+
+### Step 6 · 收尾（0.5h）
+
+progress_summary 回写 Step 1-5；checkpoint.md 按"每 7 次对话"规则归档本次 TUI 战役全程；
+design doc 状态行更新。
+
+### 明确不做
+
+- 读路径 I/O 全量端口化（债务登记触发条件未出现）；handlers 二次细拆（当前最大 151 行，无压力）；
+- keybindings.toml 自定义按键（依赖 P3 落地后再评估）。

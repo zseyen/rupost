@@ -51,7 +51,7 @@ fn derive_url_test_file(normalized_url: &str) -> DerivedTest {
 }
 
 fn derive_filename_test_file(name: &str) -> DerivedTest {
-    let mut file_base = name.to_string();
+    let mut file_base = bound_filename(name);
     if !file_base.ends_with(".http") && !file_base.ends_with(".md") {
         file_base.push_str(".http");
     }
@@ -62,8 +62,24 @@ fn derive_filename_test_file(name: &str) -> DerivedTest {
     }
 }
 
+/// 输入字符串 → 8 位十六进制短哈希（截断名的区分后缀）。
+/// 注意：DefaultHasher 不承诺跨 Rust 版本稳定，工具链升级可能使同一长输入
+/// 生成不同后缀（产生新文件而非命中 AlreadyExists）——影响极小，登记债务。
+fn short_hash(raw: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let mut hasher = DefaultHasher::new();
+    hasher.write(raw.as_bytes());
+    format!("{:08x}", hasher.finish() as u32)
+}
+
+/// 按 UTF-8 字符边界截断到 max_chars 个字符
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
 /// URL 片段 → 合法文件名：非字母数字转 '_'；超过 80 字符截断并追加 8 位短哈希，
-/// 保证总长远离各文件系统 255 字节上限。
+/// 保证总长远离各文件系统 255 字节上限。输入经 url::Url 解析，实际恒为 ASCII。
 fn sanitize(raw: &str) -> String {
     let mapped: String = raw
         .chars()
@@ -72,12 +88,36 @@ fn sanitize(raw: &str) -> String {
     if mapped.chars().count() <= MAX_FILE_BASE {
         return mapped;
     }
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
-    let mut hasher = DefaultHasher::new();
-    hasher.write(raw.as_bytes());
-    let truncated: String = mapped.chars().take(MAX_FILE_BASE).collect();
-    format!("{truncated}_{:08x}", hasher.finish() as u32)
+    format!(
+        "{}_{short_hash}",
+        truncate_chars(&mapped, MAX_FILE_BASE),
+        short_hash = short_hash(raw)
+    )
+}
+
+/// 文件名通道的长度约束：stem 超 80 字节截断 + 短哈希，保留扩展名。
+/// （与 URL 通道同等待遇，避免 300 字符名依赖 OS 的 ENAMETOOLONG 才失败）
+fn bound_filename(name: &str) -> String {
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if name.len() - i <= 5 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    if stem.len() <= MAX_FILE_BASE {
+        return name.to_string();
+    }
+    let budget = MAX_FILE_BASE - 9; // 预留 '_' + 8 位哈希
+    let mut cut = 0usize;
+    for (idx, c) in stem.char_indices() {
+        if idx + c.len_utf8() > budget {
+            break;
+        }
+        cut = idx + c.len_utf8();
+    }
+    format!(
+        "{}_{short_hash}{ext}",
+        &stem[..cut],
+        short_hash = short_hash(name)
+    )
 }
 
 /// 拒绝携带路径语义的文件名：`..`/`.` 段、绝对路径、Windows 盘符、反斜杠。
@@ -187,6 +227,18 @@ mod tests {
         assert_eq!(d.filename, again.filename);
         let other = derive_test_file(&format!("https://example.com/{}", "b".repeat(300)));
         assert_ne!(d.filename, other.filename);
+    }
+
+    #[test]
+    fn test_derive_long_filename_bounded() {
+        let long = "长".repeat(300); // 多字节 stem，验证字符边界截断
+        let d = derive_test_file(&long);
+        assert!(d.filename.len() < 255, "{} bytes", d.filename.len());
+        assert!(d.filename.ends_with(".http"));
+        let d2 = derive_test_file("b".repeat(300).as_str());
+        assert!(d2.filename.len() < 255);
+        // 短名不受影响
+        assert_eq!(derive_test_file("auth").filename, "auth.http");
     }
 
     #[test]

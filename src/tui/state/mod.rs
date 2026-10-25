@@ -749,29 +749,68 @@ mod tests {
             state.last_error.is_some(),
             "traversal must surface an error"
         );
-        assert!(!dir.path().join("../../{escape_name}").exists());
+        // 显式拼出逃逸落点（相对 tempdir 两级之上）：文件绝不能被写出工作区
+        let escape_target = dir.path().join(format!("../../{escape_name}"));
+        assert!(
+            !escape_target.exists(),
+            "escape file must not exist: {escape_target:?}"
+        );
     }
 
     #[test]
     fn test_quick_create_write_error_surfaced() {
+        // FailingRepository 注入（替代 chmod：root 下 0o555 不拦截写，权限测试会假失败）
         let dir = tempfile::tempdir().unwrap();
-        let ro = dir.path().join("ro");
-        std::fs::create_dir(&ro).unwrap();
-        let mut perms = std::fs::metadata(&ro).unwrap().permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            perms.set_mode(0o555);
-        }
-        std::fs::set_permissions(&ro, perms).unwrap();
-
-        let mut state = state_in_workspace(&ro);
+        let mut state = AppState::with_ports(Repo::new(crate::tui::ports::FailingRepository));
+        state.workspace_root = dir.path().to_path_buf();
         state.create_test_from_input("google.com");
 
         assert!(
             state.last_error.is_some(),
             "write failure must surface, not be swallowed"
         );
+
+        // 错误在下次成功操作时清除（不变量锁定）
+        state.repo = Repo::default();
+        state.create_test_from_input("example.org");
+        assert_eq!(state.last_error, None);
+        assert!(dir.path().join("example_org.http").exists());
+    }
+
+    #[test]
+    fn test_quick_create_empty_input_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = state_in_workspace(dir.path());
+        state.create_test_from_input("   ");
+
+        assert_eq!(state.last_error, None);
+        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+        assert!(state.editor_file_path.is_none());
+    }
+
+    #[test]
+    fn test_quick_create_lands_in_selected_files_parent_dir() {
+        // 锁定改动前行为：选中文件 → 新文件落在其父目录
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("tests");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("auth.http"), "GET http://x").unwrap();
+
+        let mut state = state_in_workspace(dir.path());
+        state.raw_file_list = vec![sub.join("auth.http").to_string_lossy().into_owned()];
+        state.expanded_dirs.insert("tests".to_string());
+        state.rebuild_visible_tree_nodes();
+        let pos = state
+            .visible_file_nodes
+            .iter()
+            .position(|n| n.rel_path == "tests/auth.http")
+            .unwrap();
+        state.files_state.selected_index = pos;
+
+        state.create_test_from_input("google.com");
+        assert_eq!(state.last_error, None);
+        assert!(sub.join("google_com.http").exists());
+        assert!(!dir.path().join("google_com.http").exists());
     }
 
     #[test]

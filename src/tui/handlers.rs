@@ -852,6 +852,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_modal_gate_blocks_global_keys() {
+        use ratatui_textarea::TextArea;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = AppState::new();
+        state.workspace_root = dir.path().to_path_buf();
+        state.input_mode =
+            super::super::state::InputMode::QuickCreate(Box::new(TextArea::default()));
+        let (tx, _rx) = mpsc::channel(1);
+
+        // 模态打开时，全局键必须被 textarea 吞掉而非触发全局行为：
+        // q 不退出、? 不弹帮助、E 不拉起外部编辑器
+        for key in ['q', '?', 'E'] {
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                &tx,
+            )
+            .await;
+            assert!(!state.is_quitting, "'{key}' must not quit in modal");
+            assert!(!state.show_help, "'{key}' must not open help in modal");
+            assert!(
+                !state.pending_editor_launch,
+                "'{key}' must not launch editor in modal"
+            );
+        }
+        assert!(matches!(
+            state.input_mode,
+            super::super::state::InputMode::QuickCreate(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_n_key_opens_quick_input_via_sidebar_dispatch() {
+        let mut state = AppState::new();
+        state.active_panel = Panel::Files;
+        state.active_sidebar_tab = SidebarTab::Files;
+        let (tx, _rx) = mpsc::channel(1);
+
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(matches!(
+            state.input_mode,
+            super::super::state::InputMode::QuickCreate(_)
+        ));
+        assert_eq!(state.quick_input_title, "New HTTP Test File or URL:");
+    }
+
     #[test]
     fn test_quick_create_esc_discards() {
         use ratatui_textarea::TextArea;

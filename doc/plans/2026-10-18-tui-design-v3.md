@@ -1,6 +1,6 @@
 # TUI 设计 v3.1：架构还债与迭代规划（含对抗性审查修订）
 
-- **状态**：Phase 0/1 已执行（2026-10-25，jj workspace `rupost-tui`：端口化、安全三防线、URL 统一、textarea/InputMode、state/ 首片拆分；state 剩余域与 handlers 拆分留下一片）；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏记录见第八、九、十节
+- **状态**：Phase 0/1 已执行并经第四轮三代理代码审查修复（2026-10-25，jj workspace `rupost-tui`：端口化、安全三防线、URL 统一、textarea/InputMode、state/ 首片拆分；state 剩余域与 handlers 拆分留下一片）；v3.1 对抗性审查、v3.2 实践对照审查、v3.3 执行细化与第三轮查漏记录见第八、九、十节，第四轮记录见第十一节
 - **日期**：2026-10-18
 - **关联文档**：`doc/plans/tui_iteration_v2.md`（已交付，未回写进度）、`doc/tui/implementation_plan.md`、`doc/tui/keybindings.md`、`doc/tui/plugin_interface.md`、`doc/plans/progress_summary.md`、`doc/dev/development_workflow.md`
 - **原则**：Clean Architecture / DRY / TDD（红-绿-重构）/ YAGNI
@@ -134,7 +134,7 @@ pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput
 | `:3000/x` | LocalhostShorthand | `http://localhost:3000/x` |
 | `localhost:3000/x` | HostName | `http://localhost:3000/x` |
 | `api.github.com/users` | HostName | `https://api.github.com/users` |
-| `v1.2/users` | NotUrl | 文件名 `v1.2/users.http`（**修正现误判**） |
+| `v1.2/users` | HostName | `https://v1.2/users`（实现期修正：与 CLI `is_independent` 同规则——首段含点即主机；原表写 NotUrl 有误） |
 | `tests/auth.http` | NotUrl（`.http` 后缀排除） | 文件名原样 |
 | `my notes`（含空格） | NotUrl | 文件名 `my notes.http` |
 | `my.file` | HostName | `https://my.file`（现状如此，锁定；争议留 backlog） |
@@ -454,7 +454,7 @@ pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput
 }
 ```
 
-决策表（第四节）逐行落为 `http/url.rs::tests` 的表格驱动测试；`v1.2/users` 由 NotUrl 分支自然修正。
+决策表（第四节）逐行落为 `http/url.rs::tests` 的表格驱动测试；`v1.2/users` 的判定已按实现修正为 HostName（与 CLI 同规则，见第四轮审查 R4-3）。
 
 ### 9.4 提交 6：quick input 换 ratatui-textarea（修 A6/G3/G4）
 
@@ -540,3 +540,32 @@ impl TuiSettings {
 | G10 | 输入 `tests/auth.http` 这类**含子目录的相对文件名**：jail 允许（仍在工作区内），但父目录缺失时写入失败 | 行为决策 | 不自动 mkdir（用户输入即意图）；失败经 A8 浮出，决策表补一行特征测试 |
 
 三轮审查累计 F1–F17、G1–G10，主干决策（渐进重构、端口方向、模块边界、TDD 阶段）均未被推翻。
+
+---
+
+## 十一、第四轮：三代理代码审查记录（v3.3 执行后）
+
+三个并行子代理分别从安全正确性、架构一致性、测试质量审查 `uuqzqlpz..mmunqzzx` 的 6 个提交。结论：主干（三防线、端口原子写、URL 统一、InputMode）兑现且有测试锁定；审查发现 2 个 P0 级流程违约、2 个 P1、8 个 P2。已处置如下（R4-n 对应审查编号）：
+
+**已修复（审查后同批落地的提交）**：
+| # | 发现 | 修复 |
+|---|------|------|
+| R4-1 | 穿越回归测试次断言字符串未插值恒真（测试缺陷，P1） | `format!` 显式拼出逃逸落点断言 |
+| R4-2 | `with_ports` 零调用死 API + 权限测试 root 下假失败（P0/P2） | 新增 `FailingRepository` 测试替身，写失败测试改走 `with_ports` 注入，并锁定"成功清错"不变量 |
+| R4-3 | 决策表 `v1.2/users` 行与实现相反（文档矛盾，P1） | 本文档两处已改为 HostName 并注明理由 |
+| R4-4 | write_all 中途失败留残缺文件，重试被 AlreadyExists 掩盖（P2） | `create_exclusive` 失败时删除残留文件 |
+| R4-5 | 文件名通道无长度上限（P2，与 URL 通道不对称） | `bound_filename`：stem 超 80 字节截断+短哈希，保留扩展名（多字节边界安全） |
+| R4-6 | 模态门优先级、n 键分发、last_error 渲染零覆盖（P2 测试缺口） | 补 3 组测试（模态中 q/?/E 不触发全局行为；handle_key('n')→QuickCreate；smoke 矩阵加 last_error 维度） |
+| R4-7 | 空输入 no-op、选中目录推导落盘无锁定（P2/P3 缺口） | 补 2 组特征测试 |
+| R4-8 | render_quick_input_popup 重复 `Clear` 渲染（本迭代引入） | 去重 |
+
+**登记不修（含审查新增债务）**：
+- symlink 中间段逃逸（`tests → /outside` 预置符号链接时嵌套名可越界）：单用户工具+需预置，护栏非边界定位不变；ports.rs 的 FsRepository symlink 集成测试承诺撤销，以本条登记替代。
+- DefaultHasher 跨版本不稳定（哈希后缀漂移→新文件）、Windows 保留设备名（NUL/CON）、`lines().concat()` 粘贴多行、AlreadyExists 目标为目录/symlink 时静默、`locate_created_file` 对不可见落点无提示、围栏与 create 间 TOCTOU——均为 P3，触发条件出现再修。
+- `write_log_with_limit` 直写 std::fs（预存）：待 retention.rs 拆出时一并端口化，Phase 1 验收条款"state/ 写路径零命中"按字面不成立的事实以此条为准（仅快速新建写路径已干净）。
+- `use super::*`（tree/layout 两处，全仓仅有的非测试通配导入）：过渡态，随 handlers/ 拆分同片收敛为显式导入。
+- keybindings.md 与帮助面板的 n/`/`/`,` 键（G5）：留 Phase 2 文档对齐。
+
+**审查排除的疑点**（核实为干净）：path_guard 提取无语义漂移；ports 未被 UI 误用；files.rs 领域函数纯；旧手写判定零残留；mod.rs 再导出语义完整；19 个新测试中行为锁覆盖成功创建/已存在不覆盖/错误浮出/截断四主路径。
+
+**验证**：修复后 35 单测 + 39 冒烟 + 全量 448 全绿，clippy -D warnings 零输出。

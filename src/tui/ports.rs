@@ -76,6 +76,22 @@ impl Default for Repo {
     }
 }
 
+/// 仅测试用：create_exclusive 恒失败的替身，确定性验证错误浮出链路
+/// （替代 chmod 0o555 方案——root 环境下权限测试不成立）。
+#[cfg(test)]
+pub struct FailingRepository;
+
+#[cfg(test)]
+impl FileRepository for FailingRepository {
+    fn create_exclusive(&self, _path: &Path, _content: &str) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    }
+
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        Ok(path.to_path_buf())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

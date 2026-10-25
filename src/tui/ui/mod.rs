@@ -144,8 +144,6 @@ fn render_quick_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
         ])
         .split(popup_layout[1])[1];
 
-    frame.render_widget(Clear, popup_area);
-
     let block = Block::default()
         .title(format!(" {} ", state.quick_input_title))
         .borders(Borders::ALL)
@@ -519,28 +517,31 @@ mod tests {
             },
         }];
 
-        for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
-            for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
-                for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
-                    state.layout_mode = *layout;
-                    state.active_sidebar_tab = *sidebar_tab;
-                    state.active_panel = *active_panel;
+        for last_error in &[None, Some("create failed: permission denied".to_string())] {
+            state.last_error = last_error.clone();
+            for layout in &[LayoutMode::Wide, LayoutMode::Narrow, LayoutMode::Stacked] {
+                for sidebar_tab in &[SidebarTab::Files, SidebarTab::History] {
+                    for active_panel in &[Panel::Files, Panel::Editor, Panel::Response] {
+                        state.layout_mode = *layout;
+                        state.active_sidebar_tab = *sidebar_tab;
+                        state.active_panel = *active_panel;
 
-                    state.show_help = true;
-                    state.show_unsaved_confirm = false;
-                    terminal
-                        .draw(|f| {
-                            render(f, &mut state);
-                        })
-                        .unwrap();
+                        state.show_help = true;
+                        state.show_unsaved_confirm = false;
+                        terminal
+                            .draw(|f| {
+                                render(f, &mut state);
+                            })
+                            .unwrap();
 
-                    state.show_help = false;
-                    state.show_unsaved_confirm = true;
-                    terminal
-                        .draw(|f| {
-                            render(f, &mut state);
-                        })
-                        .unwrap();
+                        state.show_help = false;
+                        state.show_unsaved_confirm = true;
+                        terminal
+                            .draw(|f| {
+                                render(f, &mut state);
+                            })
+                            .unwrap();
+                    }
                 }
             }
         }

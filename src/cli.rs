@@ -391,3 +391,144 @@ pub async fn run(
     )?;
     runner.run(args).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestCase {
+        name: &'static str,
+        input: Vec<&'static str>,
+        expected_debug: bool,
+        expected_debug_on_failure: bool,
+        expected_env: Option<&'static str>,
+        expected_has_subcommand: bool,
+        expected_args: Vec<&'static str>,
+    }
+
+    #[test]
+    fn test_global_args_position_contract_table() {
+        let cases = vec![
+            TestCase {
+                name: "pre_subcmd_debug",
+                input: vec!["rupost", "--debug", "test", "suite.http"],
+                expected_debug: true,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "post_subcmd_debug",
+                input: vec!["rupost", "test", "suite.http", "--debug"],
+                expected_debug: true,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "pre_subcmd_debug_on_failure",
+                input: vec!["rupost", "--debug-on-failure", "test", "suite.http"],
+                expected_debug: false,
+                expected_debug_on_failure: true,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "post_subcmd_debug_on_failure",
+                input: vec!["rupost", "test", "suite.http", "--debug-on-failure"],
+                expected_debug: false,
+                expected_debug_on_failure: true,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "mixed_flags_both_positions",
+                input: vec![
+                    "rupost",
+                    "--debug",
+                    "test",
+                    "suite.http",
+                    "--debug-on-failure",
+                ],
+                expected_debug: true,
+                expected_debug_on_failure: true,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "global_value_arg_pre",
+                input: vec!["rupost", "--env", "staging", "test", "suite.http"],
+                expected_debug: false,
+                expected_debug_on_failure: false,
+                expected_env: Some("staging"),
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "global_value_arg_post",
+                input: vec!["rupost", "test", "suite.http", "--env", "staging"],
+                expected_debug: false,
+                expected_debug_on_failure: false,
+                expected_env: Some("staging"),
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "inline_mode_pre_debug",
+                input: vec!["rupost", "--debug", "GET", "http://example.com"],
+                expected_debug: true,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: false,
+                expected_args: vec!["GET", "http://example.com"],
+            },
+            TestCase {
+                name: "inline_mode_post_debug_trap",
+                input: vec!["rupost", "GET", "http://example.com", "--debug"],
+                expected_debug: false,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: false,
+                expected_args: vec!["GET", "http://example.com", "--debug"],
+            },
+        ];
+
+        for case in cases {
+            let parsed = Cli::try_parse_from(&case.input)
+                .unwrap_or_else(|e| panic!("Failed to parse in case '{}': {}", case.name, e));
+
+            assert_eq!(
+                parsed.debug, case.expected_debug,
+                "Case '{}' debug flag mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.debug_on_failure, case.expected_debug_on_failure,
+                "Case '{}' debug_on_failure flag mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.env.as_deref(),
+                case.expected_env,
+                "Case '{}' env mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.command.is_some(),
+                case.expected_has_subcommand,
+                "Case '{}' subcommand presence mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.args, case.expected_args,
+                "Case '{}' args mismatch",
+                case.name
+            );
+        }
+    }
+}

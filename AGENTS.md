@@ -117,11 +117,13 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
-## 5. CLI 开发与命令行传参陷阱 (CLAP Parser Rule)
+## 5. CLI 开发与命令行传参位置契约 (CLAP Parser Rule)
 
-在使用 `clap` 解析全局命令行参数时，必须牢记其位置解析特性：
-- **全局参数**（例如具备 `global = true` 的 `--debug` 或 `--debug-on-failure`）在运行命令时，**必须紧跟在主程序名之后、子命令之前**（例如：`rupost --debug test suite.http`）。
-- 若将全局参数写在子命令后面（例如：`rupost test suite.http --debug`），在没有显式进行位置参数反射处理的情况下，该参数会被子命令丢弃或误判为普通的位置参数，导致选项失效。在开发新命令行测试或编写脚本时必须严格遵循该格式。
+在使用 `clap` 解析命令行参数时，必须严格区分两种运行模式的位置契约（已由表驱动单测 `test_global_args_position_contract_table` 严格锁定）：
+- **子命令模式 (Subcommands, 如 `test`, `mock`, `history`, `export`)**：
+  clap v4 的 `global = true` 参数具备向下继承能力。无论是置于主程序之后（`rupost --debug test suite.http`）还是置于子命令之后（`rupost test suite.http --debug`），全局标志与值选项（如 `--env staging`）均可被正确解析与透传。
+- **内联请求模式 (Inline Mode, 如直接运行 `rupost GET http://...`)**：
+  由于根命令的 `args` 配置了 `trailing_var_arg = true` 以捕获任意 HTTP 请求参数与 Header，一旦将全局参数放置在 URL 之后（例如：`rupost GET http://example.com --debug`），该参数会被贪婪吸入 `cli.args` 数组中，导致 `cli.debug` 保持为 `false`。**因此，在内联请求模式下，所有全局参数必须紧跟在主程序名之后**（例如：`rupost --debug GET http://example.com`）。
 
 
 

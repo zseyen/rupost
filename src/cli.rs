@@ -169,55 +169,7 @@ pub enum Commands {
 
     /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
     #[command(alias = "exp")]
-    Export {
-        /// Target export format (e.g. curl, httpie, wget)
-        #[arg(value_name = "TARGET", required_unless_present = "list")]
-        target: Option<String>,
-
-        /// Paths to .http/.md files or directories
-        #[arg(value_name = "PATHS", required_unless_present = "list")]
-        paths: Vec<String>,
-
-        /// Environment name (e.g. dev, staging, prod)
-        #[arg(short, long)]
-        env: Option<String>,
-
-        /// Variable overrides (key=value)
-        #[arg(long, value_name = "KEY=VALUE")]
-        var: Vec<String>,
-
-        /// Path to a local environment file (e.g. .env)
-        #[arg(long, value_name = "FILE")]
-        env_file: Option<String>,
-
-        /// Path to cookie store file
-        #[arg(long, value_name = "FILE")]
-        cookie_file: Option<String>,
-
-        /// Filter and export only the request matching the given @name
-        #[arg(short, long)]
-        name: Option<String>,
-
-        /// Output in single-line compact format
-        #[arg(short, long)]
-        compact: bool,
-
-        /// Redact sensitive credentials in headers and query params
-        #[arg(long)]
-        redact: bool,
-
-        /// Save output directly to file
-        #[arg(short, long, value_name = "FILE")]
-        output: Option<String>,
-
-        /// Force overwrite output file if it already exists
-        #[arg(short, long)]
-        force: bool,
-
-        /// List all available export plugins
-        #[arg(short, long)]
-        list: bool,
-    },
+    Export(ExportArgs),
 
     /// Start interactive terminal UI mode
     Tui {
@@ -300,6 +252,108 @@ pub struct GenerateArgs {
     pub interactive: bool,
 }
 
+#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+pub struct ExportArgs {
+    /// Target export format (e.g. curl, httpie, wget)
+    #[arg(value_name = "TARGET", required_unless_present = "list")]
+    pub target: Option<String>,
+
+    /// Paths to .http/.md files or directories
+    #[arg(value_name = "PATHS", required_unless_present = "list")]
+    pub paths: Vec<String>,
+
+    /// Environment name (e.g. dev, staging, prod)
+    #[arg(short, long)]
+    pub env: Option<String>,
+
+    /// Variable overrides (key=value)
+    #[arg(long, value_name = "KEY=VALUE")]
+    pub var: Vec<String>,
+
+    /// Path to a local environment file (e.g. .env)
+    #[arg(long, value_name = "FILE")]
+    pub env_file: Option<String>,
+
+    /// Path to cookie store file
+    #[arg(long, value_name = "FILE")]
+    pub cookie_file: Option<String>,
+
+    /// Filter and export only the request matching the given @name
+    #[arg(short, long)]
+    pub name: Option<String>,
+
+    /// Output in single-line compact format
+    #[arg(short, long)]
+    pub compact: bool,
+
+    /// Redact sensitive credentials in headers and query params
+    #[arg(long)]
+    pub redact: bool,
+
+    /// Save output directly to file
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<String>,
+
+    /// Force overwrite output file if it already exists
+    #[arg(short, long)]
+    pub force: bool,
+
+    /// List all available export plugins
+    #[arg(short, long)]
+    pub list: bool,
+}
+
+impl ExportArgs {
+    pub fn into_run_options(
+        self,
+        default_env: Option<String>,
+        default_cookie_file: Option<String>,
+        default_scheme: String,
+    ) -> rupost::exporter::ExportRunOptions {
+        rupost::exporter::ExportRunOptions {
+            target: self.target,
+            paths: self.paths,
+            env: self.env.or(default_env),
+            var: self.var,
+            env_file: self.env_file,
+            cookie_file: self.cookie_file.or(default_cookie_file),
+            default_scheme,
+            name: self.name,
+            compact: self.compact,
+            redact: self.redact,
+            output: self.output.map(std::path::PathBuf::from),
+            force: self.force,
+            list: self.list,
+        }
+    }
+}
+
+/// Parameters for inline CLI single-request execution mode
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunParams {
+    pub args: Vec<String>,
+    pub no_cookies: bool,
+    pub cookie_file: Option<String>,
+    pub env: Option<String>,
+    pub default_scheme: String,
+    pub debug: bool,
+    pub debug_on_failure: bool,
+}
+
+impl RunParams {
+    pub fn from_cli(cli: &Cli) -> Self {
+        Self {
+            args: cli.args.clone(),
+            no_cookies: cli.no_cookies,
+            cookie_file: cli.cookie_file.clone(),
+            env: cli.env.clone(),
+            default_scheme: cli.default_scheme.clone(),
+            debug: cli.debug,
+            debug_on_failure: cli.debug_on_failure,
+        }
+    }
+}
+
 struct CliRunner {
     formatter: ResponseFormatter,
     executor: TestExecutor,
@@ -307,33 +361,26 @@ struct CliRunner {
 }
 
 impl CliRunner {
-    fn new(
-        no_cookies: bool,
-        cookie_file: Option<String>,
-        env: Option<String>,
-        default_scheme: String,
-        debug: bool,
-        debug_on_failure: bool,
-    ) -> Result<Self> {
-        let executor = if no_cookies {
+    fn new(params: &RunParams) -> Result<Self> {
+        let executor = if params.no_cookies {
             TestExecutor::new()
-        } else if let Some(path) = cookie_file {
+        } else if let Some(path) = &params.cookie_file {
             // 与测试套件路径一致：cookie 文件按环境隔离（cookies_dev.json 等）
             let resolved = rupost::middleware::resolve_cookie_path(
                 std::path::PathBuf::from(path),
-                env.as_deref(),
+                params.env.as_deref(),
             )?;
             TestExecutor::with_cookies(resolved)?
         } else {
             TestExecutor::with_ephemeral_cookies()
         }
-        .with_debug(debug)
-        .with_debug_on_failure(debug_on_failure);
+        .with_debug(params.debug)
+        .with_debug_on_failure(params.debug_on_failure);
 
         Ok(Self {
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
             executor,
-            default_scheme,
+            default_scheme: params.default_scheme.clone(),
         })
     }
 
@@ -372,29 +419,62 @@ impl CliRunner {
     }
 }
 
-pub async fn run(
-    args: Vec<String>,
-    no_cookies: bool,
-    cookie_file: Option<String>,
-    env: Option<String>,
-    default_scheme: String,
-    debug: bool,
-    debug_on_failure: bool,
-) -> Result<()> {
-    let runner = CliRunner::new(
-        no_cookies,
-        cookie_file,
-        env,
-        default_scheme,
-        debug,
-        debug_on_failure,
-    )?;
+pub async fn run(params: RunParams) -> Result<()> {
+    let args = params.args.clone();
+    let runner = CliRunner::new(&params)?;
     runner.run(args).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_export_args_and_run_params_mapping() {
+        let input = vec![
+            "rupost",
+            "--env",
+            "prod",
+            "--default-scheme",
+            "http",
+            "export",
+            "curl",
+            "tests/sample.http",
+            "--compact",
+            "--redact",
+        ];
+        let cli = Cli::try_parse_from(&input).expect("parse failed");
+        assert_eq!(cli.env.as_deref(), Some("prod"));
+        assert_eq!(cli.default_scheme, "http");
+
+        match cli.command {
+            Some(Commands::Export(args)) => {
+                assert_eq!(args.target.as_deref(), Some("curl"));
+                assert_eq!(args.paths, vec!["tests/sample.http"]);
+                assert!(args.compact);
+                assert!(args.redact);
+
+                let run_opts = args.into_run_options(
+                    cli.env.clone(),
+                    cli.cookie_file.clone(),
+                    cli.default_scheme.clone(),
+                );
+                assert_eq!(run_opts.target.as_deref(), Some("curl"));
+                assert_eq!(run_opts.env.as_deref(), Some("prod"));
+                assert_eq!(run_opts.default_scheme, "http");
+                assert!(run_opts.compact);
+                assert!(run_opts.redact);
+            }
+            _ => panic!("Expected Commands::Export"),
+        }
+
+        let inline_input = vec!["rupost", "--debug", "GET", "https://api.example.com"];
+        let inline_cli = Cli::try_parse_from(&inline_input).expect("inline parse failed");
+        let params = RunParams::from_cli(&inline_cli);
+        assert_eq!(params.args, vec!["GET", "https://api.example.com"]);
+        assert!(params.debug);
+        assert!(!params.debug_on_failure);
+    }
 
     struct TestCase {
         name: &'static str,

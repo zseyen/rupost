@@ -45,7 +45,7 @@ Always maintain these boundaries:
 
 ## Concurrency & Safety
 - **Async Strategy**: Use `Tokio`. Avoid blocking the main event loop.
-- **File Access**: When multiple processes might access common files (like `cookies.json`), use `fs2` for advisory locking.
+- **File Access**: When multiple processes might access common files (like `cookies.json`), use `fs4` for advisory locking.
 - **Shared State**: Prefer `Arc<T>` with fine-grained Mutexes or RwLocks only when necessary.
 
 ## Implementation Rules

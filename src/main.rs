@@ -97,14 +97,9 @@ async fn main() -> Result<()> {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             replayer.replay_file(&file).await?;
         }
-        #[rustfmt::skip]
-        Some(Commands::Export {
-            target, paths, env, var, env_file, cookie_file, name, compact, redact, output, force, list,
-        }) => {
-            rupost::exporter::run_export_from_cli(
-                target, paths, env.or(cli.env), var, env_file, cookie_file.or(cli.cookie_file),
-                cli.default_scheme, name, compact, redact, output, force, list,
-            )?;
+        Some(Commands::Export(args)) => {
+            let opts = args.into_run_options(cli.env, cli.cookie_file, cli.default_scheme);
+            rupost::exporter::run_export(opts)?;
         }
         Some(Commands::Tui { file }) => {
             rupost::tui::run(file).await?;
@@ -114,16 +109,7 @@ async fn main() -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                cli::run(
-                    cli.args,
-                    cli.no_cookies,
-                    cli.cookie_file,
-                    cli.env,
-                    cli.default_scheme,
-                    cli.debug,
-                    cli.debug_on_failure,
-                )
-                .await?;
+                cli::run(cli::RunParams::from_cli(&cli)).await?;
             }
         }
     }

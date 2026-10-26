@@ -7,42 +7,7 @@ pub mod types;
 
 use crate::Result;
 use crate::RupostError;
-use types::{ExportOptions, ExportRunOptions};
-
-/// 从 CLI 参数构建并运行导出流程的高阶门面
-#[allow(clippy::too_many_arguments)]
-pub fn run_export_from_cli(
-    target: Option<String>,
-    paths: Vec<String>,
-    env: Option<String>,
-    var: Vec<String>,
-    env_file: Option<String>,
-    cookie_file: Option<String>,
-    default_scheme: String,
-    name: Option<String>,
-    compact: bool,
-    redact: bool,
-    output: Option<String>,
-    force: bool,
-    list: bool,
-) -> Result<()> {
-    let opts = ExportRunOptions {
-        target,
-        paths,
-        env,
-        var,
-        env_file,
-        cookie_file,
-        default_scheme,
-        name,
-        compact,
-        redact,
-        output: output.map(std::path::PathBuf::from),
-        force,
-        list,
-    };
-    run_export(opts)
-}
+pub use types::{ExportOptions, ExportRunOptions};
 
 /// 执行命令导出的机制层主逻辑
 pub fn run_export(opts: ExportRunOptions) -> Result<()> {

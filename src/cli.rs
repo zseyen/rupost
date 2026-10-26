@@ -252,7 +252,7 @@ pub struct GenerateArgs {
     pub interactive: bool,
 }
 
-#[derive(Parser, Debug, Clone, PartialEq, Eq)]
+#[derive(Parser, Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExportArgs {
     /// Target export format (e.g. curl, httpie, wget)
     #[arg(value_name = "TARGET", required_unless_present = "list")]
@@ -340,7 +340,32 @@ pub struct RunParams {
     pub debug_on_failure: bool,
 }
 
+#[allow(dead_code)]
+impl Default for RunParams {
+    fn default() -> Self {
+        Self {
+            args: Vec::new(),
+            no_cookies: false,
+            cookie_file: None,
+            env: None,
+            default_scheme: "http".to_string(),
+            debug: false,
+            debug_on_failure: false,
+        }
+    }
+}
+
+#[allow(dead_code)]
 impl RunParams {
+    /// Create a new `RunParams` with the specified arguments and default configuration
+    pub fn new(args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            args: args.into_iter().map(Into::into).collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Construct RunParams directly from parsed CLI arguments
     pub fn from_cli(cli: &Cli) -> Self {
         Self {
             args: cli.args.clone(),
@@ -351,6 +376,42 @@ impl RunParams {
             debug: cli.debug,
             debug_on_failure: cli.debug_on_failure,
         }
+    }
+
+    /// Configure target environment
+    pub fn with_env(mut self, env: impl Into<String>) -> Self {
+        self.env = Some(env.into());
+        self
+    }
+
+    /// Configure default URL scheme
+    pub fn with_default_scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.default_scheme = scheme.into();
+        self
+    }
+
+    /// Configure cookie storage file path
+    pub fn with_cookie_file(mut self, path: impl Into<String>) -> Self {
+        self.cookie_file = Some(path.into());
+        self
+    }
+
+    /// Configure whether automatic cookies handling is disabled
+    pub fn with_no_cookies(mut self, no_cookies: bool) -> Self {
+        self.no_cookies = no_cookies;
+        self
+    }
+
+    /// Configure debug network diagnostics
+    pub fn with_debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    /// Configure debug network diagnostics on failure
+    pub fn with_debug_on_failure(mut self, debug_on_failure: bool) -> Self {
+        self.debug_on_failure = debug_on_failure;
+        self
     }
 }
 
@@ -474,6 +535,49 @@ mod tests {
         assert_eq!(params.args, vec!["GET", "https://api.example.com"]);
         assert!(params.debug);
         assert!(!params.debug_on_failure);
+    }
+
+    #[test]
+    fn test_run_params_builder_and_default() {
+        // 1. 测试默认值规范
+        let default_params = RunParams::default();
+        assert!(default_params.args.is_empty());
+        assert!(!default_params.no_cookies);
+        assert_eq!(default_params.cookie_file, None);
+        assert_eq!(default_params.env, None);
+        assert_eq!(default_params.default_scheme, "http");
+        assert!(!default_params.debug);
+        assert!(!default_params.debug_on_failure);
+
+        // 2. 测试 new 构造器与链式 Builder
+        let custom_params = RunParams::new(["POST", "http://127.0.0.1:8080/api"])
+            .with_env("staging")
+            .with_default_scheme("https")
+            .with_cookie_file("/tmp/cookies.json")
+            .with_no_cookies(true)
+            .with_debug(true)
+            .with_debug_on_failure(true);
+
+        assert_eq!(
+            custom_params.args,
+            vec!["POST", "http://127.0.0.1:8080/api"]
+        );
+        assert_eq!(custom_params.env.as_deref(), Some("staging"));
+        assert_eq!(custom_params.default_scheme, "https");
+        assert_eq!(
+            custom_params.cookie_file.as_deref(),
+            Some("/tmp/cookies.json")
+        );
+        assert!(custom_params.no_cookies);
+        assert!(custom_params.debug);
+        assert!(custom_params.debug_on_failure);
+
+        // 3. 测试 ExportArgs 默认值
+        let export_args = ExportArgs::default();
+        assert_eq!(export_args.target, None);
+        assert!(export_args.paths.is_empty());
+        assert!(!export_args.compact);
+        assert!(!export_args.redact);
     }
 
     struct TestCase {

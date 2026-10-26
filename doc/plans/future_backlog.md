@@ -34,3 +34,17 @@
 *   **状态**：延期实现。
 *   **需求描述**：提供美观、直观的单页 HTML 测试汇总报告，供 Jenkins / GitHub Pages / 团队内部展示。
 *   **技术架构要点**：基于 `handlebars-rust` 或 `tera` 对 `BatchExecutor` 产生的 JSON 进行静态渲染。
+
+---
+
+## 📌 2026-10 竞争格局复审登记（来源：[竞争格局复审](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-25-competitive-landscape-review.md)）
+
+### 4. gRPC / GraphQL 专用支持 — **Won't do（当前）**
+*   **状态**：显式取舍，非遗忘。Posting / Bruno / Hoppscotch / Resterm 已将其做成通用客户端标配，RuPost 定位"终端回归引擎"而非通用客户端，跟进无差异化收益。
+*   **重开条件**：若做，优先与流式叙事一致的方向（gRPC-Web / server streaming 场景的剧本断言），复用现有 `AssertTarget` 统一断言体系。
+
+### 5. HTTP/3 支持
+*   **状态**：登记观察。xh 与 curl 已支持；RuPost 经 reqwest 的能力边界待确认后再排期。
+
+### 6. `generate` 命令的 AI 延伸（历史 → 测试建议）
+*   **状态**：**已正式设计**（2026-10-26，从"远期构想"升级为待实施方案）——演进为 [`rupost ai bootstrap` 自举测试方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md) Phase 1（历史→语义增强测试文件，含脱敏/引擎 lint/降级语义）。前置依赖：AI 激活 Phase 0（[AI 激活 PRD](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-activation-prd.md)）。

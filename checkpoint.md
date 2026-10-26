@@ -34,4 +34,20 @@
 - TUI 渲染 `TestResult.warnings`（当前仅 CLI/JSON 报告可见）
 - `ws/client.rs`、`ws/frame.rs`、`action_parser.rs` 的 `Result<_, String>` 残留
 - Phase 6 架构债：`RunParams` 参数对象、TUI AppState 拆分、rupost-ai client 测试补强、anyhow 移除、`load_generator` 移出 `[[bin]]`
+
+---
+
+## 下一步：全量测试方案落地（2026-10-25）
+
+测试侧父纲已建立：[2026-10-25-test-strategy-plan.md](doc/plans/2026-10-25-test-strategy-plan.md)（v2，经双子代理交叉审查）。基线 468 测试全绿（317 lib + 6 主二进制 + 145 tests/）。方案 19 功能域矩阵盘点出 P0 缺口 4 项（`generate` 域 0 测试、快照重放仅 1 测试、历史四实子命令 + `export` 桩未锁定、CLI 全局参数位置契约无回归），P1 8 项，P2 5 项。
+
+**P0 执行方案已细化至逐场景级**：[2026-10-25-test-p0-execution.md](doc/plans/2026-10-25-test-p0-execution.md)（13 个新测试，每个含 Given-When-Then 场景说明；4 个 jj 原子提交序列；设计期实证 5 项）。执行期新事实：①子命令模式全局参数双序皆可（AGENTS.md §5 表述过时，随提交 4 修正）；②真实陷阱在内联模式（后置旗被吞且改变解析器选择）；③`history show` help 注释（"1 is the oldest"）与实现（1=最新）矛盾，随提交 3 修正。**待执行**：按 P0 执行方案 §6 提交序列实施，预期基线 468 → 481。
+
+**竞争定位已复审（2026-10）**：[2026-10-25-competitive-landscape-review.md](doc/competition/2026-10-25-competitive-landscape-review.md)。核心结论：TUI"Postman 克隆"路线已红海（Posting 三协议、Nexus 入局、ATAC 掉队、Bruno 下探终端），RuPost 可防御定位是**"面向实时 AI API 时代的终端回归引擎"**——LLM 流式测试闭环（A1）在终端工具中全行业空白且已代码在仓，最高杠杆动作是激活 `crates/rupost-ai` 并补公开示例；gRPC/GraphQL 显式 Won't do（当前），登记 future_backlog。
+
+**全文档整合审计完成（2026-10-26）**：[2026-10-26-project-integration-report.md](doc/dev/2026-10-26-project-integration-report.md)。98 文档三层沉积结构（02 设想/06-07 交付/10 治理），约 40 处矛盾分级（最重：plugin 可行性报告 Phase 1 虚勾选 [x] vs 零代码；dev/progress_summary 自相矛盾）。**关键新发现**：`crates/rupost-ai` 是无引用死代码且与 `src/http/llm_adapter.rs` 双实现悬空——激活 A1 前必须先做合并/接线架构决策，这是与 P0 测试并列的下一优先级。
+
+**AI 激活功能设计完成（2026-10-26）**：[2026-10-26-ai-activation-prd.md](doc/plans/2026-10-26-ai-activation-prd.md)。逐行核实纠正"双实现"误判（crate 资产 = AssertionTranslator 自然语言断言翻译，已带 3 测试；与 llm_adapter 流式职责不同层），架构决策采**方案 A：接线 + 职责文档化**。功能点：`rupost ai assert "<NL>" [--raw]` + 环境变量密钥 + `examples/ai_assert/` 无真实 Key 离线 dogfooding 闭环（mock 后端）+ crate client 0→4 测试；4 个 jj 提交序列；`@ai_assert` 运行时指令显式 Won't do（离线隔离）。
+
+**AI 自举测试方案设计完成（2026-10-26）**：[2026-10-26-ai-bootstrap-proposal.md](doc/plans/2026-10-26-ai-bootstrap-proposal.md)。核心管线 `rupost ai bootstrap --from history|snapshot` 五阶段（素材采集→机械还原→AI 语义增强→引擎校验→回归资产）；四判据：素材自产（历史含全量响应体，recorder.rs 实证）、提炼有界（默认脱敏+4KB 截断+8 运算符解析器兼任 lint）、产物自足（断网可跑，AI 失败降级 HttpGenerator 机械版）、闭环自证（失败回流素材）。L1 已设计（ai assert）→ L2 本方案 → L3 快照转 Mock → L4 远期。执行期 AI 参与/eBPF 录制显式非目标（与 Keploy 分界）。**实施顺序**：AI 激活 Phase 0 → 自举 Phase 1（可穿插 P0 测试补齐）。
 ---

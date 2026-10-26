@@ -27,7 +27,7 @@ pub fn escape_shell_word(input: &str, compact: bool) -> String {
                 '\n' => out.push_str("\\n"),
                 '\r' => out.push_str("\\r"),
                 '\t' => out.push_str("\\t"),
-                c if c.is_control() => out.push_str(&format!("\\x{:02x}", c as u32)),
+                c if c.is_control() => out.push_str(&format!("\\{:03o}", c as u32)),
                 c => out.push(c),
             }
         }
@@ -91,6 +91,15 @@ mod tests {
         let input = "hello\x1b[31mworld";
         let escaped = escape_shell_word(input, false);
         assert!(escaped.starts_with("$'"));
-        assert!(escaped.contains("\\x1b"));
+        assert!(escaped.contains("\\033"));
+    }
+
+    #[test]
+    fn test_control_character_followed_by_hex_digit_no_greedy_clash() {
+        // \x1b 紧随 'a'，若使用十六进制 \x1ba 会导致 bash 贪婪解析为 0x1ba
+        // 使用 3 位八进制 \033 使得 'a' 保持独立不受侵吞
+        let input = "prefix\x1bapple";
+        let escaped = escape_shell_word(input, false);
+        assert_eq!(escaped, "$'prefix\\033apple'");
     }
 }

@@ -1,11 +1,12 @@
 ---
-title: Order Service API Specification
-version: 1.2.0
-base_path: /api/v1
-host: api.orderservice.local
-rules: |
-  - 所有金额字段 (amount) 必须以分为单位（整数）。
-  - 创建订单的响应必须包含唯一标识 id。
+title = "Order Service API Specification"
+version = "1.2.0"
+base_path = "/api/v1"
+host = "api.orderservice.local"
+rules = """
+- 所有金额字段 (amount) 必须以分为单位（整数）。
+- 创建订单的响应必须包含唯一标识 id。
+"""
 ---
 
 # 订单服务接口规格书 (Order Service API Contract)

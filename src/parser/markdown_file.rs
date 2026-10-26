@@ -28,16 +28,18 @@ impl MarkdownFileParser {
     pub fn parse_content(content: &str) -> ParseResult<ParsedFile> {
         let mut parsed_file = ParsedFile::new();
 
-        // 提取 YAML Frontmatter
+        // 提取 Frontmatter (支持 +++ 与 --- 定界符，优先原生 TOML，兼容器双模兼容旧 key: value)
         let trimmed_content = content.trim_start();
-        if let Some(stripped) = trimmed_content.strip_prefix("---") {
-            let find_end = stripped.find("---");
-            if let Some(end_pos) = find_end {
-                let yaml_str = &stripped[..end_pos];
-                if let Ok(meta) = serde_yaml::from_str::<FileMetadata>(yaml_str) {
-                    parsed_file.metadata = meta;
-                }
-            }
+        let frontmatter_str = if let Some(stripped) = trimmed_content.strip_prefix("+++") {
+            stripped.find("+++").map(|end_pos| &stripped[..end_pos])
+        } else if let Some(stripped) = trimmed_content.strip_prefix("---") {
+            stripped.find("---").map(|end_pos| &stripped[..end_pos])
+        } else {
+            None
+        };
+
+        if let Some(fm) = frontmatter_str {
+            parsed_file.metadata = Self::parse_frontmatter(fm);
         }
 
         let code_blocks = Self::extract_code_blocks(content);
@@ -79,6 +81,67 @@ impl MarkdownFileParser {
         }
 
         Ok(parsed_file)
+    }
+
+    /// 解析 Frontmatter 文本：优先尝试标准 TOML，若失败则优雅兼容旧键值对语法
+    fn parse_frontmatter(fm: &str) -> FileMetadata {
+        // 1. 优先尝试原生 TOML 结构化反序列化
+        if let Ok(meta) = toml::from_str::<FileMetadata>(fm) {
+            return meta;
+        }
+
+        // 2. 优雅降级：轻量行扫描解析 key: value 及 rules: | 多行语法（无需依赖 YAML）
+        let mut meta = FileMetadata::default();
+        let mut current_multiline_key: Option<String> = None;
+        let mut multiline_buf = String::new();
+
+        for line in fm.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // 处理缩进的多行文本块
+            if let Some(ref key) = current_multiline_key {
+                if line.starts_with("  ") || line.starts_with('\t') {
+                    multiline_buf.push_str(trimmed);
+                    multiline_buf.push('\n');
+                    continue;
+                } else {
+                    if key == "rules" {
+                        meta.rules = Some(multiline_buf.clone());
+                    }
+                    current_multiline_key = None;
+                    multiline_buf.clear();
+                }
+            }
+
+            if let Some((k, v)) = trimmed.split_once(':') {
+                let key = k.trim();
+                let val = v.trim();
+                if val == "|" {
+                    current_multiline_key = Some(key.to_string());
+                    multiline_buf.clear();
+                } else {
+                    let clean_val = val.trim_matches('"').trim_matches('\'').to_string();
+                    match key {
+                        "title" => meta.title = Some(clean_val),
+                        "version" => meta.version = Some(clean_val),
+                        "base_path" => meta.base_path = Some(clean_val),
+                        "rules" => meta.rules = Some(clean_val),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if let Some(ref key) = current_multiline_key
+            && key == "rules"
+        {
+            meta.rules = Some(multiline_buf);
+        }
+
+        meta
     }
 
     fn parse_mock_block(block_content: &str, start_line: usize) -> ParseResult<ParsedRequest> {
@@ -537,5 +600,52 @@ GET http://localhost:9000/api/v1/users/123?role=admin
         assert_eq!(parsed.requests.len(), 1);
         let req = &parsed.requests[0];
         assert!(req.metadata.is_test);
+    }
+
+    #[test]
+    fn test_frontmatter_toml_parsing() {
+        // 1. 验证 --- 定界符包裹的 TOML
+        let content_dash = r#"---
+title = "User Order API"
+version = "2.1.0"
+base_path = "/api/v2"
+rules = "all amounts in cents"
+---
+
+# User Order API
+
+```http
+GET /orders
+```
+"#;
+        let parsed = MarkdownFileParser::parse_content(content_dash).unwrap();
+        assert_eq!(parsed.metadata.title.as_deref(), Some("User Order API"));
+        assert_eq!(parsed.metadata.version.as_deref(), Some("2.1.0"));
+        assert_eq!(parsed.metadata.base_path.as_deref(), Some("/api/v2"));
+        assert_eq!(
+            parsed.metadata.rules.as_deref(),
+            Some("all amounts in cents")
+        );
+        assert_eq!(parsed.requests.len(), 1);
+        assert_eq!(parsed.requests[0].base_path.as_deref(), Some("/api/v2"));
+
+        // 2. 验证 +++ 定界符包裹的 TOML
+        let content_plus = r#"+++
+title = "Zola Style API"
+base_path = "/v1"
++++
+
+```http
+GET /items
+```
+"#;
+        let parsed_plus = MarkdownFileParser::parse_content(content_plus).unwrap();
+        assert_eq!(
+            parsed_plus.metadata.title.as_deref(),
+            Some("Zola Style API")
+        );
+        assert_eq!(parsed_plus.metadata.base_path.as_deref(), Some("/v1"));
+        assert_eq!(parsed_plus.requests.len(), 1);
+        assert_eq!(parsed_plus.requests[0].base_path.as_deref(), Some("/v1"));
     }
 }

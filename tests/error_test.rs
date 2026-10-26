@@ -13,13 +13,6 @@ fn test_invalid_url() {
 }
 
 #[test]
-fn test_error_conversion_from_anyhow() {
-    let anyhow_err = anyhow::anyhow!("test anyhow error");
-    let rupost_err: RupostError = anyhow_err.into();
-    assert!(rupost_err.to_string().contains("test anyhow error"));
-}
-
-#[test]
 fn test_result_type() {
     fn returns_error() -> Result<()> {
         Err(RupostError::ParseError("test".to_string()))

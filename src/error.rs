@@ -38,6 +38,9 @@ pub enum RupostError {
     #[error("找不到依赖文件: {missing_dep} (声明在文件: {file})")]
     DependencyNotFound { file: String, missing_dep: String },
 
+    #[error("Cookie 处理错误: {0}")]
+    CookieError(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -63,13 +66,6 @@ impl RupostError {
         } else {
             self.to_string()
         }
-    }
-}
-
-// Add conversion from anyhow::Error
-impl From<anyhow::Error> for RupostError {
-    fn from(err: anyhow::Error) -> Self {
-        RupostError::Other(err.to_string())
     }
 }
 

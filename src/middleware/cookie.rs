@@ -181,8 +181,9 @@ impl CookieMiddleware {
 
         {
             let mut writer = std::io::BufWriter::new(&file);
-            save_incl_expired_and_nonpersistent(&store, &mut writer)
-                .map_err(|e| anyhow::anyhow!("Failed to save cookies: {}", e))?;
+            save_incl_expired_and_nonpersistent(&store, &mut writer).map_err(|e| {
+                crate::error::RupostError::CookieError(format!("Failed to save cookies: {e}"))
+            })?;
             writer.flush()?;
         }
 
@@ -195,8 +196,9 @@ impl CookieMiddleware {
     pub fn export_cookie_state(&self) -> Result<serde_json::Value> {
         let store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         let mut buffer = Vec::new();
-        save_incl_expired_and_nonpersistent(&store, &mut buffer)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize cookie store: {}", e))?;
+        save_incl_expired_and_nonpersistent(&store, &mut buffer).map_err(|e| {
+            crate::error::RupostError::CookieError(format!("Failed to serialize cookie store: {e}"))
+        })?;
         let value = serde_json::from_slice(&buffer)?;
         Ok(value)
     }
@@ -205,8 +207,11 @@ impl CookieMiddleware {
     pub fn import_cookie_state(&self, state: serde_json::Value) -> Result<()> {
         let bytes = serde_json::to_vec(&state)?;
         let reader = std::io::BufReader::new(&bytes[..]);
-        let new_store = load_all(reader)
-            .map_err(|e| anyhow::anyhow!("Failed to deserialize cookie store: {}", e))?;
+        let new_store = load_all(reader).map_err(|e| {
+            crate::error::RupostError::CookieError(format!(
+                "Failed to deserialize cookie store: {e}"
+            ))
+        })?;
         let mut store = self.store.lock().unwrap_or_else(|e| e.into_inner());
         *store = new_store;
         Ok(())

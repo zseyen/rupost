@@ -71,7 +71,64 @@
    - 新增 30 个单元与集成测试（基线测试量提升至 500+ 个，全量 `cargo test` 100% PASS）；
    - `verify_features.sh` 全特性端到端冒烟 100% 通过；
    - `examples/run_all.sh` 15 套内置复杂示例全量回归 100% 通过；
-   - `cargo clippy --all-targets` 零告警，`cargo fmt --check` 格式化完全达标。
+   - `cargo clippy --all-targets` 零告警，`cargo fmt --check` 格式化完全达标；
+   - **安全加固微调**：Shell 转义中将控制字符从十六进制 `\xHH` 优化为固定 3 位八进制 `\ooo`，彻底根除 Shell 贪婪消费紧跟十六进制字符的粘连歧义。
 
 **AI 自举测试方案设计完成（2026-10-26）**：[2026-10-26-ai-bootstrap-proposal.md](doc/plans/2026-10-26-ai-bootstrap-proposal.md)。核心管线 `rupost ai bootstrap --from history|snapshot` 五阶段（素材采集→机械还原→AI 语义增强→引擎校验→回归资产）；四判据：素材自产（历史含全量响应体，recorder.rs 实证）、提炼有界（默认脱敏+4KB 截断+8 运算符解析器兼任 lint）、产物自足（断网可跑，AI 失败降级 HttpGenerator 机械版）、闭环自证（失败回流素材）。L1 已设计（ai assert）→ L2 本方案 → L3 快照转 Mock → L4 远期。执行期 AI 参与/eBPF 录制显式非目标（与 Keploy 分界）。**实施顺序**：AI 激活 Phase 0 → 自举 Phase 1（可穿插 P0 测试补齐）。
+
+---
+
+## 阶段成果：质量基线加固 P0 全量测试方案完成交付（2026-10-26）
+
+依据 [P0 测试执行方案](doc/plans/2026-10-25-test-p0-execution.md)（§6 提交序列），4 个原子提交全部高质量交付，全量测试用例数突破 503+：
+1. **P0-1 `generate` 域闭环**（Commit `ffb5842a`）：
+   - 新建 `tests/generate_integration_test.rs`（4 测试）；
+   - 覆盖单条往返格式、多条按最新 N 条切分、真实三段 CLI 接力闭环（`run` -> `generate` -> `test`）、空历史友好退出。
+2. **P0-2 快照录制与重放加固**（Commit `9606ecd8`）：
+   - 扩充 `tests/snapshot_replay_test.rs`（4 测试）；
+   - 验证多请求 URL 改写与 WireMock 真实匹配等价性、`@timeout` 透传计时证明（500ms 超时打断 2s 阻塞）、损坏/非法 JSON 快照优雅容错。
+3. **P0-3 历史子命令与 `export` 桩行为锁定**（Commit `0f492833`）：
+   - 新建 `tests/history_cli_test.rs`（5 测试）；
+   - 锁定 `list`（`--limit`、`--reverse` 顺序反转）、`show`（1-indexed 倒序匹配、UUID/短ID 匹配、越界与未命中容错）、`prune`（基于 mtime 按龄清理旧日志）、`clear`（交互输入拒绝、`--yes`、`--yes --all`）以及 `export` MVP 桩契约；
+   - 修正 `src/cli.rs` 中 `Show` 命令帮助注释为 `(1-indexed, 1 is the newest) or UUID`。
+4. **P0-4 CLI 全局参数位置契约与内联模式陷阱锁定**（Commit `4ed3c3a9`）：
+   - 在 `src/cli.rs` 的 `mod tests` 编写表驱动单元测试 `test_global_args_position_contract_table`（9 个测试用例行）；
+   - 实证锁定：子命令模式（`test`, `mock`, `history` 等）clap v4 支持前置与后置全局参数向下继承；内联模式（`rupost GET url`）因 `trailing_var_arg` 会将后置参数吸入 `args`，因此内联模式全局参数必须置于最前；
+   - 同步修正 `AGENTS.md` 和 `.agents/AGENTS.md` §5 的规则规范。
+5. **自动化三层校验全绿保障**：
+   - 全量 `cargo test` 503+ PASS，0 失败；
+   - `bash tests/verify_features.sh` 全特性集成冒烟 100% 通过；
+   - `bash examples/run_all.sh` 15 套内置用例全量回归 100% 通过；
+   - `cargo fmt --check` 与 `cargo clippy --all-targets` 零告警。
+
+---
+
+## 阶段成果：依赖净化治理与 Clean Architecture 参数对象重构完成交付（2026-10-27）
+
+依据技术规格方案，彻底解决长期积累的依赖废弃、错误处理割裂以及长形参坏味道，4 个原子提交全部高质量交付：
+1. **Commit 1: 根除废弃的 `serde_yaml`**（`529a45e7`）：
+   - Markdown Frontmatter 元数据解析全面统一至原生 `toml`，并实现轻量行扫描回退器兼容遗留 `key: value` 与 `rules: |` 格式，零外部 YAML 依赖；
+   - 彻底删除 `serde_yaml` 依赖，消灭 unmaintained 安全漏洞风险。
+2. **Commit 2: 根除 `anyhow` 并统一强类型错误体系**（`25be3938`）：
+   - `src/middleware/cookie.rs` 与 `src/utils/formatter.rs` 的动态错误全部统一为领域强类型 `RupostError`（新增 `CookieError` 分支）；
+   - 从 `src/error.rs` 中剔除 `impl From<anyhow::Error>`，根 `Cargo.toml` 完全移除 `anyhow` 依赖。
+3. **Commit 3: Workspace 依赖统一继承与发布包减重**（`2714c8a5`）：
+   - 根 `Cargo.toml` 建立 `[workspace.dependencies]`，统一收敛 `tokio`, `reqwest`, `serde`, `serde_json`, `thiserror`, `async-trait`；
+   - 子包 `crates/rupost-ai` 依赖全面升级继承 `reqwest 0.13` workspace 依赖；
+   - 将 `load_generator` 从正式发布二进制 `[[bin]]` 降级为开发态 `[[example]]`，消除系统 C/OpenSSL 交叉编译污染。
+4. **Commit 4: Clean Architecture 参数对象重构与接口下沉**（`d2c1d12e`）：
+   - 引入 `RunParams` 和 `ExportArgs` 参数对象，彻底消除 `cli::run`（7个参数）与 `run_export_from_cli`（12个参数）的长形参列表；
+   - 废弃冗余过渡函数 `run_export_from_cli`，直接由机制层 `run_export(opts)` 接管；
+   - `src/main.rs` 从 131 行进一步精简至 116 行（严格控制在 150 行上限之内）；
+   - 修正架构文档 `.agent/skills/rupost-architecture/SKILL.md` 中遗留的 `fs2` 描述为 `fs4`。
+5. **Commit 5: 构造器精进与 Builder 模式补全**（`ce324f84`）：
+   - 为 `RunParams` 实现 `Default`（绑定 `"http"` 默认 scheme）与通用泛型入参构造器 `RunParams::new(["GET", "..."])`；
+   - 提供全套强类型链式 Builder 方法（`with_env`, `with_default_scheme`, `with_cookie_file`, `with_no_cookies`, `with_debug`, `with_debug_on_failure`）；
+   - 为 `ExportArgs` derive `Default`；
+   - 补充 `test_run_params_builder_and_default` 单元测试，进一步提升测试和库级易用性。
+6. **自动化三层校验全绿保障**：
+   - 全量 `cargo test --workspace` 350+ 单元测试与全部集成测试 100% PASS；
+   - `bash tests/verify_features.sh` 全特性集成冒烟 100% 通过；
+   - `cargo fmt --check` 与 `cargo clippy --workspace --all-targets` 零告警。
+
 ---

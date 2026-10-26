@@ -3,10 +3,6 @@ mod cli;
 use clap::Parser;
 use cli::{Cli, Commands, HistoryCommands};
 use rupost::Result;
-use rupost::generator::http::HttpGenerator;
-use rupost::history::selector::{self, SelectionStrategy};
-use rupost::history::storage::get_storage;
-use std::fs;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -71,44 +67,16 @@ async fn main() -> Result<()> {
                 println!("History export is not implemented in MVP stage.");
             }
         },
-        Some(Commands::Diagnose { url, report }) => match rupost::http::diagnose_url(&url).await {
-            Ok(report_data) => {
-                if report == "json" {
-                    println!("{}", serde_json::to_string_pretty(&report_data).unwrap());
-                } else {
-                    rupost::http::print_diagnose_report(&report_data);
-                }
-            }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        },
+        Some(Commands::Diagnose { url, report }) => {
+            rupost::http::run_diagnose(&url, &report).await?;
+        }
         Some(Commands::Generate(args)) => {
-            let storage = get_storage();
-
-            // Determine strategy
-            let strategy = if args.interactive {
-                SelectionStrategy::Interactive
-            } else {
-                SelectionStrategy::Last(args.last)
+            let opts = rupost::generator::GenerateOptions {
+                output_file: args.output_file,
+                last: args.last,
+                interactive: args.interactive,
             };
-
-            // Execute selection
-            let entries = selector::select_entries(storage, strategy)?;
-
-            if entries.is_empty() {
-                tracing::warn!("No history found or selected to generate.");
-                return Ok(());
-            }
-
-            let content = HttpGenerator::generate(&entries)?;
-            fs::write(&args.output_file, content)?;
-            println!(
-                "Generated test file: {} ({} requests)",
-                args.output_file,
-                entries.len()
-            );
+            rupost::generator::run_generate(opts)?;
         }
         Some(Commands::Mock { file, port }) => {
             rupost::mock::run_server_from_file(&file, port).await?;
@@ -128,6 +96,15 @@ async fn main() -> Result<()> {
         }) => {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             replayer.replay_file(&file).await?;
+        }
+        #[rustfmt::skip]
+        Some(Commands::Export {
+            target, paths, env, var, env_file, cookie_file, name, compact, redact, output, force, list,
+        }) => {
+            rupost::exporter::run_export_from_cli(
+                target, paths, env.or(cli.env), var, env_file, cookie_file.or(cli.cookie_file),
+                cli.default_scheme, name, compact, redact, output, force, list,
+            )?;
         }
         Some(Commands::Tui { file }) => {
             rupost::tui::run(file).await?;

@@ -80,15 +80,23 @@ mod tests {
     #[test]
     fn test_wget_get_simple() {
         let req = sample_req("GET", "https://api.example.com/users");
-        let opts = ExportOptions { compact: true, ..Default::default() };
+        let opts = ExportOptions {
+            compact: true,
+            ..Default::default()
+        };
         let out = WgetExporter.export_one(&req, &opts).unwrap();
-        assert_eq!(out, "wget -qO- --content-on-error --method=GET 'https://api.example.com/users'");
+        assert_eq!(
+            out,
+            "wget -qO- --content-on-error --method=GET 'https://api.example.com/users'"
+        );
     }
 
     #[test]
     fn test_wget_head_uses_spider() {
         let req = sample_req("HEAD", "https://api.example.com/status");
-        let out = WgetExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = WgetExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert!(out.contains("--spider"));
         assert!(out.contains("--server-response"));
         assert!(!out.contains("--method=HEAD"));
@@ -97,11 +105,14 @@ mod tests {
     #[test]
     fn test_wget_post_with_body_and_headers() {
         let mut req = sample_req("POST", "https://api.example.com/data");
-        req.headers.push(("Content-Type".into(), "application/json".into()));
+        req.headers
+            .push(("Content-Type".into(), "application/json".into()));
         req.body = Some("{\"k\": \"v\"}".to_string());
         req.timeout_secs = Some(15);
 
-        let out = WgetExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = WgetExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert!(out.contains("--content-on-error"));
         assert!(out.contains("--method=POST"));
         assert!(out.contains("--timeout=15"));

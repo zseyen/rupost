@@ -116,7 +116,9 @@ mod tests {
     fn test_redact_url_query() {
         let url = "https://example.com/api?api_key=secret999&page=2";
         let redacted = redact_url(url);
-        assert!(redacted.contains("api_key=%5BREDACTED%5D") || redacted.contains("api_key=[REDACTED]"));
+        assert!(
+            redacted.contains("api_key=%5BREDACTED%5D") || redacted.contains("api_key=[REDACTED]")
+        );
         assert!(redacted.contains("page=2"));
         assert!(!redacted.contains("secret999"));
     }

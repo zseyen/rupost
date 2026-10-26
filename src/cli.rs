@@ -167,6 +167,58 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
+    #[command(alias = "exp")]
+    Export {
+        /// Target export format (e.g. curl, httpie, wget)
+        #[arg(value_name = "TARGET", required_unless_present = "list")]
+        target: Option<String>,
+
+        /// Paths to .http/.md files or directories
+        #[arg(value_name = "PATHS", required_unless_present = "list")]
+        paths: Vec<String>,
+
+        /// Environment name (e.g. dev, staging, prod)
+        #[arg(short, long)]
+        env: Option<String>,
+
+        /// Variable overrides (key=value)
+        #[arg(long, value_name = "KEY=VALUE")]
+        var: Vec<String>,
+
+        /// Path to a local environment file (e.g. .env)
+        #[arg(long, value_name = "FILE")]
+        env_file: Option<String>,
+
+        /// Path to cookie store file
+        #[arg(long, value_name = "FILE")]
+        cookie_file: Option<String>,
+
+        /// Filter and export only the request matching the given @name
+        #[arg(short, long)]
+        name: Option<String>,
+
+        /// Output in single-line compact format
+        #[arg(short, long)]
+        compact: bool,
+
+        /// Redact sensitive credentials in headers and query params
+        #[arg(long)]
+        redact: bool,
+
+        /// Save output directly to file
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<String>,
+
+        /// Force overwrite output file if it already exists
+        #[arg(short, long)]
+        force: bool,
+
+        /// List all available export plugins
+        #[arg(short, long)]
+        list: bool,
+    },
+
     /// Start interactive terminal UI mode
     Tui {
         /// Optional test file path to pre-load and preview in TUI

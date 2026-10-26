@@ -82,19 +82,28 @@ mod tests {
     #[test]
     fn test_httpie_get_simple() {
         let req = sample_req("GET", "https://api.example.com/users");
-        let opts = ExportOptions { compact: true, ..Default::default() };
+        let opts = ExportOptions {
+            compact: true,
+            ..Default::default()
+        };
         let out = HttpieExporter.export_one(&req, &opts).unwrap();
-        assert_eq!(out, "http --ignore-stdin GET 'https://api.example.com/users'");
+        assert_eq!(
+            out,
+            "http --ignore-stdin GET 'https://api.example.com/users'"
+        );
     }
 
     #[test]
     fn test_httpie_post_json() {
         let mut req = sample_req("POST", "https://api.example.com/login");
         req.body = Some("{\"user\": \"bob\"}".to_string());
-        req.headers.push(("Authorization".into(), "Bearer xyz".into()));
+        req.headers
+            .push(("Authorization".into(), "Bearer xyz".into()));
         req.headers.push(("X-Empty".into(), "".into()));
 
-        let out = HttpieExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = HttpieExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         // 验证有 body 时不带 --ignore-stdin，使用 --raw
         assert!(!out.contains("--ignore-stdin"));
         assert!(out.contains("--raw '{\"user\": \"bob\"}'"));
@@ -112,7 +121,9 @@ mod tests {
         req.is_sse = true;
         req.timeout_secs = Some(30);
 
-        let out = HttpieExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = HttpieExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert!(out.contains("--stream"));
         assert!(out.contains("--timeout=30"));
     }

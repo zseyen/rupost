@@ -83,6 +83,15 @@ RuPost 提供了直观且高效的命令行接口：
   ```bash
   rupost tui
   ```
+* **导出测试用例为原生命令行 (cURL / HTTPie / Wget)**:
+  ```bash
+  # 查看支持的导出插件
+  rupost export --list
+  # 导出为 cURL 命令 (支持环境变量注入与凭据自动脱敏)
+  rupost export curl examples/basic.http -e dev --redact
+  # 导出单行紧凑格式并保存到脚本
+  rupost export httpie examples/basic.http --compact -o request.sh
+  ```
 
 ---
 

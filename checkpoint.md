@@ -49,5 +49,29 @@
 
 **AI 激活功能设计完成（2026-10-26）**：[2026-10-26-ai-activation-prd.md](doc/plans/2026-10-26-ai-activation-prd.md)。逐行核实纠正"双实现"误判（crate 资产 = AssertionTranslator 自然语言断言翻译，已带 3 测试；与 llm_adapter 流式职责不同层），架构决策采**方案 A：接线 + 职责文档化**。功能点：`rupost ai assert "<NL>" [--raw]` + 环境变量密钥 + `examples/ai_assert/` 无真实 Key 离线 dogfooding 闭环（mock 后端）+ crate client 0→4 测试；4 个 jj 提交序列；`@ai_assert` 运行时指令显式 Won't do（离线隔离）。
 
+---
+
+## 阶段成果：命令导出插件架构 (rupost export) 交付完成（2026-10-26）
+
+依据插件化架构设计与红队对抗性审查，完整实现命令导出体系：
+1. **插件机制与开闭原则**：定义 `CommandExporter` Trait 与 `ExporterRegistry` 注册表，内置支持 `curl`、`httpie` (别名 `http`) 与 `wget` 目标；
+2. **安全防线 (Security First)**：
+   - POSIX Shell 安全转义与控制字符过滤（单引号 `'...'` 与单行紧凑模式 ANSI-C `$'...'` 转义，终端逃逸防 Pastejacking）；
+   - 凭据多维脱敏（请求头敏感 Key 保留 `Bearer/Basic/Digest` 前缀，URL 敏感 Query 参数遮蔽）；
+   - 文件覆写保护（`-o/--output` 在文件已存在时阻断并提示 `--force` 覆写）；
+3. **核心数据管线 (IR Pipeline)**：
+   - 5 层级联变量准备管线与 URL 补全拼接；
+   - 自动推断 JSON 请求头（保留用户原始 Body 格式与行序）；
+   - 域名/路径匹配自动注入标准 `Cookie` 请求头；
+   - 跨请求 `@capture` 符号表静态分析（提供依赖断裂警告并继续导出可用请求）；
+   - 自动跳过 `@skip` 块、纯 Mock 路由块与 WebSocket 长连接；
+4. **架构解耦与精简**：
+   - 将 `generate`、`diagnose` 与 `export` 门面完全下沉，`src/main.rs` 行数从 154 行压降至 131 行（严格遵守 < 150 行红线）；
+5. **全面质量验证**：
+   - 新增 30 个单元与集成测试（基线测试量提升至 500+ 个，全量 `cargo test` 100% PASS）；
+   - `verify_features.sh` 全特性端到端冒烟 100% 通过；
+   - `examples/run_all.sh` 15 套内置复杂示例全量回归 100% 通过；
+   - `cargo clippy --all-targets` 零告警，`cargo fmt --check` 格式化完全达标。
+
 **AI 自举测试方案设计完成（2026-10-26）**：[2026-10-26-ai-bootstrap-proposal.md](doc/plans/2026-10-26-ai-bootstrap-proposal.md)。核心管线 `rupost ai bootstrap --from history|snapshot` 五阶段（素材采集→机械还原→AI 语义增强→引擎校验→回归资产）；四判据：素材自产（历史含全量响应体，recorder.rs 实证）、提炼有界（默认脱敏+4KB 截断+8 运算符解析器兼任 lint）、产物自足（断网可跑，AI 失败降级 HttpGenerator 机械版）、闭环自证（失败回流素材）。L1 已设计（ai assert）→ L2 本方案 → L3 快照转 Mock → L4 远期。执行期 AI 参与/eBPF 录制显式非目标（与 Keploy 分界）。**实施顺序**：AI 激活 Phase 0 → 自举 Phase 1（可穿插 P0 测试补齐）。
 ---

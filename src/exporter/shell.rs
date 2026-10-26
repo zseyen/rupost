@@ -59,7 +59,10 @@ mod tests {
 
     #[test]
     fn test_simple_string() {
-        assert_eq!(escape_shell_word("https://api.example.com/users", false), "'https://api.example.com/users'");
+        assert_eq!(
+            escape_shell_word("https://api.example.com/users", false),
+            "'https://api.example.com/users'"
+        );
     }
 
     #[test]

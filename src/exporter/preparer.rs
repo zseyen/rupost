@@ -287,21 +287,16 @@ mod tests {
         let mut parsed = ParsedRequest::new(5);
         parsed.method = Some("POST".to_string());
         parsed.url = "https://api.example.com/custom".to_string();
-        parsed
-            .headers
-            .push(("Content-Type".to_string(), "application/vnd.custom+json".to_string()));
+        parsed.headers.push((
+            "Content-Type".to_string(),
+            "application/vnd.custom+json".to_string(),
+        ));
         parsed.body = Some("{\"key\": 1}".to_string());
 
         let mut context = VariableContext::new();
-        let ir = RequestPreparer::prepare_one(
-            parsed,
-            &mut context,
-            None,
-            None,
-            false,
-            &HashSet::new(),
-        )
-        .unwrap();
+        let ir =
+            RequestPreparer::prepare_one(parsed, &mut context, None, None, false, &HashSet::new())
+                .unwrap();
 
         let ct = ir
             .headers
@@ -316,9 +311,10 @@ mod tests {
         let mut parsed = ParsedRequest::new(1);
         parsed.method = Some("GET".to_string());
         parsed.url = "https://api.example.com/data?token=secret123&page=1".to_string();
-        parsed
-            .headers
-            .push(("Authorization".to_string(), "Bearer eyJhbGci...".to_string()));
+        parsed.headers.push((
+            "Authorization".to_string(),
+            "Bearer eyJhbGci...".to_string(),
+        ));
         parsed
             .headers
             .push(("X-Api-Key".to_string(), "key999".to_string()));
@@ -337,7 +333,11 @@ mod tests {
         assert!(!ir.url.contains("secret123"));
         assert!(ir.url.contains("token=%5BREDACTED%5D") || ir.url.contains("token=[REDACTED]"));
         assert_eq!(
-            ir.headers.iter().find(|(k, _)| k == "Authorization").unwrap().1,
+            ir.headers
+                .iter()
+                .find(|(k, _)| k == "Authorization")
+                .unwrap()
+                .1,
             "Bearer [REDACTED]"
         );
         assert_eq!(
@@ -355,7 +355,9 @@ mod tests {
         req1.metadata.name = Some("Login".to_string());
         req1.method = Some("POST".to_string());
         req1.url = "https://api.example.com/login".to_string();
-        req1.metadata.captures.push(VariableCapture::from_body("token", "data.token"));
+        req1.metadata
+            .captures
+            .push(VariableCapture::from_body("token", "data.token"));
         file.add_request(req1);
 
         // 请求 2: 标记 @skip
@@ -368,7 +370,8 @@ mod tests {
         let mut req3 = ParsedRequest::new(20);
         req3.method = Some("GET".to_string());
         req3.url = "https://api.example.com/profile".to_string();
-        req3.headers.push(("Authorization".to_string(), "Bearer {{token}}".to_string()));
+        req3.headers
+            .push(("Authorization".to_string(), "Bearer {{token}}".to_string()));
         file.add_request(req3);
 
         let mut context = VariableContext::new();
@@ -385,7 +388,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.requests.len(), 2); // req1 和 req3
-        assert_eq!(output.skipped.len(), 1);  // req2
+        assert_eq!(output.skipped.len(), 1); // req2
         assert_eq!(output.skipped[0].reason, "@skip");
 
         // 验证 req3 中的 {{token}} 被精准诊断为来源于前置 @capture
@@ -409,15 +412,9 @@ mod tests {
         parsed.metadata.sse_timeout = Some(Duration::from_secs(120)); // 应生效专属超时
 
         let mut context = VariableContext::new();
-        let ir = RequestPreparer::prepare_one(
-            parsed,
-            &mut context,
-            None,
-            None,
-            false,
-            &HashSet::new(),
-        )
-        .unwrap();
+        let ir =
+            RequestPreparer::prepare_one(parsed, &mut context, None, None, false, &HashSet::new())
+                .unwrap();
 
         assert!(ir.is_sse);
         assert_eq!(ir.timeout_secs, Some(120));

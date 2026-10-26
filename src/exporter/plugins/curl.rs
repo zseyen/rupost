@@ -79,14 +79,18 @@ mod tests {
     #[test]
     fn test_curl_get_simple() {
         let req = sample_req("GET", "https://api.example.com/users");
-        let out = CurlExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = CurlExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert_eq!(out, "curl 'https://api.example.com/users'");
     }
 
     #[test]
     fn test_curl_head_uses_capital_i() {
         let req = sample_req("HEAD", "https://api.example.com/users");
-        let out = CurlExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = CurlExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert!(out.contains("-I"));
         assert!(!out.contains("-X HEAD"));
     }
@@ -94,10 +98,13 @@ mod tests {
     #[test]
     fn test_curl_post_json_with_body() {
         let mut req = sample_req("POST", "https://api.example.com/login");
-        req.headers.push(("Content-Type".into(), "application/json".into()));
+        req.headers
+            .push(("Content-Type".into(), "application/json".into()));
         req.body = Some("{\"user\": \"alice\"}".to_string());
 
-        let out = CurlExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = CurlExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert!(out.contains("-X POST"));
         assert!(out.contains("-H 'Content-Type: application/json'"));
         assert!(out.contains("--data-raw '{\"user\": \"alice\"}'"));
@@ -109,7 +116,9 @@ mod tests {
         let mut req = sample_req("GET", "https://api.example.com/search");
         req.body = Some("{\"query\": \"rust\"}".to_string());
 
-        let out = CurlExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = CurlExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         // 关键：带 body 时即使是 GET 也必须有 -X GET，防止 curl 改写为 POST
         assert!(out.contains("-X GET"));
         assert!(out.contains("--data-raw '{\"query\": \"rust\"}'"));
@@ -121,7 +130,9 @@ mod tests {
         req.is_sse = true;
         req.timeout_secs = Some(60);
 
-        let out = CurlExporter.export_one(&req, &ExportOptions::default()).unwrap();
+        let out = CurlExporter
+            .export_one(&req, &ExportOptions::default())
+            .unwrap();
         assert!(out.contains("-N"));
         assert!(out.contains("--max-time 60"));
     }
@@ -131,7 +142,10 @@ mod tests {
         let mut req = sample_req("POST", "https://api.example.com/data");
         req.body = Some("line1\nline2".to_string());
 
-        let opts = ExportOptions { compact: true, ..Default::default() };
+        let opts = ExportOptions {
+            compact: true,
+            ..Default::default()
+        };
         let out = CurlExporter.export_one(&req, &opts).unwrap();
         assert!(!out.contains(" \\\n  "));
         assert!(out.contains("$'line1\\nline2'"));

@@ -8,7 +8,7 @@
 
 RuPost 项目的根目录由以下核心文件夹和配置文件组成：
 
-*   [crates/](file:///Users/zsyzzx/project/rust/rupost/crates)：用于存放独立拆分的子 Crate。目前包含大模型适配模块 `rupost-ai`。
+*   [crates/](file:///Users/zsyzzx/project/rust/rupost/crates)：用于存放独立拆分的子 Crate。目前包含 AI 创作辅助模块 `rupost-ai`（已接线 `rupost ai assert` 命令）。
 *   [src/](file:///Users/zsyzzx/project/rust/rupost/src)：主程序核心代码区，承载绝大部分的核心算法、执行流程与适配层。
 *   [tests/](file:///Users/zsyzzx/project/rust/rupost/tests)：集成测试和端到端 (E2E) 测试目录，验证完整的命令行或网络交互。
 *   [doc/](file:///Users/zsyzzx/project/rust/rupost/doc)：项目文档库（包括架构设计、开发流程规范、未来规划与进度汇总）。
@@ -33,7 +33,7 @@ graph TD
         MockServer["mock/server/axum_adapter.rs<br>(Axum 服务端)"]
         EnvParser["variable/env_file.rs<br>(.env 文件解析)"]
         TUIView["tui/ui/ (mod/sidebar/response/editor)<br>(ratatui 界面绘制与按键监听)"]
-        RupostAiCrate["crates/rupost-ai<br>(外部大模型网关适配)"]
+        RupostAiCrate["crates/rupost-ai<br>(AI 创作辅助: 断言翻译)"]
     end
 
     subgraph UseCase ["2. UseCase (应用用例层 - 控制与业务流转)"]
@@ -81,8 +81,9 @@ graph TD
 ### 3.1 独立子 Crate (`crates/`)
 
 *   #### [crates/rupost-ai/](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai)
-    *   [client.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/client.rs)：大模型网关 HTTP 请求发送器，处理与具体服务商的连接。
-    *   [translator.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/translator.rs)：将 OpenAI、Anthropic 等不同格式的普通或流式响应翻译规整为 RuPost 统一的事件帧（`LlmEventFrame`）。
+    定位为 **AI 创作辅助** 模块（已接线 `rupost ai assert` 命令），与 `src/http/llm_adapter.rs` 的 LLM 流量运行时职责分层、互不依赖。
+    *   [client.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/client.rs)：OpenAI 兼容的非流式 chat completion 客户端（`AiClient` trait + `OpenAiClient`），处理与具体服务商的连接。
+    *   [translator.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/translator.rs)：AI 创作辅助翻译器（`AssertionTranslator`），通过固化 8 运算符语法的 Prompt 将自然语言期望翻译为标准 `@assert` 断言行（创作期使用；LLM 流式事件帧规整由 `src/http/llm_adapter.rs` 负责，两者职责互不重叠）。
     *   [error.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/error.rs)：大模型适配模块自定义错误。
     *   [lib.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/lib.rs)：模块的入口定义与公共导出。
 
@@ -152,7 +153,7 @@ graph TD
     *   [request_builder.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/request_builder.rs)：数据转换适配器。负责将 Parser 层的纯语法结构 `ParsedRequest` 实例化转换成可执行的 `Request`。
     *   [diagnose.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/diagnose.rs)：连通性诊断工作流。分步握手网络链路（DNS 耗时、TCP 耗时、TLS 协商耗时、TTFB 耗时），解析证书 X.509 validity 字段算出生效天数并输出高亮警告。
     *   [stream.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/stream.rs)：流式数据（Server-Sent Events 与大模型流式 JSON 帧）解析捕获与事件流提取分发。
-    *   [llm_adapter.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/llm_adapter.rs)：对接 `rupost-ai` 的客户端适配类，处理通用大模型协议的转换。
+    *   [llm_adapter.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/llm_adapter.rs)：LLM 流量运行时适配器，负责 provider URL 探测与 SSE delta 流提取（`stream.llm.content` 规整）；与 `crates/rupost-ai`（创作期客户端与断言翻译）职责分层、互不依赖。
     *   [timing.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/timing.rs)：高精度耗时测量辅助结构。
     *   [url.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/url.rs)：URL 智能解析与分层拼接（绝对/相对判定、`:` 端口缩写、CLI 独立主机协议补全、base_url/base_path 拼接）。
     *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/types.rs)：底层网络协议定义与大模型适配协议。

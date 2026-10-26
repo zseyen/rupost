@@ -48,3 +48,32 @@
 
 ### 6. `generate` 命令的 AI 延伸（历史 → 测试建议）
 *   **状态**：**已正式设计**（2026-10-26，从"远期构想"升级为待实施方案）——演进为 [`rupost ai bootstrap` 自举测试方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md) Phase 1（历史→语义增强测试文件，含脱敏/引擎 lint/降级语义）。前置依赖：AI 激活 Phase 0（[AI 激活 PRD](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-activation-prd.md)）。
+
+---
+
+## 📌 2026-10-27 对抗审查裁决登记（来源：[生成语义与调试取证执行计划](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-generation-semantics-execution-plan.md)）
+
+> 背景：云调试/自动日志/录制需求经 7 个对抗性子代理审查后降级收敛，以下为显式取舍（比照 gRPC Won't do 先例，防止摇摆）。
+
+### 7. 代理抓包（`rupost record --port`）— **Won't do（当前）**
+*   HTTPS MITM 需 CA 信任链，是 Reqable/Charles/mitmproxy 的重战场；`reqable_analysis` 自身结论即"互补而非竞争"。
+*   **翻案条件**：出现"无 GUI 环境批量捕获且用户拒绝装 mitmproxy"的真实需求证据；或反向代理模式（base_url 指向 rupost，复用 axum_adapter）被独立验证有需求。
+
+### 8. 生产环境平台日志 adapter（Loki/SLS/CLS/ES）— **Won't do（当前）**
+*   依赖"组织已有集中日志平台 + 愿意签发只读凭据"两个外部前提；0 收入阶段无付费钩子形态。
+*   **翻案条件**：对齐产品策略变现阶梯二（团队 SaaS）的付费钩子形态。
+
+### 9. kubectl 委托多服务日志聚合 — **推迟（探路先行）**
+*   内建唯一保留项为通用 `--on-failure` 钩子（见执行计划 Phase 2d），kubectl 聚合让用户经钩子自行接 stern 管道验证需求。
+*   **前置实验**（编码前必须）：CRI 多行日志时间戳形态（已证伪"续行无时间戳"假设）、目标服务 trace 回传现状、`kubectl logs -l --all-containers --prefix --timestamps` 组合行为。
+
+### 10. `history export` 桩转实（T2 事后补录）— **推迟（搭车项）**
+*   与 `generate` 功能重叠；前提（history 缺 body）已被代码推翻。随 replay per-entry 结果（Phase 2a）同批搭车，约 20 行。
+*   **前置决策**：旧历史条目 body=None 的导出语义（跳过 or 占位）。
+
+### 11. 生成语义批次（Phase 1）
+*   语义化命名 / Host 模板化 / 动态值反向识别 / 链式值溯源（复制型）——设计与量级见[执行计划 §3-§4](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-generation-semantics-execution-plan.md)；其中动态值识别即 ai bootstrap 机械降级路径，与 A1 激活存在复利关系。
+*   `rupost g --failed` 失败选择器、`--emit-env`、`--format md`：backlog 观察，有真实抱怨再排。
+
+### 12. TUI 历史反向还原路径审计
+*   `format_request_snapshot_to_http`（TUI 独立实现）疑似未复用凭据脱敏——先审计确认，显式记录取舍（TUI 会话草稿保留真值 or 同步模板化）。

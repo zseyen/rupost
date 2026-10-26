@@ -6,7 +6,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ## [Unreleased]
 
+### Added
+
+- `rupost ai assert "<自然语言>"`：AI 创作辅助命令，将自然语言期望翻译为标准 `@assert` 断言行（支持任意 OpenAI 兼容后端与本地 Ollama；密钥仅从 `RUPOST_AI_API_KEY`/`OPENAI_API_KEY` 环境变量读取，不落盘不入日志）。`--raw` 输出纯断言行供脚本追加。休眠的 `rupost-ai` crate 正式接线激活；通过 `rupost mock` 充当 OpenAI 兼容后端实现零 Key 离线 dogfooding 闭环（`tests/ai_assert_test.rs` + `tests/verify_features.sh` 步骤 7）。
+
 ### Changed
+
+- `rupost g` (history → .http generation) now **templates credentials as
+  variables** instead of writing them verbatim: `Authorization: Bearer eyJ...`
+  becomes `Authorization: Bearer {{authorization}}` (scheme prefix preserved,
+  variable carries only the credential body), sensitive URL query values become
+  `api_key={{api_key}}`, and a header comment lists all referenced variables
+  (provide values via `--var` / `.env` / `rupost.toml`). Previously generated
+  files contained plaintext credentials — a security fix first shipped as
+  `[REDACTED]` placeholders, now upgraded to runnable variable references.
+  `rupost export` keeps `[REDACTED]` (its output targets humans/pasting).
+- `rupost g` now emits **semantic names**: `### GET /users` and
+  `# @name get_users` (derived from method + path, ordinal suffix on
+  collision) instead of opaque `### Request <id8>` / `req_<timestamp>_<n>`.
+- `rupost g --templatize-host` rewrites the absolute origin of each request to
+  `{{base_url}}/path` so one generated file runs across environments via the
+  standard variable cascade (naming follows the `rupost.toml` template
+  convention). Default behavior is unchanged (absolute URLs).
+
+### Fixed
+
+- **Security**: `rupost g` no longer writes `Authorization` / `Cookie` /
+  `X-Api-Key` header values or sensitive URL query values (e.g. `?api_key=`)
+  verbatim into generated `.http` files. Redaction semantics are shared with
+  `rupost export` (`exporter/redact.rs`).
 
 - TUI: file creation I/O is routed through a `FileRepository` port (atomic
   `create_new`, Fs/InMemory implementations) — the ViewModel no longer touches the

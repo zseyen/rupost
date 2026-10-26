@@ -132,3 +132,32 @@
    - `cargo fmt --check` 与 `cargo clippy --workspace --all-targets` 零告警。
 
 ---
+
+## 阶段成果：终端 API 竞品深度剖析与演进启示文档交付（2026-10-27）
+
+依据用户要求，针对终端生态三大代表性工具 **ain**、**ATAC**、**slumber** 进行了深入的架构与哲学剖析，完成高规格战略分析文档 [2026-10-27-terminal-api-clients-ain-atac-slumber-deep-dive.md](doc/competition/2026-10-27-terminal-api-clients-ain-atac-slumber-deep-dive.md)：
+1. **哲学解构**：Unix 纯粹管道流（ain）、全功能 Postman 终端复刻（ATAC）、声明式配方驱动的优雅 TUI（slumber）；
+2. **护城河巩固**：论证 RuPost 在“活文档（Markdown 一等公民）”、“实时 AI API 流式闭环（全行业空白）”、“DAG 确定性编排”以及“Mock 与用例同源”上的绝对优势；
+3. **吸收路线图**：规划 OSC 52 终端剪贴板、Shell 动态命令求值 `$(cmd)`、单请求惰性依赖自愈与 OpenAPI/Postman 逆向转换三阶段转化。
+
+---
+
+## 阶段成果：AI 失败智能处理 PRD 规格制定交付（2026-10-27）
+
+依据竞品对标与补充切入点分析，完成两大绝对蓝海能力的产品 PRD 制定：[2026-10-28-ai-failure-triage-and-attribution-prd.md](doc/plans/2026-10-28-ai-failure-triage-and-attribution-prd.md)（v1.0）：
+1. **E2 断言失败就地 AI 归因 (In-place Attribution)**：嵌入 `rupost test --ai-explain` 失败回显，无需切换窗口，直接就地生成根因假设与修复指引；
+2. **E5 CI 批量失败聚类 Triage (Failure Clustering)**：新增 `rupost ai triage <report.json>`，利用结构化 JSON 报告将成百上千条失败聚合为 2~4 个根因簇；
+3. **Clean Architecture 设计**：脱敏抽取器 + 领域分析器 + 离线 Mock 闭环设计，杜绝凭据泄漏，全流程 100% 具备确定性离线回归能力。
+
+
+
+---
+
+## 阶段成果：AI 激活——`rupost ai assert` 创作辅助命令交付完成（2026-10-27）
+
+依据 [AI 激活 PRD](doc/plans/2026-10-26-ai-activation-prd.md)，4 个原子提交全部交付，休眠 crate `rupost-ai` 正式接线激活（终结"workspace 成员但主包零依赖、全库零 use rupost_ai"的死代码状态）：
+1. **Commit 1 接线**（`5603a0c8`）：根 `Cargo.toml` workspace 依赖 + `src/cli.rs` `Ai`/`AiCommands` 子命令 + `src/main.rs` 分发。密钥仅从环境变量读取（`RUPOST_AI_API_KEY` → `OPENAI_API_KEY` 回退），缺 Key 报错含可执行指引并 exit 1；后端错误响应体 500 字符截断，密钥与 prompt 原文不进任何输出路径。
+2. **Commit 2 测试**（`4befd1d0`）：crate 侧 wiremock 4 测试（成功解析 / 401 ApiError 透传 / 空 choices / 非 JSON 体）+ translator 存量 3 测试保持全绿；二进制级 `tests/ai_assert_test.rs` 3 测试——**离线 dogfooding 闭环**（`rupost mock` 充当 OpenAI 兼容后端，零真实 Key）、缺 Key 指引、后端 401 状态码透出；`examples/ai_assert/mock_ai.json` 提供固定 chat completion 响应。
+3. **Commit 3 示例与脚本**（`b2f8dfed`）：`examples/ai_assert/README.md`（零 Key 演示 + Ollama 指引）+ `verify_features.sh` 步骤 7（dogfooding 闭环 + `set -e` 下退出码断言）。
+4. **Commit 4 文档对齐**：`directory_structure.md` 纠正 translator.rs 的历史误判描述（"流式事件帧规整"实为 `llm_adapter` 职责）并登记 crate "AI 创作辅助" 定位（分层职责与 llm_adapter 互不依赖）；README 特性区、CHANGELOG Added、progress_summary、checkpoint 同步归档。
+5. **质量基线**：`cargo test --workspace` 全绿（首次覆盖 crate，新增 7 测试）；`cargo fmt --check` / `cargo clippy --all-targets --all-features -- -D warnings` 零告警；`verify_features.sh` 全特性回归 PASS。

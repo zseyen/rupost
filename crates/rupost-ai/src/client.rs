@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait AiClient: Send + Sync {
     /// Send a prompt to the AI and get a text response

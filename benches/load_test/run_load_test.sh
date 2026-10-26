@@ -14,12 +14,12 @@ echo -e "${BLUE}[*] 开始执行 RuPost 宏观并发性能压力测试...${NC}"
 killall rupost 2>/dev/null || true
 killall load_generator 2>/dev/null || true
 
-# 1. 编译最新的 release 二进制
+# 1. 编译最新的 release 二进制与压测工具
 echo -e "${BLUE}[*] 正在编译发布版 binaries (rupost & load_generator)...${NC}"
-cargo build --release
+cargo build --release --example load_generator
 
 RUPOST_BIN="./target/release/rupost"
-LOAD_GEN_BIN="./target/release/load_generator"
+LOAD_GEN_BIN="./target/release/examples/load_generator"
 
 if [ ! -f "$RUPOST_BIN" ] || [ ! -f "$LOAD_GEN_BIN" ]; then
     echo -e "${RED}[ERROR] 找不到编译生成的发布版二进制文件！${NC}"

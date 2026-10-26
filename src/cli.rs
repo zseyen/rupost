@@ -256,7 +256,7 @@ pub enum HistoryCommands {
     /// Show detailed response and body/frames for a specific history entry
     #[command(alias = "s")]
     Show {
-        /// History entry number (1-indexed, 1 is the oldest) or UUID
+        /// History entry number (1-indexed, 1 is the newest) or UUID
         #[arg(required = true)]
         target: String,
     },

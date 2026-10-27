@@ -78,8 +78,9 @@ fn test_generate_formats_single_entry_roundtrip_parsable() {
 
     let generated = HttpGenerator::generate(&[entry]).expect("generate failed");
 
-    // 1. 验证生成的文本内容
-    assert!(generated.contains("### Request abc12345"));
+    // 1. 验证生成的文本内容（语义化命名：method + path）
+    assert!(generated.contains("### POST /users"));
+    assert!(generated.contains("# @name post_users"));
     assert!(generated.contains("# @timeout 500ms"));
     assert!(generated.contains("POST http://api.example.com/users"));
     assert!(
@@ -165,6 +166,87 @@ fn test_generate_templates_sensitive_credentials() {
     let parsed_file =
         HttpFileParser::parse_content(&generated).expect("parse templated http failed");
     assert_eq!(parsed_file.requests.len(), 1);
+}
+
+#[test]
+fn test_generate_semantic_names_with_collision_suffix() {
+    let entries = vec![
+        create_test_entry(
+            "id11111111",
+            "POST",
+            "https://api.example.com/users",
+            vec![],
+            None,
+            None,
+            201,
+        ),
+        create_test_entry(
+            "id22222222",
+            "POST",
+            "https://api.example.com/users",
+            vec![],
+            None,
+            None,
+            201,
+        ),
+    ];
+
+    let generated = HttpGenerator::generate(&entries).expect("generate failed");
+
+    // 同路径同名请求：标题相同，@name 追加序号去重
+    assert_eq!(generated.matches("### POST /users").count(), 2);
+    assert!(generated.contains("# @name post_users\n"));
+    assert!(generated.contains("# @name post_users_2\n"));
+
+    // 命名不携带 query（避免敏感参数混入名称）
+    let query_entry = create_test_entry(
+        "id33333333",
+        "GET",
+        "https://api.example.com/users?api_key=secret999",
+        vec![],
+        None,
+        None,
+        200,
+    );
+    let generated = HttpGenerator::generate(&[query_entry]).expect("generate failed");
+    assert!(generated.contains("### GET /users\n"));
+    assert!(!generated.contains("users_api_key"));
+
+    // 往返解析
+    let parsed_file =
+        HttpFileParser::parse_content(&generated).expect("parse semantic names failed");
+    assert_eq!(parsed_file.requests.len(), 1);
+}
+
+#[test]
+fn test_generate_templatize_host_flag() {
+    let entry = create_test_entry(
+        "host000001",
+        "GET",
+        "http://127.0.0.1:8081/users?page=2",
+        vec![],
+        None,
+        None,
+        200,
+    );
+
+    // 默认行为不变：绝对 URL 原样
+    let plain =
+        HttpGenerator::generate(std::slice::from_ref(&entry)).expect("generate plain failed");
+    assert!(plain.contains("GET http://127.0.0.1:8081/users?page=2"));
+
+    // --templatize-host：origin → {{base_url}}，path/query 保留，变量清单登记
+    let (templated, vars) =
+        HttpGenerator::generate_with_variables(&[entry], true).expect("generate templated failed");
+    assert!(templated.contains("GET {{base_url}}/users?page=2"));
+    assert!(vars.contains(&"base_url".to_string()));
+    assert!(templated.contains("# Variables: base_url"));
+
+    // 模板化产物仍可被解析器往返
+    let parsed_file =
+        HttpFileParser::parse_content(&templated).expect("parse templated http failed");
+    assert_eq!(parsed_file.requests.len(), 1);
+    assert_eq!(parsed_file.requests[0].method_or_default(), "GET");
 }
 
 #[test]
@@ -255,6 +337,60 @@ async fn test_generate_cli_from_history_end_to_end() {
     assert!(
         out_test2.status.success(),
         "Step 3 rupost t generated out.http failed: {:?}",
+        String::from_utf8_lossy(&out_test2.stderr)
+    );
+}
+
+#[tokio::test]
+async fn test_generate_cli_templatize_host_end_to_end() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/items"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&mock_server)
+        .await;
+
+    let dir = tempdir().unwrap();
+    let history_dir = dir.path().join("history_dir");
+    fs::create_dir_all(&history_dir).unwrap();
+
+    let initial_http = dir.path().join("case.http");
+    fs::write(&initial_http, format!("GET {}/items\n", mock_server.uri())).unwrap();
+
+    // 步骤 1: 真实执行请求，触发历史记录写入
+    let out_test1 = run_rupost_cmd(&history_dir, dir.path(), &["t", "case.http"]);
+    assert!(
+        out_test1.status.success(),
+        "Step 1 rupost t failed: {:?}",
+        String::from_utf8_lossy(&out_test1.stderr)
+    );
+
+    // 步骤 2: --templatize-host 生成，origin 模板化为 {{base_url}}
+    let out_gen = run_rupost_cmd(
+        &history_dir,
+        dir.path(),
+        &["g", "out.http", "--last", "1", "--templatize-host"],
+    );
+    assert!(
+        out_gen.status.success(),
+        "Step 2 rupost g failed: {:?}",
+        String::from_utf8_lossy(&out_gen.stderr)
+    );
+    let stdout_gen = String::from_utf8_lossy(&out_gen.stdout);
+    assert!(
+        stdout_gen.contains("Variables referenced: base_url"),
+        "CLI hint missing: {stdout_gen}"
+    );
+
+    let out_content = fs::read_to_string(dir.path().join("out.http")).unwrap();
+    assert!(out_content.contains("GET {{base_url}}/items"));
+
+    // 步骤 3: 经 --var 级联提供真值后，模板化文件可直接跑通（跨环境闭环）
+    let var = format!("base_url={}", mock_server.uri());
+    let out_test2 = run_rupost_cmd(&history_dir, dir.path(), &["t", "out.http", "--var", &var]);
+    assert!(
+        out_test2.status.success(),
+        "Step 3 rupost t templated out.http failed: {:?}",
         String::from_utf8_lossy(&out_test2.stderr)
     );
 }

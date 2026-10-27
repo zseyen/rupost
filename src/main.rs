@@ -77,6 +77,7 @@ async fn main() -> Result<()> {
                 output_file: args.output_file,
                 last: args.last,
                 interactive: args.interactive,
+                templatize_host: args.templatize_host,
             };
             rupost::generator::run_generate(opts)?;
         }

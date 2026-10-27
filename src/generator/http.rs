@@ -1,14 +1,14 @@
 use crate::Result;
 use crate::exporter::redact::is_sensitive_key;
 use crate::history::model::HistoryEntry;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 pub struct HttpGenerator;
 
 impl HttpGenerator {
     /// Convert a list of history entries to .http file content
     pub fn generate(entries: &[HistoryEntry]) -> Result<String> {
-        Ok(Self::generate_with_variables(entries)?.0)
+        Ok(Self::generate_with_variables(entries, false)?.0)
     }
 
     /// Convert history entries to .http content, plus the sorted names of all
@@ -17,15 +17,27 @@ impl HttpGenerator {
     /// 敏感凭据一律模板化为 `{{variable}}` 引用（绝不内联原值），用户经四层级联
     /// （`--var` > 系统环境变量 > `.env` > `rupost.toml`）任一渠道提供真值即可运行；
     /// 与 `export` 的 `[REDACTED]` 脱敏分工：export 给人看，generate 给机器跑。
-    pub fn generate_with_variables(entries: &[HistoryEntry]) -> Result<(String, Vec<String>)> {
+    ///
+    /// `templatize_host` 为 true 时，将请求 origin（scheme://host[:port]）改写为
+    /// `{{base_url}}`，使同一文件经变量级联跨环境运行。
+    pub fn generate_with_variables(
+        entries: &[HistoryEntry],
+        templatize_host: bool,
+    ) -> Result<(String, Vec<String>)> {
         let mut output = String::new();
         let mut variables = BTreeSet::new();
+        let mut used_names: HashMap<String, usize> = HashMap::new();
 
         for (i, entry) in entries.iter().enumerate() {
             if i > 0 {
                 output.push_str("\n\n");
             }
-            output.push_str(&Self::format_entry(entry, &mut variables));
+            output.push_str(&Self::format_entry(
+                entry,
+                templatize_host,
+                &mut variables,
+                &mut used_names,
+            ));
         }
 
         if !entries.is_empty() {
@@ -43,33 +55,34 @@ impl HttpGenerator {
         Ok((output, names))
     }
 
-    fn format_entry(entry: &HistoryEntry, variables: &mut BTreeSet<String>) -> String {
+    fn format_entry(
+        entry: &HistoryEntry,
+        templatize_host: bool,
+        variables: &mut BTreeSet<String>,
+        used_names: &mut HashMap<String, usize>,
+    ) -> String {
         let mut block = String::new();
 
-        // 1. Comment / Name
-        // Generate a name like: "GET /api/users - 10:23:45"
-
-        block.push_str(&format!(
-            "### Request {}\n",
-            entry.id.chars().take(8).collect::<String>()
-        ));
-        block.push_str(&format!(
-            "# @name req_{}_{}\n",
-            entry.timestamp.timestamp(),
-            i8::abs(entry.id.as_bytes()[0] as i8)
-        ));
+        // 1. Semantic title / name（method + path，同文件冲突时追加序号）
+        let (title, name) = Self::semantic_title_and_name(entry, used_names);
+        block.push_str(&format!("### {title}\n"));
+        block.push_str(&format!("# @name {name}\n"));
 
         // 1.5 Timeout（快照记录了 @timeout 时还原该指令）
         if let Some(t) = entry.request.timeout {
             block.push_str(&format!("# @timeout {}ms\n", t.as_millis()));
         }
 
-        // 2. Request Line（URL query 中的敏感键值模板化为变量）
-        block.push_str(&format!(
-            "{} {}\n",
-            entry.request.method,
+        // 2. Request Line（可选 origin → {{base_url}}；URL query 敏感键值模板化为变量）
+        let rendered_url = if templatize_host {
+            Self::variablize_url(
+                &Self::templatize_host_in_url(&entry.request.url, variables),
+                variables,
+            )
+        } else {
             Self::variablize_url(&entry.request.url, variables)
-        ));
+        };
+        block.push_str(&format!("{} {}\n", entry.request.method, rendered_url));
 
         // 3. Headers
         for (key, value) in &entry.request.headers {
@@ -129,6 +142,55 @@ impl HttpGenerator {
         )
     }
 
+    /// 语义化命名：`GET /users` + `get_users`；同文件冲突时追加序号（`get_users_2`）。
+    /// slug 仅取 URL path（排除 query，避免敏感参数混入名称），非字母数字转下划线。
+    fn semantic_title_and_name(
+        entry: &HistoryEntry,
+        used: &mut HashMap<String, usize>,
+    ) -> (String, String) {
+        let method = entry.request.method.to_ascii_uppercase();
+        let path = url::Url::parse(&entry.request.url)
+            .map(|u| u.path().to_string())
+            .unwrap_or_default();
+
+        let title = if path.is_empty() || path == "/" {
+            method.clone()
+        } else {
+            format!("{method} {path}")
+        };
+
+        let slug: String = path
+            .trim_start_matches('/')
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let mut slug = slug.trim_matches('_').to_string();
+        if slug.is_empty() {
+            slug = method.to_lowercase();
+        } else {
+            slug = format!("{}_{}", method.to_lowercase(), slug);
+        }
+        slug.truncate(48);
+        while slug.ends_with('_') {
+            slug.pop();
+        }
+
+        let count = used.entry(slug.clone()).or_insert(0);
+        *count += 1;
+        let name = if *count == 1 {
+            slug
+        } else {
+            format!("{slug}_{count}")
+        };
+        (title, name)
+    }
+
     /// Header/Query 键名转变量名：小写、非字母数字转下划线（`X-Api-Key` -> `x_api_key`）
     fn var_name_from_key(key: &str) -> String {
         key.chars()
@@ -150,6 +212,35 @@ impl HttpGenerator {
             "BEARER" | "BASIC" | "DIGEST" | "TOKEN"
         );
         (known && !rest.trim().is_empty()).then_some(scheme)
+    }
+
+    /// 将 origin（scheme://host[:port]）改写为 `{{base_url}}`；变量名沿用
+    /// `rupost.toml` 模板约定。其余部分逐字保留。
+    fn templatize_host_in_url(raw: &str, variables: &mut BTreeSet<String>) -> String {
+        let Ok(parsed) = url::Url::parse(raw) else {
+            return raw.to_string();
+        };
+        let Some(host) = parsed.host_str() else {
+            return raw.to_string();
+        };
+        if host.is_empty() {
+            return raw.to_string();
+        }
+        let mut origin = format!("{}://{}", parsed.scheme(), host);
+        if let Some(port) = parsed.port() {
+            origin.push_str(&format!(":{port}"));
+        }
+        match raw.find(&origin) {
+            Some(pos) => {
+                variables.insert("base_url".to_string());
+                let mut out = String::with_capacity(raw.len());
+                out.push_str(&raw[..pos]);
+                out.push_str("{{base_url}}");
+                out.push_str(&raw[pos + origin.len()..]);
+                out
+            }
+            None => raw.to_string(),
+        }
     }
 
     /// URL query 中的敏感键值模板化为 `{{变量}}`；其余部分逐字保留（不做重编码）

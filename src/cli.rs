@@ -269,6 +269,10 @@ pub struct GenerateArgs {
     /// Interactive selection mode
     #[arg(short, long)]
     pub interactive: bool,
+
+    /// Rewrite request origin as {{base_url}} so the file runs across environments
+    #[arg(long = "templatize-host")]
+    pub templatize_host: bool,
 }
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq, Default)]

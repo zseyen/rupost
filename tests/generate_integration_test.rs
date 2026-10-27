@@ -87,11 +87,11 @@ fn test_generate_formats_single_entry_roundtrip_parsable() {
             .to_lowercase()
             .contains("content-type: application/json")
     );
-    // 敏感凭据必须脱敏（复用 exporter 的 redact 语义），原始 token 严禁出现
+    // 敏感凭据模板化为变量引用，原始 token 严禁出现
     let lowered = generated.to_lowercase();
     assert!(
-        lowered.contains("authorization: bearer [redacted]"),
-        "Authorization should be redacted, got: {generated}"
+        lowered.contains("authorization: bearer {{authorization}}"),
+        "Authorization should be templated, got: {generated}"
     );
     assert!(!generated.contains("my_secret_token"));
     assert!(generated.contains("# @assert status == 201"));
@@ -122,7 +122,7 @@ fn test_generate_formats_single_entry_roundtrip_parsable() {
 }
 
 #[test]
-fn test_generate_redacts_sensitive_credentials() {
+fn test_generate_templates_sensitive_credentials() {
     let entry = create_test_entry(
         "redact00001",
         "GET",
@@ -139,27 +139,31 @@ fn test_generate_redacts_sensitive_credentials() {
 
     let generated = HttpGenerator::generate(&[entry]).expect("generate failed");
 
-    // Header 凭据脱敏，保留认证 scheme 前缀
+    // Header 凭据模板化为变量引用，原始值严禁出现
     let lowered = generated.to_lowercase();
-    assert!(lowered.contains("x-api-key: [redacted]"));
-    assert!(lowered.contains("cookie: [redacted]"));
+    assert!(lowered.contains("x-api-key: {{x_api_key}}"));
+    assert!(lowered.contains("cookie: {{cookie}}"));
     assert!(!generated.contains("sk-1234567890"));
     assert!(!generated.contains("session_id=abc123xyz"));
 
-    // URL Query 中的敏感键值脱敏，普通参数保留
+    // URL Query 中的敏感键值模板化，普通参数保留
     assert!(!generated.contains("secret999"));
-    assert!(lowered.contains("api_key="));
+    assert!(lowered.contains("api_key={{api_key}}"));
     assert!(generated.contains("page=2"));
 
     // 非敏感 Header 原样保留
     assert!(
         lowered.contains("content-type: application/json"),
-        "non-sensitive header must survive redaction"
+        "non-sensitive header must survive templating"
     );
+
+    // 顶部注释列出全部引用变量，指引用户配置渠道
+    assert!(generated.contains("# Credentials are templated"));
+    assert!(generated.contains("# Variables: api_key, cookie, x_api_key"));
 
     // 生成文本仍可被解析器往返
     let parsed_file =
-        HttpFileParser::parse_content(&generated).expect("parse redacted http failed");
+        HttpFileParser::parse_content(&generated).expect("parse templated http failed");
     assert_eq!(parsed_file.requests.len(), 1);
 }
 

@@ -28,12 +28,18 @@ pub fn run_generate(opts: GenerateOptions) -> Result<()> {
         return Ok(());
     }
 
-    let content = HttpGenerator::generate(&entries)?;
+    let (content, variables) = HttpGenerator::generate_with_variables(&entries)?;
     fs::write(&opts.output_file, content)?;
     println!(
         "Generated test file: {} ({} requests)",
         opts.output_file,
         entries.len()
     );
+    if !variables.is_empty() {
+        println!(
+            "  Variables referenced: {} (provide via --var / .env / rupost.toml)",
+            variables.join(", ")
+        );
+    }
     Ok(())
 }

@@ -100,3 +100,94 @@ impl AiClient for OpenAiClient {
         Ok(chat_response.choices.remove(0).message.content)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_client(uri: String) -> OpenAiClient {
+        OpenAiClient::new(
+            "test-key".to_string(),
+            Some(uri),
+            Some("test-model".to_string()),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("Authorization", "Bearer test-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "hello assertion"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = test_client(server.uri());
+        let result = client.generate_text("sys", "user").await.unwrap();
+        assert_eq!(result, "hello assertion");
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_api_error_includes_status_and_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string(r#"{"error": {"message": "invalid api key"}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = test_client(server.uri());
+        let result = client.generate_text("sys", "user").await;
+        match result {
+            Err(AiError::ApiError { status, message }) => {
+                assert_eq!(status, 401);
+                assert!(message.contains("invalid api key"));
+            }
+            other => panic!("Expected ApiError, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_empty_choices() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": []
+            })))
+            .mount(&server)
+            .await;
+
+        let client = test_client(server.uri());
+        let result = client.generate_text("sys", "user").await;
+        match result {
+            Err(AiError::TranslationFailed(msg)) => assert!(msg.contains("No choices")),
+            other => panic!("Expected TranslationFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_non_json_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not a json"))
+            .mount(&server)
+            .await;
+
+        let client = test_client(server.uri());
+        let result = client.generate_text("sys", "user").await;
+        assert!(
+            matches!(result, Err(AiError::RequestFailed(_))),
+            "Expected RequestFailed for non-JSON body, got: {result:?}"
+        );
+    }
+}

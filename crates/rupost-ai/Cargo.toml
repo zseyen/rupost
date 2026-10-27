@@ -13,3 +13,4 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 mockall = "0.13.1"
+wiremock = "0.6.5"

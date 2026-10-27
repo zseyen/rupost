@@ -2,6 +2,10 @@ use crate::error::{AiError, Result};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// AI 请求总超时：AI 端点响应慢，但绝不允许无限阻塞脚本与 CI 流水线
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[allow(clippy::double_must_use)]
 #[async_trait]
@@ -21,7 +25,10 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     pub fn new(api_key: String, base_url: Option<String>, model: Option<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .expect("failed to build HTTP client"),
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
             model: model.unwrap_or_else(|| "gpt-4o-mini".to_string()),
@@ -75,7 +82,10 @@ impl AiClient for OpenAiClient {
 
         let response = self
             .client
-            .post(format!("{}/chat/completions", self.base_url))
+            .post(format!(
+                "{}/chat/completions",
+                self.base_url.trim_end_matches('/')
+            ))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&request)
             .send()
@@ -130,6 +140,24 @@ mod tests {
         let client = test_client(server.uri());
         let result = client.generate_text("sys", "user").await.unwrap();
         assert_eq!(result, "hello assertion");
+    }
+
+    #[tokio::test]
+    async fn test_generate_text_tolerates_trailing_slash_base_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "ok"}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = test_client(format!("{}/", server.uri()));
+        let result = client.generate_text("sys", "user").await.unwrap();
+        assert_eq!(result, "ok");
+        server.verify().await;
     }
 
     #[tokio::test]

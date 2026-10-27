@@ -129,8 +129,14 @@ async fn main() -> Result<()> {
 /// `rupost ai assert`: 将自然语言期望翻译为标准 @assert 断言行（创作期辅助，密钥仅从环境变量读取）
 async fn run_ai_assert(text: &str, raw: bool) -> Result<()> {
     let api_key = std::env::var("RUPOST_AI_API_KEY")
-        .or_else(|_| std::env::var("OPENAI_API_KEY"))
-        .map_err(|_| {
+        .ok()
+        .filter(|key| !key.is_empty())
+        .or_else(|| {
+            std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|key| !key.is_empty())
+        })
+        .ok_or_else(|| {
             RupostError::Other(
                 "未配置 AI 密钥：请先 `export RUPOST_AI_API_KEY=...`（或 `OPENAI_API_KEY`）；\
                  可选 `RUPOST_AI_BASE_URL` 指定 OpenAI 兼容端点、`RUPOST_AI_MODEL` 指定模型"

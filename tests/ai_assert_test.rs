@@ -74,8 +74,8 @@ fn test_ai_assert_offline_dogfooding_loop() {
         output.contains("# @assert body.token exists"),
         "stdout should contain token assertion, got: {output}"
     );
-    // 密钥与 prompt 原文不得出现在输出中
-    assert!(!output.contains("demo-key"), "output must not leak api key");
+    // 密钥与 prompt 原文不得出现在输出中（"demo" 即本次注入的真实 Key）
+    assert!(!output.contains("demo"), "output must not leak api key");
 }
 
 #[test]
@@ -86,6 +86,18 @@ fn test_ai_assert_missing_key_fails_with_guidance() {
     assert!(
         output.contains("RUPOST_AI_API_KEY"),
         "error should contain executable guidance, got: {output}"
+    );
+}
+
+#[test]
+fn test_ai_assert_empty_key_treated_as_missing() {
+    // CI 中常见的空占位设置：RUPOST_AI_API_KEY="" 应等价于未配置
+    let (code, output) = run_ai_assert(None, Some(""), "status is 200");
+
+    assert_eq!(code, 1, "output: {output}");
+    assert!(
+        output.contains("RUPOST_AI_API_KEY"),
+        "empty key should fall back to guidance, got: {output}"
     );
 }
 

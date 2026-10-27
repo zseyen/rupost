@@ -87,10 +87,13 @@ fn test_generate_formats_single_entry_roundtrip_parsable() {
             .to_lowercase()
             .contains("content-type: application/json")
     );
+    // 敏感凭据必须脱敏（复用 exporter 的 redact 语义），原始 token 严禁出现
+    let lowered = generated.to_lowercase();
     assert!(
-        generated.contains("Authorization: Bearer my_secret_token")
-            || generated.contains("authorization: Bearer my_secret_token")
+        lowered.contains("authorization: bearer [redacted]"),
+        "Authorization should be redacted, got: {generated}"
     );
+    assert!(!generated.contains("my_secret_token"));
     assert!(generated.contains("# @assert status == 201"));
 
     // 2. 验证 User-Agent 等自计算 Header 已被剥离
@@ -116,6 +119,48 @@ fn test_generate_formats_single_entry_roundtrip_parsable() {
         .iter()
         .any(|a| a.to_string().contains("status == 201"));
     assert!(has_status_assert, "Missing status == 201 assertion");
+}
+
+#[test]
+fn test_generate_redacts_sensitive_credentials() {
+    let entry = create_test_entry(
+        "redact00001",
+        "GET",
+        "https://api.example.com/users?api_key=secret999&page=2",
+        vec![
+            ("Content-Type", "application/json"),
+            ("X-Api-Key", "sk-1234567890"),
+            ("Cookie", "session_id=abc123xyz"),
+        ],
+        None,
+        None,
+        200,
+    );
+
+    let generated = HttpGenerator::generate(&[entry]).expect("generate failed");
+
+    // Header 凭据脱敏，保留认证 scheme 前缀
+    let lowered = generated.to_lowercase();
+    assert!(lowered.contains("x-api-key: [redacted]"));
+    assert!(lowered.contains("cookie: [redacted]"));
+    assert!(!generated.contains("sk-1234567890"));
+    assert!(!generated.contains("session_id=abc123xyz"));
+
+    // URL Query 中的敏感键值脱敏，普通参数保留
+    assert!(!generated.contains("secret999"));
+    assert!(lowered.contains("api_key="));
+    assert!(generated.contains("page=2"));
+
+    // 非敏感 Header 原样保留
+    assert!(
+        lowered.contains("content-type: application/json"),
+        "non-sensitive header must survive redaction"
+    );
+
+    // 生成文本仍可被解析器往返
+    let parsed_file =
+        HttpFileParser::parse_content(&generated).expect("parse redacted http failed");
+    assert_eq!(parsed_file.requests.len(), 1);
 }
 
 #[test]

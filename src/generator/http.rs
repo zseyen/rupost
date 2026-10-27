@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::exporter::redact::{redact_header_value, redact_url};
 use crate::history::model::HistoryEntry;
 
 pub struct HttpGenerator;
@@ -43,8 +44,12 @@ impl HttpGenerator {
             block.push_str(&format!("# @timeout {}ms\n", t.as_millis()));
         }
 
-        // 2. Request Line
-        block.push_str(&format!("{} {}\n", entry.request.method, entry.request.url));
+        // 2. Request Line（URL Query 中的敏感键值脱敏，与 exporter 语义一致）
+        block.push_str(&format!(
+            "{} {}\n",
+            entry.request.method,
+            redact_url(&entry.request.url)
+        ));
 
         // 3. Headers
         for (key, value) in &entry.request.headers {
@@ -54,7 +59,12 @@ impl HttpGenerator {
                 continue;
             }
             if let Ok(val_str) = value.to_str() {
-                block.push_str(&format!("{}: {}\n", key_str, val_str));
+                // 凭据脱敏：生成的测试文件严禁落盘明文凭证
+                block.push_str(&format!(
+                    "{}: {}\n",
+                    key_str,
+                    redact_header_value(key_str, val_str)
+                ));
             }
         }
 

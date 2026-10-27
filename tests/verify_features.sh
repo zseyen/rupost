@@ -308,6 +308,35 @@ else
     echo -e "${GREEN}[✓] TUI 运行环境校验成功（正常启动与退出，无 Runtime 嵌套冲突）！${NC}"
 fi
 
+# 7. 验证 AI 断言生成 (ai assert) —— 离线 dogfooding 闭环 (mock 充当 OpenAI 兼容后端)
+echo -e "${BLUE}[*] 验证 AI 断言生成 (ai assert) 离线 dogfooding 闭环...${NC}"
+$RUPOST_BIN mock examples/ai_assert/mock_ai.json --port 9001 > /dev/null 2>&1 &
+MOCK_AI_PID=$!
+sleep 2
+
+AI_OUT=$(RUPOST_AI_BASE_URL=http://127.0.0.1:9001/v1 RUPOST_AI_API_KEY=demo $RUPOST_BIN ai assert "登录成功并且响应里包含token" 2>&1)
+echo "AI 断言输出: $AI_OUT"
+if echo "$AI_OUT" | grep -q "# @assert status == 200" && echo "$AI_OUT" | grep -q "# @assert body.token exists"; then
+    echo -e "${GREEN}[✓] ai assert 离线 dogfooding 闭环验证成功（无真实 API Key）！${NC}"
+else
+    echo -e "${RED}[ERROR] ai assert 闭环验证失败！${NC}"
+    kill $MOCK_AI_PID
+    exit 1
+fi
+
+# 未配置密钥时应返回退出码 1 并给出可执行指引（set -e 下用 || 捕获退出码）
+AI_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY $RUPOST_BIN ai assert "status is 200" > /dev/null 2>&1 || AI_EXIT=$?
+if [ $AI_EXIT -eq 1 ]; then
+    echo -e "${GREEN}[✓] 未配置密钥时正确返回退出码 1！${NC}"
+else
+    echo -e "${RED}[ERROR] 未配置密钥时应返回退出码 1，实际: $AI_EXIT${NC}"
+    kill $MOCK_AI_PID
+    exit 1
+fi
+
+kill $MOCK_AI_PID
+
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"
 echo -e "${GREEN}=====================================================${NC}"

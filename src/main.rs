@@ -1,8 +1,10 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Commands, HistoryCommands};
-use rupost::Result;
+use cli::{AiCommands, Cli, Commands, HistoryCommands};
+use colored::Colorize;
+use rupost::{Result, RupostError};
+use rupost_ai::{AssertionTranslator, OpenAiClient};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -101,6 +103,14 @@ async fn main() -> Result<()> {
             let opts = args.into_run_options(cli.env, cli.cookie_file, cli.default_scheme);
             rupost::exporter::run_export(opts)?;
         }
+        Some(Commands::Ai { command }) => match command {
+            AiCommands::Assert { text, raw } => {
+                if let Err(e) = run_ai_assert(&text, raw).await {
+                    eprintln!("{} {}", "[ERROR]".red().bold(), e.to_user_friendly_string());
+                    std::process::exit(1);
+                }
+            }
+        },
         Some(Commands::Tui { file }) => {
             rupost::tui::run(file).await?;
         }
@@ -114,4 +124,51 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `rupost ai assert`: 将自然语言期望翻译为标准 @assert 断言行（创作期辅助，密钥仅从环境变量读取）
+async fn run_ai_assert(text: &str, raw: bool) -> Result<()> {
+    let api_key = std::env::var("RUPOST_AI_API_KEY")
+        .or_else(|_| std::env::var("OPENAI_API_KEY"))
+        .map_err(|_| {
+            RupostError::Other(
+                "未配置 AI 密钥：请先 `export RUPOST_AI_API_KEY=...`（或 `OPENAI_API_KEY`）；\
+                 可选 `RUPOST_AI_BASE_URL` 指定 OpenAI 兼容端点、`RUPOST_AI_MODEL` 指定模型"
+                    .to_string(),
+            )
+        })?;
+    let base_url = std::env::var("RUPOST_AI_BASE_URL").ok();
+    let model = std::env::var("RUPOST_AI_MODEL").ok();
+    let client = OpenAiClient::new(api_key, base_url, model);
+    let translator = AssertionTranslator::new(std::sync::Arc::new(client));
+    let assertions = translator
+        .translate(text)
+        .await
+        .map_err(|e| RupostError::Other(truncate_message(&e.to_string(), 500)))?;
+
+    if raw {
+        for assertion in &assertions {
+            println!("# @assert {assertion}");
+        }
+    } else {
+        println!(
+            "{} 已生成 {} 条标准断言（粘贴到请求块末尾即可生效）:",
+            "[✓]".green().bold(),
+            assertions.len()
+        );
+        for assertion in &assertions {
+            println!("# @assert {assertion}");
+        }
+    }
+    Ok(())
+}
+
+/// 错误信息截断，防止 AI 返回的超长响应体刷屏
+fn truncate_message(msg: &str, max_chars: usize) -> String {
+    if msg.chars().count() <= max_chars {
+        msg.to_string()
+    } else {
+        let truncated: String = msg.chars().take(max_chars).collect();
+        format!("{truncated}...[truncated]")
+    }
 }

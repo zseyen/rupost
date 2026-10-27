@@ -171,11 +171,30 @@ pub enum Commands {
     #[command(alias = "exp")]
     Export(ExportArgs),
 
+    /// AI assisted authoring commands
+    Ai {
+        #[command(subcommand)]
+        command: AiCommands,
+    },
+
     /// Start interactive terminal UI mode
     Tui {
         /// Optional test file path to pre-load and preview in TUI
         #[arg(value_name = "FILE")]
         file: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AiCommands {
+    /// Translate natural language expectations into standard @assert lines
+    Assert {
+        /// Natural language description of the expected behavior
+        text: String,
+
+        /// Print plain assertion lines only (machine-friendly)
+        #[arg(long)]
+        raw: bool,
     },
 }
 

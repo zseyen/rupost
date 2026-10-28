@@ -79,8 +79,8 @@
 | 需求 | 状态 | 开 | 测 | 产 | 阶段 | 画像 | 安全注记 |
 | :--- | :--- | :- | :- | :- | :--- | :--- | :--- |
 | R1 单请求重跑 | **已实现（tui-audit 工作区 2026-10-28，随工作区合并翻正）** | ● | ○ | — | M1/S3 | 李 | 级联照常；越界零 panic；1b 跳过标记语义（原序号保留） |
-| R2 debug-on-failure 守护 | DBG-2 · M1 待做 | ● | ○ | — | M1/S3 | 李 | — |
-| R3 diagnose json 契约 | fast-follow | ● | ○ | — | ff/S3 | 李 | schema 纪律 |
+| R2 debug-on-failure 守护 | **已实现（tui-audit 工作区 2026-10-28）** | ● | ○ | — | M1/S3 | 李 | 连接层失败无拆分为已知缺口（Virtual Response 承接） |
+| R3 diagnose json 契约 | fast-follow（注：DBG-2 已覆盖 `t --report json` 内嵌 diagnose_report 字段，`diagnose` 命令自身的 json 契约仍待） | ● | ○ | — | ff/S3 | 李 | schema 纪律 |
 | R4 `--explain` | **分支已实现待合并**（Step0–3+加固） | ● | ○ | ○(X6 默认关) | M1/S3·S6 | 李/赵/张 | 脱敏截断进 AI；B1 |
 | R5 `ai triage` | **分支已实现待合并** | ○ | ● | — | M2/S6 | 赵 | 桶守恒；B1 |
 | R6 replay per-entry | T3 · 待做 | ○ | ● | ○ | M2/S6 | 赵 | 灰度比对数据面；**随 T5 export 搭车** |

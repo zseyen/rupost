@@ -29,6 +29,7 @@ async fn main() -> Result<()> {
             no_cookies,
             cookie_file,
             save_snapshot,
+            only,
         }) => {
             let options = rupost::runner::TestSuiteOptions {
                 paths,
@@ -46,6 +47,7 @@ async fn main() -> Result<()> {
                 debug_on_failure: cli.debug_on_failure,
                 default_scheme: cli.default_scheme,
                 save_snapshot,
+                only,
             };
             let has_failure = rupost::runner::run_test_suite(options).await?;
             if has_failure {

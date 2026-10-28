@@ -96,6 +96,10 @@ pub enum Commands {
         /// File path to save HTTP request/response snapshot
         #[arg(long, value_name = "FILE")]
         save_snapshot: Option<String>,
+
+        /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
+        #[arg(long, value_name = "N|@NAME")]
+        only: Option<String>,
     },
 
     /// Manage request history

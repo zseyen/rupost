@@ -1,5 +1,6 @@
 pub mod app;
 pub mod executor;
+pub mod selector;
 pub mod types;
 
 pub mod engine;

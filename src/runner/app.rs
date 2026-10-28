@@ -191,7 +191,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
 
     // 保存快照
     if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(&batch_results, &options.paths, snapshot_path)?;
+        save_batch_snapshot(&batch_results, &paths, snapshot_path)?;
     }
 
     Ok(has_failure)

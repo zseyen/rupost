@@ -75,5 +75,7 @@
 *   语义化命名 / Host 模板化 / 动态值反向识别 / 链式值溯源（复制型）——设计与量级见[执行计划 §3-§4](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-generation-semantics-execution-plan.md)；其中动态值识别即 ai bootstrap 机械降级路径，与 A1 激活存在复利关系。
 *   `rupost g --failed` 失败选择器、`--emit-env`、`--format md`：backlog 观察，有真实抱怨再排。
 
-### 12. TUI 历史反向还原路径审计
-*   `format_request_snapshot_to_http`（TUI 独立实现）疑似未复用凭据脱敏——先审计确认，显式记录取舍（TUI 会话草稿保留真值 or 同步模板化）。
+### 12. TUI 历史反向还原路径审计 — **已完成（2026-10-28，T10）**
+*   **审计结论**：`format_request_snapshot_to_http`（`src/tui/state/history.rs`）原样写入全部 Header/URL/Body，调用点仅 `sync.rs`/`confirm.rs` 两处、产物只进**内存编辑器**（`editor_file_path = None`、`is_dirty = false`），TUI 全目录无剪贴板/文件导出路径——**无新暴露面**（凭据的持久化明文本就是 history 本身，属本机存储）。
+*   **显式裁决**：TUI 还原**有意保留凭据真值**——供未来内联编辑重发（模板化会破坏重发语义）；对外分享走 `export --redact`（脱敏）或 `generate`（模板化），三者分工明确互不越界。
+*   **契约锁定**：`test_history_restore_keeps_credentials_verbatim_by_design`（`src/tui/state/history.rs`）——若未来有人给还原路径加模板化/脱敏，此测试先行失败提醒重新裁决。

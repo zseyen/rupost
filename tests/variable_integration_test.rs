@@ -393,19 +393,14 @@ fn test_env_file_invalid_path_is_silently_ignored() {
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 场景 1：路径不存在 → 静默忽略，toml 变量不受影响
-    let context =
-        ConfigLoader::build_context(&config, Some("dev"), &[], Some("/no/such/file.env"));
+    let context = ConfigLoader::build_context(&config, Some("dev"), &[], Some("/no/such/file.env"));
     assert_eq!(context.get("toml_var").as_deref(), Some("from-toml"));
     assert_eq!(context.get("should_not_exist"), None);
 
     // 场景 2：路径存在但为目录（读入失败同样被吞）→ 静默忽略
     let dir = temp_dir.path().join("dir_as_env_file");
     fs::create_dir(&dir).unwrap();
-    let context = ConfigLoader::build_context(
-        &config,
-        Some("dev"),
-        &[],
-        Some(dir.to_str().unwrap()),
-    );
+    let context =
+        ConfigLoader::build_context(&config, Some("dev"), &[], Some(dir.to_str().unwrap()));
     assert_eq!(context.get("toml_var").as_deref(), Some("from-toml"));
 }

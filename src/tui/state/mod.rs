@@ -2,8 +2,7 @@
 use super::event::Action;
 use super::files;
 use super::ports::Repo;
-pub use super::theme::ThemeKind;
-use super::theme::{Theme, palette};
+use super::theme::{Theme, ThemeKind, palette};
 
 mod history;
 mod layout;

@@ -736,7 +736,7 @@ fn test_tui_command_line_file_auto_positioning() {
 
     // 1. 传入嵌套路径：父目录自动展开、光标定位到目标文件、内容载入编辑器
     let initial_file = Some(file_c.to_string_lossy().to_string());
-    rupost::tui::app::load_initial_file(&mut state, &initial_file);
+    rupost::tui::app::load_initial_file(&mut state, initial_file.as_deref());
 
     assert!(
         state.expanded_dirs.contains("examples"),
@@ -762,7 +762,7 @@ fn test_tui_command_line_file_auto_positioning() {
     state_fallback.workspace_root = temp_dir.path().to_path_buf();
     state_fallback.raw_file_list = vec![file_a.to_string_lossy().to_string()];
     state_fallback.rebuild_visible_tree_nodes();
-    rupost::tui::app::load_initial_file(&mut state_fallback, &None);
+    rupost::tui::app::load_initial_file(&mut state_fallback, None);
     assert_eq!(state_fallback.editor_text, "GET http://a");
     assert_eq!(state_fallback.files_state.selected_index, 0);
 
@@ -772,7 +772,7 @@ fn test_tui_command_line_file_auto_positioning() {
     state_dir.raw_file_list = vec![file_c.to_string_lossy().to_string()];
     state_dir.rebuild_visible_tree_nodes();
     let dir_initial = Some(nested_dir.to_string_lossy().to_string());
-    rupost::tui::app::load_initial_file(&mut state_dir, &dir_initial);
+    rupost::tui::app::load_initial_file(&mut state_dir, dir_initial.as_deref());
     assert_eq!(
         state_dir
             .visible_file_nodes
@@ -781,6 +781,77 @@ fn test_tui_command_line_file_auto_positioning() {
         Some(true)
     );
     assert!(state_dir.editor_file_path.is_none());
+
+    // 4. 传入不存在的路径：canonicalize 失败，回退加载第一个文件
+    let mut state_missing = AppState::new();
+    state_missing.workspace_root = temp_dir.path().to_path_buf();
+    state_missing.raw_file_list = vec![file_a.to_string_lossy().to_string()];
+    state_missing.rebuild_visible_tree_nodes();
+    let missing = Some(
+        temp_dir
+            .path()
+            .join("no_such_file.http")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    rupost::tui::app::load_initial_file(&mut state_missing, missing.as_deref());
+    assert_eq!(state_missing.editor_text, "GET http://a");
+    assert_eq!(state_missing.files_state.selected_index, 0);
+}
+
+#[test]
+fn test_sse_resize_lazy_rebuild_on_render() {
+    // 真实风险路径：流式进行中发生 resize → 宽度变化清空预折行缓存并复位位点，
+    // 渲染端必须按新宽度惰性全量重构已完成行，不得丢行或残留旧宽折行
+    let mut state = AppState::new();
+    state.is_loading = true;
+    state.current_response_width = 60;
+    // 110 字符长行：60 宽折 2 段、~38 宽（Stacked 40 列终端面板）折 3 段，保证折行数可区分
+    let long_line = "a long streaming line that exceeds sixty display columns and surely exceeds the narrower stacked panel width too";
+    let chunk = format!("short\n{long_line}\n");
+    state.handle_stream_chunk(chunk.clone());
+
+    let base_lines = state.sse_visual_lines.len();
+    assert!(
+        base_lines > 2,
+        "long line must wrap at width 60: {base_lines}"
+    );
+    assert_eq!(state.sse_last_processed_pos, chunk.len());
+
+    // 模拟 resize：update_layout 检测到响应宽度变化，清空缓存并复位位点
+    state.update_layout(40, 24);
+    assert!(state.sse_visual_lines.is_empty());
+    assert_eq!(state.sse_last_processed_pos, 0);
+
+    // Stacked 布局仅渲染焦点面板，焦点切到 Response 才会触发流式分支的惰性重构
+    state.active_panel = Panel::Response;
+    let backend = ratatui::backend::TestBackend::new(40, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    assert_eq!(frame.buffer.area.width, 40);
+    assert!(
+        state.sse_visual_lines.len() > base_lines,
+        "narrower panel must produce more wrapped lines: {} vs {base_lines}",
+        state.sse_visual_lines.len()
+    );
+    assert_eq!(state.sse_last_processed_pos, chunk.len());
+    let rendered: Vec<String> = state
+        .sse_visual_lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(rendered.first().map(String::as_str), Some("short"));
+    // 长行必须被切成多段（不再有 60 宽下的旧折行），且无内容丢失
+    assert!(!rendered.contains(&long_line.to_string()));
+    let rejoined = rendered.join("");
+    assert!(
+        rejoined.contains(long_line),
+        "no content loss after rebuild"
+    );
 }
 
 #[test]
@@ -1288,7 +1359,7 @@ fn test_external_editor_key_trigger() {
 #[test]
 fn test_theme_axis_smoke_matrix() {
     // 主题轴 × 错误态 × 布局 的参数化冒烟矩阵（P2 缺口补齐）
-    use rupost::tui::state::ThemeKind;
+    use rupost::tui::theme::ThemeKind;
     let backend = ratatui::backend::TestBackend::new(100, 30);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
 
@@ -1361,7 +1432,10 @@ fn test_theme_axis_smoke_matrix() {
             })
             .unwrap();
         let rendered = buffer_text(frame.buffer);
-        assert!(rendered.contains("[FAILED]"), "theme {theme:?}:\n{rendered}");
+        assert!(
+            rendered.contains("[FAILED]"),
+            "theme {theme:?}:\n{rendered}"
+        );
         assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
         assert_eq!(
             find_cell_fg(frame.buffer, "Warnings:"),

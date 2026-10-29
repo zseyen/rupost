@@ -318,5 +318,18 @@ mod tests {
         };
         state.update(Action::SendRequest(Box::new(req)));
         assert!(state.warnings.is_empty());
+
+        // Err 分支同样透传告警（警告与失败正交：错误响应也可伴随 capture/变量告警）
+        state.handle_request_finished(
+            Err("connection refused".to_string()),
+            HashMap::new(),
+            vec![],
+            vec!["undefined variable {{api_key}}".to_string()],
+        );
+        assert_eq!(state.warnings.len(), 1);
+        let err_resp = state
+            .last_response
+            .expect("error response must be materialized");
+        assert!(!err_resp.is_success());
     }
 }

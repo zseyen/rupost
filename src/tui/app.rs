@@ -95,7 +95,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     state.history_list.reverse();
 
     // 默认加载首个文件或指定的 initial_file
-    load_initial_file(&mut state, &initial_file);
+    load_initial_file(&mut state, initial_file.as_deref());
 
     // 捕获初始尺寸
     if let Ok((w, h)) = crossterm::terminal::size() {
@@ -225,7 +225,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
 
 /// 默认加载首个文件或指定的 initial_file（`rupost tui [FILE]` 预加载入口）。
 /// 逐级展开目标文件所在目录、定位树节点并载入编辑器；提取自 run_async 以便离线单测。
-pub fn load_initial_file(state: &mut AppState, initial_file: &Option<String>) {
+pub fn load_initial_file(state: &mut AppState, initial_file: Option<&str>) {
     let mut initial_idx = 0;
     if let Some(init_path) = initial_file
         && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()

@@ -650,40 +650,71 @@ fn test_warnings_rendered_in_response_panel() {
 
 #[test]
 fn test_tui_command_line_file_auto_positioning() {
+    // 锁定 `rupost tui <file>` 预加载入口的真实实现（app::load_initial_file）
     let temp_dir = tempfile::tempdir().unwrap();
     let file_a = temp_dir.path().join("a.http");
     let file_b = temp_dir.path().join("b.http");
+    let nested_dir = temp_dir.path().join("examples");
+    std::fs::create_dir(&nested_dir).unwrap();
+    let file_c = nested_dir.join("c.http");
 
     std::fs::write(&file_a, "GET http://a").unwrap();
     std::fs::write(&file_b, "GET http://b").unwrap();
+    std::fs::write(&file_c, "GET http://c").unwrap();
 
     let mut state = AppState::new();
     state.workspace_root = temp_dir.path().to_path_buf();
     state.raw_file_list = vec![
         file_a.to_string_lossy().to_string(),
         file_b.to_string_lossy().to_string(),
+        file_c.to_string_lossy().to_string(),
     ];
     state.rebuild_visible_tree_nodes();
 
-    // 模拟命令行中传入了定位到 b.http 的参数，利用我们刚写的匹配算法
-    let initial_file = Some(file_b.to_string_lossy().to_string());
-    let mut initial_idx = 0;
-    if let Some(init_path) = &initial_file
-        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
-    {
-        let matched = state.visible_file_nodes.iter().position(|n| {
-            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
-                c.to_string_lossy() == canon_init.to_string_lossy()
-            } else {
-                n.abs_path == canon_init.to_string_lossy()
-            }
-        });
-        if let Some(pos) = matched {
-            initial_idx = pos;
-        }
-    }
+    // 1. 传入嵌套路径：父目录自动展开、光标定位到目标文件、内容载入编辑器
+    let initial_file = Some(file_c.to_string_lossy().to_string());
+    rupost::tui::app::load_initial_file(&mut state, &initial_file);
 
-    assert_eq!(initial_idx, 1); // 成功定位到第二项 (b.http)
+    assert!(
+        state.expanded_dirs.contains("examples"),
+        "parent dir of initial file must be expanded"
+    );
+    let target = state
+        .visible_file_nodes
+        .iter()
+        .position(|n| n.display_name == "c.http")
+        .unwrap();
+    assert_eq!(state.files_state.selected_index, target);
+    assert_eq!(state.selected_file_index, target);
+    assert_eq!(state.editor_text, "GET http://c");
+    // 树节点 abs_path 经 canonicalize（macOS /var → /private/var），用规范路径比较
+    let canon_c = std::fs::canonicalize(&file_c).unwrap().to_string_lossy().into_owned();
+    assert_eq!(state.editor_file_path.as_deref(), Some(canon_c.as_str()));
+
+    // 2. 不传文件：回退加载第一个文件
+    let mut state_fallback = AppState::new();
+    state_fallback.workspace_root = temp_dir.path().to_path_buf();
+    state_fallback.raw_file_list = vec![file_a.to_string_lossy().to_string()];
+    state_fallback.rebuild_visible_tree_nodes();
+    rupost::tui::app::load_initial_file(&mut state_fallback, &None);
+    assert_eq!(state_fallback.editor_text, "GET http://a");
+    assert_eq!(state_fallback.files_state.selected_index, 0);
+
+    // 3. 传入目录：定位目录节点，不读入编辑器
+    let mut state_dir = AppState::new();
+    state_dir.workspace_root = temp_dir.path().to_path_buf();
+    state_dir.raw_file_list = vec![file_c.to_string_lossy().to_string()];
+    state_dir.rebuild_visible_tree_nodes();
+    let dir_initial = Some(nested_dir.to_string_lossy().to_string());
+    rupost::tui::app::load_initial_file(&mut state_dir, &dir_initial);
+    assert_eq!(
+        state_dir
+            .visible_file_nodes
+            .get(state_dir.files_state.selected_index)
+            .map(|n| n.is_dir),
+        Some(true)
+    );
+    assert!(state_dir.editor_file_path.is_none());
 }
 
 #[test]

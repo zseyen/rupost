@@ -95,59 +95,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     state.history_list.reverse();
 
     // 默认加载首个文件或指定的 initial_file
-    let mut initial_idx = 0;
-    if let Some(init_path) = &initial_file
-        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
-    {
-        let root_canon = std::fs::canonicalize(&state.workspace_root)
-            .unwrap_or_else(|_| state.workspace_root.clone());
-        if let Ok(rel) = canon_init.strip_prefix(&root_canon) {
-            let mut current = std::path::PathBuf::new();
-            for comp in rel.components() {
-                if let std::path::Component::Normal(name) = comp {
-                    let step = current.join(name);
-                    let step_abs = root_canon.join(&step);
-                    if step_abs.is_dir() {
-                        state
-                            .expanded_dirs
-                            .insert(step.to_string_lossy().replace('\\', "/"));
-                    }
-                    current = step;
-                }
-            }
-            state.rebuild_visible_tree_nodes();
-        }
-
-        let canon_init_str = canon_init.to_string_lossy().into_owned();
-        let matched = state.visible_file_nodes.iter().position(|n| {
-            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
-                c.to_string_lossy() == canon_init_str
-            } else {
-                n.abs_path == canon_init_str
-            }
-        });
-        if let Some(pos) = matched {
-            initial_idx = pos;
-        }
-    }
-
-    if !state.visible_file_nodes.is_empty() && initial_idx < state.visible_file_nodes.len() {
-        let first_node = &state.visible_file_nodes[initial_idx];
-        if !first_node.is_dir {
-            if let Ok(content) = std::fs::read_to_string(&first_node.abs_path) {
-                state.editor_text = content;
-                state.editor_file_path = Some(first_node.abs_path.clone());
-                if let Ok(metadata) = std::fs::metadata(&first_node.abs_path) {
-                    state.editor_file_mtime = metadata.modified().ok();
-                }
-                state.selected_file_index = initial_idx;
-                state.files_state.selected_index = initial_idx;
-                state.loaded_file_index = initial_idx;
-            }
-        } else {
-            state.files_state.selected_index = initial_idx;
-        }
-    }
+    load_initial_file(&mut state, &initial_file);
 
     // 捕获初始尺寸
     if let Ok((w, h)) = crossterm::terminal::size() {
@@ -273,6 +221,64 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
         .map_err(|e| crate::error::RupostError::IoError(std::io::Error::other(e.to_string())))?;
 
     Ok(())
+}
+
+/// 默认加载首个文件或指定的 initial_file（`rupost tui [FILE]` 预加载入口）。
+/// 逐级展开目标文件所在目录、定位树节点并载入编辑器；提取自 run_async 以便离线单测。
+pub fn load_initial_file(state: &mut AppState, initial_file: &Option<String>) {
+    let mut initial_idx = 0;
+    if let Some(init_path) = initial_file
+        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
+    {
+        let root_canon = std::fs::canonicalize(&state.workspace_root)
+            .unwrap_or_else(|_| state.workspace_root.clone());
+        if let Ok(rel) = canon_init.strip_prefix(&root_canon) {
+            let mut current = std::path::PathBuf::new();
+            for comp in rel.components() {
+                if let std::path::Component::Normal(name) = comp {
+                    let step = current.join(name);
+                    let step_abs = root_canon.join(&step);
+                    if step_abs.is_dir() {
+                        state
+                            .expanded_dirs
+                            .insert(step.to_string_lossy().replace('\\', "/"));
+                    }
+                    current = step;
+                }
+            }
+            state.rebuild_visible_tree_nodes();
+        }
+
+        let canon_init_str = canon_init.to_string_lossy().into_owned();
+        let matched = state.visible_file_nodes.iter().position(|n| {
+            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
+                c.to_string_lossy() == canon_init_str
+            } else {
+                n.abs_path == canon_init_str
+            }
+        });
+        if let Some(pos) = matched {
+            initial_idx = pos;
+        }
+    }
+
+    if !state.visible_file_nodes.is_empty() && initial_idx < state.visible_file_nodes.len() {
+        let first_node = &state.visible_file_nodes[initial_idx];
+        if !first_node.is_dir {
+            if let Ok(content) = std::fs::read_to_string(&first_node.abs_path) {
+                state.editor_text = content;
+                state.editor_file_path = Some(first_node.abs_path.clone());
+                if let Ok(metadata) = std::fs::metadata(&first_node.abs_path) {
+                    state.editor_file_mtime = metadata.modified().ok();
+                }
+                state.selected_file_index = initial_idx;
+                state.files_state.selected_index = initial_idx;
+                state.loaded_file_index = initial_idx;
+            }
+        } else {
+            state.files_state.selected_index = initial_idx;
+        }
+    }
 }
 
 /// 对 TUI 中扫描出的所有候选文件路径进行精细化过滤

@@ -197,3 +197,73 @@ async fn test_parallel_mode_never_persists_worker_cookies() {
         "worker cookies must not leak into the cookie file, got: {on_disk}"
     );
 }
+
+/// 契约 1c："逐文件"粒度的外部观测点——子进程 + 挂起服务器：
+/// 文件 A（set cookie）立即完成，文件 B 请求挂起的服务端（60s 延迟 > 客户端
+/// 30s 超时），批处理在文件 B 上阻塞。子进程运行期间轮询 cookie 文件：
+/// 若 `persist_cookies()` 位于循环内（现状），文件 A 完成后文件立即出现；
+/// 若被重构为批次末统一落盘，阻塞期间文件绝不出现 → 观测窗口内红。
+/// （fail-fast 观测点不可行：批次末 persist 在 break 后照样执行，两者不可区分。）
+#[tokio::test]
+async fn test_serial_persists_while_batch_still_running() {
+    use std::time::Instant;
+
+    let server = MockServer::start().await;
+    mount_cookie_endpoints(&server, "hang_sid", "hang-1").await;
+    Mock::given(method("GET"))
+        .and(path("/hang"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(60)))
+        .mount(&server)
+        .await;
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let cookie_file = temp.path().join("cookies.json");
+    std::fs::write(
+        temp.path().join("a.http"),
+        format!("### Set\nGET {}/set\n", server.uri()),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("b.http"),
+        format!("### Hang\nGET {}/hang\n", server.uri()),
+    )
+    .unwrap();
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "t",
+            ".",
+            "--cookie-file",
+            cookie_file.to_str().unwrap(),
+            "--report",
+            "json",
+        ])
+        .current_dir(temp.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn rupost binary");
+
+    // 子进程阻塞在文件 B 的 30s 客户端超时上——20s 观测窗口内文件必须已出现
+    // （余量覆盖慢 CI 的二进制冷启动与 Defender 扫描；失败路径才付出全窗时间）
+    let deadline = Instant::now() + std::time::Duration::from_secs(20);
+    let mut observed = false;
+    while Instant::now() < deadline {
+        if std::fs::read_to_string(&cookie_file)
+            .map(|c| c.contains("hang_sid"))
+            .unwrap_or(false)
+        {
+            observed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        observed,
+        "cookies must be persisted when file A completes, \
+         while the batch is still blocked on file B"
+    );
+}

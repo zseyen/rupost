@@ -180,6 +180,20 @@
 
 按测试方案 v3 指引执行全链门禁时，`examples/run_all.sh` 14/15 失败（外网可达却 0ms 报 "error sending request"）。根因：`2714c8a5` workspace 依赖统一时 reqwest 加了 `default-features = false` 但未补 TLS feature——**HTTPS/WSS 静默失效，且全量 551 测试全绿（本地 http wiremock 无法捕获）**，暴露了"构建配置漂移不可测"盲区。修复：workspace 定义补回 `default-tls`（恢复原行为）+ load-bearing 注释锚。验证：https 直连 200、workspace 551 全绿、run_all.sh 15/15。**启示**：run_all.sh 是目前唯一能抓住 TLS 缺失的探针（外网依赖使其不可入 CI），发版前必跑地位加固。
 
+
+---
+
+## 测试缺口清偿、P2 卫生批次与双轮审查（2026-10-29/30）
+
+三个 workspace 批次 + 两轮双子代理对抗审查，测试策略 v3 的 P0/P1/P2 **独立台账全部清零**：
+
+- **tui-fix（10-29）**：TUI 测试缺口清偿（stream 流式域 0→10 单测、warnings 全链路渲染 [D1 关闭]、预加载真函数化、主题轴冒烟）+ 双审查修复轮（buffer 级消费端守护、缓存面板样式丢失修复、流式视图 Warnings 摘要）。
+- **test-gaps（10-30）**：§6.2 四项 P1 真缺口清偿——并行×`--cookie-file` 落盘契约（串行逐文件/并行 Ephemeral 不落盘）、SSE 韧性上浮真实网络层（断流 flush/1MB 截断×2）、JSON 报告 schema 精确键集合（含 `diagnose --report json`）、capture 专项（逐条降级/from 解析/global Arc 共享）。
+- **p2-hygiene（10-30）**：CI test/clippy/build 三处 `--workspace`（38 vs 36 套件实证）、`--env-file` 无效路径静默忽略契约锁定、`make coverage` 一键入口、criterion benches 验证、Windows 三平台核对；DX-1/3/4 落地（Makefile 九目标 [gate-fast 上线即抓到未格式化测试]、PRD 模板 `make prd`、SDK 检测 `make build`）。
+- **review-fixes（10-30）**：两轮审查（4 P1 + 9 P2）全部闭环——RST 传输层错误真守护（SO_LINGER=0 + socket2 0.6）、cookie 逐文件粒度子进程挂起观测点（persist 移出循环实证变红）、失败形态 schema、SDK 切换分支可达性（改探固定 Xcode 路径）；过程事故（红检查回写静默失败、divergent）如实归档并收敛，终态 src/ 零变更。
+
+**质量基线**：`cargo test --workspace` 38 套件全绿；clippy `--workspace --all-targets --all-features` 零告警；`make gate` 成为本地门禁标准入口。
+
 ---
 
 ## TUI 流式调试深化（2026-10-30，tui-streaming workspace）

@@ -192,3 +192,85 @@ async fn test_diagnose_json_schema_exact_fields() {
         .collect();
     assert_eq!(dns_keys, vec!["nanos", "secs"]);
 }
+
+/// 失败/错误形态的 schema 一致性：断言败（HTTP 有响应）与连接错误
+/// （无响应）两种结果的金字段集合与成功形态完全相同——CI 看板按同一
+/// 结构消费，不因结果形态而改变。
+#[tokio::test]
+async fn test_batch_json_report_schema_failed_result_shape() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let temp = tempfile::TempDir::new().unwrap();
+    // 已关端口 → 连接拒绝 → error Some、status null
+    let dead_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let file_a = temp.path().join("a.http");
+    std::fs::write(
+        &file_a,
+        format!(
+            "### AssertFail\n@assert status == 599\nGET {}/ok\n\n### ConnFail\nGET http://127.0.0.1:{dead_port}/\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let parsed_a = HttpFileParser::parse_file(&file_a).unwrap();
+
+    let mut files_map = HashMap::new();
+    files_map.insert(file_a.clone(), parsed_a);
+    let batch = BatchExecutor::new(TestExecutor::new());
+    let mut context = VariableContext::new();
+    let results = batch
+        .execute_batch(BatchRunRequest {
+            execution_order: vec![file_a],
+            dependencies: HashMap::new(),
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Serial,
+            concurrency: 1,
+            fail_fast: false,
+        })
+        .await
+        .unwrap();
+
+    let mut buf: Vec<u8> = Vec::new();
+    TestReporter::report_json(&results, &mut buf).unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+
+    let reqs = parsed[0]["results"].as_array().unwrap();
+    assert_eq!(reqs.len(), 2);
+
+    // 形态 1：断言败——HTTP 完成但 success false，error 仍为 null
+    let assert_fail = &reqs[0];
+    assert_eq!(assert_fail["success"], false);
+    assert_eq!(assert_fail["status"], 200);
+    assert_eq!(assert_fail["error"], serde_json::Value::Null);
+    assert_eq!(
+        assert_fail["assertions"][0]["passed"], false,
+        "failed assertion must be visible in the report"
+    );
+
+    // 形态 2：连接错误——status null、error 非 null
+    let conn_fail = &reqs[1];
+    assert_eq!(conn_fail["success"], false);
+    assert_eq!(conn_fail["status"], serde_json::Value::Null);
+    assert!(
+        conn_fail["error"].is_string(),
+        "connection error must surface"
+    );
+
+    // 两种失败形态的键集合彼此一致（成功形态由既有测试锁定；同源于
+    // reporter.rs 的同一 json! 字面量，此断言防未来按形态拆分序列化路径）
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    assert_eq!(keys(assert_fail), keys(conn_fail));
+}

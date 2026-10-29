@@ -53,7 +53,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --verbose
+        # --workspace：预热全部 crate 的编译缓存，test 步骤零冷编译
+        run: cargo build --workspace --verbose
       - name: Run tests
         # --workspace：默认跑法漏掉 workspace 子 crate 的测试（测试策略 v3 §7.1）
         run: cargo test --workspace --verbose

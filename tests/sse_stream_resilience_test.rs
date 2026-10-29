@@ -99,6 +99,70 @@ GET {uri}/stream
     assert_eq!(context.get("tail_id").as_deref(), Some("9"));
 }
 
+/// 契约 1（传输层错误分支）：SO_LINGER=0 强制 RST → 客户端读到
+/// `Some(Err)` 而非 EOF → 走 sse_runner 的 Err 分支 flush。该分支
+/// 与 EOF 的 None 分支是两个独立调用点，删掉 Err 分支的 flush 本测试即红。
+#[tokio::test]
+async fn test_sse_transport_error_flushes_tail_event() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let uri = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+
+    let server = tokio::spawn(async move {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut socket = socket;
+            handshake(&mut socket).await;
+            socket
+                .write_all(b"id: 9\nevent: done\ndata: {\"text\": \"rst-payload\"}")
+                .await
+                .unwrap();
+            // 300ms：给 hyper 连接任务充分的读取余量——RST 会丢弃接收缓冲中
+            // 未读数据，客户端必须先把尾帧读进用户态才能经 Err 分支 flush
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            // 转回 std 流设置 SO_LINGER=0 后 drop：内核发 RST 而非 FIN，
+            // 客户端下一次 poll 得到 ECONNRESET（Some(Err) 分支）
+            let std_stream = socket.into_std().unwrap();
+            socket2::SockRef::from(&std_stream)
+                .set_linger(Some(std::time::Duration::ZERO))
+                .unwrap();
+            drop(std_stream);
+        }
+    });
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let http_file = temp.path().join("rst.http");
+    std::fs::write(
+        &http_file,
+        format!(
+            r#"### SSE RST tail
+@sse
+@sse_max_events 1
+@assert status == 200
+@capture tail from stream.body.text
+GET {uri}/stream
+"#
+        ),
+    )
+    .unwrap();
+
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+
+    server.await.unwrap();
+    // 传输层错误不影响请求成功判定：尾帧 flush 后流照常收尾
+    assert!(
+        results[0].success,
+        "stream must complete despite RST: {:?}",
+        results[0].error
+    );
+    assert_eq!(
+        context.get("tail").as_deref(),
+        Some("rst-payload"),
+        "Err-branch flush must deliver the tail event"
+    );
+}
+
 /// 契约 2：单事件 data 累积超过 1MB 上限 → 截断且不 OOM；事件边界复位后
 /// 后续正常事件完整解析（截断状态不泄漏到下一个事件）
 #[tokio::test]

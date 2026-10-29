@@ -1,8 +1,9 @@
 # RuPost 全量测试方案 (Test Strategy & Plan)
 
-> **创建日期**: 2026-10-25（v2，经两个独立子代理——功能完整性审查 / 事实准确性核查——交叉审查后修订，修订记录见 §9）
+> **创建日期**: 2026-10-25（v3，2026-10-28 追平现实基线并纳入 AI/单请求重跑/自动诊断新域，修订记录见 §9）
 > **性质**: 全局测试策略与功能覆盖矩阵（唯一测试方案事实来源，领域专项规约如 [Cookie 测试规约](file:///Users/zsyzzx/project/rust/rupost/doc/cookie/cookie_test_specification.md) 以本方案为父纲）
-> **现状基线**: 全量 468 测试 0 失败 = src `mod tests` 317 单测 + 主二进制内嵌单测 6（`cli::parser` 经 `main.rs` 编入）+ `tests/` 145 集成测试；`cargo fmt --check` 与 `cargo clippy --all-targets -D warnings` 双零
+> **现状基线**: 全 workspace **551 测试 / 34 套件 / 0 失败** = 主包 543（lib 单测 356 + 主二进制单测 9 + `tests/` 178 集成，29 文件）+ `crates/rupost-ai` 8（client 5 + translator 3）。**⚠️ 默认 `cargo test` 仅覆盖主包 543，crate 的 8 个测试必须 `cargo test --workspace` 才纳入**（实证：workspace root package 默认只跑自身）——§7.1 纪律已随之升级
+> **历史基线**: v2 时点 468（317+6+145）；v2→v3 间 P0 缺口 4 项全部落地并超额（13→31 个新测试），详见 §9
 > **子代理验证**: 方案成稿后由两个独立子代理（功能清单完整性 / 事实准确性）交叉审查并修订
 
 ---
@@ -36,8 +37,9 @@ L5 手工探索 ──── 真实外网验证 + TUI 真机冒烟（发布前�
 | 层 | 位置 | 隔离手段 | 规模基线 | 触发时机 |
 | :-- | :--- | :--- | :--- | :--- |
 | **L0** | CI + 本地 | — | fmt/clippy/MSRV 1.89 双零 | 每次提交（流程规范强制三步） |
-| **L1** | 各源文件 `mod tests`（`#[cfg(test)]`，56 个模块） | 内存 Mock（如 `MockHttpClient`）、`InMemory FileRepository` | 317 个（lib）+ 6 个（主二进制 `cli::parser`） | `cargo test`，每次提交 |
-| **L2** | `tests/*.rs`（23 个文件） | wiremock（11 文件）、裸 `TcpListener`（4 文件）、`MockLlmServer`、`TempDir`、ratatui `TestBackend` | 145 个 | `cargo test`，每次提交 |
+| **L1** | 各源文件 `mod tests`（`#[cfg(test)]`） | 内存 Mock（如 `MockHttpClient`）、`InMemory FileRepository`、mockall | 主包 lib 356 + 主二进制 9（含 `cli.rs:621` 全局参数位置契约表） | `cargo test`，每次提交 |
+| **L1.5** | `crates/rupost-ai` `mod tests` | mockall（translator 3）+ 逻辑级 client 测试（5：成功/401 状态与体/空 choices/非 JSON/尾斜杠容忍） | 8 个（**仅 `cargo test --workspace` 可见**） | AI 域改动提交时 |
+| **L2** | `tests/*.rs`（29 个文件） | wiremock（14 文件）、裸 `TcpListener`（5 文件）、`MockLlmServer`、`TempDir`、ratatui `TestBackend`、**dogfooding 复用 `rupost mock` 当 OpenAI 兼容后端** | 178 个 | `cargo test`，每次提交 |
 | **L3** | `tests/verify_features.sh` + `examples/run_all.sh` | 本地 Mock 服务 + 临时沙箱目录，零外网 | 全特性闭环 + 15 示例 | 核心引擎（parser/executor/批量）改动后 + 发版前 |
 | **L4** | `tests/adversarial_regression_test.rs`、`benches/`（criterion ×3）、`benches/load_test/` | 原始复现命令、wiremock | 7 对抗 + 3 基准 | Bug 修复同提交；性能改动手动触发 |
 | **L5** | [测试与功能验证指引 §2](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) | 真实外网（`httpbingo.org`、`badssl.com`） | 6 大验证场景 | 发版前 + 网络栈改动后 |
@@ -58,12 +60,14 @@ L5 手工探索 ──── 真实外网验证 + TUI 真机冒烟（发布前�
 | ratatui `TestBackend` | TUI 渲染冒烟（无需真实终端） | `tests/tui_smoke_test.rs` |
 | `InMemoryFileRepository` | TUI 写路径端口化测试 | `src/tui/ports.rs` |
 | `tokio::time` / `set_delay` | 超时、重连退避、过期 Cookie | 相应单测与集成 |
+| `rupost mock` 当 OpenAI 兼容后端（dogfooding） | AI 命令的**无真实 Key 离线闭环**（`ai assert` 等） | `tests/ai_assert_test.rs`、`verify_features.sh` 步骤 7 |
+| mockall | crate 侧 trait Mock（`AiClient`） | `crates/rupost-ai/src/translator.rs` |
 
 **外网依赖收敛规则**：自动化测试（L0–L4）**禁止**发起真实公网请求；仅 L5 手工清单允许，且统一收敛到 `httpbingo.org`（功能）与 `badssl.com`（证书异常）。
 
 ---
 
-## 4. 功能域覆盖矩阵（19 域 × 现状 × 缺口）
+## 4. 功能域覆盖矩阵（20 域 × 现状 × 缺口）
 
 > 状态标记：✅ 覆盖充分 ｜ ⚠️ 覆盖偏薄（有明确缺口） ｜ 🕳 覆盖盲区（见 §6 行动计划）
 
@@ -77,17 +81,18 @@ L5 手工探索 ──── 真实外网验证 + TUI 真机冒烟（发布前�
 | 6 | 并行与 Cookie 隔离 | JoinSet 并发限制、并行分支 Cookie 物理隔离（不落盘）、钻石 DAG 告警 | `cookie_isolation_test`(2)、`batch_testing_test` | ⚠️ 隔离矩阵待补（并行 × `--cookie-file` 组合契约未锁定） |
 | 7 | Cookie 管理 | 三模式（AutoPersist/Ephemeral/Disabled）、文件锁、0600、损坏降级、CLI 内联请求的 `--no-cookies`/`--cookie-file`/`--env`→`cookies_<env>.json` 接线 | `cookie_test`(9) + [Cookie 测试规约](file:///Users/zsyzzx/project/rust/rupost/doc/cookie/cookie_test_specification.md) | ✅（CLI 内联接线仅有函数级测试） |
 | 8 | 本地 Mock 服务 | Trie 路由（`:id`/`*`/`**`）、多变体条件、兜底分支、Axum 适配 | `mock_integration_test`(3) + src mock 单测 | ✅（单测充分） |
-| 9 | 网络诊断 | DNS/TCP/TLS/TTFB 拆分、X.509 临期/过期判定、`--debug`/`--debug-on-failure` 失败自动诊断、`diagnose --report json` 输出 | `diagnose_integration_test`(3)、`timing_diagnostics_test`(2) | ⚠️ 失败自动诊断与 JSON 输出无测试 |
+| 9 | 网络诊断 | DNS/TCP/TLS/TTFB 拆分、X.509 临期/过期判定、`--debug`/`--debug-on-failure` 失败自动诊断、`diagnose --report json` 输出 | `diagnose_integration_test`(3)、`timing_diagnostics_test`(2)、`debug_on_failure_test`(4，DBG-2 契约) | ⚠️ `diagnose --report json` 无测试（其余已锁） |
 | 10 | SSE 流式 | WHATWG 语义（空 data 帧、event 重置、id 留存）、内存上限、`@sse_timeout`、`@stream_to` | `sse_assertion_test`(2) + src SseRunner 单测 | ⚠️ 集成层偏薄，断流/上限场景需上浮 |
 | 11 | LLM 流式调试 | OpenAI/Anthropic 帧规整、`stream.llm.content` 断言、路由重定向 | `llm_mvp_test`(5) | ✅（`crates/rupost-ai` translator 有 mockall 单测，client/error 无测试且 crate 暂无引用方，见 §6 P2） |
 | 12 | WebSocket | `@websocket` 剧本（SEND/EXPECT/WAIT/CLOSE）、软匹配、MsgPack、重连自愈、1000 帧上限 | `websocket_integration_test`(8) + src ws 单测 | ✅ |
-| 13 | 快照录制与重放 | `--save-snapshot` 录制、`replay --target` 改写、`@timeout` 透传 | `snapshot_replay_test`(1) | 🕳 单测试承载整个域 |
-| 14 | 请求历史与测试文件生成 | `history list/show/prune/clear` 四实子命令（`export` 为 MVP 桩，行为=打印未实现提示）、gc、并发写；`generate`（别名 `g`，`--last`/`--interactive`）从历史生成 `.http` | `history_integration_test`(1)、`history_concurrency_test`(1) | 🕳 `generator/http.rs` 0 测试（selector 的 Last 策略已有 2 单测，Interactive 为 TTY 交互归 L5）；历史子命令仅 2 测试 |
-| 15 | CLI 体验 | curl/httpie 解析、单字母别名（t/h/g/d/m/i/r/l/e/s/p/c）、**全局参数必须置于子命令前**、URL 归一化、日志级别（`RUST_LOG` 过滤与 debug/release 默认级） | `query_params_test`(3)、`auto_routing_test`(2)、`logger_integration_test`(1)、src cli/parser 单测 | ⚠️ 全局参数位置陷阱无回归锁定 |
+| 13 | 快照录制与重放 | `--save-snapshot` 录制、`replay --target` 改写、`@timeout` 透传、损坏容错 | `snapshot_replay_test`(4) | ✅（P0-2 达成；结构化 per-entry 结果与 Smart Diff 见 runbook T3/T4） |
+| 14 | 请求历史与测试文件生成 | `history list/show/prune/clear` + `export` 桩锁定、`show` 1=最新（help 已修正）、gc、并发写；`generate`（凭据模板化 `{{}}`、语义命名、`--templatize-host`、动态值反向识别 T1/链式溯源 T2 排期中）；顶层 `export` 子命令 | `history_integration_test`(1)、`history_concurrency_test`(1)、`history_cli_test`(5，含 export 桩)、`export_integration_test`(2)、`generate_integration_test`(8) | ✅（P0-1/P0-3 达成并超额；T1/T2 落地时补决策表测试） |
+| 15 | CLI 体验 | curl/httpie 解析、单字母别名、**全局参数位置契约（双序皆可 + 内联陷阱，表驱动已锁）**、URL 归一化、`--only`/`path#n` 单请求重跑选择器、日志级别 | `query_params_test`(3)、`auto_routing_test`(2)、`logger_integration_test`(1)、`single_request_test`(8)、`src/cli.rs` 位置契约表 | ✅（P0-4 达成；AGENTS.md §5 已同步修正） |
 | 16 | TUI 交互 | MVU 状态机、双 Tab、预折行滚动、`/` 过滤、快速新建三防线、鼠标点击切焦、流式帧增量渲染、`tui <file>` 预加载入口、主题切换（单测覆盖） | `tui_smoke_test`(39) + src 纯函数单测 | ⚠️ 流式渲染（`state/stream.rs`）0 测试；主题轴未进冒烟矩阵；`warnings` 渲染盲区（遗留项 D1） |
 | 17 | 模板脚手架 | `init` 三类模板（config/sse/llm）生成、`--list`、防覆盖、`--force` 警告、模板内容完整性、`template` 别名 | `template_test`(9) + L3 脚本 | ✅ |
 | 18 | 报告与错误处理 | 终端彩色摘要、JSON 报告 schema（含 warnings）、panic 清零（用户输入→失败结果非崩溃） | `error_test`(4)、JSON 报告断言散落 | ⚠️ JSON schema 契约无独立锁定 |
 | 19 | HTTP 客户端行为 | 默认 UA `rupost/1.0.0`、变量配置覆盖、用例 Header 最高优先级覆盖的三级级联 | `user_agent_test`(4) | ✅ |
+| 20 | AI 创作辅助 | `ai assert` 自然语言→标准断言（离线 dogfooding、密钥不入盘不入日志、`--raw`）；crate `AiClient` 错误路径；`ai bootstrap`（自举测试，**未实施**：素材脱敏、引擎 lint、降级机械版） | `ai_assert_test`(4)、`verify_features.sh` 步骤 7、crate 8 | ✅（assert 已锁）/ 🕳（bootstrap 随实施交付，见 [自举提案 §8](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md)） |
 
 ---
 
@@ -146,25 +151,17 @@ OpenAI/Anthropic 双格式的 delta/content_block 帧规整为 `stream.llm.conte
 - **自愈**：物理断连指数退避 5 次重连、挂起期 100 帧缓冲、重连后 `push_front` 时序补发。
 - **资源**：`BoundedFrameBuffer` 1000 帧上限滑动淘汰。
 
-### 5.13 快照录制与重放（缺口域）
-- **待补**（当前仅 1 个集成测试）：
-  1. 录制 → 重放往返等价：`--save-snapshot` 后 `replay --target host:port`，断言 Path/Query 原样、Host/Port 改写生效；
-  2. `@timeout` 语义透传（快照含 timeout 字段的重放不再退回 30s 默认）；
-  3. 快照文件损坏/非快照 JSON 的可读错误。
+### 5.13 快照录制与重放（v2 缺口已核销 ✅）
+P0-2 落地（4 集成测试）：录制→重放往返等价（Host/Port 改写 + Path/Body 透传一次证明）、`@timeout` 透传（<1.5s 计时行为学证明）、损坏快照三分支容错、状态比对失败语义。后续结构化 per-entry 结果（runbook T3）与 Smart Diff（T4）落地时按其验收补测。
 
-### 5.14 请求历史与测试文件生成（缺口域）
-- **历史子命令**（四个实子命令仅 2 测试，待补）：`history list --limit`、`show <id>`、`prune`/`clear` 的删除语义与 gc 触发；并发写不损坏（已有 1 测试守护）。
-- **`export` 为 MVP 桩**：`main.rs` 对 `HistoryCommands::Export` 仅打印 "not implemented in MVP stage." 并丢弃参数——以 1 个**桩行为锁定测试**记录现状（输出包含该提示、退出码 0），防止有人误以为它已可用；实现 export 时该测试先行失败驱动替换。
-- **`generate` 域（`generator/http.rs` 0 测试，最高缺口；selector Last 策略已有 2 单测，Interactive 为 TTY 交互归 L5 手工）**：
-  1. `generate --last` 非交互路径：最近一次请求快照 → 生成合法 `.http` 文件（文件存在、含方法行与 URL、可被 `rupost t` 再次解析执行——往返闭环）；
-  2. 交互选择路径（`history/selector.rs`）：以预置输入驱动选择逻辑（优先纯函数层测试）；
-  3. 空历史 / 历史为空目录的友好错误。
-- **TUI 反向还原**：`format_request_snapshot_to_http` 纯函数已单测覆盖，此处不重复。
+### 5.14 请求历史与测试文件生成（v2 缺口已核销 ✅）
+P0-1/P0-3 落地：`generate_integration_test`(8，含凭据模板化泄露回归锚点 dc1f048c——生成物凭据一律 `{{变量}}` 化)、`history_cli_test`(5，`show` 1=最新 help 修正同交付、`export` 桩锁定)、`export_integration_test`(2)。`--interactive`（TTY）仍归 L5 手工清单。generate 语义增强（runbook T1 动态值反向识别 / T2 链式溯源）落地时按其五形状/五张决策表补测。
 
-### 5.15 CLI 体验（待锁回归）
-- **全局参数位置契约**（AGENTS.md CLAP 规则，2026-10-25 实证校准）：子命令模式下 clap v4 对 `global = true` 参数**前后位置皆可**（实测 `rupost test x.http --debug` 正确解析）；**真实陷阱在内联模式**（无子命令）——后置全局旗被 `trailing_var_arg` 吞入内联参数且改变解析器选择。以表驱动解析级测试锁定双模式八场景，并同步修正 AGENTS.md 表述（详见 [P0 执行方案 §5](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-p0-execution.md)）。
+### 5.15 CLI 体验（v2 缺口已核销 ✅）
+- **全局参数位置契约**（AGENTS.md CLAP 规则，2026-10-25 实证校准，**已由 `src/cli.rs:621` 表驱动测试锁定**）：子命令模式下 clap v4 对 `global = true` 参数**前后位置皆可**；**真实陷阱在内联模式**（无子命令）——后置全局旗被 `trailing_var_arg` 吞入内联参数且改变解析器选择。AGENTS.md §5 已同步修正。
 - **解析器**：curl 风格（`-H`/`-d`/`-X`）、httpie 风格、`strict json` 错误、单字母别名全表（t/h/g/d/m/i/r/l/e/s/p/c）冒烟。
 - **URL 归一化**：`normalize_input_url` 决策表（`:3000` 缩写、无 scheme 补全、WS/WSS 原样返回、query 含 `://` 不误判）。
+- **单请求重跑选择器**（新增契约，`single_request_test` 8 测试）：`--only <n>` 与 `path#n` 语法、越界/解析失败路径。
 - **日志级别**（`logger_integration_test` 守护）：`RUST_LOG` 过滤生效、debug/release 构建的默认级别差异不泄漏调试噪音。
 
 ### 5.16 TUI
@@ -183,76 +180,113 @@ OpenAI/Anthropic 双格式的 delta/content_block 帧规整为 `stream.llm.conte
 ### 5.19 HTTP 客户端行为
 `user_agent_test` 三级级联：默认 UA `rupost/1.0.0` → 变量配置覆盖 → 用例 `User-Agent` Header 最高优先级覆盖；随域 15 的内联请求冒烟互为补充。
 
+### 5.20 AI 创作辅助（域 20）
+- **已锁定**（`ai assert`）：`ai_assert_test` 4 测试——离线 dogfooding 闭环（`rupost mock` 当 OpenAI 兼容后端）、缺 Key 指引、401 错误路径、输出契约；crate 侧 client 5 + translator 3（引号包裹剥离、非法 JSON 降级）；`verify_features.sh` 步骤 7 全离线复现。密钥纪律：不入盘、不进日志、错误信息截断。
+- **随 bootstrap 实施交付**（[自举提案 §8](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md)，L1 密度最高处是信任边界）：
+  1. **lint 器表格驱动**（引擎裁决）：合法/非法断言矩阵、capture 断链、批内 `@depends-on` 成环丢弃、`{{MASKED}}` 回扫；
+  2. **脱敏器单测**：键名大小写、嵌套 JSON、数组内对象、4KB 截断边界；
+  3. **`ai_bootstrap_test`**（二进制级全链离线）：种子历史 → mock AI → 生成 → `rupost t` 生成物全绿；AI 500 降级机械版；非法建议 lint 兜底；防覆盖；
+  4. `verify_features.sh` 新步骤（US5 演示闭环）。
+- **AI 纪律**（继承两份 PRD）：AI 只在创作期参与，执行期零 AI；AI 不可用降级不塌。
+
 ---
 
 ## 6. 缺口行动计划（Gap → 优先级）
 
-> 按"每项可独立交付、可砍"原则列项，遵循 MVP 准则。**P0 四项的可执行落地细化（含逐场景 Given-When-Then 说明）见 [P0 执行方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-p0-execution.md)**。
+> 按"每项可独立交付、可砍"原则列项，遵循 MVP 准则。**v2 版 P0 四项已全部落地**（生成域 8 测试、重放 4 测试、历史 CLI 5 测试、CLI 位置契约表，实际交付 31 个新测试——详见 [P0 执行方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-p0-execution.md) 及其落地提交），下表为 v3 重估后的**残余与新增**缺口。
+
+### 6.1 已完成（v2 清单核销，保留作追溯）
+
+| v2 项 | 落地证据 |
+| :--- | :--- |
+| P0 `generate` 域 0 测试 | `generate_integration_test`(8) + 凭据模板化对抗回归（dc1f048c 泄密修复） |
+| P0 快照重放仅 1 测试 | `snapshot_replay_test`(4)：往返等价/timeout 透传/损坏容错 |
+| P0 历史子命令 + export 桩 | `history_cli_test`(5)（show help 修正同交付）+ `export_integration_test`(2) |
+| P0 CLI 全局参数契约 | `src/cli.rs:621` `test_global_args_position_contract_table`（AGENTS.md §5 同步修正） |
+| P1 `--debug-on-failure` 自动诊断 | `debug_on_failure_test`(4)（DBG-2 契约，随 DX 批交付） |
+
+### 6.2 残余与新增缺口
 
 | 优先级 | 缺口项 | 动作 | 验收标准 |
 | :--- | :--- | :--- | :--- |
-| **P0** | `generate` 域：`generator/http.rs` 0 测试（§5.14） | 新增 generator 测试：`--last` 生成→可再解析的往返闭环、空历史友好错误 | `tests/` 含 generate 往返闭环测试 |
-| **P0** | 快照录制/重放域仅 1 集成测试（§5.13） | 新增 3 个集成测试（往返等价/timeout 透传/损坏容错） | `tests/snapshot_replay_test.rs` ≥ 4 测试全绿 |
-| **P0** | 历史四实子命令仅 2 集成测试 + `export` 桩未锁定（§5.14） | 补 `list --limit`/`show`/`prune` 行为测试 + `export` 桩行为锁定测试 | 四实子命令各有 ≥1 集成测试；桩行为有锚点 |
-| **P0** | CLI 全局参数位置契约无回归锁定（§5.15） | 新增 2 个二进制级测试锁定全局参数前置/后置行为 | `tests/` 内有显式命名测试；行为变更时测试先行失败 |
 | **P1** | SSE 断流 flush / 1MB 上限未上浮集成层（§5.10） | 各上浮 1 个 TcpListener 集成测试 | 集成层可独立复现两个语义 |
 | **P1** | 捕获域无独立测试文件（§5.4） | 新增 `capture` 专项测试（逐条降级/`from` 解析/global 克隆） | §5.4 清单全覆盖 |
 | **P1** | 并行 × `--cookie-file` 行为契约未锁定（§5.6） | 新增 1 测试锁定"并行分支不落盘"契约 | 契约变更时测试先行失败 |
 | **P1** | JSON 报告 schema 无独立契约测试（§5.18） | 新增 schema 断言（字段清单逐项存在性），含 `diagnose --report json` | 手写字段清单漏字段时测试失败 |
-| **P1** | `--debug-on-failure` 失败自动诊断无测试（§5.9） | 新增 1 个失败用例触发的自动诊断集成测试 | 失败输出含时延拆分段 |
+| **P1** | AI bootstrap 测试包（§5.20，随实施交付） | lint 表驱动 + 脱敏器边界 + 全链离线集成 + verify 步骤 | [自举提案 §8](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md) 验收 |
+| **P1** | 生成语义 T1/T2 决策表（随 runbook 排期） | 动态值反向识别五形状表 + 链式溯源五张决策表 + wiremock 链式闭环 | [主执行文档 T1/T2](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-master-execution-runbook.md) 验收 |
 | **P1** | TUI 流式渲染（`state/stream.rs`）0 测试 + `tui <file>` 预加载（§5.16） | 补流式增量渲染单测 + 预加载入口冒烟 | §5.16 待补清单清零 |
 | **P1** | TUI `warnings` 渲染盲区（D1 遗留） | 功能补齐后补 1 冒烟测试 | 冒烟含含 warning 的结果态 |
-| **P1** | `--env-file` 无效路径静默忽略未锁定（§5.3） | 新增 1 测试锁定现状契约 | 契约变更时测试先行失败 |
-| **P2** | 覆盖率统计未常态化（tarpaulin 仅文档提及） | 本地可选命令固化为 `make`/脚本入口；暂不进 CI 门禁（避免 flaky 外网依赖） | [测试指引 §4.2](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) 命令可一键执行 |
-| **P2** | criterion 基准无趋势观测 | 发版前手动跑 3 基准比对；`load_generator` 移出 `[[bin]]`（架构债顺带） | benches 可运行且耗时无数量级回退 |
-| **P2** | 主题轴未进 TUI 冒烟矩阵（§5.16） | 在现有 TestBackend 冒烟上加 1 个主题维度参数化 | Dark/Light 各 1 渲染冒烟 |
-| **P2** | 架构债对测试策略的影响登记 | `anyhow` 残留（`middleware/cookie.rs`、`utils/formatter.rs`、`error.rs` From）限制错误路径类型化断言；`RunParams` 参数对象尚不存在影响可参数化；`crates/rupost-ai` client/error 无测试且 crate 无引用方 | 重构执行时同步按本方案补测试，不在测试战役中先行处理 |
+| **P2** | `--env-file` 无效路径静默忽略锁定（§5.3，现状覆盖未确认） | 核对 `variable_integration_test` 是否已含无效路径场景，缺则补 | 契约变更时测试先行失败 |
+| **P2** | 覆盖率统计未常态化（tarpaulin 仅文档提及） | 本地可选命令固化；暂不进 CI 门禁 | [测试指引 §4.2](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) 命令可一键执行 |
+| **P2** | criterion 基准无趋势观测 | 发版前手动跑 3 基准比对（`load_generator` 已移出示例，架构债销账） | benches 可运行且耗时无数量级回退 |
+| **P2** | 主题轴未进 TUI 冒烟矩阵（§5.16） | TestBackend 冒烟加主题维度参数化 | Dark/Light 各 1 渲染冒烟 |
+| **P2** | crate 测试纳入 CI 门禁 | CI `cargo test` 升级为 `cargo test --workspace`（当前默认跑法漏掉 crate 8 测试） | CI 日志可见 34 套件 |
 | **P2** | Windows 平台文件锁/权限差异 | 现有 `#[cfg(unix)]` 门控维持；CI 三平台绿即达标 | CI test Job 三平台 0 失败 |
 
-**P0 合计约 10 个新测试，预计 1–2 天内可完成；P1 合计约 8 个新测试。**
+**P1 合计约 10–14 个新测试；bootstrap/T1/T2 的测试随各自实施切片交付，不单独排期。**
 
 ---
 
 ## 7. 执行纪律与成功指标
 
 ### 7.1 强制纪律（继承研发流程规范）
-1. **提交前三步**：`cargo fmt --all -- --check` → `cargo clippy --all-targets --all-features -- -D warnings` → `cargo test` 全绿，缺一不提交。
-2. **核心引擎改动**（parser / executor / batch / parallel）：追加跑 `examples/run_all.sh` 与 `tests/verify_features.sh`。
+1. **提交前三步**：`cargo fmt --all -- --check` → `cargo clippy --all-targets --all-features -- -D warnings` → **`cargo test --workspace`** 全绿，缺一不提交。⚠️ 自 AI 激活（crate 获得测试）起，裸 `cargo test` 不覆盖 `crates/rupost-ai` 的 8 个测试（实证：workspace root package 默认只跑主包），涉及 AI 域或发布核验时必须带 `--workspace`。
+2. **核心引擎改动**（parser / executor / batch / parallel / generator）：追加跑 `examples/run_all.sh` 与 `tests/verify_features.sh`。
 3. **Bug 修复 = 修复 + 对抗性回归测试同一原子提交**（`jj`），杜绝"修了但没锁"。
 4. **新增功能 = 功能 + 对应层级测试同一原子提交**，且在 §4 矩阵中登记状态。
+5. **AI 域专项**：AI 只在创作期参与；AI 相关测试必须全离线（mock 后端 / mockall），禁止任何测试依赖真实 API Key。
 
 ### 7.2 成功指标（本方案的生命周期）
-- **基线守护**：全量测试 0 失败、fmt/clippy 双零、`run_all.sh` 15/15、`verify_features.sh` PASS。
-- **矩阵收敛**：§4 中 🕳 清零、⚠️ 全部降级为 ✅ 或明确接受为文档化契约（P1 完成后达成）。
-- **追溯性**：任何测试可沿"用户故事 → 行为契约 → 测试文件"链条追溯；任何 bug 修复可在 `adversarial_regression_test.rs` 或对应域测试中找到锚点。
+- **基线守护**：全 workspace 测试 0 失败（当前 551/34 套件）、fmt/clippy 双零、`run_all.sh` 15/15、`verify_features.sh` PASS（含 AI dogfooding 步骤）。
+- **矩阵收敛**：§4 中 🕳 清零、⚠️ 全部降级为 ✅ 或明确接受为文档化契约。
+- **追溯性**：任何测试可沿"用户故事 → 行为契约 → 测试文件"链条追溯；任何 bug 修复可在 `adversarial_regression_test.rs` 或对应域测试中找到锚点（范例：generate 凭据泄露 dc1f048c）。
 
 ---
 
 ## 8. 文档联动
 
 - 本方案为测试侧唯一父纲；[测试与功能验证指引](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) 保留为"E2E 手工操作手册"并在开头反向链接本方案。
+- 功能实施的任务队列与验收以 [主执行文档（runbook）](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-master-execution-runbook.md) 为活状态载体——随实施交付的测试（AI bootstrap / T1 / T2 / T3 / T4 等）的验收标准挂各自任务卡，本方案 §6.2 只登记测试侧视图。
 - 领域专项规约（如 [Cookie 测试规约](file:///Users/zsyzzx/project/rust/rupost/doc/cookie/cookie_test_specification.md)）从属于本方案 §4 对应行。
 - 进度事实唯一来源仍为 [progress_summary.md](file:///Users/zsyzzx/project/rust/rupost/doc/plans/progress_summary.md)，本方案执行进展按 Stage 6 规范登记其中。
 
 ---
 
-## 9. 子代理交叉审查修订记录（v1 → v2）
+## 9. 修订记录
+
+### v2 → v3（2026-10-28，追平现实 + 新域纳入）
+
+v2 定稿后、本次更新前，仓库经两个执行会话大幅推进（AI 激活实施、生成语义批、DX 批、文档治理批），本版将方案追平至 HEAD（`f61b3556`）现实并查漏补缺：
+
+**基线翻新**：468（317+6+145，23 文件）→ **551 / 34 套件**（主包 543 = lib 356 + bin 9 + tests/ 178·29 文件；crate 8）。wiremock 11→14 文件、TcpListener 4→5。
+**新发现的方法论缺口**：默认 `cargo test` 不覆盖 workspace 子 crate 测试（实证），§7.1 纪律升级为 `--workspace` 并列 P2 CI 门禁项。
+
+**矩阵（19→20 域）与核销**：
+- v2 P0 四项全部核销（§6.1，实际交付 31 测试，超出方案的 13）；`--debug-on-failure`（原 P1）随 DX 批落地（`debug_on_failure_test` 4）。
+- 域 13/14/15 从 🕳/⚠️ 翻 ✅；域 14 吸收 generate 凭据模板化/语义命名/`--templatize-host` 新契约与 T1/T2 排期指针。
+- **新增域 20 AI 创作辅助**：`ai assert` 已锁（`ai_assert_test` 4 + crate 8 + verify 步骤 7 dogfooding）；`ai bootstrap` 测试包随实施交付（§5.20）。
+- 域 15 吸收 `--only`/`path#n` 单请求重跑选择器（`single_request_test` 8）。
+
+**残余缺口重估**（§6.2）：SSE 上浮 / capture 专项 / 并行×cookie 契约 / JSON schema / TUI stream / TUI warnings 六项确认为真缺口（代码核实）；`--env-file` 现状覆盖未确认降 P2 待核对；`load_generator` 架构债销账（已移出示例）；rupost-ai "无引用方"表述终结（已接线）。
+
+### v1 → v2（2026-10-25，双子代理交叉审查）
 
 成稿后由两个独立子代理并行审查（功能完整性 / 事实准确性），全部发现及处置：
 
-### 事实修正（2 处）
+**事实修正（2 处）**
 1. **基线拆分错误**：v1 记 "tests/ 151 集成"，实为 `145`（另 6 个是 `cli::parser` 单测经 `main.rs` 编入主二进制）；"27 套件"实为 26 测试二进制 + 1 空 Doc-tests 结果行。已按 317 + 6 + 145 = 468 修正口径。
 2. **TUI 冒烟矩阵失实**：v1 引用 "主题×错误态叉乘矩阵"，经核查 `tests/tui_smoke_test.rs` 无主题轴、无错误态叉乘（主题仅由 `theme.rs` 单测覆盖；progress_summary 的历史表述与现状有出入）。已修正描述并将主题轴列为 P2 缺口。
 
-### 功能遗漏补齐（影响矩阵结构的 3 处 + 若干条目级）
+**功能遗漏补齐（影响矩阵结构的 3 处 + 若干条目级）**
 1. **`generate` 命令整域缺位**：`src/generator/http.rs` 与 `history/selector.rs` 0 测试、`tests/` 零命中，README 明确宣称该能力——新增域 14 合并"历史 + 生成"，列为 P0 首项。
 2. **`history export` 是未实现桩**：`main.rs:70-72` 仅打印 not implemented——从"可测契约"改判为"桩行为锁定测试"，避免给桩写行为测试。
 3. **3 个现存测试文件游离于矩阵外**：`end_to_end_test`(9) 归域 1、`user_agent_test`(4) 新增域 19、`logger_integration_test`(1) 归域 15。
 4. 条目级补齐：`--debug`/`--debug-on-failure` 失败自动诊断（域 9）、`diagnose --report json`（域 9/18）、CLI 内联请求 Cookie 接线（域 7）、`--env-file` 静默吞错现状契约（域 3）、TUI 鼠标/流式渲染/`tui <file>` 预加载（域 16）、模板三类与 `--list`（域 17）、断言运算符 7→8 修正（域 2）。
 
-### 立场补齐
-- `crates/rupost-ai` 登记为"translator 有单测、client/error 无测试且 crate 暂无引用方"，测试策略上暂不投入（P2 备注）。
+**立场补齐**
+- `crates/rupost-ai` 登记为"translator 有单测、client/error 无测试且 crate 暂无引用方"，测试策略上暂不投入（P2 备注）。（v3 注：该立场已因 AI 激活实施而终结）
 - `anyhow` 残留与 `RunParams` 缺位登记为"影响测试可断言性"的架构债，重构时同步补测（P2 备注），测试战役不先行处理。
 
-### 审查确认无改动项
+**审查确认无改动项**
 CLI 别名全表与全局参数集合、批量 DAG、Cookie 三模式、Mock Trie/变体、WS 剧本与自愈参数（5 次重连/100 帧缓冲/1000 帧上限）、SSE 1MB 上限、并行 Cookie 不落盘、replay 改写与 timeout 透传、CI 三平台、benches 3 基准、run_all.sh 15 用例——均与仓库事实相符。

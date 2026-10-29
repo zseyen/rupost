@@ -161,3 +161,21 @@
 3. **Commit 3 示例与脚本**（`b2f8dfed`）：`examples/ai_assert/README.md`（零 Key 演示 + Ollama 指引）+ `verify_features.sh` 步骤 7（dogfooding 闭环 + `set -e` 下退出码断言）。
 4. **Commit 4 文档对齐**：`directory_structure.md` 纠正 translator.rs 的历史误判描述（"流式事件帧规整"实为 `llm_adapter` 职责）并登记 crate "AI 创作辅助" 定位（分层职责与 llm_adapter 互不依赖）；README 特性区、CHANGELOG Added、progress_summary、checkpoint 同步归档。
 5. **质量基线**：`cargo test --workspace` 全绿（首次覆盖 crate，新增 7 测试）；`cargo fmt --check` / `cargo clippy --all-targets --all-features -- -D warnings` 零告警；`verify_features.sh` 全特性回归 PASS。
+
+---
+
+## 测试方案 v3 追平现实（2026-10-28）
+
+[全量测试方案](doc/plans/2026-10-25-test-strategy-plan.md) 已更新至 v3，追平至 HEAD（`f61b3556`）：
+
+- **基线翻新**：468 → **551 测试 / 34 套件 / 0 失败**（主包 543 = lib 356 + bin 9 + tests/ 178·29 文件；crate 8）。wiremock 14 文件、TcpListener 5 文件。
+- **v2 P0 全部核销**（§6.1）：generate 8 测试（含凭据模板化泄露回归锚点 dc1f048c）、快照重放 4、历史 CLI 5（show help 修正同交付）、CLI 位置契约表（AGENTS.md §5 同步修正）；`--debug-on-failure`（原 P1）随 DBG-2 落地。实际交付 31 测试 > 方案 13。
+- **矩阵 19→20 域**：新增 AI 创作辅助域（`ai assert` 已锁 / `ai bootstrap` 测试包随实施交付，lint 表驱动+脱敏器边界为密度最高处）；域 15 吸收 `--only`/`path#n` 单请求重跑（8 测试）。
+- **新方法论缺口（实证）**：默认 `cargo test` 不覆盖 workspace 子 crate 的 8 个测试——纪律升级为 `cargo test --workspace`；CI 门禁升级列 P2。
+- **残余真缺口（P1 六项）**：SSE 断流/1MB 上浮集成层、capture 专项、并行×`--cookie-file` 契约、JSON 报告 schema、TUI `state/stream.rs` 流式渲染、TUI warnings 渲染。
+
+---
+
+## HTTPS 回归修复（2026-10-29，指引测试会话发现）
+
+按测试方案 v3 指引执行全链门禁时，`examples/run_all.sh` 14/15 失败（外网可达却 0ms 报 "error sending request"）。根因：`2714c8a5` workspace 依赖统一时 reqwest 加了 `default-features = false` 但未补 TLS feature——**HTTPS/WSS 静默失效，且全量 551 测试全绿（本地 http wiremock 无法捕获）**，暴露了"构建配置漂移不可测"盲区。修复：workspace 定义补回 `default-tls`（恢复原行为）+ load-bearing 注释锚。验证：https 直连 200、workspace 551 全绿、run_all.sh 15/15。**启示**：run_all.sh 是目前唯一能抓住 TLS 缺失的探针（外网依赖使其不可入 CI），发版前必跑地位加固。

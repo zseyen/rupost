@@ -21,26 +21,38 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
         (InputMode::Filter(_), KeyCode::Enter) => {
             state.input_mode = InputMode::None; // 过滤已实时生效，Enter 仅关闭
         }
-        (InputMode::QuickCreate(_) | InputMode::Filter(_), _) => {
+        (InputMode::Auth(_), KeyCode::Enter) => {
+            if let InputMode::Auth(textarea) = &state.input_mode {
+                let value = textarea.lines().concat().trim().to_string();
+                state.input_mode = InputMode::None;
+                if value.is_empty() {
+                    // 空值提交 = 清除快速授权
+                    state.clear_quick_auth();
+                } else {
+                    state.set_quick_auth(&value);
+                }
+            }
+        }
+        (InputMode::QuickCreate(_) | InputMode::Filter(_) | InputMode::Auth(_), _) => {
             let is_filter = matches!(state.input_mode, InputMode::Filter(_));
+            let is_auth = matches!(state.input_mode, InputMode::Auth(_));
             // 取出 textarea 编辑后放回，避免整段克隆
             let mut textarea = match &mut state.input_mode {
-                InputMode::QuickCreate(t) | InputMode::Filter(t) => std::mem::take(t),
+                InputMode::QuickCreate(t) | InputMode::Filter(t) | InputMode::Auth(t) => {
+                    std::mem::take(t)
+                }
                 InputMode::None => return,
             };
             textarea.input(crossterm::event::Event::Key(key));
-            let query = if is_filter {
-                Some(textarea.lines().concat())
-            } else {
-                None
-            };
             state.input_mode = if is_filter {
                 InputMode::Filter(textarea)
+            } else if is_auth {
+                InputMode::Auth(textarea)
             } else {
                 InputMode::QuickCreate(textarea)
             };
-            if let Some(query) = query {
-                state.set_filter(&query); // 实时过滤
+            if is_filter && let InputMode::Filter(t) = &state.input_mode {
+                state.set_filter(&t.lines().concat()); // 实时过滤
             }
         }
         (InputMode::None, _) => {}
@@ -194,5 +206,77 @@ mod tests {
             crate::tui::handlers::handle_key(&mut state, key, &tx).await;
         });
         assert!(matches!(state.input_mode, InputMode::Filter(_)));
+    }
+}
+
+#[cfg(test)]
+mod quick_auth_tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+    use ratatui_textarea::TextArea;
+
+    #[test]
+    fn test_quick_auth_flow_via_key_events() {
+        let mut state = AppState::new();
+        state.input_mode = InputMode::Auth(Box::new(TextArea::default()));
+
+        // 输入 header 值并提交 → 存入 __quick_auth 变量
+        for c in "Bearer t-1".chars() {
+            handle_modal_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        handle_modal_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(matches!(state.input_mode, InputMode::None));
+        assert_eq!(state.quick_auth().as_deref(), Some("Bearer t-1"));
+
+        // 重开模态，输入又退格清空后提交 = 清除授权
+        state.input_mode = InputMode::Auth(Box::new(TextArea::default()));
+        handle_modal_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        );
+        handle_modal_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        );
+        handle_modal_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(state.quick_auth(), None);
+
+        // Esc 丢弃：不改变现有授权
+        state.set_quick_auth("Bearer keep");
+        handle_modal_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        handle_modal_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(state.input_mode, InputMode::None));
+        assert_eq!(state.quick_auth().as_deref(), Some("Bearer keep"));
+    }
+
+    #[test]
+    fn test_auth_modal_textarea_state_preserved_across_keys() {
+        let mut state = AppState::new();
+        state.input_mode = InputMode::Auth(Box::new(TextArea::default()));
+
+        for c in "ab".chars() {
+            handle_modal_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            );
+        }
+        // 逐键编辑后内容仍在 Auth 模态的 textarea 中（take/put 往返不丢字）
+        match &state.input_mode {
+            InputMode::Auth(t) => assert_eq!(t.lines().concat(), "ab"),
+            other => panic!("expected Auth modal, got {other:?}"),
+        }
     }
 }

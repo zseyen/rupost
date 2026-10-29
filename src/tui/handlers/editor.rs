@@ -6,6 +6,24 @@ use crate::tui::state::{AppState, SidebarTab};
 use crossterm::event::{KeyCode, KeyEvent};
 use tokio::sync::mpsc;
 
+/// 快速授权注入（R3 决策表）：
+/// - 未设置快速授权 → 原样
+/// - 已设置且请求未显式声明 Authorization → 注入
+/// - 已设置但请求显式声明了 Authorization → 显式优先，原样
+pub fn inject_quick_auth(req: &mut crate::parser::ParsedRequest, auth: Option<String>) {
+    let Some(value) = auth else {
+        return;
+    };
+    let has_explicit = req
+        .headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("authorization"));
+    if !has_explicit {
+        req.headers
+            .push(("Authorization".to_string(), value.to_string()));
+    }
+}
+
 /// 处理编辑器面板按键（包括触发运行测试请求）
 /// 触发异步发包测试执行的主控逻辑 (共用于 Files 侧边栏 r/R 键与 Editor 区域 Ctrl+Enter)
 pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
@@ -28,7 +46,9 @@ pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Se
         }
     };
 
-    if let Some(req) = parsed_req {
+    if let Some(mut req) = parsed_req {
+        // 快速授权注入（显式 Authorization 声明优先）
+        inject_quick_auth(&mut req, state.quick_auth());
         state.update(Action::SendRequest(Box::new(req.clone())));
 
         let mut var_context = state.variables.clone();
@@ -148,5 +168,56 @@ pub(super) async fn handle_editor_key(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod quick_auth_tests {
+    use super::*;
+
+    fn req_with_auth(auth: Option<&str>) -> crate::parser::ParsedRequest {
+        let mut req = crate::parser::ParsedRequest {
+            method: Some("GET".to_string()),
+            url: "http://localhost".to_string(),
+            headers: vec![],
+            body: None,
+            metadata: Default::default(),
+            line_number: 1,
+            base_path: None,
+        };
+        if let Some(v) = auth {
+            req.headers
+                .push(("Authorization".to_string(), v.to_string()));
+        }
+        req
+    }
+
+    /// R3 决策表：未设置 / 注入 / 显式优先
+    #[test]
+    fn test_inject_quick_auth_decision_table() {
+        // 未设置快速授权 → 原样
+        let mut req = req_with_auth(None);
+        inject_quick_auth(&mut req, None);
+        assert!(req.headers.is_empty());
+
+        // 已设置 + 无显式声明 → 注入
+        let mut req = req_with_auth(None);
+        inject_quick_auth(&mut req, Some("Bearer t-1".to_string()));
+        assert_eq!(req.headers.len(), 1);
+        assert_eq!(req.headers[0].0, "Authorization");
+        assert_eq!(req.headers[0].1, "Bearer t-1");
+
+        // 已设置 + 显式声明 → 显式优先，不覆盖
+        let mut req = req_with_auth(Some("Bearer explicit"));
+        inject_quick_auth(&mut req, Some("Bearer quick".to_string()));
+        assert_eq!(req.headers.len(), 1);
+        assert_eq!(req.headers[0].1, "Bearer explicit");
+
+        // 大小写不敏感的显式声明识别
+        let mut req = req_with_auth(Some("Basic abc"));
+        req.headers[0].0 = "authorization".to_string();
+        inject_quick_auth(&mut req, Some("Bearer quick".to_string()));
+        assert_eq!(req.headers.len(), 1);
+        assert_eq!(req.headers[0].1, "Basic abc");
     }
 }

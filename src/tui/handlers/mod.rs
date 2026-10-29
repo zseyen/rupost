@@ -51,6 +51,12 @@ pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Se
         return;
     }
 
+    // 全局大写 A 键：快速授权输入（Authorization header 值，显式声明优先）
+    if key.code == KeyCode::Char('A') {
+        state.input_mode = InputMode::Auth(Box::new(sidebar::new_input_textarea(state.palette())));
+        return;
+    }
+
     // 全局 Esc 键高优先级拦截（用于关闭其他全局轻量弹窗并返回 Files 面板）
     if key.code == KeyCode::Esc {
         if state.show_help {

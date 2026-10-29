@@ -55,6 +55,8 @@ pub enum InputMode {
     QuickCreate(Box<ratatui_textarea::TextArea<'static>>),
     /// 侧边栏 `/` 过滤（实时过滤，Esc 清除）
     Filter(Box<ratatui_textarea::TextArea<'static>>),
+    /// 全局 `A` 快速授权（输入 header 值，Enter 存入 `__quick_auth` 变量）
+    Auth(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +227,26 @@ impl AppState {
             repo: Repo::default(),
             last_error: None,
         }
+    }
+
+    /// 快速授权变量键（`A` 键设置；空串 = 未设置）
+    pub const QUICK_AUTH_VAR: &'static str = "__quick_auth";
+
+    /// 设置快速授权（Authorization header 值，如 "Bearer eyJ..."）
+    pub fn set_quick_auth(&mut self, value: &str) {
+        self.variables.insert(Self::QUICK_AUTH_VAR, value);
+    }
+
+    /// 清除快速授权
+    pub fn clear_quick_auth(&mut self) {
+        self.variables.insert(Self::QUICK_AUTH_VAR, "");
+    }
+
+    /// 当前快速授权值（未设置或空返回 None）
+    pub fn quick_auth(&self) -> Option<String> {
+        self.variables
+            .get(Self::QUICK_AUTH_VAR)
+            .filter(|v| !v.is_empty())
     }
 
     /// 当前主题调色板

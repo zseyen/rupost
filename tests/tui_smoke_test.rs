@@ -670,6 +670,48 @@ fn test_warnings_rendered_in_response_panel() {
 }
 
 #[test]
+fn test_streaming_completed_views_show_warnings_summary() {
+    // D1 残余盲区回归锚点：SSE/WS 完成态走流式分支（不经过 HTTP 缓存渲染管线），
+    // 告警若只挂在 rebuild_http_visual_lines 上对流式请求仍然不可见
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    // SSE 完成态（无日志文件时内容区为占位文案，但摘要必须可见）
+    let mut state = AppState::new();
+    state.is_loading = false;
+    state.sse_stream_body = "data: chunk\n".to_string();
+    state.warnings = vec!["@capture id missing".to_string()];
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let rendered = buffer_text(frame.buffer);
+    assert!(rendered.contains("[SSE Completed]"), "\n{rendered}");
+    assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
+
+    // WS 完成态：经日志文件滑动窗口重建帧行，摘要与帧内容同时可见
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("ws.log");
+    std::fs::write(&log, "[→] 12:00:00 | PING\n[←] 12:00:01 | PONG\n").unwrap();
+    let mut state_ws = AppState::new();
+    state_ws.is_loading = false;
+    state_ws.handle_ws_frame(true, "PING".to_string());
+    state_ws.log_file_path = Some(log);
+    state_ws.total_log_lines = 2;
+    state_ws.warnings = vec!["var api_key missing".to_string()];
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state_ws);
+        })
+        .unwrap();
+    let rendered = buffer_text(frame.buffer);
+    assert!(rendered.contains("[WS Completed]"), "\n{rendered}");
+    assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
+    assert!(rendered.contains("PING"), "\n{rendered}");
+}
+
+#[test]
 fn test_tui_command_line_file_auto_positioning() {
     // 锁定 `rupost tui <file>` 预加载入口的真实实现（app::load_initial_file）
     let temp_dir = tempfile::tempdir().unwrap();

@@ -125,6 +125,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 Style::default().fg(t.dim),
             )));
         }
+        prepend_warnings_summary(&mut visual_lines_final, state);
 
         // 3. 计算精确的切片范围并渲染
         let total_lines = visual_lines_final.len();
@@ -194,6 +195,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 Style::default().fg(t.dim),
             )));
         }
+        prepend_warnings_summary(&mut visual_lines_final, state);
 
         let total_lines = visual_lines_final.len();
         let max_scroll = total_lines.saturating_sub(visible_height);
@@ -248,6 +250,23 @@ fn into_static_line(line: Line<'_>) -> Line<'static> {
     owned.style = line.style;
     owned.alignment = line.alignment;
     owned
+}
+
+/// 流式（SSE/WS）视图首行插入告警摘要——流式分支不走 HTTP 缓存渲染管线，
+/// 不加此行则带告警的流式请求完成态仍是渲染盲区（D1 残余）。
+/// 加载期 warnings 恒为空（SendRequest 已清空），插入仅对完成态生效。
+fn prepend_warnings_summary(lines: &mut Vec<Line<'static>>, state: &AppState) {
+    if state.warnings.is_empty() {
+        return;
+    }
+    let t = state.palette();
+    lines.insert(
+        0,
+        Line::from(Span::styled(
+            format!("Warnings: {}", state.warnings.len()),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        )),
+    );
 }
 
 fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {

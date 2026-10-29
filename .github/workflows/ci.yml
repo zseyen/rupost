@@ -36,7 +36,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        # --workspace：默认跑法漏掉 workspace 子 crate（rupost-ai 等）的 lint
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # Job 3: Build and Test on multiple platforms
   test:
@@ -54,4 +55,5 @@ jobs:
       - name: Build
         run: cargo build --verbose
       - name: Run tests
-        run: cargo test --verbose
+        # --workspace：默认跑法漏掉 workspace 子 crate 的测试（测试策略 v3 §7.1）
+        run: cargo test --workspace --verbose

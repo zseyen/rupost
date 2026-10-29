@@ -1218,3 +1218,88 @@ fn test_external_editor_key_trigger() {
 
     assert!(state.pending_editor_launch);
 }
+
+#[test]
+fn test_theme_axis_smoke_matrix() {
+    // 主题轴 × 错误态 × 布局 的参数化冒烟矩阵（P2 缺口补齐）
+    use rupost::tui::state::ThemeKind;
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let failed_response = || {
+        Response::new(
+            500,
+            reqwest::header::HeaderMap::new(),
+            "{\"error\":\"boom\"}".to_string(),
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(5),
+        )
+        .unwrap()
+    };
+    let failed_assertion = rupost::assertion::AssertionResult {
+        raw: "status == 200".to_string(),
+        passed: false,
+        actual: Some("500".to_string()),
+        expected: "200".to_string(),
+        message: Some("actual 500".to_string()),
+        stream_event_index: None,
+    };
+
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        for scenario in 0..3 {
+            let mut state = AppState::new();
+            state.theme = theme;
+            state.update_layout(100, 30);
+            match scenario {
+                // 0: 失败响应 + 失败断言 + 告警
+                0 => {
+                    state.last_response = Some(failed_response());
+                    state.assertions = vec![failed_assertion.clone()];
+                    state.warnings = vec!["@capture id: not found".to_string()];
+                }
+                // 1: SSE 流式加载中
+                1 => {
+                    state.is_loading = true;
+                    state.sse_stream_body = "data: chunk\n".to_string();
+                }
+                // 2: WS 帧完成态
+                _ => {
+                    state.handle_ws_frame(true, "PING".to_string());
+                    state.handle_ws_frame(false, "PONG".to_string());
+                }
+            }
+            state.response_visual_lines.clear();
+
+            let res = terminal.draw(|frame| {
+                rupost::tui::ui::render(frame, &mut state);
+            });
+            assert!(
+                res.is_ok(),
+                "theme {theme:?} scenario {scenario} must render without panic"
+            );
+        }
+
+        // 失败态下状态前缀与告警标题必须出现在视觉行（明暗主题共用文案）
+        let mut state = AppState::new();
+        state.theme = theme;
+        state.update_layout(100, 30);
+        state.last_response = Some(failed_response());
+        state.assertions = vec![failed_assertion.clone()];
+        state.warnings = vec!["@capture id: not found".to_string()];
+        state.response_visual_lines.clear();
+        terminal
+            .draw(|frame| {
+                rupost::tui::ui::render(frame, &mut state);
+            })
+            .unwrap();
+        let joined: String = state
+            .response_visual_lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("[FAILED]"), "theme {theme:?}: {joined}");
+        assert!(joined.contains("Warnings: 1"));
+    }
+}

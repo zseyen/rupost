@@ -7,6 +7,7 @@ use super::theme::{Theme, ThemeKind, palette};
 mod history;
 mod layout;
 mod retention;
+mod search;
 mod stream;
 mod tree;
 mod wrap;
@@ -57,6 +58,8 @@ pub enum InputMode {
     Filter(Box<ratatui_textarea::TextArea<'static>>),
     /// 全局 `A` 快速授权（输入 header 值，Enter 存入 `__quick_auth` 变量）
     Auth(Box<ratatui_textarea::TextArea<'static>>),
+    /// Response 面板 `/` 消息搜索（实时匹配，Esc/Enter 退出后 n/N 续跳）
+    Search(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +147,10 @@ pub struct AppState {
     // Phase 3 过滤状态（空串 = 不过滤）
     pub filter_query: String,
 
+    // 消息搜索状态（R4：Response 面板 `/`；query 留存供 n/N 续跳）
+    pub search_query: String,
+    pub search_match_index: usize,
+
     /// 主题种类（`,` 切换）；取色经 palette()
     pub theme: ThemeKind,
 
@@ -215,6 +222,8 @@ impl AppState {
 
             // Phase 3 过滤
             filter_query: String::new(),
+            search_query: String::new(),
+            search_match_index: 0,
 
             theme: ThemeKind::Dark,
 

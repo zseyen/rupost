@@ -1444,3 +1444,74 @@ fn test_theme_axis_smoke_matrix() {
         );
     }
 }
+
+#[test]
+fn test_search_highlight_renders_in_response_panel() {
+    // R4 冒烟：搜索态下可见切片的命中段以 accent 背景渲染
+    use rupost::tui::theme::ThemeKind;
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.response_visual_lines = vec![
+        ratatui::text::Line::raw("GET /users"),
+        ratatui::text::Line::raw("data: hello world"),
+        ratatui::text::Line::raw("data: other"),
+    ];
+    state.search_query = "hello".to_string();
+    state.last_response = Some(
+        Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "body".to_string(),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap(),
+    );
+
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    // "hello" 在第 2 行（可见区）：命中 cell 的背景必须是当前主题 accent
+    let buffer = frame.buffer;
+    let mut found_hit = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            if cell.symbol() == "h"
+                && buffer[(x + 1, y)].symbol() == "e"
+                && buffer[(x + 2, y)].symbol() == "l"
+            {
+                if cell.bg == rupost::tui::theme::palette(ThemeKind::Dark).accent {
+                    found_hit = true;
+                }
+            }
+        }
+    }
+    assert!(
+        found_hit,
+        "matched text must be rendered with accent background"
+    );
+
+    // 无 query：不应用高亮（bg 保持默认）
+    state.search_query.clear();
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let buffer = frame.buffer;
+    let plain_cell = &buffer[(6, 13)];
+    assert_ne!(
+        plain_cell.bg,
+        rupost::tui::theme::palette(ThemeKind::Dark).accent,
+        "no query must not highlight"
+    );
+}

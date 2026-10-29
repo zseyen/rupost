@@ -29,7 +29,8 @@ impl AppState {
             self.sse_last_processed_pos = actual_newline_idx + 1;
         }
 
-        if self.active_panel == Panel::Response {
+        if self.active_panel == Panel::Response && self.search_query.is_empty() {
+            // 搜索态暂停自动吸底，避免跳转被覆盖
             self.response_scroll = 9999;
         }
     }
@@ -61,7 +62,8 @@ impl AppState {
             self.ws_visual_lines.extend(wrapped);
         }
 
-        if self.active_panel == Panel::Response {
+        if self.active_panel == Panel::Response && self.search_query.is_empty() {
+            // 搜索态暂停自动吸底，避免跳转被覆盖
             self.response_scroll = 9999;
         }
     }

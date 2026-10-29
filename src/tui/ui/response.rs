@@ -7,6 +7,47 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
+/// 对可见切片应用搜索高亮（query 为空时原样返回）
+fn apply_search_highlight(sliced: Vec<Line<'static>>, state: &AppState) -> Vec<Line<'static>> {
+    let query = state.search_query.clone();
+    if query.is_empty() {
+        return sliced;
+    }
+    let accent = state.palette().accent;
+    sliced
+        .into_iter()
+        .map(|l| highlight_query_line(&l.to_string(), &query, accent))
+        .collect()
+}
+
+/// 搜索高亮（R4）：把行文本按 query 大小写不敏感切分，命中段 accent 背景 + 加粗。
+/// query 为空时原样返回；仅作用于当前可见切片（不影响底层视觉行缓存）。
+fn highlight_query_line(line: &str, query: &str, accent: ratatui::style::Color) -> Line<'static> {
+    use ratatui::style::{Color, Style};
+    if query.is_empty() {
+        return Line::from(line.to_string());
+    }
+    let lower = line.to_lowercase();
+    let q = query.to_lowercase();
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    while let Some(pos) = lower[cursor..].find(&q) {
+        let start = cursor + pos;
+        if start > cursor {
+            spans.push(Span::raw(line[cursor..start].to_string()));
+        }
+        spans.push(Span::styled(
+            line[start..start + q.len()].to_string(),
+            Style::default().bg(accent).fg(Color::Black),
+        ));
+        cursor = start + q.len();
+    }
+    if cursor < line.len() {
+        spans.push(Span::raw(line[cursor..].to_string()));
+    }
+    Line::from(spans)
+}
+
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let t = state.palette();
     let focus = state.active_panel == Panel::Response;
@@ -135,6 +176,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let end = (scroll_y + visible_height).min(total_lines);
         let sliced = visual_lines_final[scroll_y..end].to_vec();
 
+        let sliced = apply_search_highlight(sliced, state);
         frame.render_widget(Paragraph::new(sliced).block(block), area);
     } else if is_sse {
         let visual_lines = if state.is_loading {
@@ -204,6 +246,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let end = (scroll_y + visible_height).min(total_lines);
         let sliced = visual_lines_final[scroll_y..end].to_vec();
 
+        let sliced = apply_search_highlight(sliced, state);
         frame.render_widget(Paragraph::new(sliced).block(block), area);
     } else if state.is_loading {
         frame.render_widget(
@@ -228,6 +271,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let end = (scroll_y + visible_height).min(total_lines);
         let sliced = state.response_visual_lines[scroll_y..end].to_vec();
 
+        let sliced = apply_search_highlight(sliced, state);
         frame.render_widget(Paragraph::new(sliced).block(block), content_area);
     } else {
         frame.render_widget(

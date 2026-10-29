@@ -21,6 +21,10 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
         (InputMode::Filter(_), KeyCode::Enter) => {
             state.input_mode = InputMode::None; // 过滤已实时生效，Enter 仅关闭
         }
+        (InputMode::Search(_), KeyCode::Enter | KeyCode::Esc) => {
+            // 退出搜索模态：query 留存供 n/N 续跳
+            state.input_mode = InputMode::None;
+        }
         (InputMode::Auth(_), KeyCode::Enter) => {
             if let InputMode::Auth(textarea) = &state.input_mode {
                 let value = textarea.lines().concat().trim().to_string();
@@ -33,14 +37,22 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 }
             }
         }
-        (InputMode::QuickCreate(_) | InputMode::Filter(_) | InputMode::Auth(_), _) => {
+        (
+            InputMode::QuickCreate(_)
+            | InputMode::Filter(_)
+            | InputMode::Auth(_)
+            | InputMode::Search(_),
+            _,
+        ) => {
             let is_filter = matches!(state.input_mode, InputMode::Filter(_));
             let is_auth = matches!(state.input_mode, InputMode::Auth(_));
+            let is_search = matches!(state.input_mode, InputMode::Search(_));
             // 取出 textarea 编辑后放回，避免整段克隆
             let mut textarea = match &mut state.input_mode {
-                InputMode::QuickCreate(t) | InputMode::Filter(t) | InputMode::Auth(t) => {
-                    std::mem::take(t)
-                }
+                InputMode::QuickCreate(t)
+                | InputMode::Filter(t)
+                | InputMode::Auth(t)
+                | InputMode::Search(t) => std::mem::take(t),
                 InputMode::None => return,
             };
             textarea.input(crossterm::event::Event::Key(key));
@@ -48,11 +60,16 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 InputMode::Filter(textarea)
             } else if is_auth {
                 InputMode::Auth(textarea)
+            } else if is_search {
+                InputMode::Search(textarea)
             } else {
                 InputMode::QuickCreate(textarea)
             };
             if is_filter && let InputMode::Filter(t) = &state.input_mode {
                 state.set_filter(&t.lines().concat()); // 实时过滤
+            }
+            if is_search && let InputMode::Search(t) = &state.input_mode {
+                state.set_search_query(&t.lines().concat()); // 实时匹配
             }
         }
         (InputMode::None, _) => {}

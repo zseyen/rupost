@@ -209,7 +209,10 @@ mod tests {
             second.starts_with("<- ") && second.ends_with(" PONG"),
             "recv frame must render with <- prefix: {second}"
         );
-        assert_eq!(state.ws_frames[0].timestamp, first.split(' ').nth(1).unwrap());
+        assert_eq!(
+            state.ws_frames[0].timestamp,
+            first.split(' ').nth(1).unwrap()
+        );
     }
 
     #[test]
@@ -238,7 +241,9 @@ mod tests {
         state.handle_request_finished(Err("boom".to_string()), HashMap::new(), vec![], vec![]);
 
         assert!(!state.is_loading);
-        let resp = state.last_response.expect("error response must be materialized");
+        let resp = state
+            .last_response
+            .expect("error response must be materialized");
         assert!(!resp.is_success());
         assert_eq!(resp.body, "boom");
         assert_eq!(
@@ -276,8 +281,8 @@ mod tests {
 
     #[test]
     fn test_request_finished_stores_warnings_until_next_send() {
-        use crate::tui::event::Action;
         use crate::parser::ParsedRequest;
+        use crate::tui::event::Action;
 
         let mut state = AppState::new();
         state.is_loading = true;

@@ -165,10 +165,10 @@ P0-1/P0-3 落地：`generate_integration_test`(8，含凭据模板化泄露回�
 - **日志级别**（`logger_integration_test` 守护）：`RUST_LOG` 过滤生效、debug/release 构建的默认级别差异不泄漏调试噪音。
 
 ### 5.16 TUI
-- **冒烟矩阵**（TestBackend，39 个平铺场景）：布局三态（Wide/Narrow/Stacked）× Tab（Files/History）× 面板切焦 × 固定终端尺寸。**主题轴未进冒烟矩阵**（主题切换仅由 `src/tui/theme.rs` 单测覆盖明暗双调色板取值）——登记为待补维度。
+- **冒烟矩阵**（TestBackend，39 个平铺场景）：布局三态（Wide/Narrow/Stacked）× Tab（Files/History）× 面板切焦 × 固定终端尺寸。**主题轴已进冒烟矩阵**（2026-10-29 tui-fix 批次：Dark/Light × 失败态/SSE 流式/WS 完成态参数化渲染 + `[FAILED]`/`Warnings` 文案断言，`ThemeKind` 经 `tui::state` 重导出供集成测试构造）。
 - **纯函数层**：`nav` 决策表、`relocate_selection` 表格测试、`filter_matches` 谓词、`log_decision` 决策表、预折行中英文/Emoji 切分、鼠标 `hit_test` 纯几何。
 - **安全三防线**：路径穿越拒绝、`create_exclusive` 原子创建、超长文件名截断+哈希（unix 门控）。
-- **待补**：`state/stream.rs` 流式帧增量预折行渲染（**0 测试**，SSE/WS 日志在 TUI 中实时展示的核心路径）；`rupost tui <file>` 文件预加载入口；`TestResult.warnings` 渲染（遗留项 D1，功能补齐后补冒烟）。
+- **已补齐（2026-10-29 tui-fix 批次）**：`state/stream.rs` 流式域 0→9 单测（增量折行位点、CJK 显示宽折行、活动行驻留、聚焦自动滚动、WS 方向前缀与 100 帧溢出重建、完成态收敛）；`rupost tui <file>` 预加载提取为 `app::load_initial_file` 真函数并三场景冒烟（原冒烟测试为逻辑复刻的假守护，已重写指向真实现）；`TestResult.warnings` 渲染盲区全链路贯通（D1 关闭：事件 `RequestFinished` 增 `warnings` 字段 → `AppState` 暂存（`SendRequest` 清空）→ Response 面板 `Warnings: N` + `⚠` 条目渲染）。
 
 ### 5.17 模板脚手架
 空目录初始化、重名阻断报错、`--force` 高亮警告不中断、三类模板（config/sse/llm）生成与 `--list` 枚举、模板内容完整性（`environments.dev` 存在性校验）、`template` 别名——L2（9 测试）与 L3 脚本双层守护。
@@ -215,12 +215,12 @@ P0-1/P0-3 落地：`generate_integration_test`(8，含凭据模板化泄露回�
 | **P1** | JSON 报告 schema 无独立契约测试（§5.18） | 新增 schema 断言（字段清单逐项存在性），含 `diagnose --report json` | 手写字段清单漏字段时测试失败 |
 | **P1** | AI bootstrap 测试包（§5.20，随实施交付） | lint 表驱动 + 脱敏器边界 + 全链离线集成 + verify 步骤 | [自举提案 §8](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md) 验收 |
 | **P1** | 生成语义 T1/T2 决策表（随 runbook 排期） | 动态值反向识别五形状表 + 链式溯源五张决策表 + wiremock 链式闭环 | [主执行文档 T1/T2](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-master-execution-runbook.md) 验收 |
-| **P1** | TUI 流式渲染（`state/stream.rs`）0 测试 + `tui <file>` 预加载（§5.16） | 补流式增量渲染单测 + 预加载入口冒烟 | §5.16 待补清单清零 |
-| **P1** | TUI `warnings` 渲染盲区（D1 遗留） | 功能补齐后补 1 冒烟测试 | 冒烟含含 warning 的结果态 |
+| **P1** | ~~TUI 流式渲染（`state/stream.rs`）0 测试 + `tui <file>` 预加载（§5.16）~~（✅ 2026-10-29 tui-fix 清偿：9 单测 + 预加载真函数三场景冒烟） | 补流式增量渲染单测 + 预加载入口冒烟 | §5.16 待补清单清零 |
+| **P1** | ~~TUI `warnings` 渲染盲区（D1 遗留）~~（✅ 2026-10-29 tui-fix 清偿：全链路贯通 + 渲染冒烟） | 功能补齐后补 1 冒烟测试 | 冒烟含含 warning 的结果态 |
 | **P2** | `--env-file` 无效路径静默忽略锁定（§5.3，现状覆盖未确认） | 核对 `variable_integration_test` 是否已含无效路径场景，缺则补 | 契约变更时测试先行失败 |
 | **P2** | 覆盖率统计未常态化（tarpaulin 仅文档提及） | 本地可选命令固化；暂不进 CI 门禁 | [测试指引 §4.2](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) 命令可一键执行 |
 | **P2** | criterion 基准无趋势观测 | 发版前手动跑 3 基准比对（`load_generator` 已移出示例，架构债销账） | benches 可运行且耗时无数量级回退 |
-| **P2** | 主题轴未进 TUI 冒烟矩阵（§5.16） | TestBackend 冒烟加主题维度参数化 | Dark/Light 各 1 渲染冒烟 |
+| **P2** | ~~主题轴未进 TUI 冒烟矩阵（§5.16）~~（✅ 2026-10-29 tui-fix 清偿：Dark/Light × 三场景参数化冒烟） | TestBackend 冒烟加主题维度参数化 | Dark/Light 各 1 渲染冒烟 |
 | **P2** | crate 测试纳入 CI 门禁 | CI `cargo test` 升级为 `cargo test --workspace`（当前默认跑法漏掉 crate 8 测试） | CI 日志可见 34 套件 |
 | **P2** | Windows 平台文件锁/权限差异 | 现有 `#[cfg(unix)]` 门控维持；CI 三平台绿即达标 | CI test Job 三平台 0 失败 |
 
@@ -268,7 +268,7 @@ v2 定稿后、本次更新前，仓库经两个执行会话大幅推进（AI �
 - **新增域 20 AI 创作辅助**：`ai assert` 已锁（`ai_assert_test` 4 + crate 8 + verify 步骤 7 dogfooding）；`ai bootstrap` 测试包随实施交付（§5.20）。
 - 域 15 吸收 `--only`/`path#n` 单请求重跑选择器（`single_request_test` 8）。
 
-**残余缺口重估**（§6.2）：SSE 上浮 / capture 专项 / 并行×cookie 契约 / JSON schema / TUI stream / TUI warnings 六项确认为真缺口（代码核实）；`--env-file` 现状覆盖未确认降 P2 待核对；`load_generator` 架构债销账（已移出示例）；rupost-ai "无引用方"表述终结（已接线）。
+**残余缺口重估**（§6.2）：SSE 上浮 / capture 专项 / 并行×cookie 契约 / JSON schema 四项确认为真缺口（代码核实）；~~TUI stream / TUI warnings~~ 两项已于 2026-10-29 tui-fix 批次清偿（§5.16）；`--env-file` 现状覆盖未确认降 P2 待核对；`load_generator` 架构债销账（已移出示例）；rupost-ai "无引用方"表述终结（已接线）。
 
 ### v1 → v2（2026-10-25，双子代理交叉审查）
 

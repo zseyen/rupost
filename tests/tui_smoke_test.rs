@@ -688,7 +688,10 @@ fn test_tui_command_line_file_auto_positioning() {
     assert_eq!(state.selected_file_index, target);
     assert_eq!(state.editor_text, "GET http://c");
     // 树节点 abs_path 经 canonicalize（macOS /var → /private/var），用规范路径比较
-    let canon_c = std::fs::canonicalize(&file_c).unwrap().to_string_lossy().into_owned();
+    let canon_c = std::fs::canonicalize(&file_c)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     assert_eq!(state.editor_file_path.as_deref(), Some(canon_c.as_str()));
 
     // 2. 不传文件：回退加载第一个文件

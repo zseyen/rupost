@@ -301,9 +301,7 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 if !state.warnings.is_empty() {
                     raw_lines.push(Line::from(Span::styled(
                         format!("Warnings: {}", state.warnings.len()),
-                        Style::default()
-                            .fg(t.accent)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                     )));
                     for w in &state.warnings {
                         raw_lines.push(Line::from(Span::styled(

@@ -107,7 +107,7 @@ async fn test_batch_json_report_schema_exact_fields() {
     assert_eq!(result_obj["method"], "GET");
     assert!(result_obj["duration_ms"].is_number());
     assert!(
-        result_obj["warnings"].as_array().unwrap().len() > 0,
+        !result_obj["warnings"].as_array().unwrap().is_empty(),
         "undefined-variable warning must be serialized into the report"
     );
 
@@ -141,11 +141,18 @@ async fn test_diagnose_json_schema_exact_fields() {
         }
     });
 
-    let report = diagnose_url(&format!("http://127.0.0.1:{port}/")).await.unwrap();
+    let report = diagnose_url(&format!("http://127.0.0.1:{port}/"))
+        .await
+        .unwrap();
     server.await.unwrap();
 
     let value = serde_json::to_value(&report).unwrap();
-    let keys: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+    let keys: Vec<&str> = value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     let mut sorted = keys.clone();
     sorted.sort_unstable();
     let mut expected = vec![
@@ -173,6 +180,11 @@ async fn test_diagnose_json_schema_exact_fields() {
     assert_eq!(value["http_status"], 200);
     // Duration 序列化为 {secs, nanos} 对象
     let dns = &value["dns_lookup_duration"];
-    let dns_keys: Vec<&str> = dns.as_object().unwrap().keys().map(String::as_str).collect();
+    let dns_keys: Vec<&str> = dns
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(dns_keys, vec!["nanos", "secs"]);
 }

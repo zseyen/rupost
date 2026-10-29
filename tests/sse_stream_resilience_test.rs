@@ -146,7 +146,11 @@ GET {uri}/stream
 
     server.await.unwrap();
     let res = &results[0];
-    assert!(res.success, "stream must complete without OOM/panic: {:?}", res.error);
+    assert!(
+        res.success,
+        "stream must complete without OOM/panic: {:?}",
+        res.error
+    );
 
     // 溢出点前的事件数据保留（前 ~1024 行）
     let body = &res.response.as_ref().unwrap().body;
@@ -178,7 +182,10 @@ async fn test_sse_unterminated_giant_line_does_not_hang_or_explode() {
                 .write_all(format!("data: {}\n\n", "x".repeat(2 * 1024 * 1024)).as_bytes())
                 .await
                 .unwrap();
-            socket.write_all(b"data: {\"rec\": \"after-giant\"}\n\n").await.unwrap();
+            socket
+                .write_all(b"data: {\"rec\": \"after-giant\"}\n\n")
+                .await
+                .unwrap();
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     });

@@ -6,8 +6,8 @@
 //! 2. 并行模式：worker 执行器均为临时仓库（Ephemeral，Drop 也不落盘），
 //!    worker 运行期间获得的新 cookie **绝不**出现在 cookie 文件中——
 //!    并发写盘会互相截断，宁可不持久化；主执行器 Drop 兜底只保存主 store。
-use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest};
 use rupost::runner::TestExecutor;
+use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest};
 use rupost::variable::VariableContext;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,7 +19,10 @@ async fn mount_cookie_endpoints(server: &MockServer, cookie_name: &str, cookie_v
         .and(path("/set"))
         .respond_with(
             ResponseTemplate::new(200)
-                .insert_header("Set-Cookie", format!("{cookie_name}={cookie_value}; Path=/"))
+                .insert_header(
+                    "Set-Cookie",
+                    format!("{cookie_name}={cookie_value}; Path=/"),
+                )
                 .set_body_string("cookie set"),
         )
         .mount(server)

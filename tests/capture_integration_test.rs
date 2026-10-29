@@ -24,12 +24,10 @@ async fn test_capture_partial_failure_degrades_per_item() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/user"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "ok": "v-1",
-                "id": 42
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": "v-1",
+            "id": 42
+        })))
         .mount(&server)
         .await;
 
@@ -118,12 +116,10 @@ async fn test_global_capture_visible_across_files_via_shared_store() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/token"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "token": "g-secret",
-                "local": "l-1"
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "token": "g-secret",
+            "local": "l-1"
+        })))
         .mount(&server)
         .await;
     // 文件 B 用 global 变量拼 URL：可见则命中 /g/g-secret
@@ -147,22 +143,13 @@ async fn test_global_capture_visible_across_files_via_shared_store() {
     .unwrap();
     std::fs::write(
         &file_b,
-        format!(
-            "### B\nGET {}/g/{{{{global.g_token}}}}\n",
-            server.uri()
-        ),
+        format!("### B\nGET {}/g/{{{{global.g_token}}}}\n", server.uri()),
     )
     .unwrap();
 
     let mut files_map = HashMap::new();
-    files_map.insert(
-        file_a.clone(),
-        HttpFileParser::parse_file(&file_a).unwrap(),
-    );
-    files_map.insert(
-        file_b.clone(),
-        HttpFileParser::parse_file(&file_b).unwrap(),
-    );
+    files_map.insert(file_a.clone(), HttpFileParser::parse_file(&file_a).unwrap());
+    files_map.insert(file_b.clone(), HttpFileParser::parse_file(&file_b).unwrap());
 
     // 并行模式：B 的 worker context 是克隆——global 罐经 Arc 共享必须仍然可见。
     let executor = TestExecutor::new();

@@ -296,6 +296,23 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                     ));
                 }
                 raw_lines.push(Line::from(time_size_spans));
+
+                // 非致命告警必须可见，避免静默假通过
+                if !state.warnings.is_empty() {
+                    raw_lines.push(Line::from(Span::styled(
+                        format!("Warnings: {}", state.warnings.len()),
+                        Style::default()
+                            .fg(t.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                    for w in &state.warnings {
+                        raw_lines.push(Line::from(Span::styled(
+                            format!("⚠ {w}"),
+                            Style::default().fg(t.accent),
+                        )));
+                    }
+                }
+
                 raw_lines.push(Line::from(""));
                 raw_lines.push(Line::from(Span::styled(
                     "Body:",

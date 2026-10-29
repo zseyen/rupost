@@ -106,6 +106,7 @@ pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Se
                     result: Box::new(result),
                     captured_vars,
                     assertions: test_res.assertions,
+                    warnings: test_res.warnings,
                 })
                 .await;
         });

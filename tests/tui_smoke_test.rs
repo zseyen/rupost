@@ -82,7 +82,7 @@ fn test_request_finished_variable_extension() {
     .unwrap();
 
     // 模拟后台返回 RequestFinished 消息
-    state.handle_request_finished(Ok(response), captured_vars, Vec::new());
+    state.handle_request_finished(Ok(response), captured_vars, Vec::new(), Vec::new());
 
     // 验证 Loading 结束且状态正确合并
     assert!(!state.is_loading);
@@ -582,6 +582,73 @@ fn test_direct_run_window_interactive_states() {
 }
 
 #[test]
+fn test_warnings_rendered_in_response_panel() {
+    // D1 遗留项回归锚点：TestResult.warnings 不得成为渲染盲区（静默假通过）
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    state.is_loading = true;
+    let response = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        "OK".to_string(),
+        std::time::Duration::from_millis(10),
+        std::time::Duration::from_millis(5),
+        std::time::Duration::from_millis(5),
+    )
+    .unwrap();
+
+    // 模拟 RequestFinished 事件携带两条非致命告警（断言全过、响应成功）
+    state.handle_request_finished(
+        Ok(response),
+        HashMap::new(),
+        vec![],
+        vec![
+            "@capture user_id: path not found".to_string(),
+            "undefined variable {{api_key}} sent verbatim".to_string(),
+        ],
+    );
+    state.response_visual_lines.clear();
+
+    let res = terminal.draw(|frame| {
+        rupost::tui::ui::render(frame, &mut state);
+    });
+    assert!(res.is_ok());
+
+    let joined_lines: String = state
+        .response_visual_lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        joined_lines.contains("Warnings: 2"),
+        "warnings summary must render: {joined_lines}"
+    );
+    // 窄面板会折行，断言用跨折行存活的子串
+    assert!(joined_lines.contains("@capture user_id"));
+    assert!(joined_lines.contains("api_key"));
+    assert!(joined_lines.contains("verbatim"));
+
+    // 无告警时不得出现空告警标题
+    state.warnings.clear();
+    state.response_visual_lines.clear();
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let joined_lines: String = state
+        .response_visual_lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(!joined_lines.contains("Warnings:"));
+}
+
+#[test]
 fn test_tui_command_line_file_auto_positioning() {
     let temp_dir = tempfile::tempdir().unwrap();
     let file_a = temp_dir.path().join("a.http");
@@ -787,6 +854,7 @@ fn test_file_execution_states_tracking() {
         .unwrap()),
         std::collections::HashMap::new(),
         vec![],
+        vec![],
     );
     assert_eq!(
         state.file_execution_states.get("examples/ok.http"),
@@ -799,6 +867,7 @@ fn test_file_execution_states_tracking() {
     state.handle_request_finished(
         Err("Connection failed".to_string()),
         std::collections::HashMap::new(),
+        vec![],
         vec![],
     );
     assert_eq!(

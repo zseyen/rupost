@@ -96,6 +96,8 @@ pub struct AppState {
     pub current_request: Option<ParsedRequest>,
     pub last_response: Option<Response>,
     pub assertions: Vec<AssertionResult>,
+    /// 最近一次执行的非致命告警（由 RequestFinished 事件写入，SendRequest 时清空）
+    pub warnings: Vec<String>,
     pub variables: VariableContext,
     pub is_quitting: bool,
 
@@ -173,6 +175,7 @@ impl AppState {
             current_request: None,
             last_response: None,
             assertions: Vec::new(),
+            warnings: Vec::new(),
             variables: VariableContext::new(),
             is_quitting: false,
             editor_text: String::new(),
@@ -328,6 +331,7 @@ impl AppState {
                 self.loading_tick = 0;
                 self.sse_stream_body.clear();
                 self.ws_frames.clear();
+                self.warnings.clear();
                 self.response_scroll = 0;
                 self.response_visual_lines.clear();
                 self.sse_visual_lines.clear();

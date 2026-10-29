@@ -181,9 +181,10 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                     result,
                     captured_vars,
                     assertions,
+                    warnings,
                     ..
                 } => {
-                    state.handle_request_finished(*result, captured_vars, assertions);
+                    state.handle_request_finished(*result, captured_vars, assertions, warnings);
                     state.response_visual_lines.clear(); // 清空缓存以强迫重新计算预折行
                     state.response_scroll = 0; // 请求结束重置滚动
 

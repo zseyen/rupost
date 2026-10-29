@@ -71,9 +71,11 @@ impl AppState {
         result: Result<Response, String>,
         captured_vars: HashMap<String, String>,
         assertions: Vec<AssertionResult>,
+        warnings: Vec<String>,
     ) {
         self.is_loading = false;
         self.assertions = assertions.clone();
+        self.warnings = warnings;
 
         let is_success = result.is_ok() && assertions.iter().all(|a| a.passed);
         let exec_state = if is_success {
@@ -233,7 +235,7 @@ mod tests {
         state.is_loading = true;
         state.editor_file_path = Some("examples/fail.http".to_string());
 
-        state.handle_request_finished(Err("boom".to_string()), HashMap::new(), vec![]);
+        state.handle_request_finished(Err("boom".to_string()), HashMap::new(), vec![], vec![]);
 
         assert!(!state.is_loading);
         let resp = state.last_response.expect("error response must be materialized");
@@ -263,12 +265,53 @@ mod tests {
         )
         .unwrap();
 
-        state.handle_request_finished(Ok(resp), captured, vec![]);
+        state.handle_request_finished(Ok(resp), captured, vec![], vec![]);
 
         assert_eq!(
             state.file_execution_states.get("examples/ok.http"),
             Some(&FileExecState::Success)
         );
         assert_eq!(state.variables.get("token").unwrap(), "t-1");
+    }
+
+    #[test]
+    fn test_request_finished_stores_warnings_until_next_send() {
+        use crate::tui::event::Action;
+        use crate::parser::ParsedRequest;
+
+        let mut state = AppState::new();
+        state.is_loading = true;
+
+        let resp = Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "OK".to_string(),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap();
+
+        state.handle_request_finished(
+            Ok(resp),
+            HashMap::new(),
+            vec![],
+            vec!["@capture failed: body.id".to_string()],
+        );
+        assert_eq!(state.warnings.len(), 1);
+        assert!(state.warnings[0].contains("@capture"));
+
+        // 新一次请求启动必须清空旧告警，避免跨请求残留
+        let req = ParsedRequest {
+            method: Some("GET".to_string()),
+            url: "http://localhost".to_string(),
+            headers: vec![],
+            body: None,
+            metadata: Default::default(),
+            line_number: 1,
+            base_path: None,
+        };
+        state.update(Action::SendRequest(Box::new(req)));
+        assert!(state.warnings.is_empty());
     }
 }

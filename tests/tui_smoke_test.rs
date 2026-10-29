@@ -4,6 +4,39 @@ use rupost::tui::event::Action;
 use rupost::tui::state::{AppState, LayoutMode, Panel};
 use std::collections::HashMap;
 
+/// 提取 buffer 全文本（逐行拼接 cell symbol）。断言消费端真实渲染产物而非 state 中间缓存，
+/// 使生产者（折行 rebuild）与消费者（切片渲染）各自被独立守护。
+fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    let mut lines = Vec::new();
+    for y in 0..buffer.area.height {
+        let mut row = String::new();
+        for x in 0..buffer.area.width {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        lines.push(row.trim_end().to_string());
+    }
+    lines.join("\n")
+}
+
+/// 在 buffer 中查找以 needle 文本开头的 cell，返回其前景色（主题取色差异断言用）。
+/// 跨 cell 拼接比较，needle 须为 ASCII 以保证字节偏移与 cell 对齐。
+fn find_cell_fg(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<ratatui::style::Color> {
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let mut acc = String::new();
+            let mut cx = x;
+            while cx < buffer.area.width && acc.len() < needle.len() {
+                acc.push_str(buffer[(cx, y)].symbol());
+                cx += 1;
+            }
+            if acc.starts_with(needle) {
+                return Some(buffer[(x, y)].fg);
+            }
+        }
+    }
+    None
+}
+
 #[test]
 fn test_app_state_initialization() {
     let state = AppState::new();
@@ -583,7 +616,8 @@ fn test_direct_run_window_interactive_states() {
 
 #[test]
 fn test_warnings_rendered_in_response_panel() {
-    // D1 遗留项回归锚点：TestResult.warnings 不得成为渲染盲区（静默假通过）
+    // D1 遗留项回归锚点：TestResult.warnings 不得成为渲染盲区（静默假通过）。
+    // 断言消费端终端 buffer；告警用短句保证窄面板单行渲染，全文断言不受字符级折行影响。
     let backend = ratatui::backend::TestBackend::new(100, 30);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
 
@@ -605,47 +639,34 @@ fn test_warnings_rendered_in_response_panel() {
         HashMap::new(),
         vec![],
         vec![
-            "@capture user_id: path not found".to_string(),
-            "undefined variable {{api_key}} sent verbatim".to_string(),
+            "@capture id missing".to_string(),
+            "var api_key missing".to_string(),
         ],
     );
     state.response_visual_lines.clear();
 
-    let res = terminal.draw(|frame| {
-        rupost::tui::ui::render(frame, &mut state);
-    });
-    assert!(res.is_ok());
-
-    let joined_lines: String = state
-        .response_visual_lines
-        .iter()
-        .map(|l| l.to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(
-        joined_lines.contains("Warnings: 2"),
-        "warnings summary must render: {joined_lines}"
-    );
-    // 窄面板会折行，断言用跨折行存活的子串
-    assert!(joined_lines.contains("@capture user_id"));
-    assert!(joined_lines.contains("api_key"));
-    assert!(joined_lines.contains("verbatim"));
-
-    // 无告警时不得出现空告警标题
-    state.warnings.clear();
-    state.response_visual_lines.clear();
-    terminal
+    let frame = terminal
         .draw(|frame| {
             rupost::tui::ui::render(frame, &mut state);
         })
         .unwrap();
-    let joined_lines: String = state
-        .response_visual_lines
-        .iter()
-        .map(|l| l.to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(!joined_lines.contains("Warnings:"));
+    let rendered = buffer_text(frame.buffer);
+    assert!(
+        rendered.contains("Warnings: 2"),
+        "warnings summary must render:\n{rendered}"
+    );
+    assert!(rendered.contains("@capture id missing"), "\n{rendered}");
+    assert!(rendered.contains("var api_key missing"), "\n{rendered}");
+
+    // 无告警时不得出现空告警标题
+    state.warnings.clear();
+    state.response_visual_lines.clear();
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    assert!(!buffer_text(frame.buffer).contains("Warnings:"));
 }
 
 #[test]
@@ -1283,7 +1304,8 @@ fn test_theme_axis_smoke_matrix() {
             );
         }
 
-        // 失败态下状态前缀与告警标题必须出现在视觉行（明暗主题共用文案）
+        // 失败态下：文案出现在消费端 buffer，且 Warnings 摘要按当前主题 accent 槽位取色
+        // （若 ui 层硬编码 Dark 色，Light 分支 fg 断言即红——主题矩阵由此真正验证取色差异）
         let mut state = AppState::new();
         state.theme = theme;
         state.update_layout(100, 30);
@@ -1291,18 +1313,18 @@ fn test_theme_axis_smoke_matrix() {
         state.assertions = vec![failed_assertion.clone()];
         state.warnings = vec!["@capture id: not found".to_string()];
         state.response_visual_lines.clear();
-        terminal
+        let frame = terminal
             .draw(|frame| {
                 rupost::tui::ui::render(frame, &mut state);
             })
             .unwrap();
-        let joined: String = state
-            .response_visual_lines
-            .iter()
-            .map(|l| l.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(joined.contains("[FAILED]"), "theme {theme:?}: {joined}");
-        assert!(joined.contains("Warnings: 1"));
+        let rendered = buffer_text(frame.buffer);
+        assert!(rendered.contains("[FAILED]"), "theme {theme:?}:\n{rendered}");
+        assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
+        assert_eq!(
+            find_cell_fg(frame.buffer, "Warnings:"),
+            Some(rupost::tui::theme::palette(theme).accent),
+            "theme {theme:?}: Warnings summary must take accent from palette"
+        );
     }
 }

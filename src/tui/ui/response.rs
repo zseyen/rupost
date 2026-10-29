@@ -237,6 +237,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     }
 }
 
+/// 将借用行转为 'static 行并保留各 Span 样式（response_visual_lines 缓存要求 'static）
+fn into_static_line(line: Line<'_>) -> Line<'static> {
+    let mut owned = Line::from(
+        line.spans
+            .into_iter()
+            .map(|s| Span::styled(s.content.into_owned(), s.style))
+            .collect::<Vec<_>>(),
+    );
+    owned.style = line.style;
+    owned.alignment = line.alignment;
+    owned
+}
+
 fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
     let t = state.palette();
     use crate::tui::state::DetailTab;
@@ -410,6 +423,13 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
             // 注意：若是一行空行，需保留
             if line_str.is_empty() {
                 wrapped.push(Line::from(""));
+                continue;
+            }
+            // 未超宽的行原样保留 Span 样式（主题取色/加粗）；into_static_line 断开对
+            // state.last_response 的借用（缓存要求 'static）。
+            // 仅真正发生折行的行才扁平化为纯文本（wrap_text 无法跨 Span 切分）
+            if unicode_width::UnicodeWidthStr::width(line_str.as_str()) <= max_width {
+                wrapped.push(into_static_line(line));
                 continue;
             }
             let wrapped_sub =

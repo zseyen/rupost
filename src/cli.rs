@@ -186,6 +186,18 @@ pub enum Commands {
         /// Optional test file path to pre-load and preview in TUI
         #[arg(value_name = "FILE")]
         file: Option<String>,
+
+        /// Environment name in rupost.toml (e.g., dev, staging)
+        #[arg(long)]
+        env: Option<String>,
+
+        /// Variable overrides (key=value)
+        #[arg(long, value_name = "KEY=VALUE")]
+        var: Vec<String>,
+
+        /// Path to a local environment file (e.g. .env)
+        #[arg(long, value_name = "FILE")]
+        env_file: Option<String>,
     },
 }
 

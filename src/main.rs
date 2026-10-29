@@ -114,8 +114,21 @@ async fn main() -> Result<()> {
                 }
             }
         },
-        Some(Commands::Tui { file }) => {
-            rupost::tui::run(file).await?;
+        Some(Commands::Tui {
+            file,
+            env,
+            var,
+            env_file,
+        }) => {
+            rupost::tui::run(
+                file,
+                rupost::tui::TuiOptions {
+                    env,
+                    vars: var,
+                    env_file,
+                },
+            )
+            .await?;
         }
         None => {
             if cli.args.is_empty() {

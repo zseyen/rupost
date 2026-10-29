@@ -11,11 +11,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// 启动并运行 TUI 主事件循环
-pub async fn run(initial_file: Option<String>) -> Result<()> {
-    run_async(initial_file).await
+pub async fn run(initial_file: Option<String>, options: super::TuiOptions) -> Result<()> {
+    run_async(initial_file, options).await
 }
 
-async fn run_async(initial_file: Option<String>) -> Result<()> {
+async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> Result<()> {
     // 1. 初始化终端
     enable_raw_mode().map_err(crate::error::RupostError::IoError)?;
     let mut stdout = std::io::stdout();
@@ -68,6 +68,10 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     });
 
     let mut state = AppState::new();
+    // 变量上下文与 CLI 同源（runner/app.rs:111-124 同款）：
+    // rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖。
+    // 授权（Authorization: Bearer {{token}} 等）依赖于此。
+    state.variables = build_initial_context(&options);
     if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
         // 默认展开所有顶层目录
@@ -281,6 +285,24 @@ pub fn load_initial_file(state: &mut AppState, initial_file: Option<&str>) {
     }
 }
 
+/// 构建 TUI 启动时的变量上下文（与 CLI test 同一 `build_context` 入口，
+/// 级联顺序：rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖）。
+pub fn build_initial_context(options: &super::TuiOptions) -> crate::variable::VariableContext {
+    let config = crate::variable::ConfigLoader::find_and_load().unwrap_or_default();
+    let cli_vars: Vec<(String, String)> = options
+        .vars
+        .iter()
+        .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
+        .collect();
+    let env_file_to_load = options.env_file.as_deref().or(Some(".env"));
+    crate::variable::ConfigLoader::build_context(
+        &config,
+        options.env.as_deref(),
+        &cli_vars,
+        env_file_to_load,
+    )
+}
+
 /// 对 TUI 中扫描出的所有候选文件路径进行精细化过滤
 /// 1. 过滤文件名黑名单：README.md, SUMMARY.md, CHANGELOG.md, AGENTS.md, checkpoint.md, walkthrough.md 等
 /// 2. 过滤目录黑名单：.git, .rupost, target, node_modules, .agents, .gemini 等
@@ -489,5 +511,34 @@ mod tests {
         // 2. 经过展开（模拟 canonicalize 后相同物理路径前缀），strip_prefix 能够完美剥离前缀并放行
         let relative_path = file_path.strip_prefix(canonical_cwd).unwrap();
         assert_eq!(relative_path, std::path::Path::new("examples/ok.http"));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    /// R1 验收：--var 覆盖 .env，.env 变量进入上下文（授权变量的解析地基）
+    #[test]
+    fn test_build_initial_context_env_file_and_var_cascade() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("custom.env");
+        std::fs::write(
+            &env_path,
+            "token = \"env-token-1\"\nbase_url = \"http://from-env\"\n",
+        )
+        .unwrap();
+
+        let options = super::super::TuiOptions {
+            env: None,
+            vars: vec!["token=cli-token-2".to_string()],
+            env_file: Some(env_path.to_string_lossy().into_owned()),
+        };
+        let context = build_initial_context(&options);
+
+        // .env 变量生效
+        assert_eq!(context.get("base_url").as_deref(), Some("http://from-env"));
+        // --var 覆盖 .env（级联最高优先）
+        assert_eq!(context.get("token").as_deref(), Some("cli-token-2"));
     }
 }

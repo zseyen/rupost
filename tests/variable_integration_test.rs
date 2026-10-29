@@ -376,3 +376,36 @@ async fn test_env_file_loader_integration() {
         panic!("Response is missing");
     }
 }
+
+/// 契约锁定（测试策略 §5.3 P2，2026-10-30）：`--env-file` 指向不存在的路径
+/// 或目录时，当前行为为**静默忽略**——不报错、不中断，上下文回退到
+/// toml/系统环境变量（config.rs 中 `.ok()` 吞掉解析错误，质量加固登记的已知债）。
+/// 若未来改为告警或硬错误，此测试先行失败，提示同步更新契约描述。
+#[test]
+fn test_env_file_invalid_path_is_silently_ignored() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("rupost.toml");
+    fs::write(
+        &config_path,
+        "[environments.dev]\ntoml_var = \"from-toml\"\n",
+    )
+    .unwrap();
+    let config = ConfigLoader::load_from_path(&config_path).unwrap();
+
+    // 场景 1：路径不存在 → 静默忽略，toml 变量不受影响
+    let context =
+        ConfigLoader::build_context(&config, Some("dev"), &[], Some("/no/such/file.env"));
+    assert_eq!(context.get("toml_var").as_deref(), Some("from-toml"));
+    assert_eq!(context.get("should_not_exist"), None);
+
+    // 场景 2：路径存在但为目录（读入失败同样被吞）→ 静默忽略
+    let dir = temp_dir.path().join("dir_as_env_file");
+    fs::create_dir(&dir).unwrap();
+    let context = ConfigLoader::build_context(
+        &config,
+        Some("dev"),
+        &[],
+        Some(dir.to_str().unwrap()),
+    );
+    assert_eq!(context.get("toml_var").as_deref(), Some("from-toml"));
+}

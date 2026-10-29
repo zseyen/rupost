@@ -179,3 +179,15 @@
 ## HTTPS 回归修复（2026-10-29，指引测试会话发现）
 
 按测试方案 v3 指引执行全链门禁时，`examples/run_all.sh` 14/15 失败（外网可达却 0ms 报 "error sending request"）。根因：`2714c8a5` workspace 依赖统一时 reqwest 加了 `default-features = false` 但未补 TLS feature——**HTTPS/WSS 静默失效，且全量 551 测试全绿（本地 http wiremock 无法捕获）**，暴露了"构建配置漂移不可测"盲区。修复：workspace 定义补回 `default-tls`（恢复原行为）+ load-bearing 注释锚。验证：https 直连 200、workspace 551 全绿、run_all.sh 15/15。**启示**：run_all.sh 是目前唯一能抓住 TLS 缺失的探针（外网依赖使其不可入 CI），发版前必跑地位加固。
+
+---
+
+## TUI 流式调试深化（2026-10-30，tui-streaming workspace）
+
+PRD 驱动四域交付（SSE/WS 接入 + 授权 + 消息搜索），全程 TDD：
+1. **变量上下文**：TUI 启动与 CLI 同源加载（toml/.env/系统变量 + `--env/--var/--env-file` 透传）——终结授权变量不解析的断链；
+2. **快速授权**：`A` 键模态 → `__quick_auth` 注入（显式优先决策表锁定）；
+3. **消息搜索**：`/` 三视图高亮 + n/N 环绕跳转；顺带修 `response_total_lines` 计数 bug；
+4. **WS 交互会话**：`W/S/D` 常驻会话（复用 WsSession，零侵入 runner 剧本执行），echo 回环 + 授权握手 + 关闭通知三集成测试。
+
+质量基线：39 套件 592 测试绿；clippy 零警告。PRD 非目标：SSE 事件结构化、多会话并行、SSE 交互发送。

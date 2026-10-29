@@ -78,7 +78,7 @@ L5 手工探索 ──── 真实外网验证 + TUI 真机冒烟（发布前�
 | 3 | 变量与环境 | 四层级联优先级（`--var` > 系统 env > `.env` > `rupost.toml`）、动态变量、未定义警告、`--env` 路径穿越拒绝、`--env-file` 无效路径静默忽略（现状契约） | `variable_integration_test`(13) | ✅ |
 | 4 | 变量捕获 | `@capture` 逐条化、失败进 warnings、`global.` 跨文件传递、regex/JSONPath 源 | `variable_integration_test`、批量用例级联 | ⚠️ 缺独立域测试（捕获行为散落在变量/批量测试中） |
 | 5 | 批量测试与 DAG | Kahn 拓扑、环路检测、依赖补全、路径合理性校验、State Cloning、Fail-Fast | `batch_testing_test`(9) | ✅ |
-| 6 | 并行与 Cookie 隔离 | JoinSet 并发限制、并行分支 Cookie 物理隔离（不落盘）、钻石 DAG 告警 | `cookie_isolation_test`(2)、`batch_testing_test` | ⚠️ 隔离矩阵待补（并行 × `--cookie-file` 组合契约未锁定） |
+| 6 | 并行与 Cookie 隔离 | JoinSet 并发限制、并行分支 Cookie 物理隔离（不落盘）、钻石 DAG 告警 | `cookie_isolation_test`(2)、`batch_testing_test`、`cookie_persistence_test`(2) | ✅ 并行 × `--cookie-file` 契约已锁定（§5.6） |
 | 7 | Cookie 管理 | 三模式（AutoPersist/Ephemeral/Disabled）、文件锁、0600、损坏降级、CLI 内联请求的 `--no-cookies`/`--cookie-file`/`--env`→`cookies_<env>.json` 接线 | `cookie_test`(9) + [Cookie 测试规约](file:///Users/zsyzzx/project/rust/rupost/doc/cookie/cookie_test_specification.md) | ✅（CLI 内联接线仅有函数级测试） |
 | 8 | 本地 Mock 服务 | Trie 路由（`:id`/`*`/`**`）、多变体条件、兜底分支、Axum 适配 | `mock_integration_test`(3) + src mock 单测 | ✅（单测充分） |
 | 9 | 网络诊断 | DNS/TCP/TLS/TTFB 拆分、X.509 临期/过期判定、`--debug`/`--debug-on-failure` 失败自动诊断、`diagnose --report json` 输出 | `diagnose_integration_test`(3)、`timing_diagnostics_test`(2)、`debug_on_failure_test`(4，DBG-2 契约) | ⚠️ `diagnose --report json` 无测试（其余已锁） |
@@ -112,17 +112,18 @@ L5 手工探索 ──── 真实外网验证 + TUI 真机冒烟（发布前�
 ### 5.3 变量与环境
 - **级联优先级表**（四行，逐对覆盖验证）：`--var` > 系统环境变量 > 本地 `.env` > `rupost.toml [environments.<env>]`；同名变量命名空间过滤（外部 `api_version=v999` 不得渗入）。
 - **极值**：未定义 `{{var}}`（警告 + 字面发送）、循环引用、动态变量 `$uuid`/`$timestamp`/`$random_int` 格式、`--env` 含路径穿越字符（报错拒绝）。
-- **现状契约锁定**：`--env-file` 指向无效路径时当前为**静默忽略**（`config.rs` 解析失败被 `.ok()` 吞掉，质量加固方案已登记为债）——以测试锁定现状；未来若改为告警，测试先行失败提示同步更新。
+- **现状契约锁定（✅ 2026-10-30）**：`--env-file` 指向无效路径或目录时**静默忽略**（`config.rs` 解析失败被 `.ok()` 吞掉，质量加固方案登记的债）——`variable_integration_test::test_env_file_invalid_path_is_silently_ignored` 双场景锁定（不存在路径 / 目录形态）；未来改为告警时此测试先行失败提示同步更新。
 
-### 5.4 变量捕获（缺口域）
-- **待补**：`@capture` 失败逐条降级（一坏一好 → 好的生效、坏的进 `warnings`）、`from_id from body.id` 变量名含 `from` 的解析、regex 源内含 `from` 子串、`global.` 前缀跨文件克隆后的可见性。目标落点：新增 `tests/capture_integration_test.rs` 或并入 `variable_integration_test.rs`。
+### 5.4 变量捕获（已清偿 2026-10-30）
+- **`tests/capture_integration_test.rs`**（3 测试）：①逐条降级——一坏一好组合，好的生效、坏的进 `warnings` 且指名道姓、不污染 success 判定、坏变量不得以半成品存在；②变量名含 `from`（`from_id from body.session`）的关键词定位 + regex 源内含 `from`（`regex "from=(\d+)"`，捕获组优先整体匹配）+ header 源同测；③`global.` 前缀跨文件可见性——并行 DAG 依赖链下 `@capture global.x` 经 Arc 共享罐对后继 worker 可见（变量差集克隆机制不携带 `global.*` 键仍可达）。
+- **顺带实证的行为边界（现状，非缺陷）**：`from body`（无字段路径的整体捕获）不支持——落入 JSONPath 解析必告警；`{{base}}` 非保留名，URL 渲染残缺时由 `{{base_url}}` 专项校验兜底报错。
 
 ### 5.5 批量测试与 DAG
 - **拓扑场景**：线性链、Fork/Join、钻石（多父）、成环（报 `Dependency loop detected` 后中断）、缺失依赖自动补全、`@depends-on ../../` 越界拒绝。
 - **并行专项**：`--concurrency` 上限生效、Fail-Fast 在并行模式的中断语义、State Cloning 单向性（子节点写变量不回渗父节点）。
 
-### 5.6 并行 × Cookie 组合（缺口域）
-- **待补**：并行模式下 `--cookie-file` 的行为契约（当前实现为串行分支才落盘，需以测试锁定"并行不落盘"为显式文档化行为，防止未来无感变更）。
+### 5.6 并行 × Cookie 组合（已清偿 2026-10-30）
+- **`tests/cookie_persistence_test.rs`**（2 测试）锁定完整契约：①串行——会话跨文件内存共享（文件 B 请求携带文件 A 的 Set-Cookie）+ 逐文件落盘（run 返回时 executor 存活即已在盘）；②并行——run 返回时 cookie 文件不存在（worker 全 Ephemeral 从不落盘），主执行器 Drop 兜底后文件可出现但绝不含 worker 新 cookie（兜底只保存主 store）。
 
 ### 5.7 Cookie 管理
 按 [Cookie 测试规约](file:///Users/zsyzzx/project/rust/rupost/doc/cookie/cookie_test_specification.md) 执行（9 测试：发送/接收/域路径匹配/过期/持久化/双级 Cookie/禁用/损坏降级/10 线程并发）。
@@ -141,7 +142,7 @@ L5 手工探索 ──── 真实外网验证 + TUI 真机冒烟（发布前�
 ### 5.10 SSE 流式（待上浮）
 - **WHATWG 语义锚点**：空 `data:` 帧不派发、`event:` 跨帧重置、`id:` 跨帧留存、出错分支 flush 尾帧（TcpListener 断流）。
 - **资源**：buffer 超过 1MB 上限的截断复位、`@sse_timeout` 中断、`@stream_to` 增量落盘与目录不存在时的错误浮出。
-- **缺口**：断流 flush 与内存上限目前集中在 src 单测，需各上浮 1 个集成测试。
+- **已上浮（2026-10-30，`tests/sse_stream_resilience_test.rs`，3 测试）**：①断流尾帧 flush——服务端发未完结尾事件后断连（EOF），尾事件照常派发且 `stream.id`/`stream.body.*` 捕获可用（Err/EOF 两分支共用同一 flush，RST 形态未单测）；②单事件 data 累积超 1MB——溢出点前行保留、溢出点后行丢弃、事件边界复位后正常事件完整解析；③无换行残片超 1MB——截断保尾不挂死，后续事件不受影响。
 
 ### 5.11 LLM 流式
 OpenAI/Anthropic 双格式的 delta/content_block 帧规整为 `stream.llm.content`；非 LLM 流降级 Generic；`MockLlmServer` 提供本地闭环；路由中间件把外部 host 改写为本地 Mock。
@@ -165,16 +166,17 @@ P0-1/P0-3 落地：`generate_integration_test`(8，含凭据模板化泄露回�
 - **日志级别**（`logger_integration_test` 守护）：`RUST_LOG` 过滤生效、debug/release 构建的默认级别差异不泄漏调试噪音。
 
 ### 5.16 TUI
-- **冒烟矩阵**（TestBackend，39 个平铺场景）：布局三态（Wide/Narrow/Stacked）× Tab（Files/History）× 面板切焦 × 固定终端尺寸。**主题轴已进冒烟矩阵**（2026-10-29 tui-fix 批次：Dark/Light × 失败态/SSE 流式/WS 完成态参数化渲染 + `[FAILED]`/`Warnings` 文案断言，`ThemeKind` 经 `tui::state` 重导出供集成测试构造）。
+- **冒烟矩阵**（TestBackend，43 个平铺场景）：布局三态（Wide/Narrow/Stacked）× Tab（Files/History）× 面板切焦 × 固定终端尺寸。**主题轴已进冒烟矩阵**（2026-10-29 tui-fix 批次：Dark/Light × 失败态/SSE 流式/WS 完成态参数化渲染 + buffer 文案断言 + `find_cell_fg` 取色差异断言——若 ui 层硬编码 Dark 色，Light 分支即红；顺带修复 rebuild 管线 `to_string()` 扁平化导致的缓存面板样式丢失，未超宽行现保留 Span 主题取色）。渲染类断言以 `CompletedFrame::buffer` 终端产物为准（消费端守护），不再只断言 state 中间缓存。
 - **纯函数层**：`nav` 决策表、`relocate_selection` 表格测试、`filter_matches` 谓词、`log_decision` 决策表、预折行中英文/Emoji 切分、鼠标 `hit_test` 纯几何。
 - **安全三防线**：路径穿越拒绝、`create_exclusive` 原子创建、超长文件名截断+哈希（unix 门控）。
-- **已补齐（2026-10-29 tui-fix 批次）**：`state/stream.rs` 流式域 0→9 单测（增量折行位点、CJK 显示宽折行、活动行驻留、聚焦自动滚动、WS 方向前缀与 100 帧溢出重建、完成态收敛）；`rupost tui <file>` 预加载提取为 `app::load_initial_file` 真函数并三场景冒烟（原冒烟测试为逻辑复刻的假守护，已重写指向真实现）；`TestResult.warnings` 渲染盲区全链路贯通（D1 关闭：事件 `RequestFinished` 增 `warnings` 字段 → `AppState` 暂存（`SendRequest` 清空）→ Response 面板 `Warnings: N` + `⚠` 条目渲染）。
+- **已补齐（2026-10-29 tui-fix 批次，含双子代理审查修复轮）**：`state/stream.rs` 流式域 0→10 单测（增量折行位点、CJK 显示宽折行、活动行驻留、聚焦自动滚动、WS 方向前缀与 100 帧溢出重建、完成态收敛/warnings 暂存与跨请求清空/Err+warnings 组合）；`rupost tui <file>` 预加载提取为 `app::load_initial_file` 真函数并四场景冒烟（嵌套展开/无参回退/目录节点/不存在路径回退；原冒烟测试为逻辑复刻的假守护，已重写指向真实现）；`TestResult.warnings` 渲染盲区全链路贯通（D1 关闭：事件 `RequestFinished` 增 `warnings` 字段 → `AppState` 暂存（`SendRequest` 清空）→ Response 面板 `Warnings: N` + `⚠` 条目渲染，含 SSE/WS 流式完成态视图首行摘要）；resize 惰性重构路径补冒烟（宽度变化清缓存 → 渲染端按新宽度全量重构、无内容丢失）。
 
 ### 5.17 模板脚手架
 空目录初始化、重名阻断报错、`--force` 高亮警告不中断、三类模板（config/sse/llm）生成与 `--list` 枚举、模板内容完整性（`environments.dev` 存在性校验）、`template` 别名——L2（9 测试）与 L3 脚本双层守护。
 
 ### 5.18 报告与错误处理
-- **JSON 报告 schema 契约**：字段清单锁定（含 `warnings`），新增字段必须同步更新 schema 断言——防止"手写字段清单漏字段"缺陷复发（质量加固 C9 锚点）。
+- **JSON 报告 schema 契约（已清偿 2026-10-30，`tests/report_schema_test.rs`）**：批量报告顶层 `{file_path, results}` 与逐请求 12 字段（含易漏的 `warnings`/`diagnose_report`）**精确键集合**断言（新增字段也须显式更新契约）；断言子对象 `{raw, passed, message}`；`diagnose --report json` 13 字段精确键集合 + http 明文场景空值形态（`cert_info`/`tls_handshake_duration` 为 null）+ Duration 的 `{secs, nanos}` 序列化形态。
+- **现状观察（非缺口）**：`TestResult.timing` 与 `.request`（快照）未纳入 JSON 报告——schema 测试按现状锁定，若未来加入属契约变更。
 - **panic 清零纪律**：任何用户输入（状态码、断言、header 名）只允许产生失败的测试结果；每个 panic 修复与 wiremock/TcpListener 复现用例同提交。
 
 ### 5.19 HTTP 客户端行为
@@ -209,20 +211,20 @@ P0-1/P0-3 落地：`generate_integration_test`(8，含凭据模板化泄露回�
 
 | 优先级 | 缺口项 | 动作 | 验收标准 |
 | :--- | :--- | :--- | :--- |
-| **P1** | SSE 断流 flush / 1MB 上限未上浮集成层（§5.10） | 各上浮 1 个 TcpListener 集成测试 | 集成层可独立复现两个语义 |
-| **P1** | 捕获域无独立测试文件（§5.4） | 新增 `capture` 专项测试（逐条降级/`from` 解析/global 克隆） | §5.4 清单全覆盖 |
-| **P1** | 并行 × `--cookie-file` 行为契约未锁定（§5.6） | 新增 1 测试锁定"并行分支不落盘"契约 | 契约变更时测试先行失败 |
-| **P1** | JSON 报告 schema 无独立契约测试（§5.18） | 新增 schema 断言（字段清单逐项存在性），含 `diagnose --report json` | 手写字段清单漏字段时测试失败 |
+| **P1** | ~~SSE 断流 flush / 1MB 上限未上浮集成层（§5.10）~~（✅ 2026-10-30 清偿：3 测试） | 各上浮 1 个 TcpListener 集成测试 | 集成层可独立复现两个语义 |
+| **P1** | ~~捕获域无独立测试文件（§5.4）~~（✅ 2026-10-30 清偿：3 测试全覆盖） | 新增 `capture` 专项测试（逐条降级/`from` 解析/global 克隆） | §5.4 清单全覆盖 |
+| **P1** | ~~并行 × `--cookie-file` 行为契约未锁定（§5.6）~~（✅ 2026-10-30 清偿：串行落盘+并行不落盘双契约） | 新增 1 测试锁定"并行分支不落盘"契约 | 契约变更时测试先行失败 |
+| **P1** | ~~JSON 报告 schema 无独立契约测试（§5.18）~~（✅ 2026-10-30 清偿：精确键集合断言 ×2） | 新增 schema 断言（字段清单逐项存在性），含 `diagnose --report json` | 手写字段清单漏字段时测试失败 |
 | **P1** | AI bootstrap 测试包（§5.20，随实施交付） | lint 表驱动 + 脱敏器边界 + 全链离线集成 + verify 步骤 | [自举提案 §8](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md) 验收 |
 | **P1** | 生成语义 T1/T2 决策表（随 runbook 排期） | 动态值反向识别五形状表 + 链式溯源五张决策表 + wiremock 链式闭环 | [主执行文档 T1/T2](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-master-execution-runbook.md) 验收 |
 | **P1** | ~~TUI 流式渲染（`state/stream.rs`）0 测试 + `tui <file>` 预加载（§5.16）~~（✅ 2026-10-29 tui-fix 清偿：9 单测 + 预加载真函数三场景冒烟） | 补流式增量渲染单测 + 预加载入口冒烟 | §5.16 待补清单清零 |
 | **P1** | ~~TUI `warnings` 渲染盲区（D1 遗留）~~（✅ 2026-10-29 tui-fix 清偿：全链路贯通 + 渲染冒烟） | 功能补齐后补 1 冒烟测试 | 冒烟含含 warning 的结果态 |
-| **P2** | `--env-file` 无效路径静默忽略锁定（§5.3，现状覆盖未确认） | 核对 `variable_integration_test` 是否已含无效路径场景，缺则补 | 契约变更时测试先行失败 |
-| **P2** | 覆盖率统计未常态化（tarpaulin 仅文档提及） | 本地可选命令固化；暂不进 CI 门禁 | [测试指引 §4.2](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) 命令可一键执行 |
-| **P2** | criterion 基准无趋势观测 | 发版前手动跑 3 基准比对（`load_generator` 已移出示例，架构债销账） | benches 可运行且耗时无数量级回退 |
+| **P2** | ~~`--env-file` 无效路径静默忽略锁定（§5.3）~~（✅ 2026-10-30 清偿：双场景契约测试） | 核对 `variable_integration_test` 是否已含无效路径场景，缺则补 | 契约变更时测试先行失败 |
+| **P2** | ~~覆盖率统计未常态化~~（✅ 2026-10-30 清偿：`make coverage` 一键入口，llvm-cov 工具缺失打印安装指引；维持不进 CI 门禁裁决） | 本地可选命令固化；暂不进 CI 门禁 | [测试指引 §4.2](file:///Users/zsyzzx/project/rust/rupost/doc/guides/testing_guide.md) 命令可一键执行 |
+| **P2** | criterion 基准无趋势观测（✅ 2026-10-30 验证：3 benches 编译 + variable_resolver_bench 短采样端到端跑通；趋势比对仍为发版前手动仪式，`make gate-all` 旁路可执行） | 发版前手动跑 3 基准比对（`load_generator` 已移出示例，架构债销账） | benches 可运行且耗时无数量级回退 |
 | **P2** | ~~主题轴未进 TUI 冒烟矩阵（§5.16）~~（✅ 2026-10-29 tui-fix 清偿：Dark/Light × 三场景参数化冒烟） | TestBackend 冒烟加主题维度参数化 | Dark/Light 各 1 渲染冒烟 |
-| **P2** | crate 测试纳入 CI 门禁 | CI `cargo test` 升级为 `cargo test --workspace`（当前默认跑法漏掉 crate 8 测试） | CI 日志可见 34 套件 |
-| **P2** | Windows 平台文件锁/权限差异 | 现有 `#[cfg(unix)]` 门控维持；CI 三平台绿即达标 | CI test Job 三平台 0 失败 |
+| **P2** | ~~crate 测试纳入 CI 门禁~~（✅ 2026-10-30 清偿：test 与 clippy 两 job 均升 `--workspace`，实测 38 套件 vs 默认 36） | CI `cargo test` 升级为 `cargo test --workspace`（当前默认跑法漏掉 crate 8 测试） | CI 日志可见 34 套件 |
+| **P2** | Windows 平台文件锁/权限差异（✅ 2026-10-30 核对：ci.yml test job 矩阵本就含 ubuntu/macos/windows 三平台，`#[cfg(unix)]` 门控维持，现状达标） | 现有 `#[cfg(unix)]` 门控维持；CI 三平台绿即达标 | CI test Job 三平台 0 失败 |
 
 **P1 合计约 10–14 个新测试；bootstrap/T1/T2 的测试随各自实施切片交付，不单独排期。**
 
@@ -268,7 +270,7 @@ v2 定稿后、本次更新前，仓库经两个执行会话大幅推进（AI �
 - **新增域 20 AI 创作辅助**：`ai assert` 已锁（`ai_assert_test` 4 + crate 8 + verify 步骤 7 dogfooding）；`ai bootstrap` 测试包随实施交付（§5.20）。
 - 域 15 吸收 `--only`/`path#n` 单请求重跑选择器（`single_request_test` 8）。
 
-**残余缺口重估**（§6.2）：SSE 上浮 / capture 专项 / 并行×cookie 契约 / JSON schema 四项确认为真缺口（代码核实）；~~TUI stream / TUI warnings~~ 两项已于 2026-10-29 tui-fix 批次清偿（§5.16）；`--env-file` 现状覆盖未确认降 P2 待核对；`load_generator` 架构债销账（已移出示例）；rupost-ai "无引用方"表述终结（已接线）。
+**残余缺口重估**（§6.2）：~~SSE 上浮 / capture 专项 / 并行×cookie 契约 / JSON schema / TUI stream / TUI warnings~~ 六项真缺口已全部清偿——TUI 两项 2026-10-29（tui-fix 批次），其余四项 2026-10-30（test-gaps 批次，§5.4/§5.6/§5.10/§5.18）；`--env-file` 现状覆盖未确认降 P2 待核对；`load_generator` 架构债销账（已移出示例）；rupost-ai "无引用方"表述终结（已接线）。
 
 ### v1 → v2（2026-10-25，双子代理交叉审查）
 

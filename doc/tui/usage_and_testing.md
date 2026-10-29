@@ -139,3 +139,13 @@ Files 侧栏按 `n` 打开快速输入框（模态输入，期间所有全局键
 5. 再按 `n` 输入同名 `example.org` 回车 → 不覆盖，编辑器显示原内容。
 6. `Esc` 丢弃、`E` 拉起 `$EDITOR` 保存退出 → TUI 热重载内容。
 7. 窗口缩放穿越 Wide/Narrow/Stacked 三档，快速输入弹窗均居中且光标位置正确。
+
+## 流式调试真机冒烟清单（2026-10-31 增补，SSE/WS 接入 + 授权 + 消息搜索）
+
+TestBackend 已覆盖渲染与状态机（见 `tests/tui_smoke_test.rs`、`tests/tui_ws_session_test.rs`），以下需真实终端 / 真实服务端手动过一遍：
+
+1. **变量上下文**：工作区放 `rupost.toml`（`[environments.dev]` 含 `token`）与 `.env`（同名不同值），`cargo run -- tui --env dev` 进入；运行带 `Authorization: Bearer {{token}}` 的请求（wiremock/echo 亦可），服务端应收到 toml 值。`--var token=cli-x` 覆盖后应收到 cli-x。
+2. **快速授权**：按 `A` 输入 `Bearer manual-1` 回车 → 底栏出现 `AUTH✓`；运行无 Authorization 的请求，服务端应收到 `Bearer manual-1`；编辑器中显式写 `Authorization: Bearer file-1` 再运行 → 服务端应收到 `file-1`（显式优先）。`A` 清空回车 → `AUTH✓` 消失。
+3. **消息搜索**：运行一个返回多行 JSON 的请求，`/` 输入子串 → 命中片段高亮（主题 accent 背景）；`n`/`N` 在命中间环绕；`Esc` 后 `n` 仍可续跳；流式运行 SSE 期间搜索 → 新帧到达时视口不再自动跳底（搜索优先）。
+4. **WS 交互会话**：编辑器为 `@websocket` 请求，按 `W` → 状态无错误、收到的帧实时出现；按 `S` 输入文本回车 → 视口出现 `[→]` 发送帧、服务端收到；`n`/`N` 可在帧间搜索；`D` 关闭后服务端断连；对断开的服务端保持会话 → 观察指数退避重连日志。
+5. **互斥**：会话活跃时按 `r`/`Ctrl+Enter` → 状态栏提示需先 `D`；关闭后恢复执行。

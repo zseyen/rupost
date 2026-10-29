@@ -20,7 +20,10 @@ members = [
 ]
 
 [workspace.dependencies]
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream"] }
+# `default-tls` 是 load-bearing：关闭后 HTTPS/WSS 静默失效（请求 0ms 报
+# "error sending request"），且全量测试（本地 http wiremock）无法捕获——
+# 仅 examples/run_all.sh 的外网用例可暴露。删除前必须三思。
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "stream", "default-tls"] }
 rupost-ai = { path = "crates/rupost-ai" }
 tokio = { version = "1.49.0", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }

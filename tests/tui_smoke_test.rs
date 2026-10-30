@@ -1499,18 +1499,92 @@ fn test_search_highlight_renders_in_response_panel() {
         "matched text must be rendered with accent background"
     );
 
-    // 无 query：不应用高亮（bg 保持默认）
+    // 无 query：全 buffer 扫描断言不存在 accent 背景的命中渲染（布局漂移免疫）
     state.search_query.clear();
+    state.response_visual_lines.clear();
     let frame = terminal
         .draw(|frame| {
             rupost::tui::ui::render(frame, &mut state);
         })
         .unwrap();
     let buffer = frame.buffer;
-    let plain_cell = &buffer[(6, 13)];
-    assert_ne!(
-        plain_cell.bg,
-        rupost::tui::theme::palette(ThemeKind::Dark).accent,
-        "no query must not highlight"
+    let mut highlighted = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if buffer[(x, y)].bg == rupost::tui::theme::palette(ThemeKind::Dark).accent {
+                highlighted = true;
+            }
+        }
+    }
+    assert!(
+        !highlighted,
+        "no query must not highlight anywhere in the viewport"
+    );
+}
+
+#[test]
+fn test_search_jump_visible_in_completed_log_view() {
+    // R4 端到端：完成态长连接日志 >50 行时，跳转到第 58 行的命中必须可见
+    // （回归锚点：完成态渲染曾按窗口局部长度钳制，深行号跳转目标落在视口外）
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("ws.log");
+    {
+        let mut f = std::fs::File::create(&log).unwrap();
+        for i in 0..150 {
+            writeln!(
+                f,
+                "[→] 12:00:00 | frame-{} {}",
+                i,
+                if i == 90 { "NEEDLE" } else { "" }
+            )
+            .unwrap();
+        }
+    }
+
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.current_request = Some(ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "ws://x".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: rupost::parser::RequestMetadata {
+            websocket: true,
+            ..Default::default()
+        },
+        line_number: 1,
+        base_path: None,
+    });
+    state.is_loading = false;
+    state.log_file_path = Some(log.clone());
+    state.total_log_lines = 150;
+    state.search_query = "NEEDLE".to_string();
+
+    state.jump_to_match(true);
+    assert_eq!(state.response_scroll, 90);
+
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    let content: String = {
+        let buffer = terminal.backend().buffer();
+        let mut acc = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                acc.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        acc
+    };
+    assert!(
+        content.contains("frame-90 NEEDLE"),
+        "jumped-to match must be visible (line 90/150; old clamp showed window tail ~120+ instead)"
     );
 }

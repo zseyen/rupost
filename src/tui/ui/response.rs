@@ -20,6 +20,22 @@ fn apply_search_highlight(sliced: Vec<Line<'static>>, state: &AppState) -> Vec<L
         .collect()
 }
 
+/// 流式（SSE/WS）完成态视图首行插入告警摘要（D1：流式分支不走 HTTP 缓存管线）。
+/// 仅 scroll=0 时可见（作为视图头行）；滚动后随内容移出视口。
+fn prepend_warnings_summary(lines: &mut Vec<Line<'static>>, state: &AppState) {
+    if state.warnings.is_empty() {
+        return;
+    }
+    let t = state.palette();
+    lines.insert(
+        0,
+        Line::from(Span::styled(
+            format!("Warnings: {}", state.warnings.len()),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        )),
+    );
+}
+
 /// 搜索高亮（R4）：把行文本按 query 大小写不敏感切分，命中段 accent 背景 + 加粗。
 /// query 为空时原样返回；仅作用于当前可见切片（不影响底层视觉行缓存）。
 fn highlight_query_line(line: &str, query: &str, accent: ratatui::style::Color) -> Line<'static> {
@@ -168,13 +184,26 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         }
         prepend_warnings_summary(&mut visual_lines_final, state);
 
-        // 3. 计算精确的切片范围并渲染
-        let total_lines = visual_lines_final.len();
-        let max_scroll = total_lines.saturating_sub(visible_height);
-        let scroll_y = state.response_scroll.min(max_scroll);
-
-        let end = (scroll_y + visible_height).min(total_lines);
-        let sliced = visual_lines_final[scroll_y..end].to_vec();
+        // 3. 切片：流式态 = 底部钳制；完成态 = scroll 即视口顶部日志行号
+        //    （滑窗前后各 50 行前导缓冲，视口起点 = min(scroll, 50) + warnings 偏移；
+        //    此前按窗口局部长度钳制，日志行号 >50 的搜索跳转目标会落在视口外）
+        let sliced = if state.is_loading {
+            let total_lines = visual_lines_final.len();
+            let max_scroll = total_lines.saturating_sub(visible_height);
+            let scroll_y = state.response_scroll.min(max_scroll);
+            let end = (scroll_y + visible_height).min(total_lines);
+            visual_lines_final[scroll_y..end].to_vec()
+        } else {
+            let warn = usize::from(!state.warnings.is_empty());
+            let lead = if state.response_scroll == 0 {
+                0
+            } else {
+                warn + state.response_scroll.min(50)
+            }
+            .min(visual_lines_final.len());
+            let end = (lead + visible_height).min(visual_lines_final.len());
+            visual_lines_final[lead..end].to_vec()
+        };
 
         let sliced = apply_search_highlight(sliced, state);
         frame.render_widget(Paragraph::new(sliced).block(block), area);
@@ -239,12 +268,24 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         }
         prepend_warnings_summary(&mut visual_lines_final, state);
 
-        let total_lines = visual_lines_final.len();
-        let max_scroll = total_lines.saturating_sub(visible_height);
-        let scroll_y = state.response_scroll.min(max_scroll);
-
-        let end = (scroll_y + visible_height).min(total_lines);
-        let sliced = visual_lines_final[scroll_y..end].to_vec();
+        // 切片语义与 WS 完成态相同（scroll = 视口顶部日志行号）
+        let sliced = if state.is_loading {
+            let total_lines = visual_lines_final.len();
+            let max_scroll = total_lines.saturating_sub(visible_height);
+            let scroll_y = state.response_scroll.min(max_scroll);
+            let end = (scroll_y + visible_height).min(total_lines);
+            visual_lines_final[scroll_y..end].to_vec()
+        } else {
+            let warn = usize::from(!state.warnings.is_empty());
+            let lead = if state.response_scroll == 0 {
+                0
+            } else {
+                warn + state.response_scroll.min(50)
+            }
+            .min(visual_lines_final.len());
+            let end = (lead + visible_height).min(visual_lines_final.len());
+            visual_lines_final[lead..end].to_vec()
+        };
 
         let sliced = apply_search_highlight(sliced, state);
         frame.render_widget(Paragraph::new(sliced).block(block), area);
@@ -294,23 +335,6 @@ fn into_static_line(line: Line<'_>) -> Line<'static> {
     owned.style = line.style;
     owned.alignment = line.alignment;
     owned
-}
-
-/// 流式（SSE/WS）视图首行插入告警摘要——流式分支不走 HTTP 缓存渲染管线，
-/// 不加此行则带告警的流式请求完成态仍是渲染盲区（D1 残余）。
-/// 加载期 warnings 恒为空（SendRequest 已清空），插入仅对完成态生效。
-fn prepend_warnings_summary(lines: &mut Vec<Line<'static>>, state: &AppState) {
-    if state.warnings.is_empty() {
-        return;
-    }
-    let t = state.palette();
-    lines.insert(
-        0,
-        Line::from(Span::styled(
-            format!("Warnings: {}", state.warnings.len()),
-            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-        )),
-    );
 }
 
 fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {

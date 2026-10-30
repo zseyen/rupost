@@ -312,3 +312,42 @@ mod quick_auth_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod auth_entry_tests {
+    use super::*;
+    use crate::tui::handlers::handle_key;
+    use crossterm::event::KeyModifiers;
+    use tokio::sync::mpsc;
+
+    /// R3 守护：A 键入口（handle_key 全链路）打开 Auth 模态
+    #[tokio::test]
+    async fn test_a_key_opens_auth_modal_via_handle_key() {
+        let mut state = AppState::new();
+        let (tx, _rx) = mpsc::channel(1);
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(matches!(state.input_mode, InputMode::Auth(_)));
+
+        // 提交后值落变量（端到端）
+        for c in "Bearer a-1".chars() {
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                &tx,
+            )
+            .await;
+        }
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert_eq!(state.quick_auth().as_deref(), Some("Bearer a-1"));
+    }
+}

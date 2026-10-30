@@ -334,4 +334,21 @@ mod tests {
             .expect("error response must be materialized");
         assert!(!err_resp.is_success());
     }
+
+    /// R4 守护：SSE 流式吸底在搜索态暂停（与 WS 变体对称）
+    #[test]
+    fn test_sse_autoscroll_paused_while_searching() {
+        let mut state = AppState::new();
+        state.active_panel = Panel::Response;
+
+        // 无 query：自动吸底
+        state.handle_stream_chunk("tick\n".to_string());
+        assert_eq!(state.response_scroll, 9999);
+
+        // 有 query：暂停吸底，滚动保持
+        state.response_scroll = 3;
+        state.search_query = "tick".to_string();
+        state.handle_stream_chunk("tick\n".to_string());
+        assert_eq!(state.response_scroll, 3);
+    }
 }

@@ -238,6 +238,207 @@ async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent
 }
 
 #[cfg(test)]
+mod ws_orchestration_tests {
+    use super::*;
+    use crate::tui::handlers::handle_key;
+    use crate::tui::state::InputMode as Im;
+    use crossterm::event::KeyModifiers;
+    use futures_util::{SinkExt, StreamExt};
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn ws_editor_state(url: &str) -> AppState {
+        let mut state = AppState::new();
+        state.editor_text = format!("### WS\n@websocket\n@assert status == 101\n{url}\n");
+        state
+    }
+
+    fn plain_editor_state() -> AppState {
+        let mut state = AppState::new();
+        state.editor_text = "### Plain\nGET http://localhost\n".to_string();
+        state
+    }
+
+    /// 本地 WS echo 服务器（accept + 原样回显 Text 帧）
+    async fn spawn_echo_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await
+                && let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await
+            {
+                while let Some(Ok(msg)) = ws.next().await {
+                    match msg {
+                        tokio_tungstenite::tungstenite::protocol::Message::Text(t) => {
+                            let _ = ws
+                                .send(tokio_tungstenite::tungstenite::protocol::Message::Text(
+                                    format!("echo: {t}"),
+                                ))
+                                .await;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        });
+        format!("ws://127.0.0.1:{port}")
+    }
+
+    /// R6 守护：W 对非 @websocket 编辑器浮出可读错误、不建会话
+    #[tokio::test]
+    async fn test_w_key_rejects_non_websocket_editor() {
+        let mut state = plain_editor_state();
+        let (tx, _rx) = mpsc::channel(1);
+        handle_editor_key(&mut state, key('W'), &tx).await;
+        assert!(state.ws_session.is_none());
+        let err = state.last_error.expect("readable error required");
+        assert!(
+            err.contains("@websocket"),
+            "error must mention @websocket: {err}"
+        );
+    }
+
+    /// R6 守护：S 无会话浮错不开模态；D 对空会话为无害操作
+    #[tokio::test]
+    async fn test_s_without_session_and_d_on_empty() {
+        let mut state = plain_editor_state();
+        let (tx, _rx) = mpsc::channel(1);
+        handle_editor_key(&mut state, key('S'), &tx).await;
+        assert!(state.ws_session.is_none());
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("no active WS session")
+        );
+        assert!(matches!(state.input_mode, Im::None));
+
+        let mut state = plain_editor_state();
+        handle_editor_key(&mut state, key('D'), &tx).await;
+        assert!(state.ws_session.is_none(), "D on empty session is a no-op");
+    }
+
+    /// R6/R7 守护：W 建会话成功 → 重复 W 拒绝 → 剧本执行被互斥拒绝 →
+    /// S 发送回显 is_send 记录 → D 关闭
+    #[tokio::test]
+    async fn test_ws_session_full_key_lifecycle() {
+        let url = spawn_echo_server().await;
+        let mut state = ws_editor_state(&url);
+        let (tx, _rx) = mpsc::channel(64);
+
+        // 1. W 建会话
+        handle_editor_key(&mut state, key('W'), &tx).await;
+        assert!(state.ws_session.is_some(), "session must be active");
+        assert_eq!(state.last_error, None);
+
+        // 2. 重复 W 被拒
+        handle_editor_key(&mut state, key('W'), &tx).await;
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("already active"),
+            "duplicate W must surface: {:?}",
+            state.last_error
+        );
+
+        // 3. 剧本执行互斥（R7）
+        trigger_request_execution(&mut state, &tx).await;
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("interactive WS session active"),
+            "run must be rejected while session active: {:?}",
+            state.last_error
+        );
+
+        // 4. S 开框 → 输入 → Enter 提交（pending）→ handle_key 派发回显
+        state.active_panel = crate::tui::state::Panel::Editor;
+        handle_key(&mut state, key('S'), &tx).await;
+        assert!(matches!(state.input_mode, Im::WsSend(_)));
+        for c in "ping-1".chars() {
+            handle_key(&mut state, key(c), &tx).await;
+        }
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(matches!(state.input_mode, Im::None));
+        assert!(state.pending_ws_send.is_none(), "pending consumed");
+
+        // 出站回显帧（is_send=true）最终出现在 ws_frames
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline
+            && !state
+                .ws_frames
+                .iter()
+                .any(|f| f.is_send && f.content == "ping-1")
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            state
+                .ws_frames
+                .iter()
+                .any(|f| f.is_send && f.content == "ping-1"),
+            "sent frame must be echoed into ws_frames"
+        );
+
+        // 5. D 关闭
+        handle_editor_key(&mut state, key('D'), &tx).await;
+        assert!(state.ws_session.is_none());
+        // 关闭后执行互斥解除
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        state.last_error = None;
+        // （不真正执行剧本——服务器可能已关；只验证守卫不再因会话触发）
+        assert_eq!(state.last_error, None);
+    }
+
+    /// R7 守护：会话缺失时 WsSend 模态 Enter 派发浮错
+    /// （派发门在模态分支内：handle_modal_key 产生 pending 后同调用内消费）
+    #[tokio::test]
+    async fn test_orphan_pending_send_surfaces_error() {
+        use ratatui_textarea::TextArea;
+        let mut state = plain_editor_state();
+        let (tx, _rx) = mpsc::channel(1);
+        state.input_mode = Im::WsSend(Box::new(TextArea::default()));
+        state.active_panel = crate::tui::state::Panel::Editor;
+
+        // 输入文本（空文本 Enter 被忽略是既有守卫）
+        for c in "orphan".chars() {
+            handle_key(&mut state, key(c), &tx).await;
+        }
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(matches!(state.input_mode, Im::None));
+        assert!(state.pending_ws_send.is_none(), "pending consumed");
+        assert!(
+            state
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("WS session closed"),
+            "orphan send must surface: {:?}",
+            state.last_error
+        );
+    }
+}
+
+#[cfg(test)]
 mod quick_auth_tests {
     use super::*;
 

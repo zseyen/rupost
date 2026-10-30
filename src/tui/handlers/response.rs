@@ -107,3 +107,97 @@ mod tests {
         assert_eq!(response_total_lines(&state), 500);
     }
 }
+
+#[cfg(test)]
+mod search_flow_tests {
+    use super::*;
+    use crate::tui::event::TuiEvent;
+    use crate::tui::handlers::handle_key;
+    use crate::tui::state::{InputMode, Panel};
+    use crossterm::event::KeyModifiers;
+    use tokio::sync::mpsc;
+
+    fn key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn state_with_lines(lines: &[&str]) -> AppState {
+        let mut state = AppState::new();
+        state.active_panel = Panel::Response;
+        state.terminal_height = 20;
+        state.response_visual_lines = lines
+            .iter()
+            .map(|l| ratatui::text::Line::raw(l.to_string()))
+            .collect();
+        state
+    }
+
+    /// R4 守护：`/` 模态逐键输入实时更新 query（克隆 Filter 的 live 语义）
+    #[tokio::test]
+    async fn test_search_modal_live_typing_updates_query() {
+        let mut state = state_with_lines(&["alpha", "beta"]);
+        let (tx, _rx) = mpsc::channel::<TuiEvent>(1);
+
+        handle_key(&mut state, key('/'), &tx).await;
+        assert!(matches!(state.input_mode, InputMode::Search(_)));
+
+        for c in "al".chars() {
+            handle_key(&mut state, key(c), &tx).await;
+        }
+        assert_eq!(state.search_query, "al", "query must update live");
+
+        // Esc 退出：query 留存
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(matches!(state.input_mode, InputMode::None));
+        assert_eq!(state.search_query, "al");
+
+        // 留存 query 下 n/N 续跳
+        state.jump_to_match(true);
+        assert_eq!(state.response_scroll, 0);
+    }
+
+    /// R5 守护：完成态长连接视图 Down 滚动按 total_log_lines 钳制
+    /// （旧计数 bug 会按错误基数提前停或越界）
+    #[test]
+    fn test_completed_scroll_clamps_to_total_log_lines() {
+        let mut state = AppState::new();
+        state.active_panel = Panel::Response;
+        state.is_loading = false;
+        state.sse_stream_body = "legacy".to_string();
+        state.total_log_lines = 150;
+        state.terminal_height = 20;
+
+        for _ in 0..200 {
+            handle_response_key(&mut state, key('j'));
+        }
+        // max = 150 - (20-2) = 132
+        assert_eq!(state.response_scroll, 132, "must clamp to total-viewport");
+    }
+
+    /// R4 守护：完成态 SSE 的搜索空间同为日志文件（与 WS 对称）
+    #[test]
+    fn test_search_space_sse_completed_uses_log_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("sse.log");
+        std::fs::write(&log, "chunk-0\nchunk-1\n").unwrap();
+
+        let mut state = AppState::new();
+        state.active_detail_tab = crate::tui::state::DetailTab::Response;
+        state.sse_stream_body = "chunk-0\n".to_string();
+        state.is_loading = false;
+        state.log_file_path = Some(log.clone());
+        state.search_query = "chunk-1".to_string();
+
+        match state.search_space() {
+            crate::tui::state::search::SearchSpace::LogFile(p) => assert_eq!(p, log),
+            other => panic!("expected LogFile space, got {other:?}"),
+        }
+        state.jump_to_match(true);
+        assert_eq!(state.response_scroll, 1);
+    }
+}

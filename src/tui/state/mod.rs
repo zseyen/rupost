@@ -7,7 +7,7 @@ use super::theme::{Theme, ThemeKind, palette};
 mod history;
 mod layout;
 mod retention;
-mod search;
+pub mod search;
 mod stream;
 mod tree;
 mod wrap;

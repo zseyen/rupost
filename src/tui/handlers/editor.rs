@@ -492,7 +492,6 @@ mod quick_auth_tests {
 #[cfg(test)]
 mod wiring_tests {
     use super::*;
-    use crate::tui::event::TuiEvent;
     use futures_util::{SinkExt, StreamExt};
     use std::time::Duration;
     use tokio::net::TcpListener;
@@ -528,10 +527,9 @@ mod wiring_tests {
             );
             if let Ok(Some(reqs)) =
                 tokio::time::timeout(Duration::from_millis(100), server.received_requests()).await
+                && !reqs.is_empty()
             {
-                if !reqs.is_empty() {
-                    break reqs;
-                }
+                break reqs;
             }
         };
         assert!(!received.is_empty());
@@ -544,6 +542,7 @@ mod wiring_tests {
     }
 
     /// 本地 WS echo 服务器（accept_hdr_async 捕获握手 header）
+    #[allow(clippy::result_large_err)] // accept_hdr_async 的 Err 类型由 API 固定
     async fn spawn_ws_capture_server() -> (String, tokio::sync::mpsc::Receiver<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -590,6 +589,7 @@ mod wiring_tests {
     /// 接线守护（R6+R3）：W 键建连时快速授权经 start_ws_session 注入握手。
     /// 删掉 start_ws_session 内的 inject_quick_auth 调用 → 本测试红。
     #[tokio::test]
+    #[allow(clippy::result_large_err)] // accept_hdr_async 的 Err 类型由 API 固定
     async fn test_w_key_carries_quick_auth_into_handshake() {
         let (url, mut rx) = spawn_ws_capture_server().await;
         let mut state = AppState::new();

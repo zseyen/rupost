@@ -1588,3 +1588,123 @@ fn test_search_jump_visible_in_completed_log_view() {
         "jumped-to match must be visible (line 90/150; old clamp showed window tail ~120+ instead)"
     );
 }
+
+#[test]
+fn test_streaming_views_search_highlight_smoke() {
+    // R4 冒烟：SSE 流式视图与 WS 流式视图的搜索高亮（HTTP 分支由既有测试覆盖）
+    use rupost::tui::theme::ThemeKind;
+    let accent = rupost::tui::theme::palette(ThemeKind::Dark).accent;
+
+    // SSE 流式视图
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.is_loading = true;
+    state.current_request = Some(ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "http://x/stream".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: rupost::parser::RequestMetadata {
+            sse: true,
+            ..Default::default()
+        },
+        line_number: 1,
+        base_path: None,
+    });
+    state.handle_stream_chunk("data: needle-here\n".to_string());
+    state.search_query = "needle".to_string();
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let mut sse_hit = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if buffer[(x, y)].bg == accent {
+                sse_hit = true;
+            }
+        }
+    }
+    assert!(sse_hit, "SSE streaming view must highlight matches");
+
+    // WS 流式视图
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.is_loading = true;
+    state.current_request = Some(ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "ws://x".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: rupost::parser::RequestMetadata {
+            websocket: true,
+            ..Default::default()
+        },
+        line_number: 1,
+        base_path: None,
+    });
+    state.handle_ws_frame(false, "needle-frame".to_string());
+    state.search_query = "needle".to_string();
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let mut ws_hit = false;
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if buffer[(x, y)].bg == accent {
+                ws_hit = true;
+            }
+        }
+    }
+    assert!(ws_hit, "WS streaming view must highlight matches");
+}
+
+#[test]
+fn test_new_modals_render_smoke_matrix() {
+    // R3/R4/R6 冒烟：Auth / Search / WsSend 三模态在多尺寸下渲染不 panic
+    use ratatui_textarea::TextArea;
+    use rupost::tui::state::InputMode;
+
+    let make_state = |mode: InputMode| {
+        let mut state = AppState::new();
+        state.input_mode = mode;
+        state
+    };
+    let modes = vec![
+        (
+            "Auth",
+            make_state(InputMode::Auth(Box::new(TextArea::default()))),
+        ),
+        (
+            "Search",
+            make_state(InputMode::Search(Box::new(TextArea::default()))),
+        ),
+        (
+            "WsSend",
+            make_state(InputMode::WsSend(Box::new(TextArea::default()))),
+        ),
+    ];
+
+    for (name, mut state) in modes {
+        let terminal_sizes = [(80u16, 24u16), (35u16, 5u16)];
+        for &(w, h) in &terminal_sizes {
+            let backend = ratatui::backend::TestBackend::new(w, h);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            let res = terminal.draw(|frame| {
+                rupost::tui::ui::render(frame, &mut state);
+            });
+            assert!(res.is_ok(), "{name} modal must render at {w}x{h}");
+        }
+    }
+}

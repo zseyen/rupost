@@ -488,3 +488,161 @@ mod quick_auth_tests {
         assert_eq!(req.headers[0].1, "Basic abc");
     }
 }
+
+#[cfg(test)]
+mod wiring_tests {
+    use super::*;
+    use crate::tui::event::TuiEvent;
+    use futures_util::{SinkExt, StreamExt};
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// 接线守护（R3）：trigger_request_execution 必须调用快速授权注入——
+    /// state.quick_auth 已设置时，wiremock 收到的请求携带 Authorization。
+    /// 删掉 trigger 内的 inject_quick_auth 调用 → 本测试红。
+    #[tokio::test]
+    async fn test_trigger_injects_quick_auth_into_real_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/secure"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+
+        let mut state = AppState::new();
+        state.editor_text = format!("### Secured\nGET {}/secure\n", server.uri());
+        state.set_quick_auth("Bearer wiring-1");
+
+        let (tx, _rx) = mpsc::channel(8);
+        trigger_request_execution(&mut state, &tx).await;
+
+        // 执行 task 异步发包（RequestFinished 事件由 app.rs 主循环消费，测试外无关）
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let received = loop {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "request must arrive within 5s window"
+            );
+            if let Ok(Some(reqs)) =
+                tokio::time::timeout(Duration::from_millis(100), server.received_requests()).await
+            {
+                if !reqs.is_empty() {
+                    break reqs;
+                }
+            }
+        };
+        assert!(!received.is_empty());
+        let auth = received[0]
+            .headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        assert_eq!(auth, "Bearer wiring-1", "quick auth must reach the wire");
+    }
+
+    /// 本地 WS echo 服务器（accept_hdr_async 捕获握手 header）
+    async fn spawn_ws_capture_server() -> (String, tokio::sync::mpsc::Receiver<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tokio::spawn(async move {
+            let tx = tx;
+            if let Ok((stream, _)) = listener.accept().await {
+                let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+                    std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let capture = captured.clone();
+                let callback =
+                    |req: &tokio_tungstenite::tungstenite::http::Request<()>,
+                     resp: tokio_tungstenite::tungstenite::http::Response<()>| {
+                        for (k, v) in req.headers() {
+                            capture.lock().unwrap().push(format!(
+                                "{}: {}",
+                                k.as_str(),
+                                v.to_str().unwrap_or("")
+                            ));
+                        }
+                        Ok(resp)
+                    };
+                if let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, callback).await {
+                    let headers = captured.lock().unwrap().clone();
+                    let _ = tx.send(headers).await;
+                    while let Some(Ok(msg)) = ws.next().await {
+                        match msg {
+                            tokio_tungstenite::tungstenite::protocol::Message::Text(t) => {
+                                let _ = ws
+                                    .send(tokio_tungstenite::tungstenite::protocol::Message::Text(
+                                        format!("echo: {t}"),
+                                    ))
+                                    .await;
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), rx)
+    }
+
+    /// 接线守护（R6+R3）：W 键建连时快速授权经 start_ws_session 注入握手。
+    /// 删掉 start_ws_session 内的 inject_quick_auth 调用 → 本测试红。
+    #[tokio::test]
+    async fn test_w_key_carries_quick_auth_into_handshake() {
+        let (url, mut rx) = spawn_ws_capture_server().await;
+        let mut state = AppState::new();
+        state.editor_text = format!("### WS\n@websocket\n{url}\n");
+        state.set_quick_auth("Bearer ws-quick");
+
+        let (tx, _rx) = mpsc::channel(8);
+        handle_editor_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('W'), crossterm::event::KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(state.ws_session.is_some(), "session must open");
+
+        let headers = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .expect("handshake captured");
+        assert!(
+            headers
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case("authorization: Bearer ws-quick")),
+            "quick auth must reach WS handshake, got {headers:?}"
+        );
+    }
+
+    /// 接线守护（R1+R6）：编辑器中的 {{变量}} 在 WS 会话建立时解析
+    /// （state.variables 由启动加载链填充；删掉 build_initial_context
+    /// 接线或 start_session 的 resolve → 本测试红）。
+    #[tokio::test]
+    async fn test_w_key_resolves_variables_into_handshake() {
+        let (url, mut rx) = spawn_ws_capture_server().await;
+        let mut state = AppState::new();
+        state.editor_text = format!("### WS\n@websocket\n{url}\nX-Api: {{{{tok}}}}\n");
+        state.variables.insert("tok", "resolved-v1");
+
+        let (tx, _rx) = mpsc::channel(8);
+        handle_editor_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('W'), crossterm::event::KeyModifiers::NONE),
+            &tx,
+        )
+        .await;
+        assert!(state.ws_session.is_some(), "session must open");
+
+        let headers = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .expect("handshake captured");
+        assert!(
+            headers.iter().any(|h| h == "x-api: resolved-v1"),
+            "variable must be resolved in WS handshake, got {headers:?}"
+        );
+    }
+}

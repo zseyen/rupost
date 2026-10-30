@@ -1,7 +1,7 @@
 //! Response 面板组件：滚动、详情子选项卡切换与消息搜索（`/`、n/N）。
 
 use super::nav;
-use crate::tui::state::{AppState, DetailTab, InputMode, Panel};
+use crate::tui::state::{AppState, DetailTab};
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// 处理 Response 面板键盘滚动、搜索入口与 n/N 跳转
@@ -69,6 +69,7 @@ fn switch_detail_tab(state: &mut AppState, forward: bool) {
 mod tests {
     use super::*;
     use crate::tui::event::TuiEvent;
+    use crate::tui::state::{InputMode, Panel};
     use crossterm::event::KeyModifiers;
 
     #[tokio::test]

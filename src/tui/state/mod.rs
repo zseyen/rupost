@@ -60,6 +60,8 @@ pub enum InputMode {
     Auth(Box<ratatui_textarea::TextArea<'static>>),
     /// Response 面板 `/` 消息搜索（实时匹配，Esc/Enter 退出后 n/N 续跳）
     Search(Box<ratatui_textarea::TextArea<'static>>),
+    /// WS 交互会话发送（`S` 键，Enter 发送）
+    WsSend(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +153,10 @@ pub struct AppState {
     pub search_query: String,
     pub search_match_index: usize,
 
+    // WS 交互会话（R6/R7）：Some 时活跃，drop 即关闭；pending 发送由模态取出
+    pub ws_session: Option<crate::tui::ws_interactive::WsInteractiveSession>,
+    pub pending_ws_send: Option<String>,
+
     /// 主题种类（`,` 切换）；取色经 palette()
     pub theme: ThemeKind,
 
@@ -224,6 +230,8 @@ impl AppState {
             filter_query: String::new(),
             search_query: String::new(),
             search_match_index: 0,
+            ws_session: None,
+            pending_ws_send: None,
 
             theme: ThemeKind::Dark,
 

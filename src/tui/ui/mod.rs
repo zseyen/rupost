@@ -129,13 +129,15 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
             " Authorization header value (e.g. Bearer <token>, empty clears): ".to_string()
         }
         InputMode::Search(_) => " Search messages (n/N after Esc): ".to_string(),
+        InputMode::WsSend(_) => " WS send (Enter to send): ".to_string(),
         InputMode::None => String::new(),
     };
     let textarea = match &state.input_mode {
         InputMode::QuickCreate(t)
         | InputMode::Filter(t)
         | InputMode::Auth(t)
-        | InputMode::Search(t) => t,
+        | InputMode::Search(t)
+        | InputMode::WsSend(t) => t,
         InputMode::None => return,
     };
     let popup_layout = Layout::default()

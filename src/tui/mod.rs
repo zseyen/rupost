@@ -6,6 +6,7 @@ pub mod ports;
 pub mod state;
 pub mod theme;
 pub mod ui;
+pub mod ws_interactive;
 
 /// TUI 启动选项：变量上下文来源（与 CLI test 子命令同源）
 #[derive(Debug, Clone, Default)]

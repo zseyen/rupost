@@ -21,8 +21,18 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
         (InputMode::Filter(_), KeyCode::Enter) => {
             state.input_mode = InputMode::None; // 过滤已实时生效，Enter 仅关闭
         }
-        (InputMode::Search(_), KeyCode::Enter | KeyCode::Esc) => {
-            // 退出搜索模态：query 留存供 n/N 续跳
+        (InputMode::WsSend(_), KeyCode::Enter) => {
+            // 出站帧由发送侧本地回显（manager 不广播出站帧）
+            if let InputMode::WsSend(textarea) = &state.input_mode {
+                let value = textarea.lines().concat().trim().to_string();
+                state.input_mode = InputMode::None;
+                if !value.is_empty() {
+                    state.pending_ws_send = Some(value);
+                }
+            }
+        }
+        (InputMode::Search(_), KeyCode::Enter) => {
+            // 退出搜索模态：query 留存供 n/N 续跳（Esc 由全局臂处理，语义相同）
             state.input_mode = InputMode::None;
         }
         (InputMode::Auth(_), KeyCode::Enter) => {
@@ -41,18 +51,21 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
             InputMode::QuickCreate(_)
             | InputMode::Filter(_)
             | InputMode::Auth(_)
-            | InputMode::Search(_),
+            | InputMode::Search(_)
+            | InputMode::WsSend(_),
             _,
         ) => {
             let is_filter = matches!(state.input_mode, InputMode::Filter(_));
             let is_auth = matches!(state.input_mode, InputMode::Auth(_));
             let is_search = matches!(state.input_mode, InputMode::Search(_));
+            let is_ws_send = matches!(state.input_mode, InputMode::WsSend(_));
             // 取出 textarea 编辑后放回，避免整段克隆
             let mut textarea = match &mut state.input_mode {
                 InputMode::QuickCreate(t)
                 | InputMode::Filter(t)
                 | InputMode::Auth(t)
-                | InputMode::Search(t) => std::mem::take(t),
+                | InputMode::Search(t)
+                | InputMode::WsSend(t) => std::mem::take(t),
                 InputMode::None => return,
             };
             textarea.input(crossterm::event::Event::Key(key));
@@ -62,6 +75,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 InputMode::Auth(textarea)
             } else if is_search {
                 InputMode::Search(textarea)
+            } else if is_ws_send {
+                InputMode::WsSend(textarea)
             } else {
                 InputMode::QuickCreate(textarea)
             };

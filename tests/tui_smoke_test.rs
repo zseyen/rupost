@@ -1488,10 +1488,9 @@ fn test_search_highlight_renders_in_response_panel() {
             if cell.symbol() == "h"
                 && buffer[(x + 1, y)].symbol() == "e"
                 && buffer[(x + 2, y)].symbol() == "l"
+                && cell.bg == rupost::tui::theme::palette(ThemeKind::Dark).accent
             {
-                if cell.bg == rupost::tui::theme::palette(ThemeKind::Dark).accent {
-                    found_hit = true;
-                }
+                found_hit = true;
             }
         }
     }

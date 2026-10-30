@@ -2,7 +2,7 @@
 
 use super::nav;
 use crate::tui::event::{Action, TuiEvent};
-use crate::tui::state::{AppState, SidebarTab};
+use crate::tui::state::{AppState, InputMode, SidebarTab};
 use crossterm::event::{KeyCode, KeyEvent};
 use tokio::sync::mpsc;
 
@@ -28,6 +28,12 @@ pub fn inject_quick_auth(req: &mut crate::parser::ParsedRequest, auth: Option<St
 /// 触发异步发包测试执行的主控逻辑 (共用于 Files 侧边栏 r/R 键与 Editor 区域 Ctrl+Enter)
 pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
     if state.is_loading {
+        return;
+    }
+    // R7 互斥：交互会话活跃时禁止剧本执行（连接与变量上下文冲突）
+    if state.ws_session.is_some() {
+        state.last_error =
+            Some("interactive WS session active — press D to close before running".to_string());
         return;
     }
     let parsed_req = if state.active_sidebar_tab == SidebarTab::History {
@@ -138,7 +144,7 @@ pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Se
     }
 }
 
-/// 处理编辑器面板按键（包括触发运行测试请求）
+/// 处理编辑器面板按键（包括触发运行测试请求与 WS 交互会话）
 pub(super) async fn handle_editor_key(
     state: &mut AppState,
     key: KeyEvent,
@@ -154,6 +160,25 @@ pub(super) async fn handle_editor_key(
     } else {
         let max_offset = nav::editor_max_offset(total_lines);
         match key.code {
+            // R6：`W` 建立交互式 WS 会话（编辑器须为 @websocket 请求）
+            KeyCode::Char('W') => start_ws_session(state, event_tx).await,
+            // R6：`D` 关闭活跃会话（drop → SessionManager 退出 → 连接关闭）
+            KeyCode::Char('D') => {
+                if state.ws_session.take().is_some() {
+                    state.last_error = None;
+                }
+            }
+            // R6：`S` 打开发送输入框（会话活跃时）
+            KeyCode::Char('S') => {
+                if state.ws_session.is_some() {
+                    state.input_mode = InputMode::WsSend(Box::new(
+                        super::sidebar::new_input_textarea(state.palette()),
+                    ));
+                } else {
+                    state.last_error =
+                        Some("no active WS session — press W to open one".to_string());
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 state.editor_scroll = nav::scroll_up(state.editor_scroll, 1);
             }
@@ -168,6 +193,47 @@ pub(super) async fn handle_editor_key(
             }
             _ => {}
         }
+    }
+}
+
+/// 建立交互式 WS 会话（R6）：编辑器首个请求须为 @websocket；
+/// 快速授权注入 + 变量解析后建连；帧经转发 task 回流既有渲染链路。
+async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
+    if state.is_loading {
+        state.last_error = Some("busy: request execution in flight".to_string());
+        return;
+    }
+    if state.ws_session.is_some() {
+        state.last_error = Some("WS session already active — press D to close first".to_string());
+        return;
+    }
+    let parsed_req = match crate::parser::parse_content(&state.editor_text) {
+        Ok(parsed) => parsed.requests.first().cloned(),
+        Err(e) => {
+            state.last_error = Some(format!("HTTP Parser Error: {e}"));
+            return;
+        }
+    };
+    let Some(mut req) = parsed_req else {
+        state.last_error = Some("no request block found in editor".to_string());
+        return;
+    };
+    if !req.metadata.websocket {
+        state.last_error = Some(
+            "editor is not a @websocket request — W opens interactive sessions only".to_string(),
+        );
+        return;
+    }
+    inject_quick_auth(&mut req, state.quick_auth());
+    let mut var_context = state.variables.clone();
+    var_context.insert("__default_scheme", "ws");
+
+    match super::super::ws_interactive::start_session(&req, &var_context, event_tx.clone()).await {
+        Ok(sess) => {
+            state.last_error = None;
+            state.ws_session = Some(sess);
+        }
+        Err(e) => state.last_error = Some(e),
     }
 }
 

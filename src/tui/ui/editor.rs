@@ -2,13 +2,14 @@ use crate::tui::state::{AppState, Panel};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders, Paragraph},
 };
 
 pub fn render(frame: &mut Frame, area: Rect, state: &AppState) {
+    let t = state.palette();
     let focus = state.active_panel == Panel::Editor;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
+    let border_color = if focus { t.info } else { t.dim };
 
     // 计算总行数并渲染当前滚动行号
     let total_lines = state.editor_text.lines().count();

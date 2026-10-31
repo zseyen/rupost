@@ -37,6 +37,11 @@ pub struct Cli {
     /// Default scheme when URL does not contain one
     #[arg(long, global = true, default_value = "http")]
     pub default_scheme: String,
+
+    /// Environment name (e.g., dev, staging, prod) — resolves `--cookie-file`
+    /// to an environment-suffixed file for inline requests, mirroring `test`
+    #[arg(long, global = true, value_name = "NAME")]
+    pub env: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -253,6 +258,7 @@ impl CliRunner {
     fn new(
         no_cookies: bool,
         cookie_file: Option<String>,
+        env: Option<String>,
         default_scheme: String,
         debug: bool,
         debug_on_failure: bool,
@@ -260,7 +266,12 @@ impl CliRunner {
         let executor = if no_cookies {
             TestExecutor::new()
         } else if let Some(path) = cookie_file {
-            TestExecutor::with_cookies(std::path::PathBuf::from(path))?
+            // 与测试套件路径一致：cookie 文件按环境隔离（cookies_dev.json 等）
+            let resolved = rupost::middleware::resolve_cookie_path(
+                std::path::PathBuf::from(path),
+                env.as_deref(),
+            )?;
+            TestExecutor::with_cookies(resolved)?
         } else {
             TestExecutor::with_ephemeral_cookies()
         }
@@ -313,6 +324,7 @@ pub async fn run(
     args: Vec<String>,
     no_cookies: bool,
     cookie_file: Option<String>,
+    env: Option<String>,
     default_scheme: String,
     debug: bool,
     debug_on_failure: bool,
@@ -320,6 +332,7 @@ pub async fn run(
     let runner = CliRunner::new(
         no_cookies,
         cookie_file,
+        env,
         default_scheme,
         debug,
         debug_on_failure,

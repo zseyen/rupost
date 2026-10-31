@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
                     cli.args,
                     cli.no_cookies,
                     cli.cookie_file,
+                    cli.env,
                     cli.default_scheme,
                     cli.debug,
                     cli.debug_on_failure,

@@ -62,6 +62,10 @@ pub struct TestResult {
 
     /// 完整的 HTTP 请求快照（用于录制重放）
     pub request: Option<crate::history::RequestSnapshot>,
+
+    /// 非致命告警（如 @capture 失败、未定义变量占位符、畸形 JSON 降级发送）。
+    /// 不影响 success 判定，但必须对用户可见，避免静默假通过。
+    pub warnings: Vec<String>,
 }
 
 impl TestResult {
@@ -91,6 +95,7 @@ impl TestResult {
             timing: None,
             diagnose_report: None,
             request: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -117,6 +122,7 @@ impl TestResult {
             timing: None,
             diagnose_report: None,
             request: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -141,6 +147,7 @@ impl TestResult {
             timing: None,
             diagnose_report: None,
             request: None,
+            warnings: Vec::new(),
         }
     }
 }

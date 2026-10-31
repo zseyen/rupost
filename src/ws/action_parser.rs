@@ -97,8 +97,11 @@ impl WsActionParser {
                         let parts: Vec<&str> = content.split_whitespace().collect();
                         if parts.len() >= 3 && parts[1] == "from" {
                             let var_name = parts[0];
-                            if let Some(from_idx) = content.find("from") {
-                                let source_str = content[from_idx + 4..].trim();
+                            // 跳过变量名再定位 from，避免变量名含 "from" 子串（如 from_id）时错位
+                            let after_var = &content[var_name.len()..];
+                            if let Some(rel) = after_var.find("from") {
+                                let source_str =
+                                    content[var_name.len() + rel + "from".len()..].trim();
                                 if !var_name.is_empty() && !source_str.is_empty() {
                                     captures.push(
                                         crate::variable::capture::VariableCapture::parse(
@@ -173,19 +176,19 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>,
     }
 
     if condition.starts_with('$') || condition.contains('.') || condition.contains('[') {
-        let operators = ["==", "!=", "contains"];
-        for op in &operators {
-            if let Some(pos) = condition.find(op) {
-                let path_part = condition[..pos].trim();
-                let val_part = condition[pos + op.len()..].trim();
-                let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
-                if !segments.is_empty() {
-                    return (
-                        Some(segments),
-                        Some(val_part.to_string()),
-                        Some(op.to_string()),
-                    );
-                }
+        // 与 @assert 共用最左运算符扫描（引号感知、支持 >= <= > < == != contains）。
+        // 此前仅识别 == != contains 且按列表顺序 find：`$.price >= 100` 会被整串当作
+        // jsonpath key 永远匹配不到，`contains "a==b"` 会在引号内误切。
+        if let Some((pos, op)) = crate::assertion::find_operator(condition) {
+            let path_part = condition[..pos].trim();
+            let val_part = condition[pos + op.len()..].trim();
+            let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
+            if !segments.is_empty() {
+                return (
+                    Some(segments),
+                    Some(val_part.to_string()),
+                    Some(op.to_string()),
+                );
             }
         }
         let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(condition);
@@ -309,6 +312,62 @@ mod tests {
             assert_eq!(assertions[0], "body.price > 100");
             assert_eq!(captures.len(), 1);
             assert_eq!(captures[0].name, "btc_val");
+        } else {
+            panic!("Expected Expect action");
+        }
+    }
+
+    #[test]
+    fn test_parse_expect_capture_var_name_containing_from() {
+        // 回归：变量名含 "from" 时源表达式错位（与 metadata.rs 同源缺陷）
+        let body = r#"
+        EXPECT $.event == "ticker"
+        @capture from_price from body.price
+        "#;
+        let actions = WsActionParser::parse_body(body).unwrap();
+        if let WsAction::Expect { captures, .. } = &actions[0] {
+            assert_eq!(captures.len(), 1);
+            assert_eq!(captures[0].name, "from_price");
+            assert_eq!(
+                captures[0].source,
+                crate::variable::capture::CaptureSource::Body("price".to_string())
+            );
+        } else {
+            panic!("Expected Expect action");
+        }
+    }
+
+    #[test]
+    fn test_expect_supports_comparison_operators_and_quoted_values() {
+        // 回归：此前 precompile_jsonpath 只认 == != contains，`$.price >= 100` 被整串
+        // 当作 jsonpath key → 永远 PathNotFound → 静默超时假阴性
+        let actions = WsActionParser::parse_body("EXPECT $.price >= 100").unwrap();
+        if let WsAction::Expect {
+            segments,
+            expected_value,
+            operator,
+            ..
+        } = &actions[0]
+        {
+            assert_eq!(segments.as_ref().unwrap(), &vec!["price".to_string()]);
+            assert_eq!(expected_value.as_deref(), Some("100"));
+            assert_eq!(operator.as_deref(), Some(">="));
+        } else {
+            panic!("Expected Expect action");
+        }
+
+        // 引号内的 == 不再误切（与 @assert 同源缺陷）
+        let actions = WsActionParser::parse_body(r#"EXPECT $.msg contains "a==b""#).unwrap();
+        if let WsAction::Expect {
+            segments,
+            expected_value,
+            operator,
+            ..
+        } = &actions[0]
+        {
+            assert_eq!(segments.as_ref().unwrap(), &vec!["msg".to_string()]);
+            assert_eq!(expected_value.as_deref(), Some("\"a==b\""));
+            assert_eq!(operator.as_deref(), Some("contains"));
         } else {
             panic!("Expected Expect action");
         }

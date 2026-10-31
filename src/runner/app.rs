@@ -37,9 +37,10 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         return Ok(false);
     }
 
-    // 2. 递归自动补全加载所有依赖（带安全沙箱限制）
-    let sandbox_root = std::env::current_dir()?;
-    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root)?;
+    // 2. 递归自动补全加载所有依赖。显式传入的路径完全信任，
+    //    @depends-on 只能落在这些输入路径的目录之下（依赖路径合理性校验）
+    let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&options.paths);
+    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots)?;
 
     // 3. 拓扑排序解析依赖
     let parse_pairs: Vec<_> = files_map
@@ -70,9 +71,17 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
     let mut executor = if options.no_cookies {
         TestExecutor::new()
     } else if let Some(cookie_path) = &options.cookie_file {
-        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref());
+        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref())?;
         TestExecutor::with_cookies(resolved)?
     } else {
+        // 默认为临时会话（运行内共享、进程退出即失），与 Postman 等的"默认持久化"
+        // 心智不同——不提示会让用户误以为会话已保存
+        if options.verbose {
+            println!(
+                "[i] 会话 Cookie 为临时模式（仅本次运行内共享）；加 --cookie-file <FILE> 可跨运行持久化"
+            );
+        }
+        tracing::debug!("Cookies are ephemeral for this run; pass --cookie-file to persist");
         TestExecutor::with_ephemeral_cookies()
     };
 

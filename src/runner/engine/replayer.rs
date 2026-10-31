@@ -115,13 +115,15 @@ impl ReplayExecutor {
         // 还原 Headers
         for (name, val) in &entry.request.headers {
             if let Ok(val_str) = val.to_str() {
-                req = req.with_header(name.as_str(), val_str);
+                req = req.with_header(name.as_str(), val_str)?;
             }
         }
         // 还原 Body
         if let Some(body_str) = &entry.request.body {
             req = req.with_body(body_str);
         }
+        // 还原 @timeout（旧快照无此字段时为 None，走 client 级默认）
+        req = req.with_timeout(entry.request.timeout);
 
         // 3. 执行请求
         let start = Instant::now();

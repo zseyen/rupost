@@ -7,6 +7,7 @@ pub mod logger;
 pub mod middleware;
 pub mod mock;
 pub mod parser;
+pub mod reporter;
 pub mod runner;
 pub mod template;
 pub mod utils;

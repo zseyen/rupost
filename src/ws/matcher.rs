@@ -1,6 +1,127 @@
+use crate::assertion::{
+    AssertError, AssertExpr, AssertTarget, AssertValue, CompareOp, ValuePath, evaluate_assertion,
+    json_value_to_assert_value, parse_assert_value,
+};
 use crate::utils::jsonpath::JsonPathResolver;
 use crate::ws::frame::WsFrame;
 use serde_json::Value;
+
+pub struct WsFrameTarget<'a> {
+    pub frame: &'a WsFrame,
+    pub decoder: Option<&'a dyn crate::ws::PayloadDecoder>,
+}
+
+impl<'a> AssertTarget for WsFrameTarget<'a> {
+    fn extract_status(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "status not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_header(&self, name: &str) -> Result<String, AssertError> {
+        if name.eq_ignore_ascii_case("type") || name.eq_ignore_ascii_case("frame_type") {
+            Ok(format!("{:?}", self.frame.frame_type))
+        } else if name.eq_ignore_ascii_case("direction") {
+            Ok(format!("{:?}", self.frame.direction))
+        } else {
+            Err(AssertError::PathNotFound(format!(
+                "Header '{}' not applicable for WebSocket frames",
+                name
+            )))
+        }
+    }
+
+    fn extract_body(&self, segments: &[String]) -> Result<AssertValue, AssertError> {
+        let json_val = if let Some(dec) = self.decoder {
+            dec.decode(&self.frame.payload).map_err(|e| {
+                AssertError::ExtractionError(format!("Failed to decode payload: {}", e))
+            })?
+        } else {
+            let txt = self.frame.payload_as_string();
+            serde_json::from_str(&txt)
+                .map_err(|e| AssertError::ExtractionError(format!("Failed to parse JSON: {}", e)))?
+        };
+
+        let target_val =
+            JsonPathResolver::resolve_with_segments(&json_val, segments).ok_or_else(|| {
+                AssertError::PathNotFound(format!("Path 'body.{}' not found", segments.join(".")))
+            })?;
+
+        json_value_to_assert_value(target_val)
+    }
+
+    fn extract_response_time(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "response.time not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_stream_event(&self) -> Result<String, AssertError> {
+        Err(AssertError::PathNotFound(
+            "stream.event not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_stream_id(&self) -> Result<String, AssertError> {
+        Err(AssertError::PathNotFound(
+            "stream.id not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_stream_body(&self, _segments: &[String]) -> Result<AssertValue, AssertError> {
+        Err(AssertError::PathNotFound(
+            "stream.body not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_stream_llm_content(&self) -> Result<String, AssertError> {
+        Err(AssertError::PathNotFound(
+            "stream.llm.content not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_timing_dns(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "timing.dns not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_timing_tcp(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "timing.tcp not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_timing_tls(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "timing.tls not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_timing_ttfb(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "timing.ttfb not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_cert_days(&self) -> Result<f64, AssertError> {
+        Err(AssertError::PathNotFound(
+            "cert.days not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_cert_issuer(&self) -> Result<String, AssertError> {
+        Err(AssertError::PathNotFound(
+            "cert.issuer not applicable for WebSocket frames".to_string(),
+        ))
+    }
+
+    fn extract_cert_subject(&self) -> Result<String, AssertError> {
+        Err(AssertError::PathNotFound(
+            "cert.subject not applicable for WebSocket frames".to_string(),
+        ))
+    }
+}
 
 /// 解耦对接收帧匹配判定的接口
 pub trait FrameMatcher {
@@ -31,49 +152,25 @@ impl JsonPathMatcher {
 
 impl FrameMatcher for JsonPathMatcher {
     fn matches(&self, frame: &WsFrame, decoder: Option<&dyn crate::ws::PayloadDecoder>) -> bool {
-        // 1. 如果有解码器，先尝试解码成 JSON Value
-        let json_val = if let Some(dec) = decoder {
-            match dec.decode(&frame.payload) {
-                Ok(val) => val,
-                Err(_) => return false,
+        let expr = if let Some(ref expected) = self.expected_value {
+            let op_str = self.operator.as_deref().unwrap_or("==");
+            let op = CompareOp::parse(op_str).unwrap_or(CompareOp::Equal);
+            let right = parse_assert_value(expected)
+                .unwrap_or_else(|_| AssertValue::String(expected.clone()));
+            AssertExpr::Compare {
+                left: ValuePath::Body(self.segments.clone()),
+                op,
+                right,
             }
         } else {
-            // 没有解码器，如果是 Text，直接转成 JSON Value。
-            // 否则（是二进制但没配解码器），直接不匹配 JSONPath
-            let txt = frame.payload_as_string();
-            match serde_json::from_str::<Value>(&txt) {
-                Ok(val) => val,
-                Err(_) => return false,
+            AssertExpr::Exists {
+                path: ValuePath::Body(self.segments.clone()),
             }
         };
 
-        // 2. 利用预编译 segments 获取 JSON 节点值
-        if let Some(target_val) = JsonPathResolver::resolve_with_segments(&json_val, &self.segments)
-        {
-            if let Some(ref expected) = self.expected_value {
-                let target_str = match target_val {
-                    Value::String(s) => s.clone(),
-                    Value::Number(n) => n.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    _ => target_val.to_string(),
-                };
-                let clean_expected = expected.trim_matches('"').trim_matches('\'');
-                let clean_target = target_str.trim_matches('"').trim_matches('\'');
-
-                let op = self.operator.as_deref().unwrap_or("==");
-                match op {
-                    "!=" => clean_target != clean_expected,
-                    "contains" => clean_target.contains(clean_expected),
-                    _ => clean_target == clean_expected,
-                }
-            } else {
-                // 如果没有指定期望值，只要 JSONPath 节点存在即算匹配成功（如 EXPECT $.event）
-                true
-            }
-        } else {
-            false
-        }
+        let target = WsFrameTarget { frame, decoder };
+        let result = evaluate_assertion(&expr, &target);
+        result.passed
     }
 }
 

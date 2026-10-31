@@ -93,6 +93,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             duration_ms: 100,
             request: RequestSnapshot {
+                timeout: None,
                 method: "GET".to_string(),
                 url: url.to_string(),
                 headers: HeaderMap::new(),

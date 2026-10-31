@@ -68,6 +68,10 @@ impl Client {
         };
         let mut req = self.inner.request(method, url).headers(request.headers);
 
+        if let Some(timeout) = request.timeout {
+            req = req.timeout(timeout);
+        }
+
         if let Some(body) = request.body {
             req = req.body(body);
         }

@@ -1,31 +1,28 @@
 pub mod app;
-pub mod batch;
 pub mod executor;
-pub mod file_sync;
-pub mod gc;
-pub mod parallel;
-pub mod path;
-pub mod replayer;
-pub mod reporter;
-pub mod resolver;
-pub mod scanner;
-pub mod sse_runner;
 pub mod types;
-pub mod url;
-pub mod workflow;
-pub mod ws_runner;
+
+pub mod engine;
+pub mod protocol;
+pub mod utils;
 
 pub use app::{TestSuiteOptions, run_test_suite};
-pub use batch::{BatchExecutor, BatchMode, BatchRunRequest};
 pub use executor::TestExecutor;
-pub use file_sync::FileSyncWriter;
-pub use gc::{perform_clear, perform_prune};
-pub use path::display_path;
-pub use replayer::{ReplayExecutor, ReplayReport};
-pub use reporter::TestReporter;
-pub use resolver::DependencyResolver;
-pub use scanner::DirectoryScanner;
-pub use sse_runner::{SseRunner, SseRunnerOptions};
 pub use types::{TestResult, TestSummary};
-pub use workflow::WorkflowGraph;
-pub use ws_runner::WsRunner;
+
+pub use engine::batch::{BatchExecutor, BatchMode, BatchRunRequest};
+pub use engine::replayer::{ReplayExecutor, ReplayReport};
+pub use engine::resolver::DependencyResolver;
+pub use engine::workflow::WorkflowGraph;
+
+pub use protocol::http_runner::HttpRunner;
+pub use protocol::sse_runner::{SseRunner, SseRunnerOptions};
+pub use protocol::ws_runner::WsRunner;
+
+pub use utils::file_sync::FileSyncWriter;
+pub use utils::path::{self, display_path};
+
+pub use crate::history::gc::{perform_clear, perform_prune};
+pub use crate::http::url;
+pub use crate::parser::scanner::DirectoryScanner;
+pub use crate::reporter::TestReporter;

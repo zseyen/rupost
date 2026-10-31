@@ -1,5 +1,8 @@
 # RuPost 竞品分析与差异化发展方案
 
+> [!IMPORTANT]
+> **本文档为早期战略底稿**。最新竞争格局与核心竞争点以 [2026-10 竞争格局复审](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-25-competitive-landscape-review.md) 为准（TUI 赛道已红海化、定位建议收敛为"面向实时 AI API 时代的终端回归引擎"）；本文的 Doc-Mock / Time-Travel / Stress-MD / Smart-Capture 设想仍可作为 backlog 参考。
+
 ## 1. 市场现状与竞品坐标
 
 在当前的 API 调试与测试领域，市场已经趋于成熟，但仍存在明显的“体验断层”。

@@ -94,36 +94,32 @@ impl VariableCapture {
         }
     }
 
-    /// 提取常规响应的变量，如果存在捕获配置，则将其存入 `VariableContext`
+    /// 提取常规响应的变量，如果存在捕获配置，则将其存入 `VariableContext`。
+    /// 返回失败项的警告信息：单条捕获失败只影响自身，不影响其余捕获。
     pub fn capture_normal(
         captures: &[VariableCapture],
         body: &str,
         headers: &HeaderMap,
         context: &mut crate::variable::VariableContext,
-    ) {
+    ) -> Vec<String> {
         if captures.is_empty() {
-            return;
+            return Vec::new();
         }
-        match capture_from_response(body, headers, captures) {
-            Ok(captured_vars) => {
-                for (key, value) in &captured_vars {
-                    tracing::debug!("Captured variable: {} = '{}'", key, value);
-                }
-                context.extend(captured_vars);
-            }
-            Err(e) => {
-                tracing::error!("Failed to capture variables: {}", e);
-            }
+        let outcome = capture_from_response(body, headers, captures);
+        for (key, value) in &outcome.captured {
+            tracing::debug!("Captured variable: {} = '{}'", key, value);
         }
+        context.extend(outcome.captured);
+        outcome.failures
     }
 
-    /// 提取 SSE 单帧事件实时捕获，并在 `VariableContext` 中生效
+    /// 提取 SSE 单帧事件实时捕获，并在 `VariableContext` 中生效；返回失败项警告
     pub fn capture_sse_frame(
         captures: &[VariableCapture],
         virtual_body: &str,
         virtual_headers: &HeaderMap,
         context: &mut crate::variable::VariableContext,
-    ) {
+    ) -> Vec<String> {
         let mut stream_captures = Vec::new();
         for cap in captures {
             if let CaptureSource::Body(ref path) = cap.source {
@@ -153,21 +149,22 @@ impl VariableCapture {
             }
         }
 
-        if !stream_captures.is_empty()
-            && let Ok(captured_vars) =
-                capture_from_response(virtual_body, virtual_headers, &stream_captures)
-        {
-            context.extend(captured_vars);
+        if !stream_captures.is_empty() {
+            let outcome = capture_from_response(virtual_body, virtual_headers, &stream_captures);
+            context.extend(outcome.captured);
+            outcome.failures
+        } else {
+            Vec::new()
         }
     }
 
-    /// 提取流结束后针对完整 LLM 内容的捕获 (针对 `stream.llm.content`)
+    /// 提取流结束后针对完整 LLM 内容的捕获 (针对 `stream.llm.content`)；返回失败项警告
     pub fn capture_sse_llm_content(
         captures: &[VariableCapture],
         final_body: &str,
         final_headers: &HeaderMap,
         context: &mut crate::variable::VariableContext,
-    ) {
+    ) -> Vec<String> {
         let mut final_captures = Vec::new();
         for cap in captures {
             if matches!(&cap.source, CaptureSource::Body(path) if path == "stream.llm.content") {
@@ -177,32 +174,35 @@ impl VariableCapture {
             }
         }
         if !final_captures.is_empty() {
-            match capture_from_response(final_body, final_headers, &final_captures) {
-                Ok(captured_vars) => {
-                    context.extend(captured_vars);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to capture stream variables: {:?}. headers: {:?}",
-                        e,
-                        final_headers
-                    );
-                }
-            }
+            let outcome = capture_from_response(final_body, final_headers, &final_captures);
+            context.extend(outcome.captured);
+            outcome.failures
+        } else {
+            Vec::new()
         }
     }
 }
 
-/// 从响应中提取变量
+/// 逐条捕获的结果：成功提取的变量与失败项的警告信息。
+/// 单条失败不再让整批捕获失效（此前循环内 `?` 导致 all-or-nothing 且错误被吞）。
+pub struct CaptureOutcome {
+    pub captured: HashMap<String, String>,
+    pub failures: Vec<String>,
+}
+
+/// 从响应中逐条提取变量
 pub fn capture_from_response(
     response_body: &str,
     response_headers: &HeaderMap,
     captures: &[VariableCapture],
-) -> Result<HashMap<String, String>> {
-    let mut vars = HashMap::new();
+) -> CaptureOutcome {
+    let mut outcome = CaptureOutcome {
+        captured: HashMap::new(),
+        failures: Vec::new(),
+    };
 
     if captures.is_empty() {
-        return Ok(vars);
+        return outcome;
     }
 
     // 只有当需要从 Body 提取时才解析 JSON
@@ -218,20 +218,34 @@ pub fn capture_from_response(
     for capture in captures {
         let value = match &capture.source {
             CaptureSource::Body(path) => {
-                if let Some(json) = &body_value {
-                    extract_from_json_path(json, path)?
-                } else {
-                    return Err(RupostError::ParseError(format!(
-                        "Response body is not valid JSON, cannot capture '{}'",
+                let Some(json) = &body_value else {
+                    outcome.failures.push(format!(
+                        "@capture {}: response body is not valid JSON",
                         capture.name
-                    )));
+                    ));
+                    continue;
+                };
+                match extract_from_json_path(json, path) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        outcome
+                            .failures
+                            .push(format!("@capture {}: {}", capture.name, e));
+                        continue;
+                    }
                 }
             }
             CaptureSource::Header(name) => {
-                let raw_val = response_headers
+                let Some(raw_val) = response_headers
                     .get(name)
                     .map(|v| String::from_utf8_lossy(v.as_bytes()).to_string())
-                    .ok_or_else(|| RupostError::Other(format!("Header '{}' not found", name)))?;
+                else {
+                    outcome.failures.push(format!(
+                        "@capture {}: header '{}' not found",
+                        capture.name, name
+                    ));
+                    continue;
+                };
                 if name == "x-sse-llm-content" {
                     url::form_urlencoded::parse(raw_val.as_bytes())
                         .map(|(key, _)| key)
@@ -241,40 +255,48 @@ pub fn capture_from_response(
                 }
             }
             CaptureSource::Regex(pattern) => {
-                let re = regex::Regex::new(pattern).map_err(|e| {
-                    RupostError::ParseError(format!("Invalid regex pattern '{}': {}", pattern, e))
-                })?;
+                let Ok(re) = regex::Regex::new(pattern) else {
+                    outcome.failures.push(format!(
+                        "@capture {}: invalid regex pattern '{}'",
+                        capture.name, pattern
+                    ));
+                    continue;
+                };
 
                 if let Some(caps) = re.captures(response_body) {
                     // 如果有捕获组，提取第一个捕获组 (索引1)
                     // 否则提取整个匹配的内容 (索引0)
-                    if let Some(matched) = caps.get(1).or_else(|| caps.get(0)) {
-                        matched.as_str().to_string()
-                    } else {
-                        return Err(RupostError::Other(format!(
-                            "Regex '{}' matched but captured nothing for '{}'",
-                            pattern, capture.name
-                        )));
+                    match caps.get(1).or_else(|| caps.get(0)) {
+                        Some(matched) => matched.as_str().to_string(),
+                        None => {
+                            outcome.failures.push(format!(
+                                "@capture {}: regex '{}' matched but captured nothing",
+                                capture.name, pattern
+                            ));
+                            continue;
+                        }
                     }
                 } else {
-                    return Err(RupostError::Other(format!(
-                        "Regex '{}' matched nothing in response body for '{}'",
-                        pattern, capture.name
-                    )));
+                    outcome.failures.push(format!(
+                        "@capture {}: regex '{}' matched nothing in response body",
+                        capture.name, pattern
+                    ));
+                    continue;
                 }
             }
             _ => {
-                return Err(RupostError::Other(format!(
-                    "Unsupported capture source for '{}'",
+                outcome.failures.push(format!(
+                    "@capture {}: unsupported capture source",
                     capture.name
-                )));
+                ));
+                continue;
             }
         };
 
-        vars.insert(capture.name.clone(), value);
+        outcome.captured.insert(capture.name.clone(), value);
     }
 
-    Ok(vars)
+    outcome
 }
 
 /// 简单的 JSON Path 提取 (支持 . 和 [] 符号)
@@ -393,7 +415,7 @@ mod tests {
             VariableCapture::from_body("token", "token"),
         ];
 
-        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        let vars = capture_from_response(body, &headers, &captures).captured;
         assert_eq!(vars.get("user_id").unwrap(), "123");
         assert_eq!(vars.get("token").unwrap(), "abc-123");
     }
@@ -406,7 +428,7 @@ mod tests {
 
         let captures = vec![VariableCapture::from_header("auth_token", "X-Token")];
 
-        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        let vars = capture_from_response(body, &headers, &captures).captured;
         assert_eq!(vars.get("auth_token").unwrap(), "header-token-123");
     }
 
@@ -416,7 +438,7 @@ mod tests {
         let headers = HeaderMap::new();
         let captures = vec![VariableCapture::from_body("item", "data.items.first")];
 
-        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        let vars = capture_from_response(body, &headers, &captures).captured;
         assert_eq!(vars.get("item").unwrap(), "item1");
     }
 
@@ -426,8 +448,31 @@ mod tests {
         let headers = HeaderMap::new();
         let captures = vec![VariableCapture::from_body("item", "data.missing")];
 
-        let result = capture_from_response(body, &headers, &captures);
-        assert!(result.is_err());
+        let outcome = capture_from_response(body, &headers, &captures);
+        assert!(outcome.captured.is_empty());
+        assert_eq!(outcome.failures.len(), 1);
+        assert!(outcome.failures[0].contains("item"));
+    }
+
+    #[test]
+    fn test_capture_failures_are_isolated_per_item() {
+        // 回归：此前循环内 `?` 使单条失败丢弃整批捕获（all-or-nothing）且错误仅
+        // 进 tracing 不可见。现在失败逐条收集，成功的照常生效。
+        let body = r#"{"good": "value"}"#;
+        let headers = HeaderMap::new();
+        let captures = vec![
+            VariableCapture::from_body("bad", "missing.path"),
+            VariableCapture::from_body("good", "good"),
+            VariableCapture::parse("nope", "regex [0-9]+"),
+        ];
+
+        let outcome = capture_from_response(body, &headers, &captures);
+        assert_eq!(outcome.captured.get("good").unwrap(), "value");
+        assert!(!outcome.captured.contains_key("bad"));
+        assert!(!outcome.captured.contains_key("nope"));
+        assert_eq!(outcome.failures.len(), 2);
+        assert!(outcome.failures.iter().any(|f| f.contains("bad")));
+        assert!(outcome.failures.iter().any(|f| f.contains("nope")));
     }
 
     #[test]
@@ -436,7 +481,7 @@ mod tests {
         let headers = HeaderMap::new();
         let captures = vec![VariableCapture::from_body("second_id", "data.items.1.id")];
 
-        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        let vars = capture_from_response(body, &headers, &captures).captured;
         assert_eq!(vars.get("second_id").unwrap(), "2");
     }
 
@@ -446,7 +491,7 @@ mod tests {
         let headers = HeaderMap::new();
         let captures = vec![VariableCapture::from_body("first_id", "data.items[0].id")];
 
-        let vars = capture_from_response(body, &headers, &captures).unwrap();
+        let vars = capture_from_response(body, &headers, &captures).captured;
         assert_eq!(vars.get("first_id").unwrap(), "1");
     }
 
@@ -469,7 +514,7 @@ mod tests {
         // 测试无捕获组
         let capture2 = VariableCapture::parse("token2", r#"regex name="csrf_token""#);
 
-        let vars = capture_from_response(body, &headers, &[capture1, capture2]).unwrap();
+        let vars = capture_from_response(body, &headers, &[capture1, capture2]).captured;
         assert_eq!(vars.get("token1").unwrap(), "abc123xyz");
         assert_eq!(vars.get("token2").unwrap(), r#"name="csrf_token""#);
     }
@@ -480,8 +525,9 @@ mod tests {
         let headers = HeaderMap::new();
         let captures = vec![VariableCapture::parse("token", "regex [0-9]+")];
 
-        let result = capture_from_response(body, &headers, &captures);
-        assert!(result.is_err());
+        let outcome = capture_from_response(body, &headers, &captures);
+        assert!(outcome.captured.is_empty());
+        assert_eq!(outcome.failures.len(), 1);
     }
 
     #[test]

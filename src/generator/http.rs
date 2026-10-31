@@ -38,6 +38,11 @@ impl HttpGenerator {
             i8::abs(entry.id.as_bytes()[0] as i8)
         ));
 
+        // 1.5 Timeout（快照记录了 @timeout 时还原该指令）
+        if let Some(t) = entry.request.timeout {
+            block.push_str(&format!("# @timeout {}ms\n", t.as_millis()));
+        }
+
         // 2. Request Line
         block.push_str(&format!("{} {}\n", entry.request.method, entry.request.url));
 

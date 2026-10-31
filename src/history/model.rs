@@ -36,6 +36,11 @@ pub struct RequestSnapshot {
     pub headers: HeaderMap,
 
     pub body: Option<String>,
+
+    /// `@timeout`（仅非流式请求设置）。`serde(default)` 兼容没有该字段的旧快照：
+    /// 缺失时重放退回 client 级默认超时，而非报错。
+    #[serde(default)]
+    pub timeout: Option<std::time::Duration>,
 }
 
 /// 响应元数据 (TUI 模式下可选包含 Body，节省空间且向前兼容)
@@ -116,6 +121,7 @@ impl RequestSnapshot {
             url: parsed.url.clone(),
             headers,
             body: parsed.body.clone(),
+            timeout: parsed.metadata.timeout,
         }
     }
 }
@@ -146,5 +152,28 @@ mod tests {
             "application/json"
         );
         assert_eq!(snapshot.body, Some("{}".to_string()));
+    }
+
+    #[test]
+    fn test_request_snapshot_timeout_roundtrip_and_old_format_compat() {
+        // 回归：快照此前不记录 @timeout——重放带超时语义的请求会静默退回 30s 默认
+        let mut parsed = ParsedRequest::new(1);
+        parsed.metadata.timeout = Some(std::time::Duration::from_millis(500));
+        let snapshot = RequestSnapshot::from_parsed(&parsed);
+        assert_eq!(
+            snapshot.timeout,
+            Some(std::time::Duration::from_millis(500))
+        );
+
+        // 序列化往返保持 timeout
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let back: RequestSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.timeout, Some(std::time::Duration::from_millis(500)));
+
+        // 旧格式快照（无 timeout 字段）反序列化为 None，不报错
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("timeout");
+        let old: RequestSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(old.timeout, None);
     }
 }

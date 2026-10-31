@@ -23,6 +23,7 @@ async fn test_snapshot_recording_and_replaying() {
     let entry = SnapshotEntry {
         id: "test-id-1".to_string(),
         request: RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com/hello".to_string(), // 相对/别的域名
             headers: reqwest::header::HeaderMap::new(),

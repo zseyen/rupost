@@ -2,6 +2,18 @@
 use crate::variable::VariableContext;
 use crate::{Result, RupostError};
 
+/// 判断是否以合法 scheme 开头（RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) 后紧跟 "://"）。
+/// 不能用 `contains("://")`：`/oauth/cb?redirect=https://x` 这类 query 内含 URL 的相对路径会被误判为绝对地址。
+fn has_scheme_prefix(url: &str) -> bool {
+    let Some(pos) = url.find("://") else {
+        return false;
+    };
+    let scheme = &url[..pos];
+    let mut chars = scheme.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 /// 智能解析最终请求 URL，处理绝对/相对路径和本地/CLI 协议快捷简写
 pub fn resolve_final_url(
     raw_url: &str,
@@ -13,8 +25,7 @@ pub fn resolve_final_url(
     let is_cli = source == Some("cli");
 
     // 1. 处理绝对 URL
-    if raw_url.contains("://") || raw_url.starts_with("http://") || raw_url.starts_with("https://")
-    {
+    if has_scheme_prefix(raw_url) {
         return Ok(raw_url.to_string());
     }
 
@@ -66,7 +77,7 @@ pub fn resolve_final_url(
 
     match (global_base, file_base_path) {
         (Some(g), Some(f)) => {
-            if f.contains("://") {
+            if has_scheme_prefix(f) {
                 Ok(join_paths(&[f, relative_url]))
             } else {
                 Ok(join_paths(&[g.as_str(), f, relative_url]))
@@ -74,7 +85,7 @@ pub fn resolve_final_url(
         }
         (Some(g), None) => Ok(join_paths(&[g.as_str(), relative_url])),
         (None, Some(f)) => {
-            if f.contains("://") {
+            if has_scheme_prefix(f) {
                 Ok(join_paths(&[f, relative_url]))
             } else {
                 Err(RupostError::BaseUrlNotConfigured)
@@ -82,6 +93,54 @@ pub fn resolve_final_url(
         }
         (None, None) => Err(RupostError::BaseUrlNotConfigured),
     }
+}
+
+/// 自由输入（CLI 参数 / TUI 快速输入）的归一化结果。
+/// 同一谓词服务 CLI 与 TUI，保证两处语义一致（US-T3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NormalizedInput {
+    /// 携带合法 scheme（RFC 3986）的绝对地址，原样返回
+    Absolute(String),
+    /// `:3000/x` 冒号 localhost 缩写 → `http://localhost:3000/x`
+    LocalhostShorthand(String),
+    /// 独立主机（含端口或域名，如 `api.github.com/users`）→ 补全 scheme
+    HostName(String),
+    /// 非 URL：按文件名处理
+    NotUrl(String),
+}
+
+/// 把自由文本输入归一化为绝对 URL 或文件名判定。
+/// 冒号缩写复用 resolve_final_url 的 CLI 语义；独立主机判定与 CLI is_independent 同一规则
+/// （含空格、`.http`/`.md` 后缀的输入按文件名处理——这是 TUI 快速新建的文件名通道）。
+pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput {
+    if has_scheme_prefix(input) {
+        return NormalizedInput::Absolute(input.to_string());
+    }
+    if input.starts_with(':') {
+        let resolved = resolve_final_url(input, &VariableContext::new(), "http", Some("cli"), None)
+            .unwrap_or_else(|_| format!("http://localhost{input}"));
+        return NormalizedInput::LocalhostShorthand(resolved);
+    }
+    let first = input.split('/').next().unwrap_or("");
+    let is_independent = first.contains('.')
+        || first
+            .find(':')
+            .map(|p| {
+                let after = &first[p + 1..];
+                !after.is_empty() && after.chars().all(|c| c.is_ascii_digit())
+            })
+            .unwrap_or(false);
+    let file_like = input.contains(' ') || input.ends_with(".http") || input.ends_with(".md");
+    if is_independent && !file_like {
+        // 本地主机没有 TLS，强行补默认 scheme 会制造必败请求
+        let scheme = if first.starts_with("localhost") || first.starts_with("127.") {
+            "http"
+        } else {
+            default_scheme
+        };
+        return NormalizedInput::HostName(format!("{scheme}://{input}"));
+    }
+    NormalizedInput::NotUrl(input.to_string())
 }
 
 pub fn join_paths(parts: &[&str]) -> String {
@@ -117,6 +176,78 @@ pub fn join_paths(parts: &[&str]) -> String {
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    #[test]
+    fn test_normalize_input_url_decision_table() {
+        use NormalizedInput::*;
+        // (输入, 期望)——判定表与设计文档 v3.3 决策表一致
+        let cases: Vec<(&str, NormalizedInput)> = vec![
+            ("https://a.com/x", Absolute("https://a.com/x".into())),
+            ("ws://a.com", Absolute("ws://a.com".into())),
+            ("wss://a.com/ws?t=1", Absolute("wss://a.com/ws?t=1".into())),
+            (
+                ":3000/x",
+                LocalhostShorthand("http://localhost:3000/x".into()),
+            ),
+            (
+                ":/health",
+                LocalhostShorthand("http://localhost/health".into()),
+            ),
+            (
+                "localhost:3000/x",
+                HostName("http://localhost:3000/x".into()),
+            ),
+            (
+                "api.github.com/users",
+                HostName("https://api.github.com/users".into()),
+            ),
+            // 与 CLI is_independent 同规则：首段含点即主机（v1.2/users 同 CLI 判为主机）
+            ("v1.2/users", HostName("https://v1.2/users".into())),
+            ("my.file", HostName("https://my.file".into())),
+            // 文件名通道
+            ("tests/auth.http", NotUrl("tests/auth.http".into())),
+            ("auth", NotUrl("auth".into())),
+            ("my notes", NotUrl("my notes".into())),
+            ("/users", NotUrl("/users".into())),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                normalize_input_url(input, "https"),
+                expected,
+                "input={input}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_relative_path_with_url_in_query_is_not_absolute() {
+        // 回归：此前 contains("://") 把 query 里含 URL 的相对路径当成绝对地址原样返回，
+        // reqwest 随后报 "relative URL without a base"，OAuth 回调类参数极常见。
+        let mut ctx = VariableContext::new();
+        ctx.insert("base_url", "https://api.example.com");
+
+        let resolved = resolve_final_url(
+            "/oauth/callback?redirect=https://app.example.com/done",
+            &ctx,
+            "http",
+            Some("file"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved,
+            "https://api.example.com/oauth/callback?redirect=https://app.example.com/done"
+        );
+
+        // 真正的绝对地址（含 query 里再带 URL）仍被识别为绝对
+        assert!(has_scheme_prefix("https://a.com/x?u=http://b.com"));
+        assert!(has_scheme_prefix("wss://a.com/ws"));
+        // 非 scheme 形态一律不算绝对
+        assert!(!has_scheme_prefix("/path?u=http://b.com"));
+        assert!(!has_scheme_prefix("example.com/?x=http://a"));
+        assert!(!has_scheme_prefix("localhost:8080/x"));
+        assert!(!has_scheme_prefix("no-scheme-here"));
+    }
 
     #[test]
     fn test_join_paths() {
@@ -253,5 +384,56 @@ mod tests {
 
         // 报错情况：无 base_url 且非绝对
         assert!(resolve_final_url("/users", &empty_ctx, "http", Some("file.http"), None).is_err());
+    }
+
+    #[test]
+    fn test_resolve_final_url_edge_cases() {
+        let mut ctx = VariableContext::new();
+        ctx.insert("baseUrl", "http://by-camelcase.com");
+
+        // 1. 验证 camelCase 形式的 baseUrl 获取优先级
+        assert_eq!(
+            resolve_final_url("/users", &ctx, "http", Some("file.http"), None).unwrap(),
+            "http://by-camelcase.com/users"
+        );
+
+        // 2. 验证 base_url 优于 baseUrl
+        ctx.insert("base_url", "http://by-snakecase.com");
+        assert_eq!(
+            resolve_final_url("/users", &ctx, "http", Some("file.http"), None).unwrap(),
+            "http://by-snakecase.com/users"
+        );
+
+        // 3. 验证 BASE_URL 的优先级
+        let mut ctx2 = VariableContext::new();
+        ctx2.insert("BASE_URL", "http://by-uppercase.com");
+        assert_eq!(
+            resolve_final_url("/users", &ctx2, "http", Some("file.http"), None).unwrap(),
+            "http://by-uppercase.com/users"
+        );
+
+        // 4. raw_url 恰好为 "/"
+        assert_eq!(
+            resolve_final_url("/", &ctx, "http", Some("file.http"), None).unwrap(),
+            "http://by-snakecase.com"
+        );
+
+        // 5. WebSocket 协议原样返回
+        assert_eq!(
+            resolve_final_url("ws://example.com/ws", &ctx, "http", Some("file.http"), None)
+                .unwrap(),
+            "ws://example.com/ws"
+        );
+        assert_eq!(
+            resolve_final_url(
+                "wss://example.com/ws",
+                &ctx,
+                "http",
+                Some("file.http"),
+                None
+            )
+            .unwrap(),
+            "wss://example.com/ws"
+        );
     }
 }

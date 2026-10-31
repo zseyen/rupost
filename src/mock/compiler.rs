@@ -73,15 +73,18 @@ impl MockCompiler {
         let lhs = parts[0];
         let rhs_val = parts[1].trim_matches('"').trim();
 
-        let (source, key) = if let Some(stripped) = lhs.strip_prefix("query.") {
-            (ConditionSource::Query, stripped.to_string())
-        } else if let Some(stripped) = lhs.strip_prefix("header.") {
-            (ConditionSource::Header, stripped.to_string())
-        } else if let Some(stripped) = lhs.strip_prefix("body.") {
-            (ConditionSource::Body, stripped.to_string())
-        } else {
-            return None;
-        };
+        let (source, stripped) = lhs
+            .strip_prefix("query.")
+            .map(|s| (ConditionSource::Query, s))
+            .or_else(|| {
+                lhs.strip_prefix("header.")
+                    .map(|s| (ConditionSource::Header, s))
+            })
+            .or_else(|| {
+                lhs.strip_prefix("body.")
+                    .map(|s| (ConditionSource::Body, s))
+            })?;
+        let key = stripped.to_string();
 
         if rhs_val.eq_ignore_ascii_case("None") {
             Some(VariantCondition {

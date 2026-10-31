@@ -220,7 +220,12 @@ fn test_log_rotation_and_size_limit() {
     // 连续写入，直到超出 100 字节
     let data = "A".repeat(40);
     for _ in 0..5 {
-        let _ = rupost::tui::state::write_log_with_limit(&file_path, &data, max_bytes);
+        let _ = rupost::tui::state::write_log_with_limit(
+            &rupost::tui::ports::FsRepository,
+            &file_path,
+            &data,
+            max_bytes,
+        );
     }
 
     // 读取物理文件大小，断言它应该被阻断拦截，且以警告结尾
@@ -269,7 +274,7 @@ fn test_gc_probabilistic_simulation() {
     )
     .unwrap();
 
-    let (deleted_count, _) = rupost::runner::gc::perform_prune(temp_dir.path(), 7, 100).unwrap();
+    let (deleted_count, _) = rupost::history::gc::perform_prune(temp_dir.path(), 7, 100).unwrap();
     assert_eq!(deleted_count, 1);
     assert!(!old_file.exists());
 }
@@ -299,7 +304,7 @@ fn test_gc_perform_prune_size_limit() {
     )
     .unwrap();
 
-    let (deleted_count, _) = rupost::runner::gc::perform_prune(temp_dir.path(), 30, 1).unwrap();
+    let (deleted_count, _) = rupost::history::gc::perform_prune(temp_dir.path(), 30, 1).unwrap();
     assert_eq!(deleted_count, 1);
     assert!(!old_file.exists());
     assert!(new_file.exists());
@@ -313,7 +318,7 @@ fn test_gc_perform_clear() {
     std::fs::write(&file1, "hello").unwrap();
     std::fs::write(&file2, "world").unwrap();
 
-    let (deleted_count, _) = rupost::runner::gc::perform_clear(temp_dir.path()).unwrap();
+    let (deleted_count, _) = rupost::history::gc::perform_clear(temp_dir.path()).unwrap();
     assert_eq!(deleted_count, 2);
     assert!(!file1.exists());
     assert!(!file2.exists());
@@ -348,6 +353,7 @@ fn test_dirty_editor_history_switch_interception() {
         timestamp: chrono::Utc::now(),
         duration_ms: 10,
         request: rupost::history::model::RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com".to_string(),
             headers: reqwest::header::HeaderMap::new(),
@@ -851,6 +857,7 @@ fn test_history_sidebar_render_no_id_prefix() {
         timestamp: chrono::Utc::now(),
         duration_ms: 10,
         request: rupost::history::model::RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com/api".to_string(),
             headers: reqwest::header::HeaderMap::new(),
@@ -889,6 +896,7 @@ fn test_history_editor_title_id_display() {
         timestamp: chrono::Utc::now(),
         duration_ms: 10,
         request: rupost::history::model::RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "http://example.com/api".to_string(),
             headers: reqwest::header::HeaderMap::new(),
@@ -999,4 +1007,114 @@ fn test_file_tree_empty_state_guard() {
         rupost::tui::ui::render(frame, &mut state);
     });
     assert!(res.is_ok());
+}
+
+#[test]
+fn test_detail_tab_switching() {
+    use rupost::tui::state::DetailTab;
+    let mut state = AppState::new();
+
+    // 默认是 Response Tab
+    assert_eq!(state.active_detail_tab, DetailTab::Response);
+
+    // 模拟在 Response 面板下通过 handle_key (会调用 handle_response_key) 切换
+    let right_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Right,
+        crossterm::event::KeyModifiers::NONE,
+    );
+
+    state.active_panel = Panel::Response;
+    state.response_visual_lines = vec![ratatui::text::Line::raw("temp_lines")];
+    state.response_scroll = 5;
+
+    // 切换到 Headers 页
+    // 我们需要把 tokio::sync::mpsc::channel 传给 handle_key
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+
+    // 执行切换
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, right_key, &tx).await;
+    });
+
+    assert_eq!(state.active_detail_tab, DetailTab::Headers);
+    // 验证折行缓存已清空，滚动偏移已重置
+    assert!(state.response_visual_lines.is_empty());
+    assert_eq!(state.response_scroll, 0);
+
+    // 再次向右切换到 Request 页
+    state.response_visual_lines = vec![ratatui::text::Line::raw("temp_lines")];
+    state.response_scroll = 3;
+    rt.block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, right_key, &tx).await;
+    });
+    assert_eq!(state.active_detail_tab, DetailTab::Request);
+    assert!(state.response_visual_lines.is_empty());
+    assert_eq!(state.response_scroll, 0);
+
+    // 向左切换回 Headers
+    let left_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Left,
+        crossterm::event::KeyModifiers::NONE,
+    );
+    rt.block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, left_key, &tx).await;
+    });
+    assert_eq!(state.active_detail_tab, DetailTab::Headers);
+}
+
+#[test]
+fn test_smart_url_test_creation() {
+    let mut state = AppState::new();
+    let temp_dir = tempfile::tempdir().unwrap();
+    state.workspace_root = temp_dir.path().to_path_buf();
+
+    // 场景 1：输入完整的 URL
+    state.create_test_from_input("https://google.com/search?q=rust");
+
+    // 应该推导出文件名 google_com_search.http 并自动创建在 workspace_root 目录下
+    let expected_path = temp_dir.path().join("google_com_search.http");
+    assert!(
+        expected_path.exists(),
+        "Expected google_com_search.http to be created"
+    );
+    let content = std::fs::read_to_string(&expected_path).unwrap();
+    assert_eq!(content, "GET https://google.com/search?q=rust\n");
+
+    // 场景 2：输入一个没有协议头但显式是域名的 URL
+    state.create_test_from_input("httpbin.org/get");
+    let expected_path_2 = temp_dir.path().join("httpbin_org_get.http");
+    assert!(
+        expected_path_2.exists(),
+        "Expected httpbin_org_get.http to be created"
+    );
+    let content_2 = std::fs::read_to_string(&expected_path_2).unwrap();
+    assert_eq!(content_2, "GET https://httpbin.org/get\n");
+
+    // 场景 3：输入普通的文件名，应该创建带有模板的文件
+    state.create_test_from_input("auth");
+    let expected_path_3 = temp_dir.path().join("auth.http");
+    assert!(expected_path_3.exists(), "Expected auth.http to be created");
+    let content_3 = std::fs::read_to_string(&expected_path_3).unwrap();
+    assert_eq!(content_3, "GET http://httpbingo.org/get\n");
+}
+
+#[test]
+fn test_external_editor_key_trigger() {
+    let mut state = AppState::new();
+    state.editor_file_path = Some("/path/to/test.http".to_string());
+    state.active_panel = Panel::Editor;
+
+    let e_key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('E'),
+        crossterm::event::KeyModifiers::SHIFT,
+    );
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        rupost::tui::handlers::handle_key(&mut state, e_key, &tx).await;
+    });
+
+    assert!(state.pending_editor_launch);
 }

@@ -1,15 +1,40 @@
-use crate::tui::state::{AppState, Panel};
+use crate::tui::state::{AppState, DetailTab, Panel};
 use ratatui::{
     Frame,
-    layout::Rect,
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Tabs},
 };
 
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
+    let t = state.palette();
     let focus = state.active_panel == Panel::Response;
-    let border_color = if focus { Color::Cyan } else { Color::DarkGray };
+    let border_color = if focus { t.info } else { t.dim };
+
+    // 1. 垂直划分选项卡 Tab 栏和内容显示区
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // 顶部 Tab 栏
+            Constraint::Min(0),    // 主要内容区
+        ])
+        .split(area);
+    let tab_area = chunks[0];
+    let content_area = chunks[1];
+
+    // 2. 渲染详情子选项卡
+    let tab_titles = vec!["[1] Response", "[2] Headers", "[3] Request"];
+    let active_idx = match state.active_detail_tab {
+        DetailTab::Response => 0,
+        DetailTab::Headers => 1,
+        DetailTab::Request => 2,
+    };
+    let tabs = Tabs::new(tab_titles)
+        .select(active_idx)
+        .style(Style::default().fg(t.dim))
+        .highlight_style(Style::default().fg(t.info).add_modifier(Modifier::BOLD));
+    frame.render_widget(tabs, tab_area);
 
     let is_ws = !state.ws_frames.is_empty()
         || state
@@ -43,10 +68,12 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let visible_height = area.height.saturating_sub(2) as usize; // 可视行数
-    let max_width = area.width.saturating_sub(2) as usize; // 可视列数
+    let visible_height = content_area.height.saturating_sub(2) as usize; // 可视行数
+    let max_width = content_area.width.saturating_sub(2) as usize; // 可视列数
 
-    if is_ws {
+    let use_streaming = (is_ws || is_sse) && state.active_detail_tab == DetailTab::Response;
+
+    if use_streaming && is_ws {
         let visual_lines = if state.is_loading {
             state.ws_visual_lines.clone()
         } else {
@@ -55,11 +82,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
             let mut lines = Vec::new();
             for f in &state.viewport_cache {
                 let arrow = if f.is_send { "[→] " } else { "[←] " };
-                let arrow_color = if f.is_send {
-                    Color::Cyan
-                } else {
-                    Color::Yellow
-                };
+                let arrow_color = if f.is_send { t.info } else { t.accent };
                 let text_line = format!("{} {} {}", arrow, f.timestamp, f.content);
                 let wrapped =
                     crate::tui::state::VisualLineProcessor::wrap_text(&text_line, max_width);
@@ -73,10 +96,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                                     .fg(arrow_color)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(
-                                format!("{} ", f.timestamp),
-                                Style::default().fg(Color::DarkGray),
-                            ),
+                            Span::styled(format!("{} ", f.timestamp), Style::default().fg(t.dim)),
                             Span::raw(raw_str[15..].to_string()),
                         ]));
                     } else if raw_str.starts_with("[←]") {
@@ -87,10 +107,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                                     .fg(arrow_color)
                                     .add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(
-                                format!("{} ", f.timestamp),
-                                Style::default().fg(Color::DarkGray),
-                            ),
+                            Span::styled(format!("{} ", f.timestamp), Style::default().fg(t.dim)),
                             Span::raw(raw_str[15..].to_string()),
                         ]));
                     } else {
@@ -105,7 +122,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         if visual_lines_final.is_empty() {
             visual_lines_final.push(Line::from(Span::styled(
                 "WebSocket connected. Listening for frames...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             )));
         }
 
@@ -174,7 +191,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         if visual_lines_final.is_empty() {
             visual_lines_final.push(Line::from(Span::styled(
                 "SSE streaming connected...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             )));
         }
 
@@ -192,11 +209,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 "[RUNNING] Sending request... {}",
                 state.get_spinner_char()
             ))
-            .style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD))
             .block(block),
             area,
         );
@@ -213,120 +226,169 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         let end = (scroll_y + visible_height).min(total_lines);
         let sliced = state.response_visual_lines[scroll_y..end].to_vec();
 
-        frame.render_widget(Paragraph::new(sliced).block(block), area);
+        frame.render_widget(Paragraph::new(sliced).block(block), content_area);
     } else {
         frame.render_widget(
             Paragraph::new("No response data. Trigger execution via Ctrl+Enter.")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(t.dim))
                 .block(block),
-            area,
+            content_area,
         );
     }
 }
 
 fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
+    let t = state.palette();
+    use crate::tui::state::DetailTab;
     if let Some(ref resp) = state.last_response {
         let mut raw_lines = Vec::new();
-        let status_color = if resp.is_success() {
-            Color::Green
-        } else {
-            Color::Red
-        };
 
-        let has_failures = !resp.is_success() || state.assertions.iter().any(|a| !a.passed);
-        let status_text = if has_failures {
-            "[FAILED]"
-        } else {
-            "[SUCCESS]"
-        };
-        let status_text_color = if has_failures {
-            Color::Red
-        } else {
-            Color::Green
-        };
+        match state.active_detail_tab {
+            DetailTab::Response => {
+                let status_color = if resp.is_success() { t.ok } else { t.err };
 
-        // 拼接任务诊断状态栏
-        raw_lines.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", status_text),
-                Style::default()
-                    .fg(status_text_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "Status: {} {} ",
-                    resp.status.code(),
-                    resp.status.reason_phrase()
-                ),
-                Style::default().fg(status_color),
-            ),
-        ]));
+                let has_failures = !resp.is_success() || state.assertions.iter().any(|a| !a.passed);
+                let status_text = if has_failures {
+                    "[FAILED]"
+                } else {
+                    "[SUCCESS]"
+                };
+                let status_text_color = if has_failures { t.err } else { t.ok };
 
-        let mut time_size_spans = vec![
-            Span::styled("Time: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{}ms  ", resp.duration.as_millis())),
-            Span::styled("Size: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(format!("{} bytes  ", resp.body.len())),
-        ];
+                // 拼接任务诊断状态栏
+                raw_lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} ", status_text),
+                        Style::default()
+                            .fg(status_text_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(
+                            "Status: {} {} ",
+                            resp.status.code(),
+                            resp.status.reason_phrase()
+                        ),
+                        Style::default().fg(status_color),
+                    ),
+                ]));
 
-        // 拼接断言进度统计
-        let total_assertions = state.assertions.len();
-        if total_assertions > 0 {
-            let passed_assertions = state.assertions.iter().filter(|a| a.passed).count();
-            let failed_assertions = total_assertions - passed_assertions;
-            let assertions_color = if failed_assertions > 0 {
-                Color::Red
-            } else {
-                Color::Green
-            };
-            time_size_spans.push(Span::styled(
-                format!(
-                    "Assertions: {} passed, {} failed",
-                    passed_assertions, failed_assertions
-                ),
-                Style::default().fg(assertions_color),
-            ));
-        }
-        raw_lines.push(Line::from(time_size_spans));
-        raw_lines.push(Line::from(""));
-        raw_lines.push(Line::from(Span::styled(
-            "Body:",
-            Style::default().fg(Color::Yellow),
-        )));
+                let mut time_size_spans = vec![
+                    Span::styled("Time: ", Style::default().fg(t.dim)),
+                    Span::raw(format!("{}ms  ", resp.duration.as_millis())),
+                    Span::styled("Size: ", Style::default().fg(t.dim)),
+                    Span::raw(format!("{} bytes  ", resp.body.len())),
+                ];
 
-        // 拼接响应 Body 各行，若行数超限 1000 则进行截断保护
-        let max_body_lines = 1000;
-        let mut body_lines = Vec::new();
-        let mut is_truncated = false;
-        let mut total_body_lines = 0;
+                // 拼接断言进度统计
+                let total_assertions = state.assertions.len();
+                if total_assertions > 0 {
+                    let passed_assertions = state.assertions.iter().filter(|a| a.passed).count();
+                    let failed_assertions = total_assertions - passed_assertions;
+                    let assertions_color = if failed_assertions > 0 { t.err } else { t.ok };
 
-        for line in resp.body.lines() {
-            total_body_lines += 1;
-            if body_lines.len() < max_body_lines {
-                body_lines.push(line.to_string());
-            } else {
-                is_truncated = true;
+                    time_size_spans.push(Span::styled(
+                        format!(
+                            "Assertions: {} passed, {} failed",
+                            passed_assertions, failed_assertions
+                        ),
+                        Style::default().fg(assertions_color),
+                    ));
+                }
+                raw_lines.push(Line::from(time_size_spans));
+                raw_lines.push(Line::from(""));
+                raw_lines.push(Line::from(Span::styled(
+                    "Body:",
+                    Style::default().fg(t.accent),
+                )));
+
+                // 拼接响应 Body 各行，若行数超限 1000 则进行截断保护
+                let max_body_lines = 1000;
+                let mut body_lines = Vec::new();
+                let mut is_truncated = false;
+                let mut total_body_lines = 0;
+
+                for line in resp.body.lines() {
+                    total_body_lines += 1;
+                    if body_lines.len() < max_body_lines {
+                        body_lines.push(line.to_string());
+                    } else {
+                        is_truncated = true;
+                    }
+                }
+
+                if is_truncated {
+                    raw_lines.push(Line::from(Span::styled(
+                        format!(
+                            " [WARNING: Response truncated from {} to 1000 lines. View full log in CLI] ",
+                            total_body_lines
+                        ),
+                        Style::default()
+                            .fg(t.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )));
+                }
+
+                for line in body_lines {
+                    raw_lines.push(Line::from(line));
+                }
+            }
+            DetailTab::Headers => {
+                raw_lines.push(Line::from(Span::styled(
+                    "--- Request Headers ---",
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
+                )));
+                if let Some(ref req) = state.current_request {
+                    for (k, v) in &req.headers {
+                        raw_lines.push(Line::from(format!("  {}: {}", k, v)));
+                    }
+                } else {
+                    raw_lines.push(Line::from("  (No request headers)"));
+                }
+                raw_lines.push(Line::from(""));
+                raw_lines.push(Line::from(Span::styled(
+                    "--- Response Headers ---",
+                    Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
+                )));
+                let mut resp_keys: Vec<String> = resp
+                    .headers
+                    .keys()
+                    .map(|k| k.as_str().to_string())
+                    .collect();
+                resp_keys.sort();
+                for k in resp_keys {
+                    if let Some(v) = resp.headers.get(&k) {
+                        let val_str = v.to_str().unwrap_or("");
+                        raw_lines.push(Line::from(format!("  {}: {}", k, val_str)));
+                    }
+                }
+            }
+            DetailTab::Request => {
+                raw_lines.push(Line::from(Span::styled(
+                    "--- Request Body ---",
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                )));
+                if let Some(ref req) = state.current_request {
+                    if let Some(ref body) = req.body {
+                        for line in body.lines() {
+                            raw_lines.push(Line::from(line));
+                        }
+                    } else {
+                        raw_lines.push(Line::from(Span::styled(
+                            "  (No request body)",
+                            Style::default().fg(t.dim),
+                        )));
+                    }
+                } else {
+                    raw_lines.push(Line::from(Span::styled(
+                        "  (No request body)",
+                        Style::default().fg(t.dim),
+                    )));
+                }
             }
         }
 
-        if is_truncated {
-            raw_lines.push(Line::from(Span::styled(
-                format!(
-                    " [WARNING: Response truncated from {} to 1000 lines. View full log in CLI] ",
-                    total_body_lines
-                ),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )));
-        }
-
-        for line in body_lines {
-            raw_lines.push(Line::from(line));
-        }
-
-        // 调用 pre-wrapper 折行处理器
+        // 调用 pre-wrapper 折行处理器 (保持 DRY)
         let mut wrapped = Vec::new();
         for line in raw_lines {
             let line_str = line.to_string();

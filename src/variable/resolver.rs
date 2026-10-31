@@ -48,6 +48,32 @@ impl VariableResolver {
         Self::substitute(&with_env, context)
     }
 
+    /// 检查渲染后的请求中是否仍残留 `{{...}}` 占位符（通常为未定义变量）。
+    /// 返回去重后的警告信息；未定义变量此前会静默按字面量发送导致假通过。
+    pub fn unresolved_placeholders(parsed: &crate::parser::ParsedRequest) -> Vec<String> {
+        static RESIDUE_REGEX: OnceLock<Regex> = OnceLock::new();
+        let re = RESIDUE_REGEX.get_or_init(|| Regex::new(r"\{\{[^}]*\}\}").unwrap());
+
+        let mut found = std::collections::BTreeSet::new();
+        let mut scan = |s: &str| {
+            for m in re.find_iter(s) {
+                found.insert(m.as_str().to_string());
+            }
+        };
+        scan(&parsed.url);
+        for (_key, value) in &parsed.headers {
+            scan(value);
+        }
+        if let Some(body) = &parsed.body {
+            scan(body);
+        }
+
+        found
+            .into_iter()
+            .map(|p| format!("变量 {p} 未定义，已按字面量发送"))
+            .collect()
+    }
+
     /// 渲染并实例化一个 `ParsedRequest`：解析其 URL, Headers, Body 中的所有占位符和环境变量；
     /// 并处理 Base URL 的自动拼接以及全局 User-Agent 的注入。
     pub fn resolve_parsed_request(
@@ -83,6 +109,26 @@ impl VariableResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unresolved_placeholders_detected() {
+        // 回归：未定义变量此前静默按字面量发送，服务器 200 即假通过
+        let mut parsed = crate::parser::ParsedRequest::new(1);
+        parsed.url = "/users/{{good_id}}/x/{{good_id}}".to_string();
+        parsed.headers = vec![("X-A".to_string(), "{{missing_a}}".to_string())];
+        parsed.body = Some("{\"k\": \"{{also_missing}}\"}".to_string());
+
+        let warnings = VariableResolver::unresolved_placeholders(&parsed);
+        // 同一占位符出现多次只报一次
+        assert_eq!(warnings.len(), 3);
+        assert!(warnings.iter().any(|w| w.contains("{{good_id}}")));
+        assert!(warnings.iter().any(|w| w.contains("{{missing_a}}")));
+        assert!(warnings.iter().any(|w| w.contains("{{also_missing}}")));
+
+        // 已解析完成的请求不应产生警告
+        let clean = crate::parser::ParsedRequest::new(1);
+        assert!(VariableResolver::unresolved_placeholders(&clean).is_empty());
+    }
 
     #[test]
     fn test_substitute_simple() {

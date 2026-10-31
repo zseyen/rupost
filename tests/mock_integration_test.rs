@@ -263,9 +263,10 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     // 3. 测试用例 5: 级联多文件依赖 @depends-on 合并加载冒烟
     let test_file = "examples/iteration_scenarios/migration_test.md";
 
-    let scanned_files = DirectoryScanner::scan(&[test_file.to_string()]).unwrap();
-    let sandbox_root = std::env::current_dir().unwrap();
-    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_root).unwrap();
+    let inputs = [test_file.to_string()];
+    let scanned_files = DirectoryScanner::scan(&inputs).unwrap();
+    let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&inputs);
+    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots).unwrap();
 
     let parse_pairs: Vec<_> = files_map
         .iter()

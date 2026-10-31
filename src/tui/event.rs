@@ -39,5 +39,4 @@ pub enum Action {
     ToggleHelp,
     SwitchPanel(super::state::Panel),
     SendRequest(Box<ParsedRequest>),
-    UpdateQuickInput(String),
 }

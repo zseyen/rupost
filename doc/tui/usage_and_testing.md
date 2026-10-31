@@ -116,3 +116,26 @@ RuPost 的 TUI 模式建立了三级防御测试体系，用于在对 CLI、内�
   ```bash
   bash examples/run_all.sh
   ```
+
+## 快速新建用例（n 键）
+
+Files 侧栏按 `n` 打开快速输入框（模态输入，期间所有全局键被输入框吞掉）：
+
+- 输入 URL（`api.github.com/users`、`:3000/x`、`https://…`）→ 在当前选中目录生成
+  自动命名的 `.http` 文件（host_port_path 规则，超 80 字符截断 + 短哈希），内容为
+  `GET <归一化 URL>`；URL 判定与 CLI 共用 `http::url::normalize_input_url` 同一语义。
+- 输入文件名（`auth`、`tests/auth.http`、含空格名）→ 按文件名创建，默认模板 GET。
+- `Enter` 创建并跳转编辑器；`Esc` 丢弃不落盘；同名文件不覆盖，仍定位加载。
+- 失败可见：路径穿越、权限、超长名等错误在底部状态栏红字显示，下次成功操作清除。
+
+## 真机冒烟清单（5 分钟，TestBackend 覆盖不到的部分）
+
+`cargo test` 全部跑在 TestBackend 上，以下需在真实终端手动过一遍（重点：IME 与真实光标）：
+
+1. `cargo run -- tui` 进入；按 `n`，观察**真实光标**（非 `█` 伪块）在输入框内闪烁。
+2. 切中文输入法输入"登录"，回车上屏——验证 textarea 的 IME 组合键路径不丢字。
+3. 输入 `../../escape.http` 回车 → 底部状态栏出现红色错误，工作区无文件产生。
+4. 输入 `example.org` 回车 → 生成 `example_org.http` 并跳转编辑器，光标在 Editor。
+5. 再按 `n` 输入同名 `example.org` 回车 → 不覆盖，编辑器显示原内容。
+6. `Esc` 丢弃、`E` 拉起 `$EDITOR` 保存退出 → TUI 热重载内容。
+7. 窗口缩放穿越 Wide/Narrow/Stacked 三档，快速输入弹窗均居中且光标位置正确。

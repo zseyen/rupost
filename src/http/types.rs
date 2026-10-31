@@ -158,7 +158,9 @@ impl fmt::Display for Url {
 pub struct Status(u16);
 impl Status {
     pub fn new(code: u16) -> Result<Self> {
-        if (100..600).contains(&code) {
+        // 与 `http::StatusCode` 对齐（100..=999）：真实服务器可能返回 7xx 等非标准
+        // 状态码，此处只做"可表示"校验，成功/失败语义由 is_* 区间方法单独判定。
+        if (100..=999).contains(&code) {
             Ok(Self(code))
         } else {
             Err(RupostError::ParseError(format!(
@@ -208,6 +210,27 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_status_accepts_nonstandard_codes() {
+        // 回归：真实服务器可能返回 7xx 等非标准状态码（此前 700 会触发
+        // Response::new(...).unwrap() panic），http crate 允许 100..=999。
+        assert!(Status::new(700).is_ok());
+        assert!(Status::new(999).is_ok());
+        assert!(Status::new(100).is_ok());
+        assert!(Status::new(599).is_ok());
+
+        // 语义方法不受放宽影响：7xx 既不算成功也不算服务端错误
+        let custom = Status::new(700).unwrap();
+        assert!(!custom.is_success());
+        assert!(!custom.is_client_error());
+        assert!(!custom.is_server_error());
+
+        // 不可表示的码仍被拒绝
+        assert!(Status::new(99).is_err());
+        assert!(Status::new(1000).is_err());
+        assert!(Status::new(0).is_err());
+    }
 
     #[test]
     fn test_parse_full_url() {

@@ -12,6 +12,7 @@ fn create_dummy_entry(id: String) -> HistoryEntry {
         timestamp: Utc::now(),
         duration_ms: 100,
         request: RequestSnapshot {
+            timeout: None,
             method: "GET".to_string(),
             url: "https://example.com".to_string(),
             headers: HeaderMap::new(),

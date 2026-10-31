@@ -127,7 +127,7 @@ pub fn prune_history(days: u64, max_size: usize) -> Result<()> {
         "Scanning log directory: {}",
         log_dir.display().to_string().cyan()
     );
-    match crate::runner::gc::perform_prune(&log_dir, days, max_size) {
+    match crate::history::gc::perform_prune(&log_dir, days, max_size) {
         Ok((count, bytes)) => {
             let mb = bytes as f64 / 1024.0 / 1024.0;
             println!(
@@ -171,7 +171,7 @@ pub fn clear_history(yes: bool, all: bool) -> Result<()> {
     let log_dir = std::path::PathBuf::from(&dir_str).join("logs");
 
     // 1. 清空 logs/ 文件夹
-    match crate::runner::gc::perform_clear(&log_dir) {
+    match crate::history::gc::perform_clear(&log_dir) {
         Ok((count, bytes)) => {
             let mb = bytes as f64 / 1024.0 / 1024.0;
             println!(

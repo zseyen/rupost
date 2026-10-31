@@ -279,10 +279,11 @@ impl MarkdownFileParser {
                     }
                 }
 
-                // 代码块开始
+                // 代码块开始：info string 只取首个 token 作为语言标签，
+                // ```http title="demo" 这类带属性的围栏此前因整串比较被忽略
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
-                    let lang_str = lang.to_string().to_lowercase();
-                    if lang_str == "http" || lang_str == "rest" {
+                    let lang_token = lang.split_whitespace().next().unwrap_or("").to_lowercase();
+                    if lang_token == "http" || lang_token == "rest" {
                         in_code_block = true;
                         current_code.clear();
                     }
@@ -316,6 +317,22 @@ struct ExtractedCodeBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_fence_info_string_with_attributes_is_recognized() {
+        // 回归：```http title="demo" 这类带属性的 info string 此前被整串比较忽略
+        let content = "# Doc\n\n```http title=\"demo\" linenos\nGET https://api.example.com/attr\n```\n\n```HTTP\nGET https://api.example.com/upper\n```\n\n```rest\nGET https://api.example.com/rest\n```\n\n```json\n{\"not\": \"http\"}\n```\n";
+        let parsed = MarkdownFileParser::parse_content(content).unwrap();
+        let urls: Vec<&str> = parsed.requests.iter().map(|r| r.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec![
+                "https://api.example.com/attr",
+                "https://api.example.com/upper",
+                "https://api.example.com/rest",
+            ]
+        );
+    }
 
     #[test]
     fn test_extract_single_http_block() {

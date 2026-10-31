@@ -68,7 +68,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     });
 
     let mut state = AppState::new();
-    if let Ok(files) = crate::runner::scanner::DirectoryScanner::scan(&[".".to_string()]) {
+    if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
         // 默认展开所有顶层目录
         let root_canon = std::fs::canonicalize(&state.workspace_root)
@@ -215,6 +215,42 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // C. 处理外部编辑器拉起请求 (Shift + E)
+        if state.pending_editor_launch {
+            state.pending_editor_launch = false;
+            if let Some(ref file_path) = state.editor_file_path {
+                let _ = disable_raw_mode();
+                let _ = crossterm::execute!(
+                    terminal.backend_mut(),
+                    LeaveAlternateScreen,
+                    crossterm::event::DisableMouseCapture
+                );
+
+                let editor = std::env::var("VISUAL")
+                    .or_else(|_| std::env::var("EDITOR"))
+                    .unwrap_or_else(|_| "vim".to_string());
+
+                if let Ok(status) = std::process::Command::new(editor).arg(file_path).status()
+                    && status.success()
+                    && let Ok(new_content) = std::fs::read_to_string(file_path)
+                {
+                    state.editor_text = new_content;
+                    state.is_dirty = false;
+                    if let Ok(metadata) = std::fs::metadata(file_path) {
+                        state.editor_file_mtime = metadata.modified().ok();
+                    }
+                }
+
+                let _ = enable_raw_mode();
+                let _ = crossterm::execute!(
+                    terminal.backend_mut(),
+                    EnterAlternateScreen,
+                    crossterm::event::EnableMouseCapture
+                );
+                let _ = terminal.clear();
             }
         }
 

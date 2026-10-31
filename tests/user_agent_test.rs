@@ -66,7 +66,7 @@ async fn test_request_level_user_agent_override() {
 
     let mut request = Request::new("GET", &format!("{}/ua", mock_server.uri())).unwrap();
     // 手工在单请求中加入 User-Agent
-    request = request.with_header("User-Agent", "OverrideUA/9.9");
+    request = request.with_header("User-Agent", "OverrideUA/9.9").unwrap();
 
     let response = client.execute(request).await.unwrap();
 

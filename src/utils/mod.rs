@@ -1,5 +1,5 @@
 mod formatter;
 pub mod jsonpath;
-pub mod security;
+pub mod path_guard;
 
 pub use formatter::{ResponseFormat, ResponseFormatter};

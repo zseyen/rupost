@@ -1,6 +1,10 @@
 # RuPost Phase 2 进度总结
 
-**最后更新**: 2026-01-22 22:52
+> **⚠️ 重要提示**: 本文件已于 2026-01-22 归档。项目当前状态请以 [`doc/plans/progress_summary.md`](../../plans/progress_summary.md) 为准——该文件持续更新至 Sprint 7 / TUI 优化阶段。
+>
+> 下方内容保留原始历史记录，但代码统计与功能状态已过时。
+
+**最后更新**: 2026-01-22 22:52（历史快照）
 
 ---
 
@@ -17,48 +21,112 @@
 
 ### 代码统计
 
-- **总代码行数**: ~1,200 行（含测试）
-- **单元测试**: 122 个（全部通过）
-- **模块数量**: 6 个（parser, runner, http, utils, error, logger）
-- **子命令**: 1 个（`test`）
-- **CLI 参数**: `--verbose` / `-v`
+- **总代码行数**: 数千行（含 8+ 个子域）
+- **单元+集成测试**: 240+ 个（全部通过，22 个集成测试文件）
+- **模块数量**: 10+ 核心子域（parser, runner, http, ws, mock, variable, assertion, middleware, tui, history, generator）
+- **子命令**: 8+（`test`, `history`, `generate`, `diagnose`, `mock`, `init`/`template`, `replay`, `tui`）
+- **CLI 参数**: 完整 Clap 派生 + curl/httpie 内联解析 + 全局 `--debug`/`--no-cookies`/`--cookie-file`/`--default-scheme`
+- **TUI 模式**: `rupost tui` — 自适应 Wide/Narrow/Stacked 布局、鼠标支持、外部编辑器挂起流
 
 ---
 
 ## 已实现的核心功能
 
-### 1. 解析能力 (Stage 2)
+### 1. 解析能力 (Stage 2+)
 ```
-.http 文件 → ParsedRequest
+.http / .md 文件 → ParsedFile（含多请求、元数据、捕获规则）
 ```
-- 按 `###` 分隔多个请求
-- 解析请求行（METHOD + URL）
-- 解析 Headers
-- 解析 Body
-- 注释处理
-- 支持 7 种 HTTP 方法
+- 按 `###` 分隔多个请求（含启发式容错自动拆分）
+- 解析请求行（7 种 HTTP 方法 + WS/WSS 协议透传）
+- 解析 Headers / Body
+- 元数据指令：`@name`, `@skip`, `@timeout`, `@assert`, `@capture`, `@depends-on`, `@websocket`, `@mock-when`, `@stream_to`, `@decoder`
+- 注释前缀兼容：`# @` 和 `// @`
+- Markdown 代码块提取（````http`）
 
-### 2. 转换能力 (Stage 3)
+### 2. 变量与环境 (Stage 3+)
 ```
-ParsedRequest → Request
+四层优先级：CLI --var > 系统环境 > .env > rupost.toml
 ```
-- `TryFrom` trait 实现
-- 智能 Body 类型推断（JSON 自动检测）
-- 默认值处理（method 默认 GET）
-- 完整错误处理
+- `{{var}}` 模板渲染
+- `@capture` JSONPath + regex 提取
+- 全局变量命名空间（`global.token`）
+- `.env` 热重载 + `--env-file`
+- 多环境切换（`--env dev|test|prod`）
 
-### 3. 批量执行能力 (Stage 4)
+### 3. 断言系统 (Stage 5)
 ```
-.http 文件 → 批量执行 → 测试报告
+@assert <target> <operator> <value>
 ```
-- `rupost test <file>` 命令
-- TestExecutor 批量执行器
-- TestReporter 报告生成器
-- 集成 ResponseFormatter
-- Verbose 模式（`--verbose`）
-- 彩色输出（成功/失败）
-- 智能显示（失败自动详细）
-- 智能检测未配置 `base_url`/`baseUrl` 的场景，阻断非法网络请求并抛出直观的中文配置引导
+- 操作符：`==`, `!=`, `contains`, `exists`
+- 目标：`status`, `headers.*`, `body.<jsonpath>`, `stream.llm.content`
+- None/null 语义统一（缺失字段优雅通过 `== null`）
+- `AssertTarget` 抽象 — 同一引擎支持 HTTP Response 和 WebSocket 帧
+
+### 4. 批量执行与 DAG 调度 (Stage 4+)
+```
+rupost test <paths> [--parallel] [--fail-fast] [--report json]
+```
+- 目录递归扫描（自动排除 `.git/`, `.rupost/`, `target/`）
+- `### @depends-on` 拓扑排序（Kahn 算法 + 环路检测）
+- 顺序 / 并行双执行模式（`JoinSet` + 并发限制器）
+- 状态克隆传递（Cookie + 变量上下文在依赖链上单向传递）
+- Fail-fast 中断
+- JSON 结构化报告
+
+### 5. WebSocket 协议 (Sprint 5)
+```
+@websocket 指令 + SEND/EXPECT/WAIT/CLOSE DSL
+```
+- Actor 模式长连接客户端 + 广播信道
+- MsgPack + JSON 自适应解码
+- 5 次指数退避自动重连（~30s）
+- `BoundedFrameBuffer` 1000 帧环形缓冲区
+- `@capture` / `@assert` 在 WS 帧上复用同一引擎
+
+### 6. SSE 与 LLM 流式 (Sprint 4)
+```
+LlmStreamAdapter + @stream_to 文件同步
+```
+- OpenAI / Anthropic 流式事件归一化
+- `stream.llm.content` 直接断言
+- `@stream_to` 非阻塞物理文件增量追加
+- 内置 `MockLlmServer`
+
+### 7. Mock 服务器 (Production Debug 7)
+```
+rupost mock start <config> --port <port>
+```
+- Trie 树路径匹配（`:id`, `*`, `**`）
+- 多路变体条件路由（Header/Query/Body JSONPath）
+- Axum 可插拔适配器
+- 终端彩色访问日志
+
+### 8. 网络诊断 (Production Debug 2)
+```
+rupost diagnose <url>
+```
+- DNS / TCP / TLS / TTFB 四段时延瀑布图
+- X.509 证书深度分析与过期预警
+
+### 9. 快照录制与重放 (MVP)
+```
+rupost test --save-snapshot + rupost replay <snapshot> --target <host>
+```
+- 完整 HTTP 交互流快照
+- `--target` 自动改写 Host/Port
+- 状态码比对高亮 Diff
+
+### 10. TUI 交互模式 (Sprint 7+)
+```
+rupost tui
+```
+- 自适应 Wide / Narrow / Stacked 三栏布局
+- 鼠标点击捕获与面板切焦
+- 底栏操作提示（lazygit 风格）
+- Files / History 双 Tab 状态解耦
+- 内存预折行（Pre-wrapping）滚动精确
+- 历史快照 Enter 反向还原为 `.http`
+- 外部编辑器挂起流 + 脏编辑器确认拦截
 
 
 ### 4. 质量保证
@@ -75,78 +143,70 @@ ParsedRequest → Request
 
 #### P1 - 高优先级
 
-1. **`HttpFileParser` 空结构体**
-   - **问题**: 空 struct 作为命名空间，不符合 Rust 惯用法
-   - **位置**: `src/parser/http_file.rs`
-   - **影响**: API 设计不够简洁
-   - **建议**: 改为模块级函数
-   - **文档**: `doc/parser_optimization_suggestions.md`
+1. **`HttpFileParser` 空结构体**（历史记录）
+   - 已在 Clean Architecture 重构中通过模块化函数取代，不再适用。
 
-2. **元数据解析缺失**
-   - **问题**: `@name`, `@skip`, `@timeout` 等元数据仅识别未解析
-   - **影响**: 无法跳过特定请求，无法设置超时
-   - **优先级**: 中 - 影响实用性
-   - **计划**: Stage 2 第二迭代
+2. **HTML 报告生成（Sprint 6 遗留）**
+   - **问题**: JSON 报告已就绪，HTML 可视化报告模板尚未实现。
+   - **影响**: CI/CD 展示和团队报告能力受限。
+   - **计划**: 基于 `handlebars-rust` 或 `tera` 对 `BatchExecutor` JSON 结果静态渲染。
 
-3. **错误处理不够细粒度**
-   - **问题**: 多种错误类型混用，不够精确
-   - **影响**: 调试困难
-   - **建议**: 建立统一的错误层次结构
+3. **动态变量（`{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`）**
+   - **问题**: 动态 built-in 变量语法支持尚未实现。
+   - **影响**: 高频刚需，用户需手动计算时间戳等值。
+   - **计划**: 新增 `DynamicVariableProvider` trait + 注册到 `VariableResolver`。
 
 #### P2 - 中优先级
 
-4. **缺少集成测试**
-   - **问题**: 单元测试充分，但集成测试较少
-   - **影响**: 端到端场景覆盖不足
-   - **建议**: 增加 `tests/` 目录下的集成测试
+4. **JUnit XML 输出**
+   - **问题**: CI/CD 系统（GitHub Actions, Jenkins）普遍expect JUnit XML 格式。
+   - **影响**: 无法直接集成企业 CI 流水线。
+   - **计划**: 新增 `--format junit` 输出。
 
-5. **Markdown 文件解析缺失**
-   - **问题**: 无法从 Markdown 提取 HTTP 代码块
-   - **影响**: 功能完整性
-   - **计划**: Stage 2 第二迭代
+5. **条件执行与循环（`@skip-if`, `@loop`）**
+   - **问题**: 语法已预研，实现延期。
+   - **影响**: CI 环境变量条件跳过、压测循环执行能力缺失。
+
+6. **并行执行进度条**
+   - **问题**: 并行模式已实现，但无终端进度反馈。
+   - **影响**: 长时间批量测试的用户体验。
 
 #### P3 - 低优先级
 
-6. **进度显示缺失**
-   - **问题**: 批量测试时无进度指示
-   - **影响**: 用户体验（长时间运行时）
-   - **建议**: 添加 `indicatif` 进度条
+7. **变量加密（SOPS-like `ENC[...]`）**
+   - 敏感配置值的加密存储与解析。
 
-7. **并行执行缺失**
-   - **问题**: 顺序执行效率低
-   - **影响**: 性能
-   - **建议**: 未来扩展
+8. **插件系统**
+   - 自定义变量 / 断言 / Mock 生成器的可插拔架构。
+
+9. **分布式追踪 / Trace ID 提取**
+   - 自动从响应头提取 Trace ID 并 propagated。
 
 ---
 
 ### 2. 功能缺失
 
-#### 未实现的原计划功能
+#### 已实现（历史记录中列为"未实现"）
 
-1. **断言系统 (Stage 5)**
-   - **描述**: `@assert status == 200` 自动验证
-   - **状态**: 未开始
-   - **优先级**: 高 - 核心测试能力
+| 功能 | 当前状态 | 交付物 |
+|------|----------|--------|
+| 断言系统 (Stage 5) | ✅ 已完成 | `src/assertion/`, `src/runner/executor.rs` |
+| 变量系统 | ✅ 已完成 | `src/variable/`, `@capture` |
+| 环境管理 | ✅ 已完成 | `.env` + `--env-file` + `rupost.toml` |
+| 输出格式 | ✅ JSON 报告已就绪 | `--report json` |
+| 请求依赖 | ✅ 已完成 | `@depends-on` + DAG 拓扑排序 |
+| Markdown 解析 | ✅ 已完成 | `src/parser/markdown_file.rs` |
+| 并行执行 | ✅ 已完成 | `src/runner/parallel.rs` |
 
-2. **变量系统**
-   - **描述**: 请求间变量传递（如 `{{userId}}`）
-   - **状态**: 未开始
-   - **优先级**: 高 - 实用性关键
+#### 仍未实现
 
-3. **环境管理**
-   - **描述**: `.env` 文件支持，环境切换
-   - **状态**: 未开始
-   - **优先级**: 中
-
-4. **输出格式 (Stage 6)**
-   - **描述**: JSON/HTML 测试报告
-   - **状态**: 未开始
-   - **优先级**: 中
-
-5. **请求依赖**
-   - **描述**: 基于前一个请求结果执行后续请求
-   - **状态**: 未开始
-   - **优先级**: 中
+1. **HTML 可视化报告** — Sprint 6 遗留
+2. **JUnit XML 报告** — CI/CD 集成必备
+3. **动态变量** (`{{$timestamp}}`, `{{$uuid}}`)
+4. **`@skip-if` 条件执行**
+5. **`@loop N` 循环压测**
+6. **变量加密** (`ENC[...]`)
+7. **插件系统**
 
 ---
 
@@ -162,47 +222,34 @@ ParsedRequest → Request
 
 ### 立即可做（P0）
 
-无紧急项 - 当前版本稳定
+无紧急项 — 当前版本稳定，240+ 测试全绿。
 
-### 短期目标（P1 - 1-2 天）
+### 短期目标（P1 - 1-2 周）
 
-1. **元数据解析实现**
-   - `@name` - 请求命名
-   - `@skip` - 跳过测试
-   - `@timeout` - 超时设置
-   - **价值**: 提升测试灵活性
-   - **工作量**: 中
+1. **HTML 报告生成**（Sprint 6 遗留）
+   - 基于现有 JSON 报告，使用 `handlebars-rust` / `tera` 渲染单页 HTML
+   - **价值**: CI/CD 展示、团队报告
 
-2. **断言系统设计与实现 (Stage 5)**
-   - 基础断言：status, headers, body contains
-   - **价值**: 真正的自动化测试能力
-   - **工作量**: 大
-   - **依赖**: 元数据解析
+2. **动态变量** (`{{$timestamp}}`, `{{$uuid}}`, `{{$randomInt}}`)
+   - 新增 `DynamicVariableProvider` trait
+   - **价值**: 高频刚需，降低用例编写摩擦
 
-### 中期目标（P2 - 1 周）
+3. **JUnit XML 输出** (`--format junit`)
+   - **价值**: 企业 CI 流水线集成必备
 
-3. **Markdown 文件解析器**
-   - 提取 ````http` 代码块
-   - **价值**: 差异化功能
-   - **工作量**: 小
+### 中期目标（P2 - 2-4 周）
 
-4. **变量系统**
-   - 环境变量支持
-   - 请求间变量传递
-   - **价值**: 实用性提升
-   - **工作量**: 大
-
-5. **优化重构**
-   - `HttpFileParser` 改为模块函数
-   - 错误类型重构
-   - **价值**: 代码质量
-   - **工作量**: 中
+4. **`@skip-if` 条件执行**
+5. **`@loop N` 循环压测**
+6. **并行执行进度条**
+7. **`rupost history export`** — 事后快照创建
 
 ### 长期目标（P3 - 未来）
 
-6. **输出与报告 (Stage 6)**
-7. **并行执行**
-8. **CLI 增强**（`--json`, `--quiet`, `--stop-on-error`）
+8. AI Distillation 引擎（`.skills` 文件）— PRD 已就绪
+9. 变量加密（SOPS-like `ENC[...]`）
+10. 插件系统
+11. 分布式追踪 / Trace ID
 
 ---
 
@@ -230,53 +277,36 @@ ParsedRequest → Request
 
 ## 🚀 建议的下一步行动
 
-### 方案 A: 完善核心功能（推荐）
+### 方案 A: 完善 CI/CD 就绪度（推荐）
 
-**目标**: 将测试能力提升到生产可用级别
+**目标**: 让 RuPost 能够无缝集成到企业 CI/CD 流水线
 
-1. **元数据解析** (1-2天)
-   - 实现 `@name`, `@skip`, `@timeout`
-   - 更新测试
-   
-2. **断言系统** (2-3天)
-   - 设计断言 DSL
-   - 实现基础断言
-   - 集成到 TestExecutor
+1. **HTML 报告生成** (1-2天)
+2. **JUnit XML 输出** (1天)
+3. **动态变量** (1天)
 
 **完成后效果**:
-```http
-@name Login Test
-@skip false
-POST https://api.example.com/login
-@assert status == 200
-@assert body.token != null
-
-{"username": "test", "password": "pass"}
+```yaml
+# GitHub Actions
+- run: cargo run -- test --report json --format junit tests/
 ```
 
----
+### 方案 B: AI 蒸馏 Phase 1
 
-### 方案 B: 扩展生态功能
+**目标**: 将执行历史转化为 `.skills` 知识文件（无需 LLM key）
 
-**目标**: 增强工具的适用场景
+1. 基于 `history/` 模块 + `JsonPathResolver`
+2. 输出 Ability → Step → Skill → Truth 结构化知识
 
-1. **Markdown 支持**
-2. **变量系统**
-3. **环境管理**
+**适合**: 打造团队知识护城河，为商业化铺垫
 
-**适合**: 需要在文档中测试 API 的场景
+### 方案 C: 分发与部署
 
----
+**目标**: 降低用户使用门槛
 
-### 方案 C: 优化与重构
-
-**目标**: 提升代码质量和性能
-
-1. **代码重构**（HttpFileParser 等）
-2. **增加集成测试**
-3. **性能优化**（并行执行）
-
-**适合**: 当前功能足够，需要打磨质量
+1. GitHub Releases 预编译二进制（macOS/Linux/Windows）
+2. Homebrew formula
+3. Reqwest 依赖安全审计与升级
 
 ---
 
@@ -297,14 +327,15 @@ POST https://api.example.com/login
 
 | 维度 | 评分 | 说明 |
 |------|------|------|
-| **核心功能** | ★★★★☆ | 解析+转换+执行完整 |
-| **测试覆盖** | ★★★★★ | 单元测试充分 |
-| **代码质量** | ★★★★☆ | Clippy 通过，有部分技术债 |
-| **用户体验** | ★★★☆☆ | 基础功能可用，缺断言 |
-| **文档完整** | ★★★☆☆ | 内部文档充分，缺用户文档 |
-| **生产就绪** | ★★★☆☆ | MVP 可用，需断言系统 |
+| **核心功能** | ★★★★★ | HTTP/WS/SSE/Mock/TUI/Replay/Diagnose 全部就绪 |
+| **测试覆盖** | ★★★★★ | 240+ 单元+集成测试全绿，22 个集成测试文件 |
+| **代码质量** | ★★★★☆ | Clippy 通过，Clean Architecture 严格解耦 |
+| **用户体验** | ★★★★☆ | TUI 成熟，HSL 配色+微动画，curl/httpie 内联支持 |
+| **文档完整** | ★★★★☆ | 内部架构文档详尽；用户文档待补全 |
+| **CI/CD 就绪** | ★★★☆☆ | JSON 报告已就绪；HTML 报告 + JUnit XML 待实现 |
+| **生产就绪** | ★★★★☆ | MVP 完成；CI 集成格式为最大缺口 |
 
-**总体**: ★★★★☆ (4/5) - **优秀的 MVP，需要核心功能补全**
+**总体**: ★★★★☆ (4/5) — 功能丰富的 Advanced MVP，CI/CD 集成为下一阶段重点
 
 ---
 

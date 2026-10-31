@@ -18,6 +18,19 @@ fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
     lines.join("\n")
 }
 
+/// buffer 中是否存在指定背景色的 cell（高亮冒烟断言用；全 TUI 代码仅高亮与
+/// statusline 两处 `.bg()`，statusline 用独立的 status_bg，与 accent 不冲突）。
+fn buffer_has_bg(buffer: &ratatui::buffer::Buffer, color: ratatui::style::Color) -> bool {
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if buffer[(x, y)].bg == color {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// 在 buffer 中查找以 needle 文本开头的 cell，返回其前景色（主题取色差异断言用）。
 /// 跨 cell 拼接比较，needle 须为 ASCII 以保证字节偏移与 cell 对齐。
 fn find_cell_fg(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<ratatui::style::Color> {
@@ -1483,7 +1496,8 @@ fn test_search_highlight_renders_in_response_panel() {
     let buffer = frame.buffer;
     let mut found_hit = false;
     for y in 0..buffer.area.height {
-        for x in 0..buffer.area.width {
+        // 上界收窄 width-2：x+2 越界索引在 Buffer 上会 panic（当前右缘是边框不触发，但属隐式依赖）
+        for x in 0..buffer.area.width.saturating_sub(2) {
             let cell = &buffer[(x, y)];
             if cell.symbol() == "h"
                 && buffer[(x + 1, y)].symbol() == "e"
@@ -1507,17 +1521,11 @@ fn test_search_highlight_renders_in_response_panel() {
             rupost::tui::ui::render(frame, &mut state);
         })
         .unwrap();
-    let buffer = frame.buffer;
-    let mut highlighted = false;
-    for y in 0..buffer.area.height {
-        for x in 0..buffer.area.width {
-            if buffer[(x, y)].bg == rupost::tui::theme::palette(ThemeKind::Dark).accent {
-                highlighted = true;
-            }
-        }
-    }
     assert!(
-        !highlighted,
+        !buffer_has_bg(
+            frame.buffer,
+            rupost::tui::theme::palette(ThemeKind::Dark).accent
+        ),
         "no query must not highlight anywhere in the viewport"
     );
 }
@@ -1622,14 +1630,7 @@ fn test_streaming_views_search_highlight_smoke() {
         })
         .unwrap();
     let buffer = terminal.backend().buffer();
-    let mut sse_hit = false;
-    for y in 0..buffer.area.height {
-        for x in 0..buffer.area.width {
-            if buffer[(x, y)].bg == accent {
-                sse_hit = true;
-            }
-        }
-    }
+    let sse_hit = buffer_has_bg(buffer, accent);
     assert!(sse_hit, "SSE streaming view must highlight matches");
 
     // WS 流式视图
@@ -1659,14 +1660,7 @@ fn test_streaming_views_search_highlight_smoke() {
         })
         .unwrap();
     let buffer = terminal.backend().buffer();
-    let mut ws_hit = false;
-    for y in 0..buffer.area.height {
-        for x in 0..buffer.area.width {
-            if buffer[(x, y)].bg == accent {
-                ws_hit = true;
-            }
-        }
-    }
+    let ws_hit = buffer_has_bg(buffer, accent);
     assert!(ws_hit, "WS streaming view must highlight matches");
 }
 

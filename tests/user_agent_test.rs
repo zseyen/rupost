@@ -1,5 +1,8 @@
 //! Integration tests for dynamic User-Agent configuration and overrides.
 
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use rupost::http::Client;
 use rupost::http::request::Request;
 use rupost::runner::TestExecutor;

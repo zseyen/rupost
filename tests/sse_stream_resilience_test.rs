@@ -5,6 +5,10 @@
 //!    共用同一 flush 分支），尾事件必须照常派发，不得静默丢失；
 //! 2. 1MB 内存上限：恶意大事件（>1MB 单行 / >1MB 单事件 data 累积）只截断
 //!    不 OOM 不挂死，且事件边界复位后后续正常事件不受影响。
+
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use rupost::parser::HttpFileParser;
 use rupost::runner::TestExecutor;
 use rupost::variable::VariableContext;

@@ -3,6 +3,10 @@
 //! 字段清单逐项存在性锁定：CI 消费者（jq/脚本/看板）依赖这些键名，
 //! 手写字段清单漏字段、或未来重构悄悄改名/删字段时，测试先行失败。
 //! 采用**精确键集合**断言：新增字段也必须显式更新契约（schema 语义）。
+
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use rupost::http::diagnose_url;
 use rupost::parser::HttpFileParser;
 use rupost::reporter::TestReporter;

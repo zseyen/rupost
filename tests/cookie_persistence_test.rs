@@ -6,6 +6,10 @@
 //! 2. 并行模式：worker 执行器均为临时仓库（Ephemeral，Drop 也不落盘），
 //!    worker 运行期间获得的新 cookie **绝不**出现在 cookie 文件中——
 //!    并发写盘会互相截断，宁可不持久化；主执行器 Drop 兜底只保存主 store。
+
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use rupost::runner::TestExecutor;
 use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest};
 use rupost::variable::VariableContext;

@@ -81,6 +81,7 @@ tempfile = "3.24.0"
 wiremock = "0.6.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 filetime = "0.2.29"
+ctor = "0.4"
 
 [[bench]]
 name = "parser_bench"

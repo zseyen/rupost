@@ -11,6 +11,10 @@
 //! 4. `global.` 前缀跨文件可见性：`@capture global.x` 落入 Arc 共享的
 //!    全局罐——依赖链 worker 的 Context 克隆共享同一罐，即使变量差集
 //!    克隆机制（`variables()`）不携带 global.* 键，后继文件仍可见。
+
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use rupost::parser::HttpFileParser;
 use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest, TestExecutor};
 use rupost::variable::VariableContext;

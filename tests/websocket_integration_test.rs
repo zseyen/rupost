@@ -1,4 +1,8 @@
 #![allow(clippy::collapsible_if, clippy::result_large_err)]
+
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use futures_util::{SinkExt, StreamExt};
 use rupost::parser::HttpFileParser;
 use rupost::runner::TestExecutor;

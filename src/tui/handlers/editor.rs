@@ -411,11 +411,19 @@ mod ws_orchestration_tests {
         // 5. D 关闭
         handle_editor_key(&mut state, key('D'), &tx).await;
         assert!(state.ws_session.is_none());
-        // 关闭后执行互斥解除
+        // 关闭后执行互斥解除：真实调用触发器验证守卫（同步，在解析/执行之前）
+        // 不再因会话浮错；spawn 的执行对已关服务器无状态副作用（测试进程已静音历史落盘）
         tokio::time::sleep(Duration::from_millis(50)).await;
         state.last_error = None;
-        // （不真正执行剧本——服务器可能已关；只验证守卫不再因会话触发）
-        assert_eq!(state.last_error, None);
+        trigger_request_execution(&mut state, &tx).await;
+        assert!(
+            !state
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("interactive WS session")),
+            "guard must not fire after session close: {:?}",
+            state.last_error
+        );
     }
 
     /// R7 守护：会话缺失时 WsSend 模态 Enter 派发浮错

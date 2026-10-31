@@ -523,9 +523,11 @@ mod context_tests {
     fn test_build_initial_context_env_file_and_var_cascade() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join("custom.env");
+        // 变量名用冷僻 key：级联第 3 层用系统环境变量覆盖同名 key，
+        // 若断言的 key 恰被 shell 导出（如 base_url），测试会假红
         std::fs::write(
             &env_path,
-            "token = \"env-token-1\"\nbase_url = \"http://from-env\"\n",
+            "token = \"env-token-1\"\nenv_only_base = \"http://from-env\"\n",
         )
         .unwrap();
 
@@ -537,7 +539,10 @@ mod context_tests {
         let context = build_initial_context(&options);
 
         // .env 变量生效
-        assert_eq!(context.get("base_url").as_deref(), Some("http://from-env"));
+        assert_eq!(
+            context.get("env_only_base").as_deref(),
+            Some("http://from-env")
+        );
         // --var 覆盖 .env（级联最高优先）
         assert_eq!(context.get("token").as_deref(), Some("cli-token-2"));
     }

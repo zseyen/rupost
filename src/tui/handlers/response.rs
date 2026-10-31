@@ -135,7 +135,8 @@ mod search_flow_tests {
     /// R4 守护：`/` 模态逐键输入实时更新 query（克隆 Filter 的 live 语义）
     #[tokio::test]
     async fn test_search_modal_live_typing_updates_query() {
-        let mut state = state_with_lines(&["alpha", "beta"]);
+        // 第二行含命中段，使留存 query 的续跳可观测（跳转必须真实移动游标）
+        let mut state = state_with_lines(&["alpha", "also-al", "beta"]);
         let (tx, _rx) = mpsc::channel::<TuiEvent>(1);
 
         handle_key(&mut state, key('/'), &tx).await;
@@ -156,9 +157,9 @@ mod search_flow_tests {
         assert!(matches!(state.input_mode, InputMode::None));
         assert_eq!(state.search_query, "al");
 
-        // 留存 query 下 n/N 续跳
+        // 留存 query 下 n/N 续跳：命中 [0, 1]，从 scroll=0 前进必须到 1
         state.jump_to_match(true);
-        assert_eq!(state.response_scroll, 0);
+        assert_eq!(state.response_scroll, 1);
     }
 
     /// R5 守护：完成态长连接视图 Down 滚动按 total_log_lines 钳制

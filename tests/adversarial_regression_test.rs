@@ -4,6 +4,9 @@
 //! `doc/plans/2026-10-18-quality-hardening-execution-plan.md`）。每个用例注释内嵌
 //! 当时的原始复现方式，保证修复可被重放验证。需要真实网络栈的用例用 wiremock 承载。
 
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use rupost::parser::HttpFileParser;
 use rupost::runner::TestExecutor;
 use rupost::variable::VariableContext;

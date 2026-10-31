@@ -376,6 +376,13 @@ impl AppState {
                 self.sse_visual_lines.clear();
                 self.sse_last_processed_pos = 0;
                 self.ws_visual_lines.clear();
+                // 滑窗域随新请求复位：旧日志路径/行数/视口缓存不得串入本次运行
+                // （log_file_path 由本次运行的 InitLogPath 事件重新挂载）
+                self.log_file_path = None;
+                self.total_log_lines = 0;
+                self.viewport_cache.clear();
+                self.cache_start_line = 0;
+                self.cache_end_line = 0;
 
                 if let Some(ref path) = self.editor_file_path {
                     if self.active_sidebar_tab == SidebarTab::Files {

@@ -232,6 +232,20 @@ async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent
         Ok(sess) => {
             state.last_error = None;
             state.ws_session = Some(sess);
+            // 交互会话无 runner 日志文件参与渲染；上一轮运行的日志/缓存/内存帧
+            // 若不清空，会话视图中会被当作伪帧渲染（张冠李戴的 stale 内容）
+            state.log_file_path = None;
+            state.total_log_lines = 0;
+            state.viewport_cache.clear();
+            state.cache_start_line = 0;
+            state.cache_end_line = 0;
+            state.sse_stream_body.clear();
+            state.sse_visual_lines.clear();
+            state.sse_last_processed_pos = 0;
+            state.ws_frames.clear();
+            state.ws_visual_lines.clear();
+            state.warnings.clear();
+            state.response_scroll = 0;
         }
         Err(e) => state.last_error = Some(e),
     }
@@ -435,6 +449,50 @@ mod ws_orchestration_tests {
             "orphan send must surface: {:?}",
             state.last_error
         );
+    }
+
+    /// P0-2 守护：W 建会话必须清空上一轮运行的流式域（日志路径/行数/视口缓存/
+    /// 内存帧/SSE 正文/告警），否则会话视图渲染 stale 伪帧、搜索空间错位
+    #[tokio::test]
+    async fn test_w_session_clears_stale_stream_state() {
+        let url = spawn_echo_server().await;
+        let mut state = ws_editor_state(&url);
+        // 伪造上一轮运行残留
+        state.log_file_path = Some(std::path::PathBuf::from("/tmp/stale-run.log"));
+        state.total_log_lines = 42;
+        state
+            .viewport_cache
+            .push_back(crate::tui::state::WsFrameRecord {
+                is_send: false,
+                timestamp: "11:00:00".to_string(),
+                content: "stale-frame".to_string(),
+            });
+        state.cache_start_line = 5;
+        state.cache_end_line = 40;
+        state.sse_stream_body = "data: stale\n".to_string();
+        state.ws_frames.push(crate::tui::state::WsFrameRecord {
+            is_send: true,
+            timestamp: "11:00:01".to_string(),
+            content: "stale-send".to_string(),
+        });
+        state.warnings = vec!["stale warning".to_string()];
+
+        let (tx, _rx) = mpsc::channel(64);
+        handle_editor_key(&mut state, key('W'), &tx).await;
+        assert!(state.ws_session.is_some(), "session must be established");
+
+        assert!(state.log_file_path.is_none());
+        assert_eq!(state.total_log_lines, 0);
+        assert!(state.viewport_cache.is_empty());
+        assert_eq!(state.cache_start_line, 0);
+        assert_eq!(state.cache_end_line, 0);
+        assert!(state.sse_stream_body.is_empty());
+        assert!(state.ws_frames.is_empty());
+        assert!(state.warnings.is_empty());
+
+        // 会话期搜索空间必须是内存视觉行（与渲染分支一致），而非日志文件
+        use crate::tui::state::search::SearchSpace;
+        assert!(matches!(state.search_space(), SearchSpace::VisualLines(_)));
     }
 }
 

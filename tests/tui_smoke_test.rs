@@ -1708,3 +1708,116 @@ fn test_new_modals_render_smoke_matrix() {
         }
     }
 }
+
+#[test]
+fn test_sse_completed_jump_survives_write_side_line_mismatch() {
+    // P1-1 回归锚点：SSE 写侧每事件落 `data: {d}\n\n` 两个物理行，而流式期
+    // total_log_lines 按 data 内 '\n' 计数恒偏小（单行 data 计 0）。
+    // 完成时必须以文件实际行数回填基准，否则深行号跳转后滑窗截断、视口空白。
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("sse.log");
+    {
+        let mut f = std::fs::File::create(&log).unwrap();
+        for i in 0..80 {
+            writeln!(f, "data: event-{}", i).unwrap();
+            writeln!(f).unwrap(); // 事件间空行（写侧双物理行格式）
+        }
+    }
+    // 文件实际 160 物理行；模拟流式期每事件计 1 行 → 80（与文件错位）
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 160);
+
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.is_loading = true;
+    state.sse_stream_body = "data: event-0\n".to_string(); // 使完成态走 SSE 分支
+    state.log_file_path = Some(log.clone());
+    state.total_log_lines = 80;
+
+    // 完成事件触发回填（RequestFinished 的 AppState 归约）
+    state.handle_request_finished(
+        Ok(Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "done".to_string(),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap()),
+        HashMap::new(),
+        vec![],
+        vec![],
+    );
+    assert_eq!(
+        state.total_log_lines, 160,
+        "completion must recount total_log_lines from the log file"
+    );
+
+    // 深行号跳转：命中在第 158 物理行（旧基准 80 下滑窗截断 → 视口空白）
+    state.search_query = "event-79".to_string();
+    state.jump_to_match(true);
+    assert_eq!(state.response_scroll, 158);
+
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    let content = {
+        let buffer = terminal.backend().buffer();
+        let mut acc = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                acc.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        acc
+    };
+    assert!(
+        content.contains("data: event-79"),
+        "jumped-to match must be visible after recount-based baseline"
+    );
+}
+
+#[test]
+fn test_send_request_resets_sliding_window_fields() {
+    // P0-2 串扰阻断：新请求必须复位上一轮运行的滑窗域（旧日志路径/行数/缓存）
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("old.log");
+    std::fs::write(&log, "[→] 12:00:00 | stale\n").unwrap();
+
+    let mut state = AppState::new();
+    state.log_file_path = Some(log);
+    state.total_log_lines = 7;
+    state
+        .viewport_cache
+        .push_back(rupost::tui::state::WsFrameRecord {
+            is_send: false,
+            timestamp: "12:00:00".to_string(),
+            content: "stale".to_string(),
+        });
+    state.cache_start_line = 3;
+    state.cache_end_line = 9;
+
+    let req = ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "http://localhost".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: Default::default(),
+        line_number: 1,
+        base_path: None,
+    };
+    state.update(Action::SendRequest(Box::new(req)));
+
+    assert!(state.log_file_path.is_none());
+    assert_eq!(state.total_log_lines, 0);
+    assert!(state.viewport_cache.is_empty());
+    assert_eq!(state.cache_start_line, 0);
+    assert_eq!(state.cache_end_line, 0);
+}

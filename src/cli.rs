@@ -754,4 +754,69 @@ mod tests {
             );
         }
     }
+
+    /// R2 验收（TUI 流式调试 PRD）：`tui` 子命令的 --env/--var/--env-file 解析
+    /// 与 TuiOptions 组装映射。变量允许多次 --var 累积；file 为可选位置参数。
+    #[test]
+    fn test_tui_args_parse_and_options_mapping() {
+        let cli = Cli::try_parse_from([
+            "rupost",
+            "tui",
+            "suite.http",
+            "--env",
+            "staging",
+            "--var",
+            "k1=v1",
+            "--var",
+            "k2=v2",
+            "--env-file",
+            ".env.staging",
+        ])
+        .expect("tui args must parse");
+
+        let Some(Commands::Tui {
+            file,
+            env,
+            var,
+            env_file,
+        }) = cli.command
+        else {
+            panic!("expected Tui subcommand");
+        };
+        {
+            assert_eq!(file.as_deref(), Some("suite.http"));
+            assert_eq!(env.as_deref(), Some("staging"));
+            assert_eq!(var, vec!["k1=v1".to_string(), "k2=v2".to_string()]);
+            assert_eq!(env_file.as_deref(), Some(".env.staging"));
+
+            // main.rs 分发处的 TuiOptions 组装映射（字段一一对应）
+            let opts = rupost::tui::TuiOptions {
+                env: env.clone(),
+                vars: var.clone(),
+                env_file: env_file.clone(),
+            };
+            assert_eq!(opts.env.as_deref(), Some("staging"));
+            assert_eq!(opts.vars, vec!["k1=v1".to_string(), "k2=v2".to_string()]);
+            assert_eq!(opts.env_file.as_deref(), Some(".env.staging"));
+        }
+    }
+
+    /// R2：无参 `tui` 的默认值（file/env/env_file 均空、vars 空集）
+    #[test]
+    fn test_tui_defaults_without_file() {
+        let cli = Cli::try_parse_from(["rupost", "tui"]).expect("bare tui must parse");
+        let Some(Commands::Tui {
+            file,
+            env,
+            var,
+            env_file,
+        }) = cli.command
+        else {
+            panic!("expected Tui subcommand");
+        };
+        assert!(file.is_none());
+        assert!(env.is_none());
+        assert!(var.is_empty());
+        assert!(env_file.is_none());
+    }
 }

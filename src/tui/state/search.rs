@@ -50,8 +50,8 @@ impl AppState {
             );
         }
         if streaming {
-            if self.is_loading {
-                // 流式态：内存视觉行（ws 优先，与渲染分支一致）
+            if self.is_loading || self.ws_session.is_some() {
+                // 流式态 / 交互会话：内存视觉行（ws 优先，与渲染分支一致）
                 if is_ws {
                     SearchSpace::VisualLines(
                         self.ws_visual_lines.iter().map(|l| l.to_string()).collect(),
@@ -68,7 +68,19 @@ impl AppState {
                 // 完成态：日志文件逐行 grep（行号即滑窗 scroll 锚点）
                 SearchSpace::LogFile(path.clone())
             } else {
-                SearchSpace::VisualLines(Vec::new())
+                // 完成态但无日志文件：回退内存视觉行（与渲染分支一致）
+                if is_ws {
+                    SearchSpace::VisualLines(
+                        self.ws_visual_lines.iter().map(|l| l.to_string()).collect(),
+                    )
+                } else {
+                    SearchSpace::VisualLines(
+                        self.sse_visual_lines
+                            .iter()
+                            .map(|l| l.to_string())
+                            .collect(),
+                    )
+                }
             }
         } else {
             SearchSpace::VisualLines(

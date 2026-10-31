@@ -171,3 +171,62 @@ async fn test_ws_interactive_session_close_notifies_server() {
     }
     panic!("server loop must observe connection close after session drop");
 }
+
+/// P0-2 渲染守护：交互会话期（无 runner 日志文件）帧必须经内存视觉行上屏，
+/// 标题为 [WS Interactive]；删掉 ui/response.rs 的 session_active 分支即红。
+#[tokio::test]
+async fn test_ws_interactive_frames_visible_in_render() {
+    use rupost::tui::state::{AppState, Panel};
+
+    let (url, _server_rx) = start_echo_ws_server().await;
+    let req = ws_request(&url);
+    let (event_tx, _event_rx) = tokio::sync::mpsc::channel(64);
+    let ctx = VariableContext::new();
+
+    let session = start_session(&req, &ctx, event_tx)
+        .await
+        .expect("connect ok");
+
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.ws_session = Some(session);
+    state.is_loading = false;
+    state.log_file_path = None;
+
+    // 会话收发帧（真实事件链路外，直接走 AppState 归约——与 app.rs 消费一致）
+    state.handle_ws_frame(true, "outbound-ping".to_string());
+    state.handle_ws_frame(false, "echo: outbound-ping".to_string());
+
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let mut lines: Vec<String> = Vec::new();
+    for y in 0..buffer.area.height {
+        let mut row = String::new();
+        for x in 0..buffer.area.width {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        lines.push(row);
+    }
+    let rendered = lines.join("\n");
+
+    assert!(
+        rendered.contains("[WS Interactive]"),
+        "active session title must be interactive, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("echo: outbound-ping"),
+        "session frames must be visible during interactive session, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Listening for frames"),
+        "placeholder must not shadow real frames, got:\n{rendered}"
+    );
+}

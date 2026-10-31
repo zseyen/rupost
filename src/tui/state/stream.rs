@@ -79,6 +79,15 @@ impl AppState {
         self.assertions = assertions.clone();
         self.warnings = warnings;
 
+        // P1-1：完成态滑窗/搜索跳转以“文件物理行号”为锚，而 total_log_lines 在
+        // 流式期按事件计数（SSE 每事件写侧 2 物理行、WS 多行 payload 计 1 帧），
+        // 完成时以日志文件实际行数回填基准；读取失败保留原值（尽力而为）。
+        if let Some(path) = &self.log_file_path {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                self.total_log_lines = content.lines().count();
+            }
+        }
+
         let is_success = result.is_ok() && assertions.iter().all(|a| a.passed);
         let exec_state = if is_success {
             FileExecState::Success

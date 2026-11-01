@@ -326,7 +326,7 @@ fi
 
 # 未配置密钥时应返回退出码 1 并给出可执行指引（set -e 下用 || 捕获退出码）
 AI_EXIT=0
-env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY $RUPOST_BIN ai assert "status is 200" > /dev/null 2>&1 || AI_EXIT=$?
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 $RUPOST_BIN ai assert "status is 200" > /dev/null 2>&1 || AI_EXIT=$?
 if [ $AI_EXIT -eq 1 ]; then
     echo -e "${GREEN}[✓] 未配置密钥时正确返回退出码 1！${NC}"
 else
@@ -336,6 +336,145 @@ else
 fi
 
 kill $MOCK_AI_PID
+
+# 8. 验证 AI 失败分诊 (ai triage) 离线确定性降级 + dogfooding 闭环
+echo -e "${BLUE}[*] 验证 AI 失败分诊 (ai triage) 离线确定性降级...${NC}"
+TMP_REPORT=$(mktemp /tmp/rupost_report_XXXXXX.json)
+cat << 'EOF' > "$TMP_REPORT"
+[
+  {
+    "file_path": "smoke.http",
+    "results": [
+      {
+        "request_number": 1,
+        "name": "CheckAuth",
+        "method": "GET",
+        "url": "http://localhost:9999/v1/items/1",
+        "status": 401,
+        "duration_ms": 3,
+        "success": false,
+        "error": null,
+        "skipped": false,
+        "assertions": [
+          {
+            "raw": "status == 200",
+            "passed": false,
+            "message": "expected 200, got 401",
+            "expected": "200",
+            "actual": "401"
+          }
+        ],
+        "warnings": []
+      }
+    ]
+  }
+]
+EOF
+TRIAGE_OUT=$(env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 $RUPOST_BIN ai triage "$TMP_REPORT" --json)
+echo "$TRIAGE_OUT" | grep -q '"category": "Auth"'
+echo -e "${GREEN}[✓] ai triage 确定性降级验证成功（含黄色警告 + exit 0）！${NC}"
+rm -f "$TMP_REPORT"
+
+echo -e "${BLUE}[*] 验证 AI 失败分诊 dogfooding 闭环 (test --report-file → ai triage)...${NC}"
+$RUPOST_BIN mock examples/ai_triage/mock_ai.json --port 9002 > /dev/null 2>&1 &
+MOCK_TRIAGE_PID=$!
+sleep 2
+
+FAIL_HTTP=$(mktemp /tmp/rupost_fail_XXXXXX.http)
+cat << 'EOF' > "$FAIL_HTTP"
+### get-profile
+GET http://127.0.0.1:9002/v1/users/1
+Accept: application/json
+
+# @assert status == 200
+EOF
+DOGFOOD_REPORT=$(mktemp /tmp/rupost_dogfood_report_XXXXXX.json)
+TEMP_EXPLAIN=$(mktemp /tmp/rupost_explain_XXXXXX.log)
+
+# --explain 无 Key：规则版基线必须出现、AI 段落不得出现、退出码 1（AI 不改变判定）
+TEST_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 $RUPOST_BIN test "$FAIL_HTTP" --explain > "$TEMP_EXPLAIN" 2>&1 || TEST_EXIT=$?
+if [ "$TEST_EXIT" -eq 1 ] && grep -q "Possible Causes" "$TEMP_EXPLAIN" && ! grep -q "AI Explanation" "$TEMP_EXPLAIN"; then
+    echo -e "${GREEN}[✓] --explain 规则版基线降级验证成功（exit 1，无 AI 段落）！${NC}"
+else
+    echo -e "${RED}[ERROR] --explain 无 Key 降级验证失败（exit=$TEST_EXIT）！${NC}"
+    cat "$TEMP_EXPLAIN"
+    kill $MOCK_TRIAGE_PID
+    exit 1
+fi
+
+# 真实失败 → 真实报告 → ai triage 消费（B1 降级，exit 0，敏感值不泄漏）
+DOGFOOD_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 $RUPOST_BIN test "$FAIL_HTTP" --report-file "$DOGFOOD_REPORT" > /dev/null 2>&1 || DOGFOOD_EXIT=$?
+if [ "$DOGFOOD_EXIT" -eq 1 ] && [ -f "$DOGFOOD_REPORT" ]; then
+    echo -e "${GREEN}[✓] test --report-file 落盘成功（exit 1 由失败断言决定）！${NC}"
+else
+    echo -e "${RED}[ERROR] --report-file 闭环失败（exit=$DOGFOOD_EXIT）！${NC}"
+    kill $MOCK_TRIAGE_PID
+    exit 1
+fi
+
+TRIAGE_JSON=$(env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 $RUPOST_BIN ai triage "$DOGFOOD_REPORT" --json)
+if echo "$TRIAGE_JSON" | grep -q '"category": "Auth"' && ! echo "$TRIAGE_JSON" | grep -q "expired-jwt-should-not-leak"; then
+    echo -e "${GREEN}[✓] ai triage dogfooding 闭环验证成功（真实报告 → Auth 根因簇，脱敏无泄漏）！${NC}"
+else
+    echo -e "${RED}[ERROR] ai triage dogfooding 闭环失败！${NC}"
+    echo "$TRIAGE_JSON"
+    kill $MOCK_TRIAGE_PID
+    exit 1
+fi
+
+kill $MOCK_TRIAGE_PID
+rm -f "$FAIL_HTTP" "$DOGFOOD_REPORT" "$TEMP_EXPLAIN"
+
+# 9. 验证通用导入器 (import curl)：devtools curl → 可执行 .http（防覆盖）
+echo -e "${BLUE}[*] 验证通用导入器 (import curl)...${NC}"
+IMPORT_FILE=$(mktemp /tmp/rupost_import_XXXXXX)
+rm -f "$IMPORT_FILE"  # mktemp 会创建空文件——导入的防覆盖语义要求先移除
+$RUPOST_BIN import curl "curl -X POST 'https://api.example.com/login?next=/home' -H 'Content-Type: application/json' -H 'Authorization: Bearer eyJdemo' --data-raw '{\"user\":\"admin\"}'" -o "$IMPORT_FILE" > /dev/null 2>&1
+if grep -q "POST https://api.example.com/login" "$IMPORT_FILE" && grep -q "authorization: Bearer {{authorization}}" "$IMPORT_FILE" && grep -q "# @assert status == 200" "$IMPORT_FILE"; then
+    echo -e "${GREEN}[✓] import curl 导入验证成功（凭据模板化 + status 断言）！${NC}"
+else
+    echo -e "${RED}[ERROR] import curl 导入失败！${NC}"
+    cat "$IMPORT_FILE"
+    exit 1
+fi
+IMPORT_DUP=0
+$RUPOST_BIN import curl "curl -X POST 'https://api.example.com/login' -o "$IMPORT_FILE"" > /dev/null 2>&1 || IMPORT_DUP=$?
+if [ "$IMPORT_DUP" -ne 0 ]; then
+    echo -e "${GREEN}[✓] import 防覆盖验证成功（已存在拒绝 + 尾部 -o 拦截）！${NC}"
+else
+    echo -e "${RED}[ERROR] import 防覆盖失效！${NC}"
+    exit 1
+fi
+rm -f "$IMPORT_FILE"
+
+# 10. 验证 AI 批量提炼 (ai bootstrap --no-ai 降级) 与指令展开 (ai resolve)
+echo -e "${BLUE}[*] 验证 ai bootstrap 降级与 ai resolve 指引...${NC}"
+HIST_DIR=$(mktemp -d /tmp/rupost_hist_XXXXXX)
+printf '%s\n' '{"id":"h1","timestamp":"2026-10-28T01:00:00Z","duration_ms":10,"request":{"method":"GET","url":"http://127.0.0.1:9002/v1/users/1","headers":{},"body":null},"source":"smoke","response":{"status":200,"headers":{},"body":"{\"token\":\"t\"}"}}' > "$HIST_DIR/history.jsonl"
+BOOT_FILE=$(mktemp /tmp/rupost_boot_XXXXXX)
+rm -f "$BOOT_FILE"  # mktemp 预创建空文件——bootstrap 防覆盖要求先移除
+BOOT_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 RUPOST_HISTORY_DIR="$HIST_DIR" $RUPOST_BIN ai bootstrap --from history --last 5 -o "$BOOT_FILE" --no-ai > /dev/null 2>&1 || BOOT_EXIT=$?
+if [ "$BOOT_EXIT" -eq 0 ] && grep -q "# @assert status == 200" "$BOOT_FILE" && grep -q "# @name " "$BOOT_FILE"; then
+    echo -e "${GREEN}[✓] ai bootstrap 机械基线降级验证成功（exit 0 + status 断言 + @name）！${NC}"
+else
+    echo -e "${RED}[ERROR] ai bootstrap 降级失败（exit=$BOOT_EXIT）！${NC}"
+    exit 1
+fi
+
+RESOLVE_FILE=$(mktemp /tmp/rupost_resolve_XXXXXX.http)
+printf '%s\n' "### login" "POST {{base_url}}/auth/login" "" "# @ai-assert 登录成功" > "$RESOLVE_FILE"
+RESOLVE_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY RUPOST_AI_PROBE_URL=http://127.0.0.1:1 $RUPOST_BIN ai resolve "$RESOLVE_FILE" > /dev/null 2>&1 || RESOLVE_EXIT=$?
+if [ "$RESOLVE_EXIT" -eq 1 ] && grep -q "@ai-assert 登录成功" "$RESOLVE_FILE" && ! grep -q "@assert" "$RESOLVE_FILE"; then
+    echo -e "${GREEN}[✓] ai resolve B2 降级验证成功（文件原样 + exit 1）！${NC}"
+else
+    echo -e "${RED}[ERROR] ai resolve 降级验证失败（exit=$RESOLVE_EXIT）！${NC}"
+    exit 1
+fi
+rm -rf "$HIST_DIR" "$BOOT_FILE" "$RESOLVE_FILE"
 
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"

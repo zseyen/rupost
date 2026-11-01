@@ -21,6 +21,7 @@ RuPost assertion expressions must follow this exact format: \
 Supported paths: status, headers.<name>, body.<json_path>, response.time. \
 Supported operators: ==, !=, >, <, >=, <=, contains, exists. \
 Return ONLY a JSON array of strings, where each string is a standard assertion. \
+If the user message contains an `[Actual response (redacted, truncated)]` section, ground every assertion in that actual structure (use its real JSON paths and values). \
 Do not return any markdown formatting or explanations. Just the JSON array. \
 Example input: 'Response is 200 and token exists' \
 Example output: [\"status == 200\", \"body.token exists\"]";

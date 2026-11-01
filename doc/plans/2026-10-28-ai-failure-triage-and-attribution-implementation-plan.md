@@ -1,6 +1,6 @@
 # Rupost AI 失败归因 (E2) 与智能分诊 (E5) 实施手册 (Flash 模型零歧义执行版 v1.1)
 
-- **文档状态**: Ready for Execution (Flash-Model Audited & Verified v1.1)
+- **文档状态**: Ready for Execution (Flash-Model Audited & Verified v1.1 + Gap Review v1.2，新增 §6 查漏补缺评审——执行前必读)
 - **创建日期**: 2026-10-28
 - **关联 PRD**: [`doc/plans/2026-10-28-ai-failure-triage-and-attribution-prd.md`](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-28-ai-failure-triage-and-attribution-prd.md) (v1.1)
 - **关联架构蓝图**: [`doc/plans/2026-10-27-ai-master-roadmap.md`](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-ai-master-roadmap.md)
@@ -46,7 +46,7 @@
    - 每完成一个 Step，必须依次运行：
      ```bash
      cargo fmt --check
-     cargo clippy --workspace --all-targets
+     cargo clippy --workspace --all-targets --all-features -- -D warnings
      cargo test --workspace
      ```
    - 全部 0 warning、0 error 后，使用 `jj describe -m "..." && jj new` 提交。
@@ -333,7 +333,7 @@ pub async fn run_ai_assert(text: &str, raw: bool) -> Result<()> {
 ### 0.3 Step 0 验证与提交
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 jj describe -m "refactor(ai): extract src/ai module, config loader and redactor"
 jj new
@@ -518,7 +518,7 @@ pub struct JsonAssertionReport {
                var: Vec::new(),
                env_file: None,
                verbose: false,
-               no_cookies: true,
+               no_cookies: false,
                cookie_file: None,
                debug: false,
                debug_on_failure: false,
@@ -598,7 +598,7 @@ pub struct JsonAssertionReport {
 ### 1.3 Step 1 验证与提交
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 jj describe -m "feat(reporter): typed JsonFileReport with failure snippet and --report-file"
 jj new
@@ -1165,7 +1165,7 @@ pub use triage::{
 ### 2.3 Step 2 验证与提交
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 jj describe -m "feat(ai): add attribution and signature-bucket triage in rupost-ai"
 jj new
@@ -1947,7 +1947,7 @@ pub async fn run_ai_triage_from_file(report_path: &str, json_flag: bool, format:
 ### 3.3 Step 3 验证与提交
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 jj describe -m "feat(cli): wire --explain (E2) and ai triage / --triage (E5)"
 jj new
@@ -2095,7 +2095,7 @@ async fn test_ai_triage_with_mock_server_enhances_clusters() {
 ```
 
 #### (3) 在 `tests/verify_features.sh` 中增加冒烟校验段
-在 [`tests/verify_features.sh`](file:///Users/zsyzzx/project/rust/rupost/tests/verify_features.sh) 末尾 `echo "ALL FEATURE VERIFICATIONS PASSED!"` 之前，追加对 `rupost ai triage` 离线确定性分诊的验证（使用 `env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY` 彻底清除宿主机环境变量影响）：
+在 [`tests/verify_features.sh`](file:///Users/zsyzzx/project/rust/rupost/tests/verify_features.sh) 末尾最终横幅（`RuPost 核心特性端到端自动化验证通过！[PASS]`）**之前**，追加对 `rupost ai triage` 离线确定性分诊的验证（使用 `env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY` 彻底清除宿主机环境变量影响；注意脚本为 `set -e`，故意失败的命令须用 `|| VAR=$?` 捕获退出码；新增 dogfooding 步骤使用端口 9002，避免与既有 9000/9001 冲突）：
 ```bash
 echo "--- Verifying AI Triage deterministic fallback ---"
 TMP_REPORT=$(mktemp /tmp/rupost_report_XXXXXX.json)
@@ -2137,7 +2137,7 @@ rm -f "$TMP_REPORT"
 ### 4.3 Step 4 验证与提交
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 bash tests/verify_features.sh
 jj describe -m "test(e2e): add ai_triage integration tests and verify_features smoke check"
@@ -2153,6 +2153,65 @@ jj new
 - [ ] `wc -l src/main.rs` 行数 **小于 150 行**（预期约 125–135 行）。
 - [ ] `rg "rupost_ai" src/runner/ src/http/ src/parser/ src/assertion/` 结果为空（核心引擎对 `rupost-ai` 零直接依赖，仅 `src/runner/app.rs` 调用 `crate::ai`）。
 - [ ] `cargo test --test ai_assert_test` 4 个存量测试 100% PASS。
-- [ ] `cargo clippy --workspace --all-targets` 零警告通过。
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` 零警告通过。
 - [ ] `cargo test --workspace` 全量单元与集成测试 100% PASS。
 - [ ] `bash tests/verify_features.sh` 全特性冒烟测试 100% PASS。
+
+---
+
+## 6. 查漏补缺评审 (Gap Review Addendum v1.2)
+
+> **评审方法**: 正文全部代码引用与仓库真实代码逐项核对（`TestResult`/`AssertionResult`/`Response::new`/`TestReporter`/`app.rs` 渲染块/`DiagnosticsReport` serde/`exporter::redact` 均已实证吻合），并对照 [PRD v1.1](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-28-ai-failure-triage-and-attribution-prd.md) 验收条款与 dev-plan 技术选型。以下条目与正文同等强制。
+
+### 6.1 编译级 / 契约级缺口（P1，不修必炸或违背 PRD）
+
+**GAP-1【已证伪，禁止执行】`runner/mod.rs` 的 `TestResult` re-export 已存在**
+复核修正：`src/runner/mod.rs:11` 实际已有 `pub use types::{TestResult, TestSummary};`（初审 grep 输出被截断导致误报）。`use crate::runner::TestResult` 可直接编译。
+修法：**什么都不做**——若再补一行重复 `pub use types::TestResult;` 反而触发 E0252 重定义编译错误。
+
+**GAP-2 ExplainSession 缺"按签名去重"（PRD US1 明确条款）**
+PRD US1 要求"仅对前 3 个**不同错误签名**的失败请求调用 AI"；正文 ExplainSession 仅计数不去重，同签名失败会重复消耗配额。
+修法（Step 3）：① `rules.rs` 新增 `pub fn failure_signature(ctx: &FailureContext) -> String`：`format!("{}|{:?}|{}", normalize_url_pattern(&ctx.url), ctx.status_code, 首个错误类型)`（错误类型 = error 首行或首个失败断言 raw）；② `ExplainSession` 增加 `explained_signatures: HashSet<String>`，`explain_failure` 计算签名，已存在则直接返回（规则版已打印），未存在才插入并消耗配额。
+
+**GAP-3 无 Key 降级缺黄色警告（PRD US2 And 明确条款）**
+正文 `build_triage_report` 在 `into_client()` 为 None 时静默降级；PRD 要求输出警告。
+修法：`build_triage_report`（env 路径）client 为 None 时 `eprintln!("{} AI 不可用（未检测到配置），已输出确定性签名分组结果", "⚠".yellow())`。`build_triage_report_with_client` 保持静默（测试注入纯净性），警告只加在 env 路径。
+
+**GAP-4 E2（`--explain`）零集成测试**
+Step 4 仅覆盖 triage；PRD US1 And（无 Key → 规则基线 + 黄色警告 + exit 1）未被任何测试锁定。
+修法：`tests/ai_triage_test.rs` 补用例：起 401 mock → `rupost test <fixture> --explain`（`env -u` 清空全部 AI 变量）→ stdout 含 `[Possible Causes]`、不含 `[AI Explanation]`、exit code == 1。
+
+### 6.2 行为与质量缺口（P2）
+
+**GAP-5 缺真实 dogfooding 闭环（P-4 路径未端到端验证）**
+Step 4 的 `ai triage` 测试用手写 JSON 报告；`rupost test --report-file` 的产物从未被 `ai triage` 消费过。
+修法：① `examples/ai_triage/mock_ai.json` 增加第二条路由 `GET /v1/users/:id` → 401；② 新增 `examples/ai_triage/failing_suite.http`（`GET {{base_url}}/v1/users/1` + `@assert status == 200`）；③ 集成测试补闭环：起 mock（端口 9002）→ `rupost test failing_suite.http --var base_url=... --report-file report.json`（exit 1）→ `rupost ai triage report.json --json` → 含 `"category": "Auth"`。verify_features.sh 增加同型步骤。
+
+**GAP-6 `JsonAssertionReport` 缺 `stream_event_index`**
+`AssertionResult` 含 `stream_event_index: Option<usize>`（SSE 流断言）；报告丢弃后，同一断言跨多事件的失败在 triage 中不可区分。
+修法：增加 `#[serde(default, skip_serializing_if = "Option::is_none")] pub stream_event_index: Option<usize>,`；`build_json_reports` 映射之；§4.2 测试 fixture 字面量同步补 `stream_event_index: None`。
+
+**GAP-7 verify_features.sh 锚点修正**（已内联修正）：原引用不存在的英文标记，已改为中文横幅锚点；dogfooding 端口约定 9002。
+**GAP-8 clippy 门禁对齐**（已内联修正）：铁律 #9 与全部 Step 验证块统一为 `cargo clippy --workspace --all-targets --all-features -- -D warnings`。
+
+### 6.3 健壮性小缺口（P3）
+
+- **GAP-9** `AttributionAdvice.fix_suggestion` 缺 `#[serde(default)]`——LLM 省略该字段会导致整体 TranslationFailed 而非降级为空建议（root_cause 已有空值检查兜底）。
+- **GAP-10** `SignatureBucket` 三个 `#[serde(skip_serializing)]` 字段（all_requests/default_root_cause/default_fix_suggestion）缺 `#[serde(default)]`——当前管线只序列化不反序列化，但下游一旦读回即炸，补 default 消除隐患。
+- **GAP-11** `run_inline_triage` 在 failed==0 时静默，使 `format_triage_markdown` 的零失败分支成为死代码——改为始终打印（全绿时输出 "All N requests passed" 单行）。
+- **GAP-12** Step 4 文档归档不全：补 `doc/architecture/directory_structure.md`（新增 `src/ai/{config,redactor,rules,explain,triage}.rs` 与 crate `json_util/attribution/triage` 条目——项目文档-代码对齐政策）与 `CHANGELOG.md`（Added：`--explain`、`ai triage` 两行）。
+
+### 6.4 范围与偏差注记（防执行误解，非缺陷）
+
+- **NOTE-1** Step 0 的 config 是 **env-only 子集**：B4 完整链（`~/.rupost/ai.toml`、本地 Ollama 探测、本地占位 Key 规则）与 `--last/--response` 属 P0 后续交付，不在本手册——执行者勿在 Step 0 私自添加探测逻辑。
+- **NOTE-2** E2 **串行** AI 调用为正确取舍（修订 dev-plan T3）：归因输出必须逐条跟随各失败请求打印，并行会打乱输出交错；MAX_AI_EXPLAIN_CALLS=3 + 熔断已限定最坏延迟。dev-plan T3（有界并行）就此标记 superseded。
+- **NOTE-3** 输出格式与 PRD 样例的演化：分类枚举（Auth/Upstream5xx/SchemaDrift/…）与 PRD 样例（InfrastructureTimeout/ContractMismatch/InternalServerError）经 `from_loose_str` 别名表双向兼容；PRD §6.2 `probable_causes: Vec<String>` 收敛为 `root_cause + fix_suggestion` 单条形态——**以本手册为准**，US1/US2 的 Then 断言按手册格式校验。
+- **NOTE-4** 旧 JSON 报告消费者兼容性已实证：旧 `report_json` 字段名与新 `JsonTestReport` 完全一致（仅新增 expected/actual/response_body_snippet），`tests/batch_testing_test.rs` 不受影响（由 workspace 测试门禁兜底）。
+- **NOTE-5** app.rs 挂载点已实证：正文 Step 3 引用的渲染块（print_header/print_result/print_batch_summary、has_failure）与 `src/runner/app.rs:120-146` 真实结构逐行吻合；`Headers` 即 `reqwest::header::HeaderMap` 别名，测试代码可直接用 `HeaderMap::new()`。
+
+### 6.5 DoD 清单增补
+
+- [x] GAP-1【已证伪】：`runner/mod.rs` 第 11 行已含 `pub use types::{TestResult, TestSummary};`——无需也不得重复添加
+- [ ] GAP-2：同签名失败只调用一次 AI（mock 调用次数 ≤ 不同签名数）
+- [ ] GAP-3：无 Key `ai triage` stderr 含 "AI 不可用" 且 exit 0
+- [ ] GAP-4/5：E2 无 Key 用例与 dogfooding 闭环（`--report-file` → `ai triage`）全绿

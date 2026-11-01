@@ -2757,6 +2757,7 @@ dependencies = [
 name = "rupost"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "clap",

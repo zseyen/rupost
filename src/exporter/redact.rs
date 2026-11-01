@@ -17,6 +17,10 @@ pub fn is_sensitive_key(key: &str) -> bool {
         || lower.contains("password")
         || lower.contains("apikey")
         || lower.contains("api_key")
+        || lower.contains("private_key")
+        || lower.contains("access_key")
+        || lower.contains("credential")
+        || lower.contains("passphrase")
 }
 
 /// 对 Header 凭据值进行掩码脱敏
@@ -45,16 +49,30 @@ pub fn redact_url(raw_url: &str) -> String {
     let Ok(mut parsed) = url::Url::parse(raw_url) else {
         return raw_url.to_string();
     };
+    let mut changed = false;
+
+    // userinfo 密码段（https://user:pass@host）
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("[REDACTED]"));
+        changed = true;
+    }
+
+    // fragment 凭据（OAuth implicit 流：#access_token=...）
+    if let Some(frag) = parsed.fragment()
+        && ["token", "access", "key", "secret"]
+            .iter()
+            .any(|k| frag.to_ascii_lowercase().contains(k))
+    {
+        parsed.set_fragment(Some("[REDACTED]"));
+        changed = true;
+    }
+
+    // query 敏感键值
     let pairs: Vec<(String, String)> = parsed
         .query_pairs()
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
-
-    if pairs.is_empty() || !pairs.iter().any(|(k, _)| is_sensitive_key(k)) {
-        return raw_url.to_string();
-    }
-
-    {
+    if pairs.iter().any(|(k, _)| is_sensitive_key(k)) {
         let mut qp = parsed.query_pairs_mut();
         qp.clear();
         for (k, v) in pairs {
@@ -64,13 +82,56 @@ pub fn redact_url(raw_url: &str) -> String {
                 qp.append_pair(&k, &v);
             }
         }
+        changed = true;
     }
-    parsed.into()
+
+    if changed {
+        parsed.into()
+    } else {
+        raw_url.to_string()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_redact_url_userinfo_password_masked() {
+        assert_eq!(
+            redact_url("https://user:supersecret@api.example.com/v1"),
+            "https://user:%5BREDACTED%5D@api.example.com/v1"
+        );
+        // 空密码段无凭据可掩（url crate 归一化处理空密码），不 panic、不误掩即可
+        let _ = redact_url("https://user:@api.example.com");
+        // IPv6 host 形态不受影响
+        assert!(redact_url("http://user:pass@[::1]:8080/v1").contains("%5BREDACTED%5D"));
+    }
+
+    #[test]
+    fn test_redact_url_oauth_fragment_masked() {
+        // OAuth implicit 流：fragment 携带 access_token
+        let masked =
+            redact_url("https://api.example.com/callback#access_token=eyJhbGciOiJIUzI1NiJ9");
+        assert!(
+            !masked.contains("eyJhbGci"),
+            "fragment token must be masked: {masked}"
+        );
+        // 普通锚点（无敏感键名）不掩
+        assert_eq!(
+            redact_url("https://docs.example.com/guide#section-2"),
+            "https://docs.example.com/guide#section-2"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_query_unchanged_when_not_sensitive() {
+        // 无敏感键时原样返回（无格式漂移）
+        assert_eq!(
+            redact_url("https://api.example.com/v1/users?page=2&limit=10"),
+            "https://api.example.com/v1/users?page=2&limit=10"
+        );
+    }
 
     #[test]
     fn test_is_sensitive_key() {

@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::exporter::redact::is_sensitive_key;
 use crate::history::model::HistoryEntry;
+use colored::Colorize;
 use std::collections::{BTreeSet, HashMap};
 
 pub struct HttpGenerator;
@@ -110,6 +111,16 @@ impl HttpGenerator {
 
         // 4. Body
         if let Some(body) = entry.request.body.as_ref().filter(|b| !b.trim().is_empty()) {
+            // Body 暂不做键级模板化（Header/URL query 已模板化）：含敏感键时落盘前明确警告
+            let body_sensitive = ["password", "passwd", "secret", "api_key", "apikey", "token"]
+                .iter()
+                .any(|k| body.to_ascii_lowercase().contains(k));
+            if body_sensitive {
+                eprintln!(
+                    "{} 请求体疑似包含明文凭据（Header/URL query 已模板化，Body 未模板化）——落盘前请手工替换为 {{{{变量}}}}",
+                    "⚠".yellow()
+                );
+            }
             block.push('\n');
             // Try to pretty print JSON
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {

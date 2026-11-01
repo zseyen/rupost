@@ -160,13 +160,13 @@ rupost history export <id> --output response.json
 **用户场景**：
 ```bash
 # 重现历史测试
-rupost history replay <id>
+rupost replay <snapshot.json> <id>
 
 # 重现并对比结果
-rupost history replay <id> --compare
+rupost replay <snapshot.json> <id> --compare
 
 # 重现到不同环境
-rupost history replay <id> --env staging
+rupost replay <snapshot.json> <id> --env staging
 ```
 
 **技术要点**：
@@ -683,7 +683,7 @@ src/
   - 变量继承机制
 - ✅ 3.5 基础测试重现
   - 快照保存（请求 + 响应 + 变量）
-  - 一键重现命令（`rupost history replay <id>`）
+  - 一键重现命令（`rupost replay <snapshot.json> <id>`）
 - ✅ 3.3 测试结果增强
   - 结果查询命令（`rupost history list/show`）
   - 基础对比功能（`rupost history diff`）
@@ -705,7 +705,7 @@ rupost test api/login.http
 rupost history list
 
 # 重现测试
-rupost history replay <id>
+rupost replay <snapshot.json> <id>
 
 # 对比结果
 rupost history diff <id1> <id2>

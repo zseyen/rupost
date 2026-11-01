@@ -2,8 +2,8 @@
 
 > **创建日期**: 2026-10-18（v3，Phase 4 执行前三视角查漏补缺后修订）
 > **来源**: 三轮审查 + 子代理审查 + Phase 4 前自查（可行性核查 / 攻面复查 / 交叉影响面）
-> **进度**: Phase 0-3 已完成（里程碑 B 达成）；Phase 4 待执行
-> **验证基线**: 全量 412 测试 0 失败，clippy 零警告（完整命令：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk cargo clippy --all-targets`，aws-lc-sys 与 macOS 27 SDK 不兼容，属上游问题）
+> **进度**: Phase 0–4 **全部完成**（里程碑 C 达成，2026-10 收官，详见 [checkpoint.md](../../checkpoint.md)）
+> **验证基线**: 全量 412 测试 0 失败（2026-10-18 时点值；当前基线已增至 578 测试 0 失败），clippy 零警告（完整命令：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk cargo clippy --all-targets`，aws-lc-sys 与 macOS 27 SDK 不兼容，属上游问题）
 
 ## v3 修订摘要（Phase 4 前查漏补缺）
 

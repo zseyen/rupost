@@ -145,7 +145,7 @@ POST https://api.example.com/beta-feature
 
 ### `@timeout` - 超时时间（可选）
 
-设置请求的超时时间（毫秒）：
+设置请求的超时时间（默认毫秒，支持单位后缀 `s` / `ms`，如 `@timeout 5s`、`@timeout 1000ms`）：
 
 ```http
 # @timeout 5000
@@ -429,7 +429,7 @@ RuPost 的 `.http` 格式与 IntelliJ HTTP Client 基本兼容：
 ### 当前版本（Phase 2）
 
 - ❌ 暂不支持文件上传（multipart/form-data）
-- ❌ 暂不支持变量捕获和传递（Phase 3）
+- ✅ 变量捕获和传递（`@capture` 指令，已实现；含响应头/JSONPath/正则来源）
 - ❌ 暂不支持脚本化断言（Phase 3+）
 - ⚠️ GraphQL 支持有限（作为普通 POST 请求）
 

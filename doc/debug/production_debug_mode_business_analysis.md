@@ -125,7 +125,7 @@ rupost logs --trace-id abc123 --services order,payment,inventory
 rupost history save <id> --with-logs
 
 # 4. 在本地重现
-rupost history replay <id> --env local --target http://localhost:3000
+rupost replay <snapshot.json> --target http://localhost:3000
 ```
 
 **价值**：节省**1.5-3.5小时**，提升10倍效率

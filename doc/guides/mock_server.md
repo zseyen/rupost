@@ -11,7 +11,7 @@ RuPost 提供了一个独立且高可扩展的轻量级本地 Mock 服务器，�
 # 启动基于 JSON 规则定义的 Mock 服务
 rupost mock examples/mock_config.json --port 9000
 
-# 编译并热加载 Markdown 设计文档中的 Mock 示例
+# 编译并加载 Markdown 设计文档中的 Mock 示例（启动时静态加载；运行中不支持热更新，修改后需重启 mock）
 rupost m doc/plans/2026-06-06-mock-server-design.md
 ```
 

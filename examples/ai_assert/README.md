@@ -44,6 +44,50 @@ RUPOST_AI_BASE_URL=http://127.0.0.1:9001/v1 RUPOST_AI_API_KEY=demo \
 全程不需要任何真实 API Key——这正是 `tests/ai_assert_test.rs` 与
 `tests/verify_features.sh` 步骤 7 的自动化验证方式。
 
+## 上下文感知（P0）：让 AI 看见真实响应
+
+### `--last N`：取最近 N 条历史作上下文
+
+```bash
+# 先真实跑一次请求（产生 history）
+rupost test login.http
+
+# AI 看着真实响应写断言（默认脱敏：token/password 等整体 [REDACTED]，4KB/条截断）
+rupost ai assert --last 1 "验证登录成功且返回管理员身份"
+```
+
+### `--response <FILE>`：显式响应文件
+
+```bash
+rupost ai assert --response resp.json "验证分页字段齐全"
+```
+
+### `--no-mask`：显式关闭上下文脱敏（自查环境）
+
+```bash
+rupost ai assert --last 1 "..." --no-mask
+# ⚠ --no-mask 已显式关闭脱敏：上下文中的敏感值将原样发送给 AI 端点，请确认合规
+```
+
+`--last` 与 `--response` 互斥；无上下文时行为与 P0 之前完全一致。
+
+## B4 零配置链（环境变量 > ~/.rupost/ai.toml > 本地探测）
+
+```bash
+# ① 环境变量（最高优先，远程端点必填 Key）
+export RUPOST_AI_API_KEY=sk-... RUPOST_AI_BASE_URL=https://api.siliconflow.cn/v1
+
+# ② 用户级配置 ~/.rupost/ai.toml（本地端点免 Key；⚠ api_key 字段写入即被拒绝）
+#    base_url = "http://localhost:11434/v1"
+#    model    = "qwen2.5:7b"
+
+# ③ 什么都没配：自动探测本地 Ollama（GET /v1/models，2s 超时）
+rupost ai assert "status is 200"
+# ℹ 未检测到显式 AI 配置，已使用本地探测端点 http://localhost:11434/v1（模型: qwen2.5:7b）
+```
+
+全部失败时输出三选一可执行指引；`RUPOST_AI_PROBE_URL` 为测试钩子（覆盖探测地址，不入用户文档）。
+
 ## 断言语法速查
 
 AI 的输出被 system prompt 固化在 rupost 的 8 运算符 × 4 目标语法内：

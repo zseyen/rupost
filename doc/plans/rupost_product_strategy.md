@@ -1,5 +1,7 @@
 # RuPost (AntiGravity) 产品与商业战略规划书
 
+> **⚠️ 愿景文档标注（2026-10-28）**：本文为 2026-05 前瞻设想，含未实现特性——`@ai_assert` 运行时指令已裁决为**创作期 CLI**（`rupost ai assert`，见 AI 激活 PRD，运行期 AI 被明确否决）、`@ai_fix`/`@bench` 无代码对应；商业化阶梯为长期设想。现状准绳以 [AI 总体规划](2026-10-27-ai-master-roadmap.md) 与 [progress_summary.md](progress_summary.md) 为准。
+
 > **极简、强大、富有美感的终端 HTTP 客户端与 API 测试工具**
 > 本文档汇集了 RuPost 的竞品分析、商业化路径、多角色场景价值以及总体开发演进路线图。
 

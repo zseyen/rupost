@@ -4,6 +4,52 @@ use rupost::tui::event::Action;
 use rupost::tui::state::{AppState, LayoutMode, Panel};
 use std::collections::HashMap;
 
+/// 提取 buffer 全文本（逐行拼接 cell symbol）。断言消费端真实渲染产物而非 state 中间缓存，
+/// 使生产者（折行 rebuild）与消费者（切片渲染）各自被独立守护。
+fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    let mut lines = Vec::new();
+    for y in 0..buffer.area.height {
+        let mut row = String::new();
+        for x in 0..buffer.area.width {
+            row.push_str(buffer[(x, y)].symbol());
+        }
+        lines.push(row.trim_end().to_string());
+    }
+    lines.join("\n")
+}
+
+/// buffer 中是否存在指定背景色的 cell（高亮冒烟断言用；全 TUI 代码仅高亮与
+/// statusline 两处 `.bg()`，statusline 用独立的 status_bg，与 accent 不冲突）。
+fn buffer_has_bg(buffer: &ratatui::buffer::Buffer, color: ratatui::style::Color) -> bool {
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            if buffer[(x, y)].bg == color {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 在 buffer 中查找以 needle 文本开头的 cell，返回其前景色（主题取色差异断言用）。
+/// 跨 cell 拼接比较，needle 须为 ASCII 以保证字节偏移与 cell 对齐。
+fn find_cell_fg(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<ratatui::style::Color> {
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            let mut acc = String::new();
+            let mut cx = x;
+            while cx < buffer.area.width && acc.len() < needle.len() {
+                acc.push_str(buffer[(cx, y)].symbol());
+                cx += 1;
+            }
+            if acc.starts_with(needle) {
+                return Some(buffer[(x, y)].fg);
+            }
+        }
+    }
+    None
+}
+
 #[test]
 fn test_app_state_initialization() {
     let state = AppState::new();
@@ -82,7 +128,7 @@ fn test_request_finished_variable_extension() {
     .unwrap();
 
     // 模拟后台返回 RequestFinished 消息
-    state.handle_request_finished(Ok(response), captured_vars, Vec::new());
+    state.handle_request_finished(Ok(response), captured_vars, Vec::new(), Vec::new());
 
     // 验证 Loading 结束且状态正确合并
     assert!(!state.is_loading);
@@ -582,41 +628,243 @@ fn test_direct_run_window_interactive_states() {
 }
 
 #[test]
+fn test_warnings_rendered_in_response_panel() {
+    // D1 遗留项回归锚点：TestResult.warnings 不得成为渲染盲区（静默假通过）。
+    // 断言消费端终端 buffer；告警用短句保证窄面板单行渲染，全文断言不受字符级折行影响。
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    state.is_loading = true;
+    let response = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        "OK".to_string(),
+        std::time::Duration::from_millis(10),
+        std::time::Duration::from_millis(5),
+        std::time::Duration::from_millis(5),
+    )
+    .unwrap();
+
+    // 模拟 RequestFinished 事件携带两条非致命告警（断言全过、响应成功）
+    state.handle_request_finished(
+        Ok(response),
+        HashMap::new(),
+        vec![],
+        vec![
+            "@capture id missing".to_string(),
+            "var api_key missing".to_string(),
+        ],
+    );
+    state.response_visual_lines.clear();
+
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let rendered = buffer_text(frame.buffer);
+    assert!(
+        rendered.contains("Warnings: 2"),
+        "warnings summary must render:\n{rendered}"
+    );
+    assert!(rendered.contains("@capture id missing"), "\n{rendered}");
+    assert!(rendered.contains("var api_key missing"), "\n{rendered}");
+
+    // 无告警时不得出现空告警标题
+    state.warnings.clear();
+    state.response_visual_lines.clear();
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    assert!(!buffer_text(frame.buffer).contains("Warnings:"));
+}
+
+#[test]
+fn test_streaming_completed_views_show_warnings_summary() {
+    // D1 残余盲区回归锚点：SSE/WS 完成态走流式分支（不经过 HTTP 缓存渲染管线），
+    // 告警若只挂在 rebuild_http_visual_lines 上对流式请求仍然不可见
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    // SSE 完成态（无日志文件时内容区为占位文案，但摘要必须可见）
+    let mut state = AppState::new();
+    state.is_loading = false;
+    state.sse_stream_body = "data: chunk\n".to_string();
+    state.warnings = vec!["@capture id missing".to_string()];
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let rendered = buffer_text(frame.buffer);
+    assert!(rendered.contains("[SSE Completed]"), "\n{rendered}");
+    assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
+
+    // WS 完成态：经日志文件滑动窗口重建帧行，摘要与帧内容同时可见
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("ws.log");
+    std::fs::write(&log, "[→] 12:00:00 | PING\n[←] 12:00:01 | PONG\n").unwrap();
+    let mut state_ws = AppState::new();
+    state_ws.is_loading = false;
+    state_ws.handle_ws_frame(true, "PING".to_string());
+    state_ws.log_file_path = Some(log);
+    state_ws.total_log_lines = 2;
+    state_ws.warnings = vec!["var api_key missing".to_string()];
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state_ws);
+        })
+        .unwrap();
+    let rendered = buffer_text(frame.buffer);
+    assert!(rendered.contains("[WS Completed]"), "\n{rendered}");
+    assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
+    assert!(rendered.contains("PING"), "\n{rendered}");
+}
+
+#[test]
 fn test_tui_command_line_file_auto_positioning() {
+    // 锁定 `rupost tui <file>` 预加载入口的真实实现（app::load_initial_file）
     let temp_dir = tempfile::tempdir().unwrap();
     let file_a = temp_dir.path().join("a.http");
     let file_b = temp_dir.path().join("b.http");
+    let nested_dir = temp_dir.path().join("examples");
+    std::fs::create_dir(&nested_dir).unwrap();
+    let file_c = nested_dir.join("c.http");
 
     std::fs::write(&file_a, "GET http://a").unwrap();
     std::fs::write(&file_b, "GET http://b").unwrap();
+    std::fs::write(&file_c, "GET http://c").unwrap();
 
     let mut state = AppState::new();
     state.workspace_root = temp_dir.path().to_path_buf();
     state.raw_file_list = vec![
         file_a.to_string_lossy().to_string(),
         file_b.to_string_lossy().to_string(),
+        file_c.to_string_lossy().to_string(),
     ];
     state.rebuild_visible_tree_nodes();
 
-    // 模拟命令行中传入了定位到 b.http 的参数，利用我们刚写的匹配算法
-    let initial_file = Some(file_b.to_string_lossy().to_string());
-    let mut initial_idx = 0;
-    if let Some(init_path) = &initial_file
-        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
-    {
-        let matched = state.visible_file_nodes.iter().position(|n| {
-            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
-                c.to_string_lossy() == canon_init.to_string_lossy()
-            } else {
-                n.abs_path == canon_init.to_string_lossy()
-            }
-        });
-        if let Some(pos) = matched {
-            initial_idx = pos;
-        }
-    }
+    // 1. 传入嵌套路径：父目录自动展开、光标定位到目标文件、内容载入编辑器
+    let initial_file = Some(file_c.to_string_lossy().to_string());
+    rupost::tui::app::load_initial_file(&mut state, initial_file.as_deref());
 
-    assert_eq!(initial_idx, 1); // 成功定位到第二项 (b.http)
+    assert!(
+        state.expanded_dirs.contains("examples"),
+        "parent dir of initial file must be expanded"
+    );
+    let target = state
+        .visible_file_nodes
+        .iter()
+        .position(|n| n.display_name == "c.http")
+        .unwrap();
+    assert_eq!(state.files_state.selected_index, target);
+    assert_eq!(state.selected_file_index, target);
+    assert_eq!(state.editor_text, "GET http://c");
+    // 树节点 abs_path 经 canonicalize（macOS /var → /private/var），用规范路径比较
+    let canon_c = std::fs::canonicalize(&file_c)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(state.editor_file_path.as_deref(), Some(canon_c.as_str()));
+
+    // 2. 不传文件：回退加载第一个文件
+    let mut state_fallback = AppState::new();
+    state_fallback.workspace_root = temp_dir.path().to_path_buf();
+    state_fallback.raw_file_list = vec![file_a.to_string_lossy().to_string()];
+    state_fallback.rebuild_visible_tree_nodes();
+    rupost::tui::app::load_initial_file(&mut state_fallback, None);
+    assert_eq!(state_fallback.editor_text, "GET http://a");
+    assert_eq!(state_fallback.files_state.selected_index, 0);
+
+    // 3. 传入目录：定位目录节点，不读入编辑器
+    let mut state_dir = AppState::new();
+    state_dir.workspace_root = temp_dir.path().to_path_buf();
+    state_dir.raw_file_list = vec![file_c.to_string_lossy().to_string()];
+    state_dir.rebuild_visible_tree_nodes();
+    let dir_initial = Some(nested_dir.to_string_lossy().to_string());
+    rupost::tui::app::load_initial_file(&mut state_dir, dir_initial.as_deref());
+    assert_eq!(
+        state_dir
+            .visible_file_nodes
+            .get(state_dir.files_state.selected_index)
+            .map(|n| n.is_dir),
+        Some(true)
+    );
+    assert!(state_dir.editor_file_path.is_none());
+
+    // 4. 传入不存在的路径：canonicalize 失败，回退加载第一个文件
+    let mut state_missing = AppState::new();
+    state_missing.workspace_root = temp_dir.path().to_path_buf();
+    state_missing.raw_file_list = vec![file_a.to_string_lossy().to_string()];
+    state_missing.rebuild_visible_tree_nodes();
+    let missing = Some(
+        temp_dir
+            .path()
+            .join("no_such_file.http")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    rupost::tui::app::load_initial_file(&mut state_missing, missing.as_deref());
+    assert_eq!(state_missing.editor_text, "GET http://a");
+    assert_eq!(state_missing.files_state.selected_index, 0);
+}
+
+#[test]
+fn test_sse_resize_lazy_rebuild_on_render() {
+    // 真实风险路径：流式进行中发生 resize → 宽度变化清空预折行缓存并复位位点，
+    // 渲染端必须按新宽度惰性全量重构已完成行，不得丢行或残留旧宽折行
+    let mut state = AppState::new();
+    state.is_loading = true;
+    state.current_response_width = 60;
+    // 110 字符长行：60 宽折 2 段、~38 宽（Stacked 40 列终端面板）折 3 段，保证折行数可区分
+    let long_line = "a long streaming line that exceeds sixty display columns and surely exceeds the narrower stacked panel width too";
+    let chunk = format!("short\n{long_line}\n");
+    state.handle_stream_chunk(chunk.clone());
+
+    let base_lines = state.sse_visual_lines.len();
+    assert!(
+        base_lines > 2,
+        "long line must wrap at width 60: {base_lines}"
+    );
+    assert_eq!(state.sse_last_processed_pos, chunk.len());
+
+    // 模拟 resize：update_layout 检测到响应宽度变化，清空缓存并复位位点
+    state.update_layout(40, 24);
+    assert!(state.sse_visual_lines.is_empty());
+    assert_eq!(state.sse_last_processed_pos, 0);
+
+    // Stacked 布局仅渲染焦点面板，焦点切到 Response 才会触发流式分支的惰性重构
+    state.active_panel = Panel::Response;
+    let backend = ratatui::backend::TestBackend::new(40, 24);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    assert_eq!(frame.buffer.area.width, 40);
+    assert!(
+        state.sse_visual_lines.len() > base_lines,
+        "narrower panel must produce more wrapped lines: {} vs {base_lines}",
+        state.sse_visual_lines.len()
+    );
+    assert_eq!(state.sse_last_processed_pos, chunk.len());
+    let rendered: Vec<String> = state
+        .sse_visual_lines
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+    assert_eq!(rendered.first().map(String::as_str), Some("short"));
+    // 长行必须被切成多段（不再有 60 宽下的旧折行），且无内容丢失
+    assert!(!rendered.contains(&long_line.to_string()));
+    let rejoined = rendered.join("");
+    assert!(
+        rejoined.contains(long_line),
+        "no content loss after rebuild"
+    );
 }
 
 #[test]
@@ -787,6 +1035,7 @@ fn test_file_execution_states_tracking() {
         .unwrap()),
         std::collections::HashMap::new(),
         vec![],
+        vec![],
     );
     assert_eq!(
         state.file_execution_states.get("examples/ok.http"),
@@ -799,6 +1048,7 @@ fn test_file_execution_states_tracking() {
     state.handle_request_finished(
         Err("Connection failed".to_string()),
         std::collections::HashMap::new(),
+        vec![],
         vec![],
     );
     assert_eq!(
@@ -1117,4 +1367,451 @@ fn test_external_editor_key_trigger() {
     });
 
     assert!(state.pending_editor_launch);
+}
+
+#[test]
+fn test_theme_axis_smoke_matrix() {
+    // 主题轴 × 错误态 × 布局 的参数化冒烟矩阵（P2 缺口补齐）
+    use rupost::tui::theme::ThemeKind;
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let failed_response = || {
+        Response::new(
+            500,
+            reqwest::header::HeaderMap::new(),
+            "{\"error\":\"boom\"}".to_string(),
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(5),
+        )
+        .unwrap()
+    };
+    let failed_assertion = rupost::assertion::AssertionResult {
+        raw: "status == 200".to_string(),
+        passed: false,
+        actual: Some("500".to_string()),
+        expected: "200".to_string(),
+        message: Some("actual 500".to_string()),
+        stream_event_index: None,
+    };
+
+    for theme in [ThemeKind::Dark, ThemeKind::Light] {
+        for scenario in 0..3 {
+            let mut state = AppState::new();
+            state.theme = theme;
+            state.update_layout(100, 30);
+            match scenario {
+                // 0: 失败响应 + 失败断言 + 告警
+                0 => {
+                    state.last_response = Some(failed_response());
+                    state.assertions = vec![failed_assertion.clone()];
+                    state.warnings = vec!["@capture id: not found".to_string()];
+                }
+                // 1: SSE 流式加载中
+                1 => {
+                    state.is_loading = true;
+                    state.sse_stream_body = "data: chunk\n".to_string();
+                }
+                // 2: WS 帧完成态
+                _ => {
+                    state.handle_ws_frame(true, "PING".to_string());
+                    state.handle_ws_frame(false, "PONG".to_string());
+                }
+            }
+            state.response_visual_lines.clear();
+
+            let res = terminal.draw(|frame| {
+                rupost::tui::ui::render(frame, &mut state);
+            });
+            assert!(
+                res.is_ok(),
+                "theme {theme:?} scenario {scenario} must render without panic"
+            );
+        }
+
+        // 失败态下：文案出现在消费端 buffer，且 Warnings 摘要按当前主题 accent 槽位取色
+        // （若 ui 层硬编码 Dark 色，Light 分支 fg 断言即红——主题矩阵由此真正验证取色差异）
+        let mut state = AppState::new();
+        state.theme = theme;
+        state.update_layout(100, 30);
+        state.last_response = Some(failed_response());
+        state.assertions = vec![failed_assertion.clone()];
+        state.warnings = vec!["@capture id: not found".to_string()];
+        state.response_visual_lines.clear();
+        let frame = terminal
+            .draw(|frame| {
+                rupost::tui::ui::render(frame, &mut state);
+            })
+            .unwrap();
+        let rendered = buffer_text(frame.buffer);
+        assert!(
+            rendered.contains("[FAILED]"),
+            "theme {theme:?}:\n{rendered}"
+        );
+        assert!(rendered.contains("Warnings: 1"), "\n{rendered}");
+        assert_eq!(
+            find_cell_fg(frame.buffer, "Warnings:"),
+            Some(rupost::tui::theme::palette(theme).accent),
+            "theme {theme:?}: Warnings summary must take accent from palette"
+        );
+    }
+}
+
+#[test]
+fn test_search_highlight_renders_in_response_panel() {
+    // R4 冒烟：搜索态下可见切片的命中段以 accent 背景渲染
+    use rupost::tui::theme::ThemeKind;
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.response_visual_lines = vec![
+        ratatui::text::Line::raw("GET /users"),
+        ratatui::text::Line::raw("data: hello world"),
+        ratatui::text::Line::raw("data: other"),
+    ];
+    state.search_query = "hello".to_string();
+    state.last_response = Some(
+        Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "body".to_string(),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap(),
+    );
+
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    // "hello" 在第 2 行（可见区）：命中 cell 的背景必须是当前主题 accent
+    let buffer = frame.buffer;
+    let mut found_hit = false;
+    for y in 0..buffer.area.height {
+        // 上界收窄 width-2：x+2 越界索引在 Buffer 上会 panic（当前右缘是边框不触发，但属隐式依赖）
+        for x in 0..buffer.area.width.saturating_sub(2) {
+            let cell = &buffer[(x, y)];
+            if cell.symbol() == "h"
+                && buffer[(x + 1, y)].symbol() == "e"
+                && buffer[(x + 2, y)].symbol() == "l"
+                && cell.bg == rupost::tui::theme::palette(ThemeKind::Dark).accent
+            {
+                found_hit = true;
+            }
+        }
+    }
+    assert!(
+        found_hit,
+        "matched text must be rendered with accent background"
+    );
+
+    // 无 query：全 buffer 扫描断言不存在 accent 背景的命中渲染（布局漂移免疫）
+    state.search_query.clear();
+    state.response_visual_lines.clear();
+    let frame = terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    assert!(
+        !buffer_has_bg(
+            frame.buffer,
+            rupost::tui::theme::palette(ThemeKind::Dark).accent
+        ),
+        "no query must not highlight anywhere in the viewport"
+    );
+}
+
+#[test]
+fn test_search_jump_visible_in_completed_log_view() {
+    // R4 端到端：完成态长连接日志 >50 行时，跳转到第 58 行的命中必须可见
+    // （回归锚点：完成态渲染曾按窗口局部长度钳制，深行号跳转目标落在视口外）
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("ws.log");
+    {
+        let mut f = std::fs::File::create(&log).unwrap();
+        for i in 0..150 {
+            writeln!(
+                f,
+                "[→] 12:00:00 | frame-{} {}",
+                i,
+                if i == 90 { "NEEDLE" } else { "" }
+            )
+            .unwrap();
+        }
+    }
+
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.current_request = Some(ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "ws://x".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: rupost::parser::RequestMetadata {
+            websocket: true,
+            ..Default::default()
+        },
+        line_number: 1,
+        base_path: None,
+    });
+    state.is_loading = false;
+    state.log_file_path = Some(log.clone());
+    state.total_log_lines = 150;
+    state.search_query = "NEEDLE".to_string();
+
+    state.jump_to_match(true);
+    assert_eq!(state.response_scroll, 90);
+
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    let content: String = {
+        let buffer = terminal.backend().buffer();
+        let mut acc = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                acc.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        acc
+    };
+    assert!(
+        content.contains("frame-90 NEEDLE"),
+        "jumped-to match must be visible (line 90/150; old clamp showed window tail ~120+ instead)"
+    );
+}
+
+#[test]
+fn test_streaming_views_search_highlight_smoke() {
+    // R4 冒烟：SSE 流式视图与 WS 流式视图的搜索高亮（HTTP 分支由既有测试覆盖）
+    use rupost::tui::theme::ThemeKind;
+    let accent = rupost::tui::theme::palette(ThemeKind::Dark).accent;
+
+    // SSE 流式视图
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.is_loading = true;
+    state.current_request = Some(ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "http://x/stream".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: rupost::parser::RequestMetadata {
+            sse: true,
+            ..Default::default()
+        },
+        line_number: 1,
+        base_path: None,
+    });
+    state.handle_stream_chunk("data: needle-here\n".to_string());
+    state.search_query = "needle".to_string();
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let sse_hit = buffer_has_bg(buffer, accent);
+    assert!(sse_hit, "SSE streaming view must highlight matches");
+
+    // WS 流式视图
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.is_loading = true;
+    state.current_request = Some(ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "ws://x".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: rupost::parser::RequestMetadata {
+            websocket: true,
+            ..Default::default()
+        },
+        line_number: 1,
+        base_path: None,
+    });
+    state.handle_ws_frame(false, "needle-frame".to_string());
+    state.search_query = "needle".to_string();
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let ws_hit = buffer_has_bg(buffer, accent);
+    assert!(ws_hit, "WS streaming view must highlight matches");
+}
+
+#[test]
+fn test_new_modals_render_smoke_matrix() {
+    // R3/R4/R6 冒烟：Auth / Search / WsSend 三模态在多尺寸下渲染不 panic
+    use ratatui_textarea::TextArea;
+    use rupost::tui::state::InputMode;
+
+    let make_state = |mode: InputMode| {
+        let mut state = AppState::new();
+        state.input_mode = mode;
+        state
+    };
+    let modes = vec![
+        (
+            "Auth",
+            make_state(InputMode::Auth(Box::new(TextArea::default()))),
+        ),
+        (
+            "Search",
+            make_state(InputMode::Search(Box::new(TextArea::default()))),
+        ),
+        (
+            "WsSend",
+            make_state(InputMode::WsSend(Box::new(TextArea::default()))),
+        ),
+    ];
+
+    for (name, mut state) in modes {
+        let terminal_sizes = [(80u16, 24u16), (35u16, 5u16)];
+        for &(w, h) in &terminal_sizes {
+            let backend = ratatui::backend::TestBackend::new(w, h);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            let res = terminal.draw(|frame| {
+                rupost::tui::ui::render(frame, &mut state);
+            });
+            assert!(res.is_ok(), "{name} modal must render at {w}x{h}");
+        }
+    }
+}
+
+#[test]
+fn test_sse_completed_jump_survives_write_side_line_mismatch() {
+    // P1-1 回归锚点：SSE 写侧每事件落 `data: {d}\n\n` 两个物理行，而流式期
+    // total_log_lines 按 data 内 '\n' 计数恒偏小（单行 data 计 0）。
+    // 完成时必须以文件实际行数回填基准，否则深行号跳转后滑窗截断、视口空白。
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("sse.log");
+    {
+        let mut f = std::fs::File::create(&log).unwrap();
+        for i in 0..80 {
+            writeln!(f, "data: event-{}", i).unwrap();
+            writeln!(f).unwrap(); // 事件间空行（写侧双物理行格式）
+        }
+    }
+    // 文件实际 160 物理行；模拟流式期每事件计 1 行 → 80（与文件错位）
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 160);
+
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.is_loading = true;
+    state.sse_stream_body = "data: event-0\n".to_string(); // 使完成态走 SSE 分支
+    state.log_file_path = Some(log.clone());
+    state.total_log_lines = 80;
+
+    // 完成事件触发回填（RequestFinished 的 AppState 归约）
+    state.handle_request_finished(
+        Ok(Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "done".to_string(),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap()),
+        HashMap::new(),
+        vec![],
+        vec![],
+    );
+    assert_eq!(
+        state.total_log_lines, 160,
+        "completion must recount total_log_lines from the log file"
+    );
+
+    // 深行号跳转：命中在第 158 物理行（旧基准 80 下滑窗截断 → 视口空白）
+    state.search_query = "event-79".to_string();
+    state.jump_to_match(true);
+    assert_eq!(state.response_scroll, 158);
+
+    terminal
+        .draw(|frame| {
+            rupost::tui::ui::render(frame, &mut state);
+        })
+        .unwrap();
+
+    let content = {
+        let buffer = terminal.backend().buffer();
+        let mut acc = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                acc.push_str(buffer[(x, y)].symbol());
+            }
+        }
+        acc
+    };
+    assert!(
+        content.contains("data: event-79"),
+        "jumped-to match must be visible after recount-based baseline"
+    );
+}
+
+#[test]
+fn test_send_request_resets_sliding_window_fields() {
+    // P0-2 串扰阻断：新请求必须复位上一轮运行的滑窗域（旧日志路径/行数/缓存）
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("old.log");
+    std::fs::write(&log, "[→] 12:00:00 | stale\n").unwrap();
+
+    let mut state = AppState::new();
+    state.log_file_path = Some(log);
+    state.total_log_lines = 7;
+    state
+        .viewport_cache
+        .push_back(rupost::tui::state::WsFrameRecord {
+            is_send: false,
+            timestamp: "12:00:00".to_string(),
+            content: "stale".to_string(),
+        });
+    state.cache_start_line = 3;
+    state.cache_end_line = 9;
+
+    let req = ParsedRequest {
+        method: Some("GET".to_string()),
+        url: "http://localhost".to_string(),
+        headers: vec![],
+        body: None,
+        metadata: Default::default(),
+        line_number: 1,
+        base_path: None,
+    };
+    state.update(Action::SendRequest(Box::new(req)));
+
+    assert!(state.log_file_path.is_none());
+    assert_eq!(state.total_log_lines, 0);
+    assert!(state.viewport_cache.is_empty());
+    assert_eq!(state.cache_start_line, 0);
+    assert_eq!(state.cache_end_line, 0);
 }

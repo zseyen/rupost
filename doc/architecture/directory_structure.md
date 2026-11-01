@@ -8,7 +8,7 @@
 
 RuPost 项目的根目录由以下核心文件夹和配置文件组成：
 
-*   [crates/](file:///Users/zsyzzx/project/rust/rupost/crates)：用于存放独立拆分的子 Crate。目前包含大模型适配模块 `rupost-ai`。
+*   [crates/](file:///Users/zsyzzx/project/rust/rupost/crates)：用于存放独立拆分的子 Crate。目前包含 AI 创作辅助模块 `rupost-ai`（已接线 `rupost ai assert` 命令）。
 *   [src/](file:///Users/zsyzzx/project/rust/rupost/src)：主程序核心代码区，承载绝大部分的核心算法、执行流程与适配层。
 *   [tests/](file:///Users/zsyzzx/project/rust/rupost/tests)：集成测试和端到端 (E2E) 测试目录，验证完整的命令行或网络交互。
 *   [doc/](file:///Users/zsyzzx/project/rust/rupost/doc)：项目文档库（包括架构设计、开发流程规范、未来规划与进度汇总）。
@@ -33,7 +33,7 @@ graph TD
         MockServer["mock/server/axum_adapter.rs<br>(Axum 服务端)"]
         EnvParser["variable/env_file.rs<br>(.env 文件解析)"]
         TUIView["tui/ui/ (mod/sidebar/response/editor)<br>(ratatui 界面绘制与按键监听)"]
-        RupostAiCrate["crates/rupost-ai<br>(外部大模型网关适配)"]
+        RupostAiCrate["crates/rupost-ai<br>(AI 创作辅助: 断言翻译)"]
     end
 
     subgraph UseCase ["2. UseCase (应用用例层 - 控制与业务流转)"]
@@ -42,6 +42,7 @@ graph TD
         WSSession["ws/session.rs<br>(WebSocket 调试会话控制)"]
         DiagnoseUseCase["http/diagnose.rs<br>(连通性分析与证书诊断)"]
         TemplateInit["template/mod.rs<br>(脚手架模版初始化)"]
+        ExportUseCase["exporter/mod.rs<br>(命令导出管线与插件注册表)"]
         TUIHandlers["tui/handlers.rs<br>(TUI 按键与交互事件分发器)"]
     end
 
@@ -80,8 +81,9 @@ graph TD
 ### 3.1 独立子 Crate (`crates/`)
 
 *   #### [crates/rupost-ai/](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai)
-    *   [client.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/client.rs)：大模型网关 HTTP 请求发送器，处理与具体服务商的连接。
-    *   [translator.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/translator.rs)：将 OpenAI、Anthropic 等不同格式的普通或流式响应翻译规整为 RuPost 统一的事件帧（`LlmEventFrame`）。
+    定位为 **AI 创作辅助** 模块（已接线 `rupost ai assert` 命令），与 `src/http/llm_adapter.rs` 的 LLM 流量运行时职责分层、互不依赖。
+    *   [client.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/client.rs)：OpenAI 兼容的非流式 chat completion 客户端（`AiClient` trait + `OpenAiClient`），处理与具体服务商的连接。
+    *   [translator.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/translator.rs)：AI 创作辅助翻译器（`AssertionTranslator`），通过固化 8 运算符语法的 Prompt 将自然语言期望翻译为标准 `@assert` 断言行（创作期使用；LLM 流式事件帧规整由 `src/http/llm_adapter.rs` 负责，两者职责互不重叠）。
     *   [error.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/error.rs)：大模型适配模块自定义错误。
     *   [lib.rs](file:///Users/zsyzzx/project/rust/rupost/crates/rupost-ai/src/lib.rs)：模块的入口定义与公共导出。
 
@@ -151,7 +153,7 @@ graph TD
     *   [request_builder.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/request_builder.rs)：数据转换适配器。负责将 Parser 层的纯语法结构 `ParsedRequest` 实例化转换成可执行的 `Request`。
     *   [diagnose.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/diagnose.rs)：连通性诊断工作流。分步握手网络链路（DNS 耗时、TCP 耗时、TLS 协商耗时、TTFB 耗时），解析证书 X.509 validity 字段算出生效天数并输出高亮警告。
     *   [stream.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/stream.rs)：流式数据（Server-Sent Events 与大模型流式 JSON 帧）解析捕获与事件流提取分发。
-    *   [llm_adapter.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/llm_adapter.rs)：对接 `rupost-ai` 的客户端适配类，处理通用大模型协议的转换。
+    *   [llm_adapter.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/llm_adapter.rs)：LLM 流量运行时适配器，负责 provider URL 探测与 SSE delta 流提取（`stream.llm.content` 规整）；与 `crates/rupost-ai`（创作期客户端与断言翻译）职责分层、互不依赖。
     *   [timing.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/timing.rs)：高精度耗时测量辅助结构。
     *   [url.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/url.rs)：URL 智能解析与分层拼接（绝对/相对判定、`:` 端口缩写、CLI 独立主机协议补全、base_url/base_path 拼接）。
     *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/types.rs)：底层网络协议定义与大模型适配协议。
@@ -183,6 +185,15 @@ graph TD
     *   [extractor.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/extractor.rs)：响应数据提取器。在求值前从 HTTP 响应的 Body (包含 JSONPath 拆分)、Header 或 Status 提取出待验证的目标值。
     *   [evaluator.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/evaluator.rs)：最终断言验证器。将提取值与预期值结合断言操作符进行计算，对于路径不存在但期望是 None/Null 的场景执行特例放行，避免断言崩溃。
 
+*   #### [src/exporter/](file:///Users/zsyzzx/project/rust/rupost/src/exporter)（命令导出插件架构层）
+    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/types.rs)：导出领域模型与中介表示（IR），包含 `ExportableRequest`、`ExportOptions`、`ExportRunOptions` 与跳过项 `SkippedItem`。
+    *   [plugin.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/plugin.rs)：`CommandExporter` 抽象 Trait 与 `ExporterRegistry` 插件注册表（支持开闭原则按名称与别名查找）。
+    *   [preparer.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/preparer.rs)：核心 IR 归一化管线 `RequestPreparer`。负责环境变量 5 层级联注入、URL 拼接、自动推断 JSON 请求头（保留原始格式）、`cookie_store` 域名/路径匹配注入、超时与 SSE 豁免对齐、跨请求变量符号表静态分析与跳过提示。
+    *   [redact.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/redact.rs)：敏感凭据脱敏引擎。支持在请求头（保留 `Bearer/Basic/Digest` 前缀）和 URL 查询参数中遮蔽敏感 Token/Key/Password。
+    *   [shell.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/shell.rs)：POSIX Shell 安全转义引擎。实现单引号转义、紧凑单行 ANSI-C 转义与终端控制字符过滤，严防 Pastejacking 命令注入。
+    *   [plugins/](file:///Users/zsyzzx/project/rust/rupost/src/exporter/plugins)：内置导出目标插件实现，包含 `curl.rs`（自动处理 `-I` 与 `--data-raw`）、`httpie.rs`（别名 `http`）、`wget.rs`（支持 `--spider` 与 `--body-data`）。
+    *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/mod.rs)：导出功能高阶协调器与文件输入输出调度，支持多文件递归扫描、`--name` 过滤与文件覆盖保护。
+
 *   #### [src/template/](file:///Users/zsyzzx/project/rust/rupost/src/template)（脚手架初始化策略）
     *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/template/mod.rs)：模板生成命令 `rupost init` 的驱动调度。检测输出路径、判断重名阻断或强制重写并输出警告。
     *   [strategy.rs](file:///Users/zsyzzx/project/rust/rupost/src/template/strategy.rs)：策略实现（包含 `ConfigTemplateStrategy` 生成 rupost.toml、`SseTemplateStrategy` 生成 SSE http 模版与 env.example）。在编译期通过 `include_str!` 携带内容。
@@ -207,5 +218,6 @@ graph TD
 | **扩展 Mock 规则匹配算法** | [mock/variant.rs](file:///Users/zsyzzx/project/rust/rupost/src/mock/variant.rs) <br> [mock/trie.rs](file:///Users/zsyzzx/project/rust/rupost/src/mock/trie.rs) | 1. 修改 `variant.rs` 来丰富 Header/Query/Body 的复合匹配条件。<br>2. 修改 `trie.rs` 调整物理路径 of 节点匹配查找流程。 |
 | **优化或新增变量提取规则** | [variable/capture.rs](file:///Users/zsyzzx/project/rust/rupost/src/variable/capture.rs) | 在变量提取逻辑中扩展源数据的提取手段（例如支持从响应 XML/HTML 或响应时延字段中提取变量）。 |
 | **修改 TUI 页面绘制布局与样式** | [tui/ui/](file:///Users/zsyzzx/project/rust/rupost/src/tui/ui) <br> [tui/app.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/app.rs) | 1. 修改 `ui/mod.rs` 调整总体面板切割比例和主框架。<br>2. 在对应的 `sidebar.rs`、`response.rs`、`editor.rs` 中微调对应面板的绘制边框、背景及文本状态。 |
+| **新增或扩展命令导出插件 (如导出到 fetch/powershell)** | [exporter/plugin.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/plugin.rs) <br> [exporter/plugins/](file:///Users/zsyzzx/project/rust/rupost/src/exporter/plugins) | 1. 实现 `CommandExporter` Trait（`name`、`aliases`、`description` 与 `export_one`）。<br>2. 在 `plugins/mod.rs` 中引入，并在 `ExporterRegistry::new_builtin()` 中注册实例。 |
 | **更改 TUI 交互逻辑与按键动作** | [tui/handlers.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/handlers.rs) <br> [tui/state.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/state.rs) | 1. 在 `handlers.rs` 的键盘事件匹配中新增/修改动作路由。<br>2. 在 `state.rs` 中为 ViewModel (TuiState) 丰富状态字段和防写冲突保护。 |
 | **更改 WebSocket 请求指令与断言** | [ws/](file:///Users/zsyzzx/project/rust/rupost/src/ws) | 1. 修改 `action_parser.rs` 扩展 DSL 指令解析。<br>2. 修改 `session.rs` 实现连接握手及多帧会话的生命周期管理。<br>3. 修改 `matcher.rs` 来增强消息体断言模式。 |

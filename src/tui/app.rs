@@ -11,11 +11,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// 启动并运行 TUI 主事件循环
-pub async fn run(initial_file: Option<String>) -> Result<()> {
-    run_async(initial_file).await
+pub async fn run(initial_file: Option<String>, options: super::TuiOptions) -> Result<()> {
+    run_async(initial_file, options).await
 }
 
-async fn run_async(initial_file: Option<String>) -> Result<()> {
+async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> Result<()> {
     // 1. 初始化终端
     enable_raw_mode().map_err(crate::error::RupostError::IoError)?;
     let mut stdout = std::io::stdout();
@@ -68,6 +68,10 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     });
 
     let mut state = AppState::new();
+    // 变量上下文与 CLI 同源（runner/app.rs:111-124 同款）：
+    // rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖。
+    // 授权（Authorization: Bearer {{token}} 等）依赖于此。
+    state.variables = build_initial_context(&options);
     if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
         // 默认展开所有顶层目录
@@ -95,59 +99,7 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
     state.history_list.reverse();
 
     // 默认加载首个文件或指定的 initial_file
-    let mut initial_idx = 0;
-    if let Some(init_path) = &initial_file
-        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
-    {
-        let root_canon = std::fs::canonicalize(&state.workspace_root)
-            .unwrap_or_else(|_| state.workspace_root.clone());
-        if let Ok(rel) = canon_init.strip_prefix(&root_canon) {
-            let mut current = std::path::PathBuf::new();
-            for comp in rel.components() {
-                if let std::path::Component::Normal(name) = comp {
-                    let step = current.join(name);
-                    let step_abs = root_canon.join(&step);
-                    if step_abs.is_dir() {
-                        state
-                            .expanded_dirs
-                            .insert(step.to_string_lossy().replace('\\', "/"));
-                    }
-                    current = step;
-                }
-            }
-            state.rebuild_visible_tree_nodes();
-        }
-
-        let canon_init_str = canon_init.to_string_lossy().into_owned();
-        let matched = state.visible_file_nodes.iter().position(|n| {
-            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
-                c.to_string_lossy() == canon_init_str
-            } else {
-                n.abs_path == canon_init_str
-            }
-        });
-        if let Some(pos) = matched {
-            initial_idx = pos;
-        }
-    }
-
-    if !state.visible_file_nodes.is_empty() && initial_idx < state.visible_file_nodes.len() {
-        let first_node = &state.visible_file_nodes[initial_idx];
-        if !first_node.is_dir {
-            if let Ok(content) = std::fs::read_to_string(&first_node.abs_path) {
-                state.editor_text = content;
-                state.editor_file_path = Some(first_node.abs_path.clone());
-                if let Ok(metadata) = std::fs::metadata(&first_node.abs_path) {
-                    state.editor_file_mtime = metadata.modified().ok();
-                }
-                state.selected_file_index = initial_idx;
-                state.files_state.selected_index = initial_idx;
-                state.loaded_file_index = initial_idx;
-            }
-        } else {
-            state.files_state.selected_index = initial_idx;
-        }
-    }
+    load_initial_file(&mut state, initial_file.as_deref());
 
     // 捕获初始尺寸
     if let Ok((w, h)) = crossterm::terminal::size() {
@@ -181,9 +133,10 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
                     result,
                     captured_vars,
                     assertions,
+                    warnings,
                     ..
                 } => {
-                    state.handle_request_finished(*result, captured_vars, assertions);
+                    state.handle_request_finished(*result, captured_vars, assertions, warnings);
                     state.response_visual_lines.clear(); // 清空缓存以强迫重新计算预折行
                     state.response_scroll = 0; // 请求结束重置滚动
 
@@ -272,6 +225,82 @@ async fn run_async(initial_file: Option<String>) -> Result<()> {
         .map_err(|e| crate::error::RupostError::IoError(std::io::Error::other(e.to_string())))?;
 
     Ok(())
+}
+
+/// 默认加载首个文件或指定的 initial_file（`rupost tui [FILE]` 预加载入口）。
+/// 逐级展开目标文件所在目录、定位树节点并载入编辑器；提取自 run_async 以便离线单测。
+pub fn load_initial_file(state: &mut AppState, initial_file: Option<&str>) {
+    let mut initial_idx = 0;
+    if let Some(init_path) = initial_file
+        && let Ok(canon_init) = std::path::Path::new(init_path).canonicalize()
+    {
+        let root_canon = std::fs::canonicalize(&state.workspace_root)
+            .unwrap_or_else(|_| state.workspace_root.clone());
+        if let Ok(rel) = canon_init.strip_prefix(&root_canon) {
+            let mut current = std::path::PathBuf::new();
+            for comp in rel.components() {
+                if let std::path::Component::Normal(name) = comp {
+                    let step = current.join(name);
+                    let step_abs = root_canon.join(&step);
+                    if step_abs.is_dir() {
+                        state
+                            .expanded_dirs
+                            .insert(step.to_string_lossy().replace('\\', "/"));
+                    }
+                    current = step;
+                }
+            }
+            state.rebuild_visible_tree_nodes();
+        }
+
+        let canon_init_str = canon_init.to_string_lossy().into_owned();
+        let matched = state.visible_file_nodes.iter().position(|n| {
+            if let Ok(c) = std::path::Path::new(&n.abs_path).canonicalize() {
+                c.to_string_lossy() == canon_init_str
+            } else {
+                n.abs_path == canon_init_str
+            }
+        });
+        if let Some(pos) = matched {
+            initial_idx = pos;
+        }
+    }
+
+    if !state.visible_file_nodes.is_empty() && initial_idx < state.visible_file_nodes.len() {
+        let first_node = &state.visible_file_nodes[initial_idx];
+        if !first_node.is_dir {
+            if let Ok(content) = std::fs::read_to_string(&first_node.abs_path) {
+                state.editor_text = content;
+                state.editor_file_path = Some(first_node.abs_path.clone());
+                if let Ok(metadata) = std::fs::metadata(&first_node.abs_path) {
+                    state.editor_file_mtime = metadata.modified().ok();
+                }
+                state.selected_file_index = initial_idx;
+                state.files_state.selected_index = initial_idx;
+                state.loaded_file_index = initial_idx;
+            }
+        } else {
+            state.files_state.selected_index = initial_idx;
+        }
+    }
+}
+
+/// 构建 TUI 启动时的变量上下文（与 CLI test 同一 `build_context` 入口，
+/// 级联顺序：rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖）。
+pub fn build_initial_context(options: &super::TuiOptions) -> crate::variable::VariableContext {
+    let config = crate::variable::ConfigLoader::find_and_load().unwrap_or_default();
+    let cli_vars: Vec<(String, String)> = options
+        .vars
+        .iter()
+        .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
+        .collect();
+    let env_file_to_load = options.env_file.as_deref().or(Some(".env"));
+    crate::variable::ConfigLoader::build_context(
+        &config,
+        options.env.as_deref(),
+        &cli_vars,
+        env_file_to_load,
+    )
 }
 
 /// 对 TUI 中扫描出的所有候选文件路径进行精细化过滤
@@ -482,5 +511,39 @@ mod tests {
         // 2. 经过展开（模拟 canonicalize 后相同物理路径前缀），strip_prefix 能够完美剥离前缀并放行
         let relative_path = file_path.strip_prefix(canonical_cwd).unwrap();
         assert_eq!(relative_path, std::path::Path::new("examples/ok.http"));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    /// R1 验收：--var 覆盖 .env，.env 变量进入上下文（授权变量的解析地基）
+    #[test]
+    fn test_build_initial_context_env_file_and_var_cascade() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join("custom.env");
+        // 变量名用冷僻 key：级联第 3 层用系统环境变量覆盖同名 key，
+        // 若断言的 key 恰被 shell 导出（如 base_url），测试会假红
+        std::fs::write(
+            &env_path,
+            "token = \"env-token-1\"\nenv_only_base = \"http://from-env\"\n",
+        )
+        .unwrap();
+
+        let options = super::super::TuiOptions {
+            env: None,
+            vars: vec!["token=cli-token-2".to_string()],
+            env_file: Some(env_path.to_string_lossy().into_owned()),
+        };
+        let context = build_initial_context(&options);
+
+        // .env 变量生效
+        assert_eq!(
+            context.get("env_only_base").as_deref(),
+            Some("http://from-env")
+        );
+        // --var 覆盖 .env（级联最高优先）
+        assert_eq!(context.get("token").as_deref(), Some("cli-token-2"));
     }
 }

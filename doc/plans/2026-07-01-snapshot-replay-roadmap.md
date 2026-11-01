@@ -31,9 +31,12 @@
     3.  在响应 `body` 中将底层的物理连接错误消息（例如 `Connection timed out`, `DNS lookup failed`）进行格式化保存，从而使 Steve 在现场能够一键重放这些网络连接类故障。
 
 ### 4. P1：事后从历史记录补录导出快照 (Post-Facto Export)
+
+> ⚠️ **2026-10-27 勘误**：设计方案第 1 点的前提已过时——`history/recorder.rs` 早已全量存储响应 body（`ResponseMeta.body` 含 `Option<String>` body 字段），且 `From<HistoryEntry> for SnapshotEntry` 转换与旧格式向后兼容测试均已存在。第 1 点所述"重构为 ResponseSnapshot"的工作**实际早已完成**；export 桩转实的剩余工作量仅为命令接线（约 20 行），随 replay per-entry 结果搭车，见 [生成语义执行计划 Phase 2c](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-generation-semantics-execution-plan.md)。另：条目 1（Secrets Masker）的 header/query 部分已由 generate 凭据模板化与 export 脱敏覆盖，**残余范围为 body 掩码**。
+
 *   **需求背景**：Dave 常常在未开启 `--save-snapshot` 时正常测试，但需要在此之后把最近一次的执行数据补录导出为快照。
 *   **设计方案**：
-    1.  **重构历史数据源**：由于现有的 `HistoryEntry` 其 `response` 字段类型是 `ResponseMeta`，不带 Body。我们需要将其重构为 `ResponseSnapshot`（包含完整的响应 Body）。
+    1.  ~~重构历史数据源~~（早期版本已完成 body 存储，见上方勘误）。
     2.  由于项目已经支持 20MB 阈值的 Lazy Compaction 压实机制，即使写入 Body，对本地磁盘和微秒级读写性能也毫无影响。
     3.  **实现 `export` 子命令**：
         - `rupost history export --last <N> --output <FILE>`：读取 `history.jsonl` 中最近的 N 次接口执行记录，提取并序列化生成 `SnapshotSuite`。

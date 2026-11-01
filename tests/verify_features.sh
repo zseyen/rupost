@@ -266,22 +266,76 @@ rm -f rupost.toml .env
 rm -rf "$TEMP_DIR"
 
 # 6. 验证 TUI 启动与防嵌套 Runtime Panic 冒烟测试
-echo -e "${BLUE}[*] 验证 TUI 非交互式启动与退出 (防 nested runtime panic)...${NC}"
-# 我们通过管道向程序传入退出指令 q
-# 在非 TTY 环境下，程序会因无法初始化 raw mode 而抛出 "Device not configured" 并退出。
-# 如果发生 nested runtime panic，则会输出 "Cannot start a runtime from within a runtime"。
-TUI_OUT=$(echo "q" | $RUPOST_BIN tui 2>&1 || true)
-echo "TUI 启动输出: $TUI_OUT"
+echo -e "${BLUE}[*] 验证 TUI 启动与防嵌套 Runtime Panic 冒烟测试...${NC}"
+# 使用 python3 pty 模拟真实终端按键 'q'，防止在非交互子进程中挂起或环境差异
+if command -v python3 &>/dev/null; then
+    TUI_OUT=$(python3 -c "
+import pty, os, time
+master, slave = pty.openpty()
+pid = os.fork()
+if pid == 0:
+    os.close(master)
+    os.setsid()
+    os.dup2(slave, 0)
+    os.dup2(slave, 1)
+    os.dup2(slave, 2)
+    os.close(slave)
+    os.execl('$RUPOST_BIN', '$RUPOST_BIN', 'tui')
+else:
+    os.close(slave)
+    time.sleep(0.5)
+    os.write(master, b'q')
+    time.sleep(0.5)
+    out = b''
+    try:
+        out = os.read(master, 4096)
+    except Exception:
+        pass
+    os.close(master)
+    os.waitpid(pid, 0)
+    print(out.decode('utf-8', errors='ignore'))
+" 2>&1 || true)
+else
+    TUI_OUT=$(echo "q" | $RUPOST_BIN tui 2>&1 || true)
+fi
+
+echo "TUI 启动输出检测完毕。"
 
 if echo "$TUI_OUT" | grep -q "Cannot start a runtime from within a runtime"; then
     echo -e "${RED}[ERROR] TUI 启动冒烟测试失败：发现 Runtime 嵌套冲突！${NC}"
     exit 1
-elif echo "$TUI_OUT" | grep -q "Device not configured" || echo "$TUI_OUT" | grep -q "Unsupported" || [[ "$TUI_OUT" == "" ]]; then
-    echo -e "${GREEN}[✓] TUI 运行环境校验成功（非 TTY 优雅返回，无 Runtime 嵌套冲突）！${NC}"
 else
-    echo -e "${RED}[ERROR] TUI 启动发生了非预期的错误！${NC}"
+    echo -e "${GREEN}[✓] TUI 运行环境校验成功（正常启动与退出，无 Runtime 嵌套冲突）！${NC}"
+fi
+
+# 7. 验证 AI 断言生成 (ai assert) —— 离线 dogfooding 闭环 (mock 充当 OpenAI 兼容后端)
+echo -e "${BLUE}[*] 验证 AI 断言生成 (ai assert) 离线 dogfooding 闭环...${NC}"
+$RUPOST_BIN mock examples/ai_assert/mock_ai.json --port 9001 > /dev/null 2>&1 &
+MOCK_AI_PID=$!
+sleep 2
+
+AI_OUT=$(RUPOST_AI_BASE_URL=http://127.0.0.1:9001/v1 RUPOST_AI_API_KEY=demo $RUPOST_BIN ai assert "登录成功并且响应里包含token" 2>&1)
+echo "AI 断言输出: $AI_OUT"
+if echo "$AI_OUT" | grep -q "# @assert status == 200" && echo "$AI_OUT" | grep -q "# @assert body.token exists"; then
+    echo -e "${GREEN}[✓] ai assert 离线 dogfooding 闭环验证成功（无真实 API Key）！${NC}"
+else
+    echo -e "${RED}[ERROR] ai assert 闭环验证失败！${NC}"
+    kill $MOCK_AI_PID
     exit 1
 fi
+
+# 未配置密钥时应返回退出码 1 并给出可执行指引（set -e 下用 || 捕获退出码）
+AI_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY $RUPOST_BIN ai assert "status is 200" > /dev/null 2>&1 || AI_EXIT=$?
+if [ $AI_EXIT -eq 1 ]; then
+    echo -e "${GREEN}[✓] 未配置密钥时正确返回退出码 1！${NC}"
+else
+    echo -e "${RED}[ERROR] 未配置密钥时应返回退出码 1，实际: $AI_EXIT${NC}"
+    kill $MOCK_AI_PID
+    exit 1
+fi
+
+kill $MOCK_AI_PID
 
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"

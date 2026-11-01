@@ -15,6 +15,8 @@ pub enum TuiEvent {
         result: Box<Result<Response, String>>,
         captured_vars: HashMap<String, String>,
         assertions: Vec<AssertionResult>,
+        /// 非致命告警（@capture 失败、未定义变量、畸形 JSON 降级等），不影响 success 但必须可见
+        warnings: Vec<String>,
     },
     StreamChunk {
         id: Uuid,

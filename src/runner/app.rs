@@ -1,13 +1,15 @@
 use crate::Result;
+use crate::RupostError;
 use crate::history::save_batch_snapshot;
 use crate::middleware::resolve_cookie_path;
+use crate::runner::selector;
 use crate::runner::{
     BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
     TestReporter, WorkflowGraph,
 };
 use crate::variable::ConfigLoader;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub struct TestSuiteOptions {
@@ -26,12 +28,24 @@ pub struct TestSuiteOptions {
     pub debug_on_failure: bool,
     pub default_scheme: String,
     pub save_snapshot: Option<String>,
+    /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
+    pub only: Option<String>,
 }
 
 /// 执行批处理测试流程，如果发现有测试失败，则返回 Ok(true)，否则返回 Ok(false)
 pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
+    // 0. 单请求选择器（DX-Debug R1）：--only 与 path#n 片段，二者互斥且仅支持单一文件路径
+    let plan = selector::build_selector_plan(&options.paths, options.only.as_deref())?;
+    let selector = plan.selector;
+    let paths = plan.paths;
+    if selector.is_some() && paths.len() == 1 && Path::new(&paths[0]).is_dir() {
+        return Err(RupostError::Other(
+            "单请求选择器（--only / path#n）不支持目录，请指定单个 .http/.md 文件".to_string(),
+        ));
+    }
+
     // 1. 递归扫描文件
-    let scanned_files = DirectoryScanner::scan(&options.paths)?;
+    let scanned_files = DirectoryScanner::scan(&paths)?;
     if scanned_files.is_empty() {
         println!("No test files found.");
         return Ok(false);
@@ -39,16 +53,59 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
 
     // 2. 递归自动补全加载所有依赖。显式传入的路径完全信任，
     //    @depends-on 只能落在这些输入路径的目录之下（依赖路径合理性校验）
-    let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&options.paths);
-    let files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots)?;
+    let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&paths);
+    let mut files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots)?;
 
-    // 3. 拓扑排序解析依赖
-    let parse_pairs: Vec<_> = files_map
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let graph = WorkflowGraph::new(&parse_pairs);
-    let execution_order = graph.resolve_execution_order()?;
+    // 3. 执行序：单请求模式收窄到目标文件（依赖文件不执行、不走 DAG）；
+    //    否则拓扑排序解析依赖
+    let (execution_order, dependencies) = if let Some(sel) = &selector {
+        if scanned_files.len() != 1 {
+            return Err(RupostError::Other(
+                "单请求选择器（--only / path#n）仅支持单一文件路径".to_string(),
+            ));
+        }
+        let target = scanned_files[0].clone();
+        let file = files_map.get_mut(&target).ok_or_else(|| {
+            RupostError::Other(format!("选择器未能定位目标文件: {}", target.display()))
+        })?;
+        let applied = selector::apply_selector(file, sel)?;
+        if applied.duplicate_names > 0 {
+            eprintln!(
+                "[!] @name 在文件内出现 {} 次，已执行首个（第 {} 条）",
+                applied.duplicate_names + 1,
+                applied.selected_number
+            );
+        }
+        let name_part = applied
+            .selected_name
+            .as_ref()
+            .map(|n| format!("（@{n}）"))
+            .unwrap_or_default();
+        // [i] 提示仅在 terminal 模式输出，保持 --report json 的 stdout 纯净可解析
+        if options.report != "json" {
+            println!(
+                "[i] 单请求模式：执行第 {} 条{}，其余 {} 条已跳过",
+                applied.selected_number, name_part, applied.skipped_count
+            );
+        }
+        let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        deps.insert(target.clone(), Vec::new());
+        (vec![target], deps)
+    } else {
+        let parse_pairs: Vec<_> = files_map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let graph = WorkflowGraph::new(&parse_pairs);
+        let order = graph.resolve_execution_order()?;
+        // 提取依赖映射关系，传入 execute_batch 供并行调度使用
+        let dependencies: HashMap<PathBuf, Vec<PathBuf>> = graph
+            .nodes
+            .iter()
+            .map(|(k, v)| (k.clone(), v.depends_on.clone()))
+            .collect();
+        (order, dependencies)
+    };
 
     // 4. 加载配置并构建变量上下文
     let config = ConfigLoader::find_and_load().unwrap_or_default();
@@ -93,12 +150,6 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
 
     // 6. 执行批处理
     let start_time = Instant::now();
-    // 提取依赖映射关系，传入 execute_batch 供并行调度使用
-    let dependencies: HashMap<PathBuf, Vec<PathBuf>> = graph
-        .nodes
-        .iter()
-        .map(|(k, v)| (k.clone(), v.depends_on.clone()))
-        .collect();
 
     let batch_mode = if options.mode == "parallel" {
         BatchMode::Parallel
@@ -140,7 +191,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
 
     // 保存快照
     if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(&batch_results, &options.paths, snapshot_path)?;
+        save_batch_snapshot(&batch_results, &paths, snapshot_path)?;
     }
 
     Ok(has_failure)
@@ -168,6 +219,7 @@ mod tests {
             debug_on_failure: false,
             default_scheme: "http".to_string(),
             save_snapshot: None,
+            only: None,
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());

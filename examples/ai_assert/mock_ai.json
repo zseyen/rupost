@@ -1,0 +1,16 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": "{\"choices\":[{\"message\":{\"content\":\"[\\\"status == 200\\\", \\\"body.token exists\\\"]\"}}]}"
+      }
+    ]
+  }
+]

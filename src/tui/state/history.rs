@@ -135,6 +135,31 @@ mod tests {
         assert_eq!(format_url_host_and_path("/relative/path"), "/relative/path");
     }
 
+    /// T10 审计裁决（2026-10-28，future_backlog 条目 12）：TUI 历史还原**有意保留凭据真值**。
+    /// 还原产物仅进内存编辑器（本地会话草稿，供未来内联编辑重发——模板化会破坏重发语义），
+    /// 无文件/剪贴板导出出口；对外分享走 `export --redact`（脱敏）或 `generate`（模板化）。
+    /// 本测试锁定该契约：若未来"顺手"给还原路径加模板化/脱敏，此处先行失败提醒重新裁决。
+    #[test]
+    fn test_history_restore_keeps_credentials_verbatim_by_design() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer live_secret_token".parse().unwrap());
+        headers.insert("cookie", "session=abc123".parse().unwrap());
+
+        let req = RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://example.com/api?api_key=secret999".to_string(),
+            headers,
+            body: None,
+        };
+
+        let http_text = format_request_snapshot_to_http(&req);
+        // 真值保留（重发语义），不模板化、不脱敏
+        assert!(http_text.contains("authorization: Bearer live_secret_token"));
+        assert!(http_text.contains("cookie: session=abc123"));
+        assert!(http_text.contains("api_key=secret999"));
+    }
+
     #[test]
     fn test_history_restore_format() {
         let mut headers = HeaderMap::new();

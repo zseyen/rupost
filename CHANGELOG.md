@@ -6,7 +6,37 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ## [Unreleased]
 
+### Added
+
+- TUI 流式调试深化：①启动加载变量上下文（rupost.toml 环境 + .env + 系统变量，`--env/--var/--env-file` 透传，与 CLI 同源）——`Authorization: Bearer {{token}}` 等授权变量在 TUI 真正解析；②`A` 快速授权（输入 header 值即注入，显式声明优先）；③Response 面板 `/` 消息搜索（HTTP/SSE/WS 三视图实时高亮 + n/N 环绕跳转，顺带修正滚动总行数与视觉行不一致）；④WS 交互会话（`W` 对 `@websocket` 请求建立常驻会话、`S` 发送消息实时回显、`D` 关闭，断线自动重连沿用 session 逻辑，与剧本执行互斥）。
+- TUI Response 面板现在渲染 `TestResult.warnings`（`Warnings: N` 摘要 + `⚠` 逐条明细，含 SSE/WS 流式完成态视图首行摘要）：`@capture` 失败、未定义变量、畸形 JSON 降级等非致命告警此前在 TUI 中被静默丢弃（`RequestFinished` 事件未携带），存在"断言全过但实际带伤"的假通过盲区（D1 遗留项关闭）。顺带修复 HTTP 缓存渲染管线扁平化导致的样式丢失——未超宽行保留 Span 主题取色。
+- `rupost ai assert "<自然语言>"`：AI 创作辅助命令，将自然语言期望翻译为标准 `@assert` 断言行（支持任意 OpenAI 兼容后端与本地 Ollama；密钥仅从 `RUPOST_AI_API_KEY`/`OPENAI_API_KEY` 环境变量读取，不落盘不入日志）。`--raw` 输出纯断言行供脚本追加。休眠的 `rupost-ai` crate 正式接线激活；通过 `rupost mock` 充当 OpenAI 兼容后端实现零 Key 离线 dogfooding 闭环（`tests/ai_assert_test.rs` + `tests/verify_features.sh` 步骤 7）。
+
 ### Changed
+
+- `rupost g` (history → .http generation) now **templates credentials as
+  variables** instead of writing them verbatim: `Authorization: Bearer eyJ...`
+  becomes `Authorization: Bearer {{authorization}}` (scheme prefix preserved,
+  variable carries only the credential body), sensitive URL query values become
+  `api_key={{api_key}}`, and a header comment lists all referenced variables
+  (provide values via `--var` / `.env` / `rupost.toml`). Previously generated
+  files contained plaintext credentials — a security fix first shipped as
+  `[REDACTED]` placeholders, now upgraded to runnable variable references.
+  `rupost export` keeps `[REDACTED]` (its output targets humans/pasting).
+- `rupost g` now emits **semantic names**: `### GET /users` and
+  `# @name get_users` (derived from method + path, ordinal suffix on
+  collision) instead of opaque `### Request <id8>` / `req_<timestamp>_<n>`.
+- `rupost g --templatize-host` rewrites the absolute origin of each request to
+  `{{base_url}}/path` so one generated file runs across environments via the
+  standard variable cascade (naming follows the `rupost.toml` template
+  convention). Default behavior is unchanged (absolute URLs).
+
+### Fixed
+
+- **Security**: `rupost g` no longer writes `Authorization` / `Cookie` /
+  `X-Api-Key` header values or sensitive URL query values (e.g. `?api_key=`)
+  verbatim into generated `.http` files. Redaction semantics are shared with
+  `rupost export` (`exporter/redact.rs`).
 
 - TUI: file creation I/O is routed through a `FileRepository` port (atomic
   `create_new`, Fs/InMemory implementations) — the ViewModel no longer touches the

@@ -28,6 +28,17 @@ pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Se
     // 0. 模态输入状态的前置处理
     if !matches!(state.input_mode, InputMode::None) {
         handle_modal_key(state, key);
+        // WsSend 模态提交：出站发送 + 本地回显（manager 不广播出站帧）
+        if let Some(text) = state.pending_ws_send.take() {
+            if let Some(sess) = &state.ws_session {
+                match crate::tui::ws_interactive::send_text(&sess.session, &text).await {
+                    Ok(()) => state.handle_ws_frame(true, text),
+                    Err(e) => state.last_error = Some(e),
+                }
+            } else {
+                state.last_error = Some("WS session closed before send".to_string());
+            }
+        }
         return;
     }
 
@@ -48,6 +59,12 @@ pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Se
         if state.active_panel != Panel::Response && state.editor_file_path.is_some() {
             state.pending_editor_launch = true;
         }
+        return;
+    }
+
+    // 全局大写 A 键：快速授权输入（Authorization header 值，显式声明优先）
+    if key.code == KeyCode::Char('A') {
+        state.input_mode = InputMode::Auth(Box::new(sidebar::new_input_textarea(state.palette())));
         return;
     }
 

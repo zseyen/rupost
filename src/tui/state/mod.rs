@@ -7,6 +7,7 @@ use super::theme::{Theme, ThemeKind, palette};
 mod history;
 mod layout;
 mod retention;
+pub mod search;
 mod stream;
 mod tree;
 mod wrap;
@@ -55,6 +56,12 @@ pub enum InputMode {
     QuickCreate(Box<ratatui_textarea::TextArea<'static>>),
     /// 侧边栏 `/` 过滤（实时过滤，Esc 清除）
     Filter(Box<ratatui_textarea::TextArea<'static>>),
+    /// 全局 `A` 快速授权（输入 header 值，Enter 存入 `__quick_auth` 变量）
+    Auth(Box<ratatui_textarea::TextArea<'static>>),
+    /// Response 面板 `/` 消息搜索（实时匹配，Esc/Enter 退出后 n/N 续跳）
+    Search(Box<ratatui_textarea::TextArea<'static>>),
+    /// WS 交互会话发送（`S` 键，Enter 发送）
+    WsSend(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +103,8 @@ pub struct AppState {
     pub current_request: Option<ParsedRequest>,
     pub last_response: Option<Response>,
     pub assertions: Vec<AssertionResult>,
+    /// 最近一次执行的非致命告警（由 RequestFinished 事件写入，SendRequest 时清空）
+    pub warnings: Vec<String>,
     pub variables: VariableContext,
     pub is_quitting: bool,
 
@@ -140,6 +149,14 @@ pub struct AppState {
     // Phase 3 过滤状态（空串 = 不过滤）
     pub filter_query: String,
 
+    // 消息搜索状态（R4：Response 面板 `/`；query 留存供 n/N 续跳）
+    pub search_query: String,
+    pub search_match_index: usize,
+
+    // WS 交互会话（R6/R7）：Some 时活跃，drop 即关闭；pending 发送由模态取出
+    pub ws_session: Option<crate::tui::ws_interactive::WsInteractiveSession>,
+    pub pending_ws_send: Option<String>,
+
     /// 主题种类（`,` 切换）；取色经 palette()
     pub theme: ThemeKind,
 
@@ -173,6 +190,7 @@ impl AppState {
             current_request: None,
             last_response: None,
             assertions: Vec::new(),
+            warnings: Vec::new(),
             variables: VariableContext::new(),
             is_quitting: false,
             editor_text: String::new(),
@@ -210,6 +228,10 @@ impl AppState {
 
             // Phase 3 过滤
             filter_query: String::new(),
+            search_query: String::new(),
+            search_match_index: 0,
+            ws_session: None,
+            pending_ws_send: None,
 
             theme: ThemeKind::Dark,
 
@@ -222,6 +244,26 @@ impl AppState {
             repo: Repo::default(),
             last_error: None,
         }
+    }
+
+    /// 快速授权变量键（`A` 键设置；空串 = 未设置）
+    pub const QUICK_AUTH_VAR: &'static str = "__quick_auth";
+
+    /// 设置快速授权（Authorization header 值，如 "Bearer eyJ..."）
+    pub fn set_quick_auth(&mut self, value: &str) {
+        self.variables.insert(Self::QUICK_AUTH_VAR, value);
+    }
+
+    /// 清除快速授权
+    pub fn clear_quick_auth(&mut self) {
+        self.variables.insert(Self::QUICK_AUTH_VAR, "");
+    }
+
+    /// 当前快速授权值（未设置或空返回 None）
+    pub fn quick_auth(&self) -> Option<String> {
+        self.variables
+            .get(Self::QUICK_AUTH_VAR)
+            .filter(|v| !v.is_empty())
     }
 
     /// 当前主题调色板
@@ -328,11 +370,19 @@ impl AppState {
                 self.loading_tick = 0;
                 self.sse_stream_body.clear();
                 self.ws_frames.clear();
+                self.warnings.clear();
                 self.response_scroll = 0;
                 self.response_visual_lines.clear();
                 self.sse_visual_lines.clear();
                 self.sse_last_processed_pos = 0;
                 self.ws_visual_lines.clear();
+                // 滑窗域随新请求复位：旧日志路径/行数/视口缓存不得串入本次运行
+                // （log_file_path 由本次运行的 InitLogPath 事件重新挂载）
+                self.log_file_path = None;
+                self.total_log_lines = 0;
+                self.viewport_cache.clear();
+                self.cache_start_line = 0;
+                self.cache_end_line = 0;
 
                 if let Some(ref path) = self.editor_file_path {
                     if self.active_sidebar_tab == SidebarTab::Files {

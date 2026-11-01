@@ -149,7 +149,13 @@ cargo test
 ```
 
 ### 4.2 运行代码覆盖率统计
-我们推荐使用 `cargo-tarpaulin` 工具进行覆盖率分析。
+**一键入口（推荐）**：仓库根目录提供 `make coverage`（DX 批交付，本地可选、不进 CI 门禁）：
+```bash
+make coverage
+```
+使用 `cargo-llvm-cov --workspace --summary-only` 输出汇总；未安装时打印一行安装指引。测试用 `--workspace` 与 CI 门禁同口径（含子 crate）。
+
+**手动方式（tarpaulin，HTML 逐行视图）**：
 1.  **安装工具**（若未安装）：
     ```bash
     cargo install cargo-tarpaulin

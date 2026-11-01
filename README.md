@@ -11,6 +11,7 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **极致美感**：精心设计的终端输出，采用 HSL 调色方案与平滑的微动画，追求极致的视觉交互体验。
 - **文档即测试**：原生支持 `.http` 与 `.md` 文件解析。你可以直接在 Markdown 文档中编写和执行 API 请求。
 - **强大断言**：内置高性能断言系统，支持 `@assert` 指令，轻松实现全自动接口验证。
+- **AI 创作辅助**：`rupost ai assert` 用一句自然语言生成标准 `@assert` 断言行；支持任意 OpenAI 兼容后端（含本地 Ollama），密钥仅走环境变量，测试执行期零 AI 依赖。详见 [AI 断言生成指南](file:///examples/ai_assert/README.md)。
 - **变量与环境管理**：灵活的变量替换机制与多环境一键切换。详见 [变量与环境管理指南](file:///doc/guides/variables_and_environments.md)。
 - **批量与并发测试**：支持跨文件有向无环图 (DAG) 拓扑排序依赖执行，支持顺序/并行双模式运行与状态单向克隆。详见 [批量测试指南](file:///doc/guides/batch_testing.md)。
 - **网络诊断分析**：细粒度的网络耗时瀑布图与 X.509 证书到期健康分析。详见 [网络诊断工具指南](file:///doc/guides/network_diagnostics.md)。
@@ -82,6 +83,15 @@ RuPost 提供了直观且高效的命令行接口：
 * **启动交互式终端 UI 调试模式 (TUI)**:
   ```bash
   rupost tui
+  ```
+* **导出测试用例为原生命令行 (cURL / HTTPie / Wget)**:
+  ```bash
+  # 查看支持的导出插件
+  rupost export --list
+  # 导出为 cURL 命令 (支持环境变量注入与凭据自动脱敏)
+  rupost export curl examples/basic.http -e dev --redact
+  # 导出单行紧凑格式并保存到脚本
+  rupost export httpie examples/basic.http --compact -o request.sh
   ```
 
 ---

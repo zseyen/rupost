@@ -154,7 +154,9 @@ pub(super) async fn handle_sidebar_key(
 }
 
 /// 统一构造模态输入框样式
-fn new_input_textarea(t: &crate::tui::theme::Theme) -> ratatui_textarea::TextArea<'static> {
+pub(crate) fn new_input_textarea(
+    t: &crate::tui::theme::Theme,
+) -> ratatui_textarea::TextArea<'static> {
     let mut textarea = ratatui_textarea::TextArea::default();
     textarea.set_style(ratatui::style::Style::default().fg(t.text));
     textarea

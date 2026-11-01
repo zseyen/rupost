@@ -125,10 +125,19 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
     let title = match &state.input_mode {
         InputMode::QuickCreate(_) => format!(" {} ", state.quick_input_title),
         InputMode::Filter(_) => " Filter files (substring, live): ".to_string(),
+        InputMode::Auth(_) => {
+            " Authorization header value (e.g. Bearer <token>, empty clears): ".to_string()
+        }
+        InputMode::Search(_) => " Search messages (n/N after Esc): ".to_string(),
+        InputMode::WsSend(_) => " WS send (Enter to send): ".to_string(),
         InputMode::None => String::new(),
     };
     let textarea = match &state.input_mode {
-        InputMode::QuickCreate(t) | InputMode::Filter(t) => t,
+        InputMode::QuickCreate(t)
+        | InputMode::Filter(t)
+        | InputMode::Auth(t)
+        | InputMode::Search(t)
+        | InputMode::WsSend(t) => t,
         InputMode::None => return,
     };
     let popup_layout = Layout::default()
@@ -314,7 +323,16 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    let spans = match state.active_panel {
+    // 快速授权指示（R3：`A` 设置后全面板可见）
+    let mut spans = Vec::new();
+    if state.quick_auth().is_some() {
+        spans.push(Span::styled(
+            " AUTH✓ ",
+            Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("│ "));
+    }
+    spans.extend(match state.active_panel {
         Panel::Files => match state.active_sidebar_tab {
             SidebarTab::Files => vec![
                 Span::styled(
@@ -435,7 +453,7 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
             ),
             Span::raw("Scroll Response"),
         ],
-    };
+    });
 
     let paragraph = Paragraph::new(Line::from(spans)).style(style);
     frame.render_widget(paragraph, area);

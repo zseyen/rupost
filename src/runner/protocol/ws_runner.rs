@@ -563,7 +563,7 @@ impl WsRunner {
 }
 
 impl WsRunner {
-    fn resolve_ws_url(url: &str) -> String {
+    pub(crate) fn resolve_ws_url(url: &str) -> String {
         let mut resolved = url.to_string();
         if resolved.starts_with("https://") {
             resolved.replace_range(0..8, "wss://");

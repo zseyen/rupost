@@ -1,3 +1,6 @@
+// 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
+mod common;
+
 use std::fs;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};

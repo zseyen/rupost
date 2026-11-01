@@ -1,6 +1,6 @@
 # RuPost 竞争格局复审与核心竞争点提炼 (2026-10)
 
-> **检索窗口**: 2026-10-26（快照式复审；仓库内既有分析 [competitive_analysis.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/competitive_analysis.md)、[competitor-analysis-and-differentiation.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/competitor-analysis-and-differentiation.md)、[reqable_analysis.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/reqable_analysis.md)（2026-01-22）的最新增量）
+> **检索窗口**: 2026-10-26（快照式复审；仓库内既有分析 [competitive_analysis.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/competitive_analysis.md)、[competitor-analysis-and-differentiation.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/competitor-analysis-and-differentiation.md)、[reqable_analysis.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/reqable_analysis.md)（2026-01-22）的最新增量；针对终端交互与配方派竞品专项剖析详见 [2026-10-27-terminal-api-clients-ain-atac-slumber-deep-dive.md](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-27-terminal-api-clients-ain-atac-slumber-deep-dive.md)）
 > **方法**: 对终端/TUI 形态、文件驱动测试、平台/录制派三赛道的头部与新兴工具逐一检索官方发布记录，与 RuPost 当前实际能力（19 功能域，见[测试方案矩阵](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-strategy-plan.md)）对照
 > **结论速览**: RuPost 的可防御位置不在"又一个终端 Postman"（该赛道 2026 年已拥挤且出现掉队者），而在 **"实时 AI API 时代的终端回归引擎"**——流式断言、LLM 帧规整、DAG 编排三件套在检索窗口内无终端工具覆盖
 

@@ -96,6 +96,10 @@ pub enum Commands {
         /// File path to save HTTP request/response snapshot
         #[arg(long, value_name = "FILE")]
         save_snapshot: Option<String>,
+
+        /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
+        #[arg(long, value_name = "N|@NAME")]
+        only: Option<String>,
     },
 
     /// Manage request history
@@ -167,11 +171,46 @@ pub enum Commands {
         verbose: bool,
     },
 
+    /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
+    #[command(alias = "exp")]
+    Export(ExportArgs),
+
+    /// AI assisted authoring commands
+    Ai {
+        #[command(subcommand)]
+        command: AiCommands,
+    },
+
     /// Start interactive terminal UI mode
     Tui {
         /// Optional test file path to pre-load and preview in TUI
         #[arg(value_name = "FILE")]
         file: Option<String>,
+
+        /// Environment name in rupost.toml (e.g., dev, staging)
+        #[arg(long)]
+        env: Option<String>,
+
+        /// Variable overrides (key=value)
+        #[arg(long, value_name = "KEY=VALUE")]
+        var: Vec<String>,
+
+        /// Path to a local environment file (e.g. .env)
+        #[arg(long, value_name = "FILE")]
+        env_file: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AiCommands {
+    /// Translate natural language expectations into standard @assert lines
+    Assert {
+        /// Natural language description of the expected behavior
+        text: String,
+
+        /// Print plain assertion lines only (machine-friendly)
+        #[arg(long)]
+        raw: bool,
     },
 }
 
@@ -204,7 +243,7 @@ pub enum HistoryCommands {
     /// Show detailed response and body/frames for a specific history entry
     #[command(alias = "s")]
     Show {
-        /// History entry number (1-indexed, 1 is the oldest) or UUID
+        /// History entry number (1-indexed, 1 is the newest) or UUID
         #[arg(required = true)]
         target: String,
     },
@@ -246,6 +285,173 @@ pub struct GenerateArgs {
     /// Interactive selection mode
     #[arg(short, long)]
     pub interactive: bool,
+
+    /// Rewrite request origin as {{base_url}} so the file runs across environments
+    #[arg(long = "templatize-host")]
+    pub templatize_host: bool,
+}
+
+#[derive(Parser, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExportArgs {
+    /// Target export format (e.g. curl, httpie, wget)
+    #[arg(value_name = "TARGET", required_unless_present = "list")]
+    pub target: Option<String>,
+
+    /// Paths to .http/.md files or directories
+    #[arg(value_name = "PATHS", required_unless_present = "list")]
+    pub paths: Vec<String>,
+
+    /// Environment name (e.g. dev, staging, prod)
+    #[arg(short, long)]
+    pub env: Option<String>,
+
+    /// Variable overrides (key=value)
+    #[arg(long, value_name = "KEY=VALUE")]
+    pub var: Vec<String>,
+
+    /// Path to a local environment file (e.g. .env)
+    #[arg(long, value_name = "FILE")]
+    pub env_file: Option<String>,
+
+    /// Path to cookie store file
+    #[arg(long, value_name = "FILE")]
+    pub cookie_file: Option<String>,
+
+    /// Filter and export only the request matching the given @name
+    #[arg(short, long)]
+    pub name: Option<String>,
+
+    /// Output in single-line compact format
+    #[arg(short, long)]
+    pub compact: bool,
+
+    /// Redact sensitive credentials in headers and query params
+    #[arg(long)]
+    pub redact: bool,
+
+    /// Save output directly to file
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<String>,
+
+    /// Force overwrite output file if it already exists
+    #[arg(short, long)]
+    pub force: bool,
+
+    /// List all available export plugins
+    #[arg(short, long)]
+    pub list: bool,
+}
+
+impl ExportArgs {
+    pub fn into_run_options(
+        self,
+        default_env: Option<String>,
+        default_cookie_file: Option<String>,
+        default_scheme: String,
+    ) -> rupost::exporter::ExportRunOptions {
+        rupost::exporter::ExportRunOptions {
+            target: self.target,
+            paths: self.paths,
+            env: self.env.or(default_env),
+            var: self.var,
+            env_file: self.env_file,
+            cookie_file: self.cookie_file.or(default_cookie_file),
+            default_scheme,
+            name: self.name,
+            compact: self.compact,
+            redact: self.redact,
+            output: self.output.map(std::path::PathBuf::from),
+            force: self.force,
+            list: self.list,
+        }
+    }
+}
+
+/// Parameters for inline CLI single-request execution mode
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunParams {
+    pub args: Vec<String>,
+    pub no_cookies: bool,
+    pub cookie_file: Option<String>,
+    pub env: Option<String>,
+    pub default_scheme: String,
+    pub debug: bool,
+    pub debug_on_failure: bool,
+}
+
+#[allow(dead_code)]
+impl Default for RunParams {
+    fn default() -> Self {
+        Self {
+            args: Vec::new(),
+            no_cookies: false,
+            cookie_file: None,
+            env: None,
+            default_scheme: "http".to_string(),
+            debug: false,
+            debug_on_failure: false,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl RunParams {
+    /// Create a new `RunParams` with the specified arguments and default configuration
+    pub fn new(args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            args: args.into_iter().map(Into::into).collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Construct RunParams directly from parsed CLI arguments
+    pub fn from_cli(cli: &Cli) -> Self {
+        Self {
+            args: cli.args.clone(),
+            no_cookies: cli.no_cookies,
+            cookie_file: cli.cookie_file.clone(),
+            env: cli.env.clone(),
+            default_scheme: cli.default_scheme.clone(),
+            debug: cli.debug,
+            debug_on_failure: cli.debug_on_failure,
+        }
+    }
+
+    /// Configure target environment
+    pub fn with_env(mut self, env: impl Into<String>) -> Self {
+        self.env = Some(env.into());
+        self
+    }
+
+    /// Configure default URL scheme
+    pub fn with_default_scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.default_scheme = scheme.into();
+        self
+    }
+
+    /// Configure cookie storage file path
+    pub fn with_cookie_file(mut self, path: impl Into<String>) -> Self {
+        self.cookie_file = Some(path.into());
+        self
+    }
+
+    /// Configure whether automatic cookies handling is disabled
+    pub fn with_no_cookies(mut self, no_cookies: bool) -> Self {
+        self.no_cookies = no_cookies;
+        self
+    }
+
+    /// Configure debug network diagnostics
+    pub fn with_debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
+    }
+
+    /// Configure debug network diagnostics on failure
+    pub fn with_debug_on_failure(mut self, debug_on_failure: bool) -> Self {
+        self.debug_on_failure = debug_on_failure;
+        self
+    }
 }
 
 struct CliRunner {
@@ -255,33 +461,26 @@ struct CliRunner {
 }
 
 impl CliRunner {
-    fn new(
-        no_cookies: bool,
-        cookie_file: Option<String>,
-        env: Option<String>,
-        default_scheme: String,
-        debug: bool,
-        debug_on_failure: bool,
-    ) -> Result<Self> {
-        let executor = if no_cookies {
+    fn new(params: &RunParams) -> Result<Self> {
+        let executor = if params.no_cookies {
             TestExecutor::new()
-        } else if let Some(path) = cookie_file {
+        } else if let Some(path) = &params.cookie_file {
             // 与测试套件路径一致：cookie 文件按环境隔离（cookies_dev.json 等）
             let resolved = rupost::middleware::resolve_cookie_path(
                 std::path::PathBuf::from(path),
-                env.as_deref(),
+                params.env.as_deref(),
             )?;
             TestExecutor::with_cookies(resolved)?
         } else {
             TestExecutor::with_ephemeral_cookies()
         }
-        .with_debug(debug)
-        .with_debug_on_failure(debug_on_failure);
+        .with_debug(params.debug)
+        .with_debug_on_failure(params.debug_on_failure);
 
         Ok(Self {
             formatter: ResponseFormatter::new(ResponseFormat::Verbose),
             executor,
-            default_scheme,
+            default_scheme: params.default_scheme.clone(),
         })
     }
 
@@ -320,22 +519,304 @@ impl CliRunner {
     }
 }
 
-pub async fn run(
-    args: Vec<String>,
-    no_cookies: bool,
-    cookie_file: Option<String>,
-    env: Option<String>,
-    default_scheme: String,
-    debug: bool,
-    debug_on_failure: bool,
-) -> Result<()> {
-    let runner = CliRunner::new(
-        no_cookies,
-        cookie_file,
-        env,
-        default_scheme,
-        debug,
-        debug_on_failure,
-    )?;
+pub async fn run(params: RunParams) -> Result<()> {
+    let args = params.args.clone();
+    let runner = CliRunner::new(&params)?;
     runner.run(args).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_export_args_and_run_params_mapping() {
+        let input = vec![
+            "rupost",
+            "--env",
+            "prod",
+            "--default-scheme",
+            "http",
+            "export",
+            "curl",
+            "tests/sample.http",
+            "--compact",
+            "--redact",
+        ];
+        let cli = Cli::try_parse_from(&input).expect("parse failed");
+        assert_eq!(cli.env.as_deref(), Some("prod"));
+        assert_eq!(cli.default_scheme, "http");
+
+        match cli.command {
+            Some(Commands::Export(args)) => {
+                assert_eq!(args.target.as_deref(), Some("curl"));
+                assert_eq!(args.paths, vec!["tests/sample.http"]);
+                assert!(args.compact);
+                assert!(args.redact);
+
+                let run_opts = args.into_run_options(
+                    cli.env.clone(),
+                    cli.cookie_file.clone(),
+                    cli.default_scheme.clone(),
+                );
+                assert_eq!(run_opts.target.as_deref(), Some("curl"));
+                assert_eq!(run_opts.env.as_deref(), Some("prod"));
+                assert_eq!(run_opts.default_scheme, "http");
+                assert!(run_opts.compact);
+                assert!(run_opts.redact);
+            }
+            _ => panic!("Expected Commands::Export"),
+        }
+
+        let inline_input = vec!["rupost", "--debug", "GET", "https://api.example.com"];
+        let inline_cli = Cli::try_parse_from(&inline_input).expect("inline parse failed");
+        let params = RunParams::from_cli(&inline_cli);
+        assert_eq!(params.args, vec!["GET", "https://api.example.com"]);
+        assert!(params.debug);
+        assert!(!params.debug_on_failure);
+    }
+
+    #[test]
+    fn test_run_params_builder_and_default() {
+        // 1. 测试默认值规范
+        let default_params = RunParams::default();
+        assert!(default_params.args.is_empty());
+        assert!(!default_params.no_cookies);
+        assert_eq!(default_params.cookie_file, None);
+        assert_eq!(default_params.env, None);
+        assert_eq!(default_params.default_scheme, "http");
+        assert!(!default_params.debug);
+        assert!(!default_params.debug_on_failure);
+
+        // 2. 测试 new 构造器与链式 Builder
+        let custom_params = RunParams::new(["POST", "http://127.0.0.1:8080/api"])
+            .with_env("staging")
+            .with_default_scheme("https")
+            .with_cookie_file("/tmp/cookies.json")
+            .with_no_cookies(true)
+            .with_debug(true)
+            .with_debug_on_failure(true);
+
+        assert_eq!(
+            custom_params.args,
+            vec!["POST", "http://127.0.0.1:8080/api"]
+        );
+        assert_eq!(custom_params.env.as_deref(), Some("staging"));
+        assert_eq!(custom_params.default_scheme, "https");
+        assert_eq!(
+            custom_params.cookie_file.as_deref(),
+            Some("/tmp/cookies.json")
+        );
+        assert!(custom_params.no_cookies);
+        assert!(custom_params.debug);
+        assert!(custom_params.debug_on_failure);
+
+        // 3. 测试 ExportArgs 默认值
+        let export_args = ExportArgs::default();
+        assert_eq!(export_args.target, None);
+        assert!(export_args.paths.is_empty());
+        assert!(!export_args.compact);
+        assert!(!export_args.redact);
+    }
+
+    struct TestCase {
+        name: &'static str,
+        input: Vec<&'static str>,
+        expected_debug: bool,
+        expected_debug_on_failure: bool,
+        expected_env: Option<&'static str>,
+        expected_has_subcommand: bool,
+        expected_args: Vec<&'static str>,
+    }
+
+    #[test]
+    fn test_global_args_position_contract_table() {
+        let cases = vec![
+            TestCase {
+                name: "pre_subcmd_debug",
+                input: vec!["rupost", "--debug", "test", "suite.http"],
+                expected_debug: true,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "post_subcmd_debug",
+                input: vec!["rupost", "test", "suite.http", "--debug"],
+                expected_debug: true,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "pre_subcmd_debug_on_failure",
+                input: vec!["rupost", "--debug-on-failure", "test", "suite.http"],
+                expected_debug: false,
+                expected_debug_on_failure: true,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "post_subcmd_debug_on_failure",
+                input: vec!["rupost", "test", "suite.http", "--debug-on-failure"],
+                expected_debug: false,
+                expected_debug_on_failure: true,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "mixed_flags_both_positions",
+                input: vec![
+                    "rupost",
+                    "--debug",
+                    "test",
+                    "suite.http",
+                    "--debug-on-failure",
+                ],
+                expected_debug: true,
+                expected_debug_on_failure: true,
+                expected_env: None,
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "global_value_arg_pre",
+                input: vec!["rupost", "--env", "staging", "test", "suite.http"],
+                expected_debug: false,
+                expected_debug_on_failure: false,
+                expected_env: Some("staging"),
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "global_value_arg_post",
+                input: vec!["rupost", "test", "suite.http", "--env", "staging"],
+                expected_debug: false,
+                expected_debug_on_failure: false,
+                expected_env: Some("staging"),
+                expected_has_subcommand: true,
+                expected_args: vec![],
+            },
+            TestCase {
+                name: "inline_mode_pre_debug",
+                input: vec!["rupost", "--debug", "GET", "http://example.com"],
+                expected_debug: true,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: false,
+                expected_args: vec!["GET", "http://example.com"],
+            },
+            TestCase {
+                name: "inline_mode_post_debug_trap",
+                input: vec!["rupost", "GET", "http://example.com", "--debug"],
+                expected_debug: false,
+                expected_debug_on_failure: false,
+                expected_env: None,
+                expected_has_subcommand: false,
+                expected_args: vec!["GET", "http://example.com", "--debug"],
+            },
+        ];
+
+        for case in cases {
+            let parsed = Cli::try_parse_from(&case.input)
+                .unwrap_or_else(|e| panic!("Failed to parse in case '{}': {}", case.name, e));
+
+            assert_eq!(
+                parsed.debug, case.expected_debug,
+                "Case '{}' debug flag mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.debug_on_failure, case.expected_debug_on_failure,
+                "Case '{}' debug_on_failure flag mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.env.as_deref(),
+                case.expected_env,
+                "Case '{}' env mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.command.is_some(),
+                case.expected_has_subcommand,
+                "Case '{}' subcommand presence mismatch",
+                case.name
+            );
+            assert_eq!(
+                parsed.args, case.expected_args,
+                "Case '{}' args mismatch",
+                case.name
+            );
+        }
+    }
+
+    /// R2 验收（TUI 流式调试 PRD）：`tui` 子命令的 --env/--var/--env-file 解析
+    /// 与 TuiOptions 组装映射。变量允许多次 --var 累积；file 为可选位置参数。
+    #[test]
+    fn test_tui_args_parse_and_options_mapping() {
+        let cli = Cli::try_parse_from([
+            "rupost",
+            "tui",
+            "suite.http",
+            "--env",
+            "staging",
+            "--var",
+            "k1=v1",
+            "--var",
+            "k2=v2",
+            "--env-file",
+            ".env.staging",
+        ])
+        .expect("tui args must parse");
+
+        let Some(Commands::Tui {
+            file,
+            env,
+            var,
+            env_file,
+        }) = cli.command
+        else {
+            panic!("expected Tui subcommand");
+        };
+        {
+            assert_eq!(file.as_deref(), Some("suite.http"));
+            assert_eq!(env.as_deref(), Some("staging"));
+            assert_eq!(var, vec!["k1=v1".to_string(), "k2=v2".to_string()]);
+            assert_eq!(env_file.as_deref(), Some(".env.staging"));
+
+            // main.rs 分发处的 TuiOptions 组装映射（字段一一对应）
+            let opts = rupost::tui::TuiOptions {
+                env: env.clone(),
+                vars: var.clone(),
+                env_file: env_file.clone(),
+            };
+            assert_eq!(opts.env.as_deref(), Some("staging"));
+            assert_eq!(opts.vars, vec!["k1=v1".to_string(), "k2=v2".to_string()]);
+            assert_eq!(opts.env_file.as_deref(), Some(".env.staging"));
+        }
+    }
+
+    /// R2：无参 `tui` 的默认值（file/env/env_file 均空、vars 空集）
+    #[test]
+    fn test_tui_defaults_without_file() {
+        let cli = Cli::try_parse_from(["rupost", "tui"]).expect("bare tui must parse");
+        let Some(Commands::Tui {
+            file,
+            env,
+            var,
+            env_file,
+        }) = cli.command
+        else {
+            panic!("expected Tui subcommand");
+        };
+        assert!(file.is_none());
+        assert!(env.is_none());
+        assert!(var.is_empty());
+        assert!(env_file.is_none());
+    }
 }

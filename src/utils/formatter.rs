@@ -1,5 +1,5 @@
+use crate::Result;
 use crate::http::Response;
-use anyhow::Result;
 use colored::*;
 pub enum ResponseFormat {
     Compact,

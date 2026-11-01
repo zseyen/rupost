@@ -39,7 +39,9 @@ fn run_ai_assert(base_port: Option<u16>, api_key: Option<&str>, text: &str) -> (
         .env_remove("RUPOST_AI_API_KEY")
         .env_remove("OPENAI_API_KEY")
         .env_remove("RUPOST_AI_BASE_URL")
-        .env_remove("RUPOST_AI_MODEL");
+        .env_remove("RUPOST_AI_MODEL")
+        // B4 上线后无配置会探测本地 Ollama；测试注入死地址保证确定性（TC-C10）
+        .env("RUPOST_AI_PROBE_URL", "http://127.0.0.1:1");
     if let Some(port) = base_port {
         cmd.env("RUPOST_AI_BASE_URL", format!("http://127.0.0.1:{port}/v1"));
     }

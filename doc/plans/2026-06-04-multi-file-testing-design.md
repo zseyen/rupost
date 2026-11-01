@@ -70,7 +70,7 @@ graph TD
     Workflow -->|4. 生成 DAG 拓扑执行顺序 | Batch[src/runner/batch.rs]
     Batch -->|5. 循环并发控制与变量共享 | Exec[src/runner/executor.rs]
     Exec -->|6. 执行网络与断言 | HTTP[src/http/client.rs]
-    Batch -->|7. 结果合并 | Aggregator[src/runner/reporter.rs]
+    Batch -->|7. 结果合并 | Aggregator[src/reporter.rs]
 ```
 
 ### 3.1 核心层级职责与数据结构
@@ -128,7 +128,7 @@ graph TD
     }
     ```
 
-#### 4. 表现层与 JSON 报告器 (`src/runner/reporter.rs`)
+#### 4. 表现层与 JSON 报告器 (`src/reporter.rs`)
 *   支持 `--report json`：把聚合后的 `BatchTestSummary` 转化为合法结构化 JSON 格式输出至 stdout。
 
 ---

@@ -131,7 +131,7 @@ graph TB
   - `check(response, assertions)` - 执行断言检查
   - 返回断言失败详情
 
-- **[NEW] [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/reporter.rs)**
+- **[NEW] [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)**
   - `TestReporter` - 测试报告器
   - 彩色输出成功/失败结果
   - 显示摘要报告

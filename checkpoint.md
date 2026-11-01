@@ -205,3 +205,44 @@ PRD 驱动四域交付（SSE/WS 接入 + 授权 + 消息搜索），全程 TDD�
 4. **WS 交互会话**：`W/S/D` 常驻会话（复用 WsSession，零侵入 runner 剧本执行），echo 回环 + 授权握手 + 关闭通知三集成测试。
 
 质量基线：39 套件 592 测试绿；clippy 零警告。PRD 非目标：SSE 事件结构化、多会话并行、SSE 交互发送。
+## 阶段成果：AI 失败智能处理——E2 就地归因与 E5 失败聚类交付完成（2026-10-28）
+
+依据 [E2/E5 PRD v1.1](doc/plans/2026-10-28-ai-failure-triage-and-attribution-prd.md)、[统一执行计划](doc/plans/2026-10-28-ai-e2e5-master-execution-plan.md) 与 [实施手册 v1.2（含 Gap Review 15 项）](doc/plans/2026-10-28-ai-failure-triage-and-attribution-implementation-plan.md)，5 步原子提交全部交付：
+1. **Step 0 地基**：`run_ai_assert` 下沉 `src/ai/mod.rs`（main.rs 182→127 行）；`src/ai/config.rs` 环境变量配置中心（空 Key 视同未配置）；`src/ai/redactor.rs` 统一脱敏截断器（复用 exporter::redact + JSON 递归键掩码 + is_char_boundary UTF-8 安全截断）。
+2. **Step 1 报告增强**：`JsonFileReport` 强类型契约（新增 expected/actual/stream_event_index 与失败项脱敏 512B 响应片段，旧字段名零变更）+ `--report-file` 落盘 + `TestSuiteOptions::default()`（cookie 默认语义与 CLI 一致）。
+3. **Step 2 领域层**：crate 新增 `json_util`（宽容 JSON 提取）、`attribution`（E2 归因，serde alias 兼容 PRD 命名）、`triage`（`FailureCategory` 无损枚举反序列化 + **分桶 ID 守恒回填**：重复/幻觉 ID 忽略、漏桶自动补确定性簇，计数 100% 守恒）。
+4. **Step 3 接线**：`src/ai/rules.rs` 确定性基线（6 类原因推导表 + URL 模式签名 + 20 桶溢出合并 + failure_signature 去重键）；`explain.rs`（签名去重 + Top-3 配额 + 连续 2 错熔断）；`triage.rs`（内存/文件双入口、无 Key 黄色警告、--json/--format）；CLI `--explain/--ai-explain/--triage` 与 `ai triage` 子命令；B0 引擎零 AI（`rg rupost_ai src/runner/ src/http/ src/parser/ src/assertion/` 为空；AI 编排仅 app.rs 渲染阶段挂载 `crate::ai`，`redactor` 纯文本工具另被 reporter 复用）。
+5. **Step 4 闭环**：`examples/ai_triage/`（mock 双路由 + failing fixture）+ `tests/ai_triage_test.rs` 4 用例（确定性分桶/wiremock AI 增强/E2 无 Key 降级 exit 1/**dogfooding 闭环**：`test --report-file` → `ai triage` 消费真实报告）+ verify_features.sh 步骤 8 + 文档归档（CHANGELOG/directory_structure/progress_summary/checkpoint）。
+6. **质量基线**：全量 570 测试 0 失败（crate 新增 17 测试）；fmt / clippy --all-features -D warnings 双零；verify_features.sh 全特性冒烟 PASS；全程零新增第三方依赖；Gap Review 中 GAP-1 经复核证伪（re-export 已存在，文档已标注禁止重复添加）。
+
+### 子代理交叉审查与修复（第二轮，2026-10-28）
+
+两路子代理（正确性/安全 + 架构/测试质量）独立审查并实证复现问题，全部闭环：
+1. **P1 脱敏旁路封堵**：reqwest 错误文本自带完整原始 URL、敏感键断言的 actual/expected/message 明文穿透报告与 LLM 上下文（审查实测复现真实 token 外泄）。新增 `redact_free_text`（散文内嵌 URL 走 redact_url query 掩码）与 `redact_assertion_value`（断言 raw 命中敏感键 → 值整体 [REDACTED]；否则 URL 掩码 + 200 字符截断），在报告生产（reporter）、E2 上下文（explain build_context）、E5 sample_error（rules）三处消费点统一应用，附 canary 回归测试。
+2. **P1 测试竞态**：三个集成用例争抢固定端口 9002（并行 harness 下结构性 flaky）——改每用例独立端口 + fixture `{{base_url}}` 变量化 + `--var` 注入 + 临时文件带进程 ID。
+3. **E2 验收补全**：PRD US1 无 Key 黄色提示（原被静默丢弃）——`ExplainSession` 客户端注入化（`explain_failure_with_client`），补配额（5 签名仅 3 调用）/熔断（连续 2 错停调用）/去重单测（StubClient 计数）；移除恒真常量测试。
+4. **签名稳定性**：`failure_signature` 对 error 文本内 URL 归一 `<url>`——同端点异实例同签名，E2 去重对网络错误真正生效。
+5. **文档如实修订**："唯一挂载点"声称（redactor 被 reporter 复用属纯文本工具）、DoD 阈值（≥590→571 实测修订）。
+审查确认项：B0/B3 硬不变量成立、守恒算法/降级链路/零外网闭环/canary 泄漏检测设计扎实。修复后全量 578 测试 0 失败，clippy --all-features -D warnings 零告警。
+### 复核轮（子代理安全复核，2026-10-28）
+
+独立复核员验证 P1 修复闭环：**两处 P1 主泄漏通道在全部三个消费点确认修复并有测试锁定，结论"P1 闭环成立，可合入"**（579 测试全绿、防御性二次脱敏幂等、签名归一无交叉漏洞、redact_free_text 正则无 ReDoS）。同步登记 3 个**预存在、条件性**后续工单（不阻塞本次合入）：
+- **P2-1** `diagnose_report.url` 未脱敏旁路：`--diagnose/--debug` + query 密钥 URL 时，`JsonTestReport.diagnose_report` 无条件序列化原始 URL（`src/reporter.rs`、`src/http/diagnose.rs:22`）——建议 redact_url 或条件 skip；
+- **P2-3** 断言 `raw` 为变量解析后文本：`{{expected_token}}` 类模板会把密钥字面量带入 raw → 报告/LLM prompt/聚类标题（`redact_assertion_value` 只掩 value 不掩 raw）；
+- **P2-2** 外部不可信报告防御纵深：`ai triage <手写报告>` 路径下 error/url/断言值依赖生产方脱敏（`context_from_json_test_report` 防御层未覆盖断言值与 default_root_cause）。
+另有低优先级：`tokenize` 等子串误报（安全侧偏移）、词表缺独立 `auth`/`session`、非 JSON 体 Bearer 字面量不掩。
+
+
+
+## 阶段成果：rupost-ai 能力线交付与重建归位（2026-11-01/02）
+
+依据 [E2/E5 PRD v1.1](doc/plans/2026-10-28-ai-failure-triage-and-attribution-prd.md)、[统一执行计划](doc/plans/2026-10-28-ai-e2e5-master-execution-plan.md)、[F7/F8 设计深潜](doc/plans/2026-10-28-ai-f7-f8-design-deepdive.md)，能力线四特性 + importer 全部交付（经污染侧线重建 + 双子代理审查三轮）：
+1. **E5 失败聚类**：signature-bucket 确定性分组（≤20 桶、溢出合并、守恒断言）+ `ai triage <report.json>`（`--json/--format`，强类型 JsonFileReport 反序列化契约，0 失败短路跳过 B4 解析）；
+2. **E2 就地归因**：`test --explain` 规则基线 + AI 解释（熔断/配额/签名去重、`RUPOST_AI_EXPLAIN` 环境开关），与 `--triage` 同源走 B4 配置链；
+3. **F7 resolve / F8 bootstrap**：`ai resolve` 原地展开 `@ai-assert`（无指令早退、Top-20 配额、熔断）；`ai bootstrap --from history` 五阶段管线（TestSynthesizer 分块 + 熔断 + 防覆盖，`-d ''` 空体与 `@file` 显式拒绝为 importer 边界）；
+4. **reporter 强类型契约**：JsonFileReport/JsonTestReport/JsonAssertionReport（键集恒定无 skip、diagnose url 脱敏、warnings 脱敏、断言三元组 expected/actual/stream_event_index）；
+5. **redactor 加固**：URL userinfo/OAuth fragment 掩码、非 JSON 体键值兜底掩码（Bearer scheme 前缀）、外部报告信任边界幂等再脱敏——均有单测锁定。
+
+**重建与评审**：污染侧线（.jjconflict 快照 + 陈旧写入）不可逐提交恢复，在链头重建并按文件边界拆为基建/接线/文档三提交；双子代理审查三轮（完整性审计、质量/安全、增量+终审），6 P1 + 10 P2 + 3 CONCERN 全部闭环。
+
+**质量基线**：43 套件 735 测试绿；clippy `--workspace --all-targets --all-features -- -D warnings` 零告警；fmt 通过。

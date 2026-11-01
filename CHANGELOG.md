@@ -10,6 +10,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 - TUI 流式调试深化：①启动加载变量上下文（rupost.toml 环境 + .env + 系统变量，`--env/--var/--env-file` 透传，与 CLI 同源）——`Authorization: Bearer {{token}}` 等授权变量在 TUI 真正解析；②`A` 快速授权（输入 header 值即注入，显式声明优先）；③Response 面板 `/` 消息搜索（HTTP/SSE/WS 三视图实时高亮 + n/N 环绕跳转，顺带修正滚动总行数与视觉行不一致）；④WS 交互会话（`W` 对 `@websocket` 请求建立常驻会话、`S` 发送消息实时回显、`D` 关闭，断线自动重连沿用 session 逻辑，与剧本执行互斥）。
 - TUI Response 面板现在渲染 `TestResult.warnings`（`Warnings: N` 摘要 + `⚠` 逐条明细，含 SSE/WS 流式完成态视图首行摘要）：`@capture` 失败、未定义变量、畸形 JSON 降级等非致命告警此前在 TUI 中被静默丢弃（`RequestFinished` 事件未携带），存在"断言全过但实际带伤"的假通过盲区（D1 遗留项关闭）。顺带修复 HTTP 缓存渲染管线扁平化导致的样式丢失——未超宽行保留 Span 主题取色。
+- `rupost ai bootstrap --from history --last N -o FILE [--filter] [--no-ai] [--templatize-host]`（F8）：**调试历史 → 语义增强回归文件**——五阶段管线（采集 → `HttpGenerator` 机械基线 → `TestSynthesizer` AI 语义增强〔分块批量 + 连续 2 错熔断〕→ 引擎裁决〔断言 parser lint + capture 语法校验 + 每块 ≤8 条〕→ 防覆盖落盘）；AI 缺失/故障降级为机械基线 + 黄色警告 + exit 0（B1）；素材发送前脱敏 4KB 截断。
+- `rupost ai resolve <FILE> [--dry-run]`（F7）：文件内 `# @ai-assert <自然语言>` 指令**原地展开**为标准 `@assert` 行（B2：AI 全局失败文件原样 + exit 1；部分失败保留原指令 + 行内警告；dry-run 预览；Top-20 配额 + 熔断；展开断言经 parser 本地预检，非法丢弃）。
+- `rupost import curl "<curl>" [-o FILE] [--templatize-host]`：**curl → 可执行 `.http` 请求块**（通用导入器，与 `export` 互逆）。POSIX 子集分词（单/双引号/反斜杠；`$'..'`、`-F`、`--data-urlencode`、`-u` 显式报错）；发射复用 `HttpGenerator`（Header/URL query 凭据模板化为 `{{变量}}`；请求体暂不模板化，含敏感键时落盘前黄色警告、`@name` 语义命名、JSON 美化、status 断言）；`-o/--output` 与 `--templatize-host` 可置于任意位置（trailing_var_arg 拦截；CURL 序列内的 `-o` 覆盖 curl 自身文件输出语义——devtools 复制场景不含 `-o`）；输出文件防覆盖。
+- **B4 配置链**：AI 端点解析升级为 `环境变量 > ~/.rupost/ai.toml > 本地探测` 三级——文件含 `api_key` 字段即拒绝（密钥永不入盘）；本地回环端点允许占位 Key（Ollama 不校验鉴权）；零配置时自动探测本地 Ollama（`GET /v1/models`，2s 超时，`RUPOST_AI_PROBE_URL` 为测试钩子）并打印一次性提示；全部失败时输出三选一可执行指引。
+- `rupost ai assert --last <N> / --response <FILE>`：**上下文感知断言**——取最近 N 条历史（或指定响应文件）经脱敏截断（4KB/条）后作为实际响应上下文，AI 依据真实 JSON 结构生成精确到实际路径的断言；`--no-mask` 显式关闭上下文脱敏（输出一次性醒目风险提示）。
+- `rupost test --explain`（别名 `--ai-explain`，支持 `RUPOST_AI_EXPLAIN=1`）：断言失败**就地归因**（E2）——恒输出确定性规则版 `[Possible Causes]` 基线，配置 AI 后按**不同错误签名**追加 `[AI Explanation]` 根因诊断（Top-3 配额 + 连续 2 错熔断）；退出码严格由测试本身决定。
+- `rupost ai triage <report.json> [--json|--format]` 与 `rupost test --triage`：CI 失败**根因聚类分诊**（E5）——确定性签名分桶（数字/UUID 折叠 `:id`，上限 20 桶）→ AI 语义归并 → **分桶 ID 守恒回填**（计数 100% 守恒、零幻觉 ID）；无 Key 时降级确定性分组并输出黄色警告，exit 0。
+- `rupost test --report-file <FILE>`：JSON 报告落盘（不干扰终端输出）；报告升级为强类型 `JsonFileReport` 契约，失败项附带脱敏（复用 exporter 脱敏器 + JSON 敏感键掩码 + 512B UTF-8 安全截断）的响应体片段与断言 expected/actual。
 - `rupost ai assert "<自然语言>"`：AI 创作辅助命令，将自然语言期望翻译为标准 `@assert` 断言行（支持任意 OpenAI 兼容后端与本地 Ollama；密钥仅从 `RUPOST_AI_API_KEY`/`OPENAI_API_KEY` 环境变量读取，不落盘不入日志）。`--raw` 输出纯断言行供脚本追加。休眠的 `rupost-ai` crate 正式接线激活；通过 `rupost mock` 充当 OpenAI 兼容后端实现零 Key 离线 dogfooding 闭环（`tests/ai_assert_test.rs` + `tests/verify_features.sh` 步骤 7）。
 
 ### Changed

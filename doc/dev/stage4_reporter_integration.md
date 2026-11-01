@@ -38,7 +38,7 @@ pub struct TestResult {
 #### 2. TestReporter 集成 ResponseFormatter
 
 ```rust
-// src/runner/reporter.rs
+// src/reporter.rs
 
 use crate::runner::types::{TestResult, TestSummary};
 use crate::utils::{ResponseFormat, ResponseFormatter};

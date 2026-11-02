@@ -246,3 +246,16 @@ PRD 驱动四域交付（SSE/WS 接入 + 授权 + 消息搜索），全程 TDD�
 **重建与评审**：污染侧线（.jjconflict 快照 + 陈旧写入）不可逐提交恢复，在链头重建并按文件边界拆为基建/接线/文档三提交；双子代理审查三轮（完整性审计、质量/安全、增量+终审），6 P1 + 10 P2 + 3 CONCERN 全部闭环。
 
 **质量基线**：43 套件 735 测试绿；clippy `--workspace --all-targets --all-features -- -D warnings` 零告警；fmt 通过。
+
+---
+
+## 阶段成果：DX-Debug R7 失败钩子与 trace 锚点协议交付完成（2026-11-03）
+
+依据 [DX-Debug PRD](doc/plans/2026-10-28-developer-debug-experience-prd.md) US-R7 / 主执行文档 T6，调试链 D5（深挖取证）断裂带收口——R1–R10 中最后一个未实现的确定性需求落地。基线：rebase 后的 `feature/ai-capability` 线（main 尖 + AI 能力蒸馏栈）。
+
+1. **锚点协议**：`rupost t --on-failure <CMD>`——每个失败请求触发一次用户 shell 命令，注入 `RUPOST_FAILED_URL`（redact_url 脱敏，敏感 query 掩码、路径保留）/ `RUPOST_FAILED_STATUS` / `RUPOST_FAILED_TRACE_ID`（`Traceparent > X-Request-Id > X-Trace-Id` 优先级，非 UTF-8/空白值跳过续找）。rupost 只给锚点，服务端日志聚合委托 stern/k9s 用户管道（非目标红线维持）。
+2. **进程语义**：`src/runner/on_failure.rs` 新模块（B0 确定性零 AI）——`tokio::process` + 10s kill_on_drop 超时；stderr/stdout 原样透传；钩子超时/非零退出/未检出 trace 头（空串 + `TestResult.warnings` 可见）均不改写测试退出码，不阻塞 Fail-Fast。
+3. **编排位置**：钩子环节置于渲染前——"无 trace 头"warning 同步落入 JSON 报告 `warnings` 数组与 `--explain` 上下文；`FailureContext` 增 `trace_id`（serde skip absent；JSON 报告摄入路径因 schema 锁定保持 None，仅实时运行路径可得）。
+4. **验证**：单测 9（trace 决策表 4 + 进程契约 5，unix 门控保 windows CI）+ 集成 5（锚点三元组捕获/空串+warning/钩子失败隔离/成功零触发/JSON 模式）+ `verify_features.sh` 步骤 11（mock 401 + X-Request-Id → 假脚本捕获 `anchor-42`）。全量 750 测试 0 失败，clippy `--workspace --all-targets --all-features` 零告警，fmt/verify_features PASS。
+
+**过程记录**：会话开头完成两项重组——①`feature/ai-capability` 蒸馏线 rebase 至 main 尖（bookmark 自动前移）；②rupost-ai 工作区自 TUI 线尖切换落位其上。调试链现状：D0–D7 全通，R 清单仅余 R3（diagnose JSON 契约测试债，fast-follow）与 R6（replay per-entry，随 T4）。

@@ -145,6 +145,7 @@ graph TD
     *   [scanner.rs](file:///Users/zsyzzx/project/rust/rupost/src/parser/scanner.rs)：目录文件遍历器。递归扫描测试目录，过滤非 `.http`/`.md` 后缀文件，并自动规避 `.git/`、`.rupost/`、`target/` 等被忽略路径。
     *   [path.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/utils/path.rs)：路径工具（受支持文件类型判断、`@depends-on` 相对路径解析为 canonical 绝对路径、展示用相对路径格式化）。
     *   [replayer.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/replayer.rs)：快照重放执行器。按录制的 HTTP 交互原样重放（`--target` 自动改写 Host/Port），透传快照中记录的 `@timeout` 语义。
+    *   [on_failure.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/on_failure.rs)：失败钩子与 trace 锚点协议（DX-Debug R7，B0 确定性零 AI）。按 `Traceparent > X-Request-Id > X-Trace-Id` 优先级提取 trace-id，经 `RUPOST_FAILED_URL/STATUS/TRACE_ID` 环境变量交给 `--on-failure` 用户命令（`tokio::process` + 10s kill_on_drop 超时，stderr/stdout 透传）；钩子任何失败只产生提示，不改写测试退出码。
     *   二级子目录划分：`src/runner/engine/`（批量/并行/拓扑/依赖解析/重放）、`src/runner/protocol/`（http/sse/ws 三个协议执行器）、`src/runner/utils/`（file_sync/path 等），由 `src/runner/mod.rs` 桥接重导出。
     *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)：将运行结果整理成 CLI 终端彩色摘要报告或输出标准的 JSON 结构化报告。
     *   [file_sync.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/utils/file_sync.rs)：为大模型流数据提供非阻塞的文件物理增量追加写入器 (`@stream_to`)。

@@ -6,6 +6,18 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      target:
+        description: '调试产物目标平台（push main 自动触发时固定 macOS ARM64）'
+        required: false
+        default: aarch64-apple-darwin
+        type: choice
+        options:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-unknown-linux-gnu
+          - x86_64-pc-windows-msvc
+          - all
 
 env:
   CARGO_TERM_COLOR: always
@@ -52,6 +64,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # 跨 job 共享键：debug-artifacts(macos) 复用本矩阵 macos 槽位的依赖缓存
+          shared-key: debug-${{ runner.os }}-${{ runner.arch }}
       - name: Build
         # --workspace：预热全部 crate 的编译缓存，test 步骤零冷编译
         run: cargo build --workspace --verbose
@@ -63,17 +78,23 @@ jobs:
   debug-artifacts:
     name: Debug artifacts (aarch64-apple-darwin)
     runs-on: macos-latest
-    needs: [fmt]
+    # 等 test 矩阵：macos 槽位刚回写的热缓存立即可用（并行启动会在首次构建时 miss）
+    needs: [test]
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build (debug, line-tables-only)
-        env:
-          # 仅 CI 构建瘦身（体积降约七成，backtrace 仍可用）；本地 Cargo.toml 不受影响
-          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+        with:
+          # 与 test(macos) 共享同一份依赖缓存：rust-cache 默认把 job 名编进键
+          # （v0-rust-test-… vs v0-rust-debug-artifacts-…），本 job 会永久 miss 并全量重编
+          shared-key: debug-${{ runner.os }}-${{ runner.arch }}
+          # 构建产物由 test 产出即可，本 job 只读缓存不回写（避免与 test 竞写同键）
+          save-if: false
+      - name: Build (debug)
+        # 不覆盖 debuginfo 等级：profile 一变即 rustc 指纹全变，缓存形同虚设
+        # （实测 line-tables-only 覆盖 → 266 crate 全量冷编 2m17s）
         run: cargo build --workspace
       - name: Upload debug artifact
         uses: actions/upload-artifact@v4

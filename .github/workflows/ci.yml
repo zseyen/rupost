@@ -58,3 +58,27 @@ jobs:
       - name: Run tests
         # --workspace：默认跑法漏掉 workspace 子 crate 的测试（测试策略 v3 §7.1）
         run: cargo test --workspace --verbose
+
+  # Job 4: Debug build artifacts for local functional testing (after merge)
+  debug-artifacts:
+    name: Debug artifacts (aarch64-apple-darwin)
+    runs-on: macos-latest
+    needs: [fmt]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (debug, line-tables-only)
+        env:
+          # 仅 CI 构建瘦身（体积降约七成，backtrace 仍可用）；本地 Cargo.toml 不受影响
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+        run: cargo build --workspace
+      - name: Upload debug artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rupost-debug-aarch64-apple-darwin-${{ github.sha }}
+          path: target/debug/rupost
+          retention-days: 30
+          if-no-files-found: error

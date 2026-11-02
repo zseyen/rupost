@@ -476,6 +476,42 @@ else
 fi
 rm -rf "$HIST_DIR" "$BOOT_FILE" "$RESOLVE_FILE"
 
+# 11. 验证失败钩子 trace 锚点协议 (--on-failure, DX-Debug R7)
+echo -e "${BLUE}[*] 验证失败钩子 trace 锚点 (--on-failure)...${NC}"
+HOOK_MOCK=$(mktemp /tmp/rupost_hook_mock_XXXXXX.json)
+cat << 'EOF' > "$HOOK_MOCK"
+[
+  {
+    "method": "GET",
+    "path": "/api",
+    "variants": [
+      {
+        "condition": null,
+        "status": 401,
+        "headers": { "Content-Type": "application/json", "X-Request-Id": "anchor-42" },
+        "response_body": "{\"error\":\"unauthorized\"}"
+      }
+    ]
+  }
+]
+EOF
+$RUPOST_BIN mock "$HOOK_MOCK" --port 9003 > /dev/null 2>&1 &
+HOOK_MOCK_PID=$!
+sleep 2
+HOOK_CASE=$(mktemp /tmp/rupost_hook_case_XXXXXX.http)
+printf '%s\n' "### probe" "GET http://127.0.0.1:9003/api" "" "# @assert status == 200" > "$HOOK_CASE"
+TRACE_OUT=$(mktemp /tmp/rupost_trace_XXXXXX)
+HOOK_EXIT=0
+$RUPOST_BIN t "$HOOK_CASE" --on-failure "printf '%s' \"\$RUPOST_FAILED_TRACE_ID\" > $TRACE_OUT" > /dev/null 2>&1 || HOOK_EXIT=$?
+kill $HOOK_MOCK_PID 2>/dev/null
+if [ "$HOOK_EXIT" -eq 1 ] && [ "$(cat "$TRACE_OUT" 2>/dev/null)" = "anchor-42" ]; then
+    echo -e "${GREEN}[✓] 失败钩子 trace 锚点验证成功（X-Request-Id → RUPOST_FAILED_TRACE_ID）！${NC}"
+else
+    echo -e "${RED}[ERROR] 失败钩子锚点验证失败（exit=$HOOK_EXIT）！${NC}"
+    exit 1
+fi
+rm -rf "$HOOK_MOCK" "$HOOK_CASE" "$TRACE_OUT"
+
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"
 echo -e "${GREEN}=====================================================${NC}"

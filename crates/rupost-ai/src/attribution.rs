@@ -32,6 +32,9 @@ pub struct FailureContext {
     pub failed_assertions: Vec<FailedAssertionInfo>,
     pub response_body_snippet: Option<String>,
     pub warnings: Vec<String>,
+    /// 失败响应的 trace 锚点（DX-Debug R7 提取协议；报告文件摄入路径无响应头数据为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 /// AI 单点失败归因输出（serde alias 兼容 PRD §6.2 的 summary/suggested_action 命名）
@@ -107,6 +110,7 @@ mod tests {
             }],
             response_body_snippet: Some(r#"{"error":"token_expired"}"#.to_string()),
             warnings: vec![],
+            trace_id: None,
         }
     }
 

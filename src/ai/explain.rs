@@ -4,6 +4,7 @@ use crate::ai::redactor::{
 };
 use crate::ai::rules::{failure_signature, infer_possible_causes};
 use crate::runner::TestResult;
+use crate::runner::on_failure::extract_trace_id;
 use colored::Colorize;
 use rupost_ai::{AiClient, FailedAssertionInfo, FailureAttributor, FailureContext};
 use std::collections::HashSet;
@@ -62,6 +63,11 @@ impl ExplainSession {
             failed_assertions,
             response_body_snippet,
             warnings: r.warnings.clone(),
+            // DX-Debug R7：trace 锚点随响应头进入归因上下文，供服务端日志关联
+            trace_id: r
+                .response
+                .as_ref()
+                .and_then(|resp| extract_trace_id(&resp.headers)),
         }
     }
 
@@ -205,6 +211,22 @@ mod tests {
             "mismatch".to_string(),
         ));
         r
+    }
+
+    #[test]
+    fn test_build_context_carries_trace_anchor() {
+        // DX-Debug R7：响应头 trace 锚点进入 FailureContext（AI 归因可引用）
+        let mut r = failed_result(1, "http://api.local/v1/x", 401);
+        r.response.as_mut().unwrap().headers.insert(
+            reqwest::header::HeaderName::from_static("x-request-id"),
+            reqwest::header::HeaderValue::from_static("req-42"),
+        );
+        let ctx = ExplainSession::build_context(&r);
+        assert_eq!(ctx.trace_id.as_deref(), Some("req-42"));
+
+        // 无响应头（网络层失败）→ None
+        let ctx = ExplainSession::build_context(&failed_result(2, "http://api.local/v1/x", 500));
+        assert_eq!(ctx.trace_id, None);
     }
 
     #[test]

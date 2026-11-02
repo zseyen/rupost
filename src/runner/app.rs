@@ -2,6 +2,7 @@ use crate::Result;
 use crate::RupostError;
 use crate::history::save_batch_snapshot;
 use crate::middleware::resolve_cookie_path;
+use crate::runner::on_failure;
 use crate::runner::selector;
 use crate::runner::{
     BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
@@ -37,6 +38,9 @@ pub struct TestSuiteOptions {
     pub save_snapshot: Option<String>,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
+    /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
+    /// 经 RUPOST_FAILED_URL/STATUS/TRACE_ID 环境变量暴露锚点
+    pub on_failure: Option<String>,
 }
 
 impl Default for TestSuiteOptions {
@@ -58,6 +62,7 @@ impl Default for TestSuiteOptions {
             no_cookies: false,
             cookie_file: None,
             only: None,
+            on_failure: None,
             debug: false,
             debug_on_failure: false,
             default_scheme: "http".to_string(),
@@ -201,8 +206,13 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         fail_fast: options.fail_fast,
     };
 
-    let batch_results = batch_executor.execute_batch(batch_request).await?;
+    let mut batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
+
+    // 6.5 失败钩子（DX-Debug R7）：渲染前触发，使"无 trace 头"警告进入报告与 explain 上下文
+    if let Some(hook_cmd) = &options.on_failure {
+        on_failure::fire_failure_hooks(&mut batch_results, hook_cmd).await;
+    }
 
     // 7. 渲染与汇报结果
     let has_failure = batch_results
@@ -290,6 +300,7 @@ mod tests {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             only: None,
+            on_failure: None,
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());

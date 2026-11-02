@@ -33,6 +33,8 @@ pub fn context_from_json_test_report(r: &JsonTestReport) -> FailureContext {
         failed_assertions,
         response_body_snippet: r.response_body_snippet.clone(),
         warnings: r.warnings.clone(),
+        // JSON 报告摄入路径无响应头数据（schema 锁定不扩字段），trace 锚点仅实时运行路径可得
+        trace_id: None,
     }
 }
 
@@ -416,6 +418,7 @@ mod tests {
             failed_assertions: vec![],
             response_body_snippet: None,
             warnings: vec!["变量 {{token}} 未定义".to_string()],
+            trace_id: None,
         };
         let causes = infer_possible_causes(&ctx);
         assert!(causes.iter().any(|c| c.contains("未定义变量")));
@@ -433,6 +436,7 @@ mod tests {
             failed_assertions: vec![],
             response_body_snippet: None,
             warnings: vec![],
+            trace_id: None,
         };
         assert!(
             infer_possible_causes(&base("connection refused"))

@@ -112,6 +112,10 @@ pub enum Commands {
         /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
         #[arg(long, value_name = "N|@NAME")]
         only: Option<String>,
+
+        /// 失败时执行的 shell 命令（每个失败请求一次；env: RUPOST_FAILED_URL/STATUS/TRACE_ID）
+        #[arg(long, value_name = "CMD")]
+        on_failure: Option<String>,
     },
 
     /// Manage request history
@@ -684,6 +688,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             cookie_file,
             save_snapshot,
             only,
+            on_failure,
         }) => {
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
             let explain_enabled = explain
@@ -710,6 +715,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 default_scheme: cli.default_scheme,
                 save_snapshot,
                 only,
+                on_failure,
             };
             let has_failure = rupost::runner::run_test_suite(options).await?;
             if has_failure {

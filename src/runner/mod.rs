@@ -1,5 +1,6 @@
 pub mod app;
 pub mod executor;
+pub mod on_failure;
 pub mod selector;
 pub mod types;
 

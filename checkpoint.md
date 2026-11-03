@@ -264,3 +264,5 @@ PRD 驱动四域交付（SSE/WS 接入 + 授权 + 消息搜索），全程 TDD�
 2. **P2 `HookOutcome.timed_out` 死分支**：`Ok(Err(_)) | Err(_)` 合并臂使 `timed_out` 恒为 false，超时提示永不触发。修复：拆分超时臂（`Err(_)` → `timed_out: true`）与等待期 IO 错误臂，单测断言旗标如实上报。
 
 **过程记录**：会话开头完成两项重组——①`feature/ai-capability` 蒸馏线 rebase 至 main 尖（bookmark 自动前移）；②rupost-ai 工作区自 TUI 线尖切换落位其上。调试链现状：D0–D7 全通，R 清单仅余 R3（diagnose JSON 契约测试债，fast-follow）与 R6（replay per-entry，随 T4）。
+
+> **2026-11-04 勘误**：上文 R7 节标题"R1–R10 中最后一个未实现的确定性需求落地"与本段"仅余 R3/R6"并存系措辞张力（R7 交付时 R1/R2 已于主线先行、R6 亦为未实现的确定性需求，"最后一个"与"仅余"口径不一）。本日 R6 + T5 搭车 + R3 壳层已交付（见 progress_summary 批次行）——**确定性调试链（R1–R7/R10）就此全绿**，R 清单剩余项均为 AI 增强型（R8/R9 已随本线交付）。另注：本日顺带修复 R7 审查轮孙进程测试的 macOS 可移植性（BSD `sleep` 拒绝附加参数致 fork 不发生）。

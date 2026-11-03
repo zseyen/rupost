@@ -2,7 +2,7 @@
 
 > 由 `make prd` 模板规范手工生成；产物落 `doc/plans/`（随 rupost-ai 执行线交付）。
 
-- **状态**：Proposed（待评审）→ Accepted（待实施）→ In Progress → Done
+- **状态**：**Done（2026-11-04 交付）**；生命周期 Proposed → Accepted → In Progress → Done
 - **日期**：2026-11-04
 - **执行队列**：并入主执行文档（`doc/plans/2026-10-27-master-execution-runbook.md`）T3 卡 + T5 卡搭车裁决
 - **范围基线**：**rupost-ai 工作区执行线**（工作副本 @ d915378c，main 尖 51784fe1 在其祖先链——2026-11-03 已 rebase，见 `checkpoint.md:266`）。该线已交付 E2（`--explain`）、E5（`ai triage`）、P0（`--last`）、R7（`--on-failure` 钩子 + trace 锚点）——调试链 D3/D4/D5 在此线上闭环，主线视角的"未合并"状态不属本 PRD 范围。

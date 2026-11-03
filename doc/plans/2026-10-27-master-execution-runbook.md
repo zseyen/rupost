@@ -86,11 +86,13 @@ cargo test                       # 全量 0 失败
 - **目标**：`ReplayReport` 扩出 `Vec<ReplayEntryResult>`（快照引用、新状态码、比对结论、耗时），失败可定位到条。
 - **文件**：`src/runner/engine/replayer.rs`（现仅聚合 `total/passed/failed`）+ `tests/snapshot_replay_test.rs`。
 - **验收**：多请求一败一成的快照重放，报告能分辨具体条目；既有聚合输出语义不变（老测试全绿）。
+- **交付注记（2026-11-04，rupost-ai 线）**：已交付（含 T5 搭车同批 + replay 失败 exit 1）。字段口径更新——卡面"快照引用"被**自包含设计**取代（条目内嵌 method/url 为 `--target` 覆写后实际值，消费者免持 suite）；`--on-failure` 钩子不覆盖 replay（PRD 非目标）。
 
 ### T5 · `export` 桩转实 — P2 · ~20 行 · 随 T3/T4 搭车
 
 - **前置决策（分钟级，先拍板）**：旧历史条目 `body=None` 的导出语义——跳过该条 or 占位导出。
 - **要点**：`main.rs:67` 桩转实，复用 `write_snapshot_suite` + `SelectionStrategy::Last`；桩行为锁定测试先行失败驱动替换。
+- **交付注记（2026-11-04，rupost-ai 线）**：前置决策已裁决——**占位导出**（复用既有 `From<HistoryEntry>` 转换的标记文本）；已随 R6 同批交付。
 
 ### T4 · Smart Diff（Phase 2b）— P2 · 2–3 天 · 依赖 T3
 

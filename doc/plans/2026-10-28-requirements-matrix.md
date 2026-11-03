@@ -80,13 +80,13 @@
 | :--- | :--- | :- | :- | :- | :--- | :--- | :--- |
 | R1 单请求重跑 | **已实现（tui-audit 工作区 2026-10-28，随工作区合并翻正）** | ● | ○ | — | M1/S3 | 李 | 级联照常；越界零 panic；1b 跳过标记语义（原序号保留） |
 | R2 debug-on-failure 守护 | **已实现（tui-audit 工作区 2026-10-28）** | ● | ○ | — | M1/S3 | 李 | 连接层失败无拆分为已知缺口（Virtual Response 承接） |
-| R3 diagnose json 契约 | fast-follow（注：DBG-2 已覆盖 `t --report json` 内嵌 diagnose_report 字段，`diagnose` 命令自身的 json 契约仍待） | ● | ○ | — | ff/S3 | 李 | schema 纪律 |
+| R3 diagnose json 契约 | **已闭环**（主体 13 键 schema 主线 e5a957c0；`run_diagnose` CLI 壳层 rupost-ai 线 2026-11-04 补测） | ● | ○ | — | ff/S3 | 李 | schema 纪律 |
 | R4 `--explain` | **分支已实现待合并**（Step0–3+加固） | ● | ○ | ○(X6 默认关) | M1/S3·S6 | 李/赵/张 | 脱敏截断进 AI；B1 |
 | R5 `ai triage` | **分支已实现待合并** | ○ | ● | — | M2/S6 | 赵 | 桶守恒；B1 |
-| R6 replay per-entry | T3 · 待做 | ○ | ● | ○ | M2/S6 | 赵 | 灰度比对数据面；**随 T5 export 搭车** |
-| T5 `export` 桩转实 | T5 · 随 T3/T4 搭车 | ● | ○ | — | M2/S4 | 李 | 旧条目 body=None 语义决策前置 |
+| R6 replay per-entry | **已实现（rupost-ai 线 2026-11-04，与 T5 同批互载）** | ○ | ● | ○ | M2/S6 | 赵 | 灰度比对数据面；本行原注"随 T5 搭车"与 T5 行"随 T3 搭车"方向矛盾，按同批互载勘误 |
+| T5 `export` 桩转实 | **已实现（rupost-ai 线 2026-11-04，与 R6 同批）** | ● | ○ | — | M2/S4 | 李 | body=None 占位导出（复用既有 From 标记文本，前置决策已裁决） |
 | Smart Diff | T4 · 待做 | — | ● | ○ | M2/S6 | 赵 | 排除列表防假失败 |
-| R7 钩子 + trace 锚点 | T6+DBG-3 · 待做 | ● | ● | ○(默认关形态) | M2/S6 | 李 | X2/X3/X5 护栏先行或随行 |
+| R7 钩子 + trace 锚点 | **已实现（rupost-ai 线 2026-11-03）** | ● | ● | ○(默认关形态) | M2/S6 | 李 | X2/X3/X5 护栏随行（脱敏 URL/trace 优先级/进程组超时终结） |
 | **审计留痕**（审查新增） | 未立项·候选 | — | ○ | ● | prod×持续 | 李/平台 | **脱敏后结构化落盘**（P0-2 修正） |
 | R8 `--last` + 零配置 | **执行线已实现待合并**（5444ac85 B4 链 / 5a373a7c 上下文采集 / 1cc42b73 接线） | ● | — | — | M1/S4 | 李/评 | 密钥 B4 链；B2 |
 | R9 `ai bootstrap` | 提案 · M2 主线 | ● | ○ | — | M2/S4 | 李/赵 | 脱敏+`--no-mask` 提示；B1 |

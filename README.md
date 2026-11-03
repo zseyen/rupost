@@ -66,6 +66,13 @@ RuPost 提供了直观且高效的命令行接口：
 * **管理请求历史记录**:
   ```bash
   rupost history list --limit 10
+  # 导出最近 N 条历史为可重放快照
+  rupost history export --last 5 -o snap.json
+  ```
+* **快照重放与失败定位**:
+  ```bash
+  rupost replay snap.json --target http://staging.example.com
+  # 失败输出 Failed entries 清单（定位到条），并以退出码 1 供 CI 门禁
   ```
 * **Cookie 会话管理**:
   ```bash

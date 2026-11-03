@@ -75,6 +75,11 @@ crossterm = "0.29"
 ratatui-textarea = "0.9"
 unicode-width = "0.1.13"
 
+# unix 侧 --on-failure 钩子进程组终结（killpg）；已是 tokio/nix 传递依赖，零新增编译面。
+# 注意：target 表必须置于 [dependencies] 全部键之后——TOML 表头会吞掉其后所有键
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 cookie = "0.18"
 socket2 = "0.6"

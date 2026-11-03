@@ -290,19 +290,86 @@ fn test_history_clear_semantics() {
 }
 
 #[test]
-fn test_history_export_stub_locked() {
+fn test_history_export_writes_replayable_snapshot() {
     let temp_dir = tempdir().expect("create temp dir");
-    let dummy_out = temp_dir.path().join("export.json");
+    let dir_path = temp_dir.path();
+    let out_file = temp_dir.path().join("export.json");
 
+    // 两条历史：e1 body=None（旧条目占位导出），e2 body=Some（原样导出）
+    let mut e1 = create_test_entry(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "GET",
+        "http://example.com/one",
+        200,
+    );
+    e1.response.body = None;
+    let e2 = create_test_entry(
+        "22222222-aaaa-bbbb-cccc-222222222222",
+        "POST",
+        "http://example.com/two",
+        201,
+    );
+    write_history_entries(dir_path, &[e1, e2]);
+
+    // 桩转实（T5 搭车）：--last N = 最近 N 条条目，静默覆盖无 --force
     let out = Command::new(rupost_bin())
-        .args(["history", "export", "-o", dummy_out.to_str().unwrap()])
+        .env("RUPOST_HISTORY_DIR", dir_path)
+        .args([
+            "history",
+            "export",
+            "--last",
+            "2",
+            "-o",
+            out_file.to_str().unwrap(),
+        ])
         .output()
         .expect("run history export");
 
-    assert!(out.status.success(), "export stub must exit with 0");
+    assert!(
+        out.status.success(),
+        "export must exit 0: got {:?}",
+        out.status
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("History export is not implemented in MVP stage"),
-        "stdout should inform user export is stubbed: got '{stdout}'"
+        stdout.contains("Exported snapshot:"),
+        "confirmation line expected: {stdout}"
+    );
+
+    // 产物是合法快照套件：source_file 标记 history、条目数与 --last 一致
+    let content = fs::read_to_string(&out_file).expect("exported file must exist");
+    let suite: rupost::history::SnapshotSuite =
+        serde_json::from_str(&content).expect("export output must be a valid SnapshotSuite");
+    assert_eq!(suite.entries.len(), 2);
+    assert_eq!(suite.source_file.as_deref(), Some("history"));
+    // body=None 旧条目占位导出：条目保留、body 为既有 From 转换的占位标记文本
+    assert_eq!(
+        suite.entries[0].response.body,
+        "Old snapshot: body not recorded"
+    );
+    // body=Some 条目原样导出
+    assert_eq!(
+        suite.entries[1].response.body,
+        "response body for 22222222-aaaa-bbbb-cccc-222222222222"
+    );
+}
+
+#[test]
+fn test_history_export_empty_history_writes_no_file() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+    let out_file = temp_dir.path().join("should_not_exist.json");
+
+    // 空历史目录（无 history.jsonl）：warn + 不写文件 + exit 0（对齐 generate 先例）
+    let out = Command::new(rupost_bin())
+        .env("RUPOST_HISTORY_DIR", dir_path)
+        .args(["history", "export", "-o", out_file.to_str().unwrap()])
+        .output()
+        .expect("run history export on empty history");
+
+    assert!(out.status.success(), "empty history export must exit 0");
+    assert!(
+        !out_file.exists(),
+        "empty history must not write snapshot file"
     );
 }

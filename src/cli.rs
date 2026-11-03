@@ -372,7 +372,7 @@ pub enum HistoryCommands {
     /// Export history entries to a snapshot file
     #[command(alias = "e")]
     Export {
-        /// Number of recent runs to include
+        /// Number of recent requests to include
         #[arg(long, default_value = "1")]
         last: usize,
 
@@ -735,8 +735,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             HistoryCommands::Clear { yes, all } => {
                 rupost::history::printer::clear_history(yes, all)?;
             }
-            HistoryCommands::Export { last: _, output: _ } => {
-                println!("History export is not implemented in MVP stage.");
+            HistoryCommands::Export { last, output } => {
+                rupost::history::export_history_snapshot(last, &output)?;
             }
         },
         Some(Commands::Diagnose { url, report }) => {

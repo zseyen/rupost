@@ -6,6 +6,8 @@ pub mod serialization;
 pub mod storage;
 
 pub use model::{RequestSnapshot, ResponseSnapshot, SnapshotEntry, SnapshotSuite};
-pub use storage::{read_snapshot_suite, save_batch_snapshot, write_snapshot_suite};
+pub use storage::{
+    export_history_snapshot, read_snapshot_suite, save_batch_snapshot, write_snapshot_suite,
+};
 pub mod gc;
 pub use gc::{perform_clear, perform_prune};

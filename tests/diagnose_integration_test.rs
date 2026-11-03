@@ -4,6 +4,47 @@ use rupost::http::{diagnose_url, print_diagnose_report};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// R3 壳层：`run_diagnose` 的 `--report json` 分支——stdout 必须是合法 JSON 报告
+/// （13 键精确 schema 由 tests/report_schema_test.rs 锁定，此处守护 CLI 壳层本身）
+#[tokio::test]
+async fn test_run_diagnose_cli_json_report_stdout() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("HELLO DIAGNOSE"))
+        .mount(&mock_server)
+        .await;
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["d", mock_server.uri().as_str(), "--report", "json"])
+        .output()
+        .expect("run rupost diagnose --report json");
+
+    assert!(out.status.success(), "diagnose success must exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("json report stdout must be valid JSON");
+    assert_eq!(value["is_https"], serde_json::json!(false));
+    assert_eq!(value["http_status"], serde_json::json!(200));
+}
+
+/// R3 壳层：诊断失败（DNS 不可解析）→ stderr 错误 + `process::exit(1)` 路径
+#[test]
+fn test_run_diagnose_cli_error_exit_one() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "d",
+            "http://rupost-diagnostics-nonexistent.invalid",
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("run rupost diagnose against unresolvable host");
+
+    assert_eq!(out.status.code(), Some(1), "diagnose failure must exit 1");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Error:"), "stderr carries error: {stderr}");
+}
+
 #[tokio::test]
 async fn test_diagnose_local_http_success() {
     // 1. 启动 Wiremock 服务端

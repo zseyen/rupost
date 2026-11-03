@@ -249,6 +249,33 @@ pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
     Ok(suite)
 }
 
+/// T5（随 R6 搭车）：将最近 N 条历史条目导出为可重放快照套件文件。
+/// - `--last N` 语义 = 最近 N 条**条目**（`SelectionStrategy::Last` → `tail(n)`，追加序即重放序）
+/// - `body=None` 旧条目经 `From<HistoryEntry>` 占位导出（"Old snapshot: body not recorded"）
+/// - 空历史：warn 后不写文件、exit 0（对齐 generate 先例）
+/// - 输出路径静默覆盖（`write_snapshot_suite` 无 `--force` 语义）；凭据不脱敏（与 `--save-snapshot` 同暴露面）
+pub fn export_history_snapshot(last: usize, output: &str) -> Result<()> {
+    use super::model::{SnapshotEntry, SnapshotSuite};
+    use super::selector::{SelectionStrategy, select_entries};
+
+    let storage = get_storage();
+    let entries = select_entries(storage, SelectionStrategy::Last(last))?;
+    if entries.is_empty() {
+        tracing::warn!("No history entries to export.");
+        return Ok(());
+    }
+
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("history".to_string()),
+        entries: entries.into_iter().map(SnapshotEntry::from).collect(),
+    };
+    let count = suite.entries.len();
+    write_snapshot_suite(&suite, output)?;
+    println!("Exported snapshot: {} ({} requests)", output, count);
+    Ok(())
+}
+
 /// 从批处理测试结果中提取请求/响应快照并写入指定文件
 pub fn save_batch_snapshot<P: AsRef<Path>>(
     batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],

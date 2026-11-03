@@ -500,3 +500,76 @@ async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
         "zero failures must print no failed-entries block: {stdout}"
     );
 }
+
+/// T5 闭环：history export 产物可直接被 replay 加载并重放（--target 覆写，wiremock 回环）
+#[tokio::test]
+async fn test_history_export_then_replay_closed_loop() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/one"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/two"))
+        .respond_with(ResponseTemplate::new(201))
+        .mount(&mock_server)
+        .await;
+
+    // 手写 history.jsonl（HistoryEntry JSON 形态，快照期望状态 = 录制响应状态）
+    let temp_dir = TempDir::new().unwrap();
+    let hist_dir = temp_dir.path().join("hist");
+    fs::create_dir_all(&hist_dir).unwrap();
+    let history_file = hist_dir.join("history.jsonl");
+    let line1 = serde_json::json!({
+        "id": "h1", "timestamp": "2026-11-04T00:00:00Z", "duration_ms": 10,
+        "request": {"method": "GET", "url": "http://origin.example.com/one", "headers": {}, "body": null},
+        "source": "smoke",
+        "response": {"status": 200, "headers": {}, "body": "resp one"}
+    });
+    let line2 = serde_json::json!({
+        "id": "h2", "timestamp": "2026-11-04T00:00:01Z", "duration_ms": 10,
+        "request": {"method": "POST", "url": "http://origin.example.com/two", "headers": {}, "body": "{\"k\":1}"},
+        "source": "smoke",
+        "response": {"status": 201, "headers": {}, "body": "resp two"}
+    });
+    fs::write(&history_file, format!("{line1}\n{line2}\n")).unwrap();
+
+    let exported = temp_dir.path().join("exported.json");
+
+    // 1. export（子进程 + RUPOST_HISTORY_DIR 隔离）
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .env("RUPOST_HISTORY_DIR", hist_dir.to_str().unwrap())
+        .args([
+            "history",
+            "export",
+            "--last",
+            "2",
+            "-o",
+            exported.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run history export");
+    assert!(
+        out.status.success(),
+        "export failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 2. replay 导出产物：两条期望状态均被 mock 满足 → exit 0
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            exported.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+        ])
+        .output()
+        .expect("run replay of exported snapshot");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "exported snapshot must be replayable: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

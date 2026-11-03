@@ -290,7 +290,8 @@ fn test_history_clear_semantics() {
 }
 
 #[test]
-fn test_history_export_writes_replayable_snapshot() {
+fn test_history_export_snapshot_schema_and_placeholder() {
+    // 可重放性闭环由 tests/snapshot_replay_test.rs::test_history_export_then_replay_closed_loop 守护
     let temp_dir = tempdir().expect("create temp dir");
     let dir_path = temp_dir.path();
     let out_file = temp_dir.path().join("export.json");
@@ -351,6 +352,73 @@ fn test_history_export_writes_replayable_snapshot() {
     assert_eq!(
         suite.entries[1].response.body,
         "response body for 22222222-aaaa-bbbb-cccc-222222222222"
+    );
+}
+
+/// D10 验收：`--last N` 截断语义 = 最近 N 条**条目**（tail(n)），旧→新追加序；缺省 --last 1
+#[test]
+fn test_history_export_last_n_truncates() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+    let out_file = temp_dir.path().join("export.json");
+
+    let e1 = create_test_entry(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "GET",
+        "http://example.com/one",
+        200,
+    );
+    let e2 = create_test_entry(
+        "22222222-aaaa-bbbb-cccc-222222222222",
+        "GET",
+        "http://example.com/two",
+        200,
+    );
+    let e3 = create_test_entry(
+        "33333333-aaaa-bbbb-cccc-333333333333",
+        "GET",
+        "http://example.com/three",
+        200,
+    );
+    write_history_entries(dir_path, &[e1, e2, e3]);
+
+    let run_export = |extra: &[&str]| {
+        let mut args = vec!["history", "export", "-o", out_file.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        Command::new(rupost_bin())
+            .env("RUPOST_HISTORY_DIR", dir_path)
+            .args(&args)
+            .output()
+            .expect("run history export")
+    };
+    let read_ids = |path: &std::path::Path| -> Vec<String> {
+        let content = fs::read_to_string(path).expect("exported file must exist");
+        let suite: rupost::history::SnapshotSuite =
+            serde_json::from_str(&content).expect("valid SnapshotSuite");
+        suite.entries.into_iter().map(|e| e.id).collect()
+    };
+
+    // --last 2：只取最近 2 条（e2, e3），旧→新序
+    let out = run_export(&["--last", "2"]);
+    assert!(out.status.success());
+    let ids = read_ids(&out_file);
+    assert_eq!(
+        ids,
+        vec![
+            "22222222-aaaa-bbbb-cccc-222222222222".to_string(),
+            "33333333-aaaa-bbbb-cccc-333333333333".to_string()
+        ],
+        "tail(n) must keep newest N entries in chronological order"
+    );
+
+    // 缺省 --last（默认 1）：只取最新一条
+    let out_default = run_export(&[]);
+    assert!(out_default.status.success());
+    let ids_default = read_ids(&out_file);
+    assert_eq!(
+        ids_default,
+        vec!["33333333-aaaa-bbbb-cccc-333333333333".to_string()],
+        "default --last 1 exports only the newest entry"
     );
 }
 

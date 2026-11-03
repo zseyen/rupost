@@ -566,10 +566,70 @@ async fn test_history_export_then_replay_closed_loop() {
         ])
         .output()
         .expect("run replay of exported snapshot");
+    let replay_stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(
         out.status.code(),
         Some(0),
-        "exported snapshot must be replayable: {}",
-        String::from_utf8_lossy(&out.stdout)
+        "exported snapshot must be replayable: {replay_stdout}"
+    );
+    // 条目数守恒可见：导出 2 条必须被真实消费（而非导出空套件也绿的盲区）
+    assert!(
+        replay_stdout.contains("Total: 2, Passed: 2"),
+        "closed loop must consume both exported entries: {replay_stdout}"
+    );
+}
+
+/// R6-a §4.2 补充定案守护：error 形态 duration_ms = 请求发起至失败的实际耗时（禁硬编码 0）——
+/// 用 wiremock 2s 延迟 + 快照 100ms @timeout 造确定性超时形态，断言落在实际耗时量级区间
+#[tokio::test]
+async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("slow")
+                .set_delay(Duration::from_secs(2)),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("slow_timeout_snapshot.json");
+
+    let entry = SnapshotEntry {
+        id: "id-slow".to_string(),
+        request: RequestSnapshot {
+            timeout: Some(Duration::from_millis(100)),
+            method: "GET".to_string(),
+            url: "http://original.example.com/slow".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
+        },
+    };
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("slow_timeout_test".to_string()),
+        entries: vec![entry],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+
+    assert_eq!(report.failed, 1);
+    let err_entry = &report.entries[0];
+    assert_eq!(err_entry.actual_status, None);
+    // 100ms @timeout 触发：耗时必 ≥ 量级下限且远小于 2s mock 延迟
+    // （上限 1500 对齐 test_replay_honors_recorded_timeout 的 3 倍余量哲学，防慢 CI 挂穿）
+    assert!(
+        err_entry.duration_ms >= 30 && err_entry.duration_ms <= 1500,
+        "error entry duration must reflect actual elapsed (~100ms timeout), got {}",
+        err_entry.duration_ms
     );
 }

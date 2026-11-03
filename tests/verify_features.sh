@@ -514,7 +514,7 @@ rm -rf "$HOOK_MOCK" "$HOOK_CASE" "$TRACE_OUT"
 
 # 12. 验证快照重放失败定位 (R6: replay per-entry + exit code)
 echo -e "${BLUE}[*] 验证快照重放失败定位 (replay per-entry)...${NC}"
-REPLAY_MOCK=$(mktemp /tmp/rupost_replay_mock_XXXXXX.json)
+REPLAY_MOCK=$(mktemp /tmp/rupost_replay_mock_XXXXXX)
 cat << 'EOF' > "$REPLAY_MOCK"
 [
   { "method": "GET", "path": "/ok", "variants": [ { "condition": null, "status": 200, "headers": { "Content-Type": "application/json" }, "response_body": "{\"ok\":true}" } ] },
@@ -525,7 +525,7 @@ $RUPOST_BIN mock "$REPLAY_MOCK" --port 9004 > /dev/null 2>&1 &
 REPLAY_MOCK_PID=$!
 sleep 2
 # 快照：#1 /ok 期望 200（成）、#2 /bad 期望 200（败，实得 503）
-REPLAY_SNAP=$(mktemp /tmp/rupost_replay_snap_XXXXXX.json)
+REPLAY_SNAP=$(mktemp /tmp/rupost_replay_snap_XXXXXX)
 cat << 'EOF' > "$REPLAY_SNAP"
 {
   "timestamp": "2026-11-04T00:00:00Z",
@@ -539,13 +539,31 @@ EOF
 REPLAY_STDOUT=$(mktemp /tmp/rupost_replay_out_XXXXXX)
 REPLAY_EXIT=0
 $RUPOST_BIN replay "$REPLAY_SNAP" --target http://127.0.0.1:9004 > "$REPLAY_STDOUT" 2>&1 || REPLAY_EXIT=$?
-kill $REPLAY_MOCK_PID 2>/dev/null
 if [ "$REPLAY_EXIT" -eq 1 ] && grep -q "Failed entries:" "$REPLAY_STDOUT" && grep -q "expected 200, got 503" "$REPLAY_STDOUT"; then
     echo -e "${GREEN}[✓] 快照重放失败定位验证成功（失败 exit 1 + Failed entries 定位到条）！${NC}"
 else
     echo -e "${RED}[ERROR] 快照重放定位验证失败（exit=$REPLAY_EXIT）！${NC}"
     exit 1
 fi
+
+# 12.5 export→replay 供给链闭环（T5）：历史 → 快照 → 重放（复用存活的 9004 mock）
+HIST_DIR=$(mktemp -d /tmp/rupost_hist_replay_XXXXXX)
+printf '%s\n' '{"id":"h1","timestamp":"2026-11-04T00:00:00Z","duration_ms":10,"request":{"method":"GET","url":"http://origin/ok","headers":{},"body":null},"source":"smoke","response":{"status":200,"headers":{},"body":"ok"}}' > "$HIST_DIR/history.jsonl"
+HIST_SNAP=$(mktemp /tmp/rupost_hist_snap_XXXXXX)
+HIST_OUT=$(mktemp /tmp/rupost_hist_replay_out_XXXXXX)
+RUPOST_HISTORY_DIR="$HIST_DIR" $RUPOST_BIN history export --last 1 -o "$HIST_SNAP" > /dev/null 2>&1 \
+    || { echo -e "${RED}[ERROR] history export 失败（供给链闭环前置步）！${NC}"; exit 1; }
+HIST_EXIT=0
+$RUPOST_BIN replay "$HIST_SNAP" --target http://127.0.0.1:9004 > "$HIST_OUT" 2>&1 || HIST_EXIT=$?
+if [ "$HIST_EXIT" -eq 0 ] && grep -q "Total: 1, Passed: 1" "$HIST_OUT"; then
+    echo -e "${GREEN}[✓] 历史导出→重放供给链验证成功（export→replay 闭环）！${NC}"
+else
+    echo -e "${RED}[ERROR] 历史导出→重放闭环验证失败（exit=$HIST_EXIT）！${NC}"
+    exit 1
+fi
+rm -rf "$HIST_DIR" "$HIST_SNAP" "$HIST_OUT"
+
+kill $REPLAY_MOCK_PID 2>/dev/null
 rm -rf "$REPLAY_MOCK" "$REPLAY_SNAP" "$REPLAY_STDOUT"
 
 echo -e "\n${GREEN}=====================================================${NC}"

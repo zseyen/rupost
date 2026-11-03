@@ -129,6 +129,8 @@ impl ReplayExecutor {
                         );
                     }
                     (None, None) => {
+                        // 防御臂：进程内不可达（matched=false 蕴含 error 或 actual 至少一者存在），
+                        // 仅未来形态扩展时兜底，不暗示存在第三归类
                         println!(
                             "   - #{} {} {} (expected {}, got <no response>)",
                             e.request_number, e.method, e.url, e.expected_status

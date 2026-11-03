@@ -608,6 +608,25 @@ mod tests {
         assert_eq!(ctx.trace_id, None);
     }
 
+    /// R6-d 决策表：match 形态——url 仍经脱敏（快照 URL 不因重放成功而免检）
+    #[test]
+    fn test_context_from_replay_entry_match_form_still_redacts() {
+        let entry = make_replay_entry(
+            1,
+            "http://api.example.com/ping?token=matchsecret",
+            Some(200),
+        );
+        let ctx = context_from_replay_entry(&entry);
+
+        assert_eq!(ctx.status_code, Some(200));
+        assert!(
+            !ctx.url.contains("matchsecret"),
+            "match 形态 url 亦须掩码: {}",
+            ctx.url
+        );
+        assert_eq!(ctx.error, None);
+    }
+
     /// R6-d 决策表：传输层失败形态——status None + error 文本内嵌 URL 亦须掩码
     #[test]
     fn test_context_from_replay_entry_transport_error_redaction() {

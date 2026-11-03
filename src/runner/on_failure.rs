@@ -85,7 +85,14 @@ pub async fn run_hook(
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         },
         // 超时：future 被 drop，kill_on_drop 终止子进程
-        Ok(Err(_)) | Err(_) => HookOutcome {
+        Err(_) => HookOutcome {
+            timed_out: true,
+            exit_success: false,
+            stderr: String::new(),
+            stdout: String::new(),
+        },
+        // 等待期 IO 错误（如管道早闭）：非超时，按失败处理
+        Ok(Err(_)) => HookOutcome {
             timed_out: false,
             exit_success: false,
             stderr: String::new(),
@@ -120,9 +127,10 @@ pub async fn fire_failure_hooks(
                         .to_string(),
                 );
             }
-            // stderr/stdout 原样透传（PRD US-R7）
+            // stderr/stdout 一律并入 rupost 的 stderr 透传（PRD US-R7）：
+            // --report json 的 stdout 是机器可读契约（保持纯净），钩子输出混入即毁
             eprint!("{}", outcome.stderr);
-            print!("{}", outcome.stdout);
+            eprint!("{}", outcome.stdout);
             if outcome.timed_out {
                 eprintln!(
                     "    {} on-failure hook timed out after {HOOK_TIMEOUT:?} (process killed)",
@@ -269,6 +277,8 @@ mod tests {
             Duration::from_millis(150),
         )
         .await;
+        // 超时必须如实上报（审查轮修复：timed_out 曾是永假的死分支）
+        assert!(out.timed_out);
         assert!(!out.exit_success);
     }
 

@@ -183,3 +183,40 @@ async fn test_hook_fires_in_json_mode_and_warning_lands_in_report() {
         "warning must be visible in json report: {report}"
     );
 }
+
+/// JSON 纯净性契约（审查轮 P1 修复）：钩子 stdout/stderr 一律并入 rupost 的
+/// stderr——`--report json` 的 stdout 保持机器可读，任何钩子输出不得混入。
+#[cfg(unix)]
+#[tokio::test]
+async fn test_hook_output_never_pollutes_json_stdout() {
+    let dir = tempdir().unwrap();
+    let (case, _server) = setup(dir.path(), "/api", 500, None).await;
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            &case,
+            "--report",
+            "json",
+            "--on-failure",
+            "echo HOOK-STDOUT-MARKER; echo HOOK-STDERR-MARKER >&2",
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.trim_start().starts_with('['),
+        "json stdout must start with report array: {stdout}"
+    );
+    assert!(
+        !stdout.contains("HOOK-STDOUT-MARKER") && !stdout.contains("HOOK-STDERR-MARKER"),
+        "hook output leaked into json stdout: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("HOOK-STDOUT-MARKER") && stderr.contains("HOOK-STDERR-MARKER"),
+        "hook output must be transparent on stderr: {stderr}"
+    );
+}

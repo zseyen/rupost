@@ -1,4 +1,5 @@
 use crate::reporter::{JsonFileReport, JsonTestReport};
+use crate::runner::ReplayEntryResult;
 use rupost_ai::{FailedAssertionInfo, FailureCategory, FailureContext, SignatureBucket};
 use std::collections::BTreeMap;
 
@@ -34,6 +35,31 @@ pub fn context_from_json_test_report(r: &JsonTestReport) -> FailureContext {
         response_body_snippet: r.response_body_snippet.clone(),
         warnings: r.warnings.clone(),
         // JSON 报告摄入路径无响应头数据（schema 锁定不扩字段），trace 锚点仅实时运行路径可得
+        trace_id: None,
+    }
+}
+
+/// 从 `ReplayEntryResult` 构建 `FailureContext`（R6 AI 预留桥）。
+/// 与 `context_from_json_test_report` 同构对称；v1 建桥不接 CLI——消费落点为 E2 报告
+/// 摄入/归因路径，解冻条件见 PRD `2026-11-04-debug-chain-r6-replay-per-entry-prd.md` §三 R6-d。
+/// 防御性脱敏（Gap Review P3）：快照 URL 可能携带 query token、重放错误文本内嵌原始 URL，
+/// 进 LLM/报告前必须掩码。已知限制：mismatch 条目 error=None 且无断言时签名 kind 落
+/// `no-error`（期望值差由条目字段承载，v1 无消费方可接受）。
+pub fn context_from_replay_entry(e: &ReplayEntryResult) -> FailureContext {
+    FailureContext {
+        // replay 快照无 @name 语义；bucket label 已有 None 降级分支（METHOD url 形态）
+        request_name: None,
+        method: e.method.clone(),
+        url: crate::ai::redactor::redact_url(&e.url),
+        status_code: e.actual_status,
+        error: e
+            .error
+            .as_deref()
+            .map(crate::ai::redactor::redact_free_text),
+        // replay 无断言；响应体/响应头 v1 不采集（T4 Smart Diff 扩展面，R7 钩子管线不覆盖 replay）
+        failed_assertions: Vec::new(),
+        response_body_snippet: None,
+        warnings: Vec::new(),
         trace_id: None,
     }
 }
@@ -538,5 +564,82 @@ mod tests {
             last.default_root_cause
         );
         assert_eq!(last.sample_requests.len(), 5, "样例列表应从被合并桶扩充");
+    }
+
+    fn make_replay_entry(
+        request_number: usize,
+        url: &str,
+        actual: Option<u16>,
+    ) -> ReplayEntryResult {
+        ReplayEntryResult {
+            request_number,
+            method: "POST".to_string(),
+            url: url.to_string(),
+            expected_status: 200,
+            actual_status: actual,
+            matched: actual.is_some() && actual == Some(200),
+            duration_ms: 45,
+            error: None,
+        }
+    }
+
+    /// R6-d 决策表：mismatch 形态映射 + URL query token 强制脱敏
+    #[test]
+    fn test_context_from_replay_entry_mismatch_mapping_and_redaction() {
+        let entry = make_replay_entry(
+            2,
+            "http://api.example.com/login?token=supersecret",
+            Some(401),
+        );
+        let ctx = context_from_replay_entry(&entry);
+
+        assert_eq!(ctx.request_name, None, "replay 无 @name 语义，不合成");
+        assert_eq!(ctx.method, "POST");
+        assert!(
+            !ctx.url.contains("supersecret"),
+            "快照 URL 可能携带 query token，必须掩码: {}",
+            ctx.url
+        );
+        assert_eq!(ctx.status_code, Some(401));
+        assert_eq!(ctx.error, None, "mismatch 不置 error（传输层语义）");
+        assert!(ctx.failed_assertions.is_empty());
+        assert_eq!(ctx.response_body_snippet, None);
+        assert!(ctx.warnings.is_empty());
+        assert_eq!(ctx.trace_id, None);
+    }
+
+    /// R6-d 决策表：传输层失败形态——status None + error 文本内嵌 URL 亦须掩码
+    #[test]
+    fn test_context_from_replay_entry_transport_error_redaction() {
+        let mut entry = make_replay_entry(3, "http://api.example.com/data?api_key=k123456", None);
+        entry.error = Some(
+            "error sending request for url (http://api.example.com/data?api_key=k123456)"
+                .to_string(),
+        );
+        let ctx = context_from_replay_entry(&entry);
+
+        assert_eq!(ctx.status_code, None, "传输层失败 status_code 为 None");
+        let err = ctx.error.as_deref().expect("error 保留进上下文");
+        assert!(
+            !err.contains("k123456"),
+            "错误文本内嵌的原始 URL 必须掩码: {err}"
+        );
+    }
+
+    /// R6-d 端到端：桥产物直接喂既有规则机（infer_possible_causes / failure_signature 纯函数，零 mock）
+    #[test]
+    fn test_context_from_replay_entry_feeds_rule_engines() {
+        let entry = make_replay_entry(5, "http://api.example.com/orders/88", Some(401));
+        let ctx = context_from_replay_entry(&entry);
+
+        let causes = infer_possible_causes(&ctx);
+        assert!(
+            causes.iter().any(|c| c.contains("401")),
+            "401 必须命中鉴权类目规则: {causes:?}"
+        );
+
+        let sig = failure_signature(&ctx);
+        assert!(sig.contains("401"), "签名携带状态码: {sig}");
+        assert!(!sig.contains("88"), "数字 ID 应归约为 :id 模式: {sig}");
     }
 }

@@ -768,7 +768,10 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             verbose,
         }) => {
             let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
-            replayer.replay_file(&file).await?;
+            let report = replayer.replay_file(&file).await?;
+            if report.failed > 0 {
+                std::process::exit(1);
+            }
         }
         Some(Commands::Export(args)) => {
             let opts = args.into_run_options(cli.env, cli.cookie_file, cli.default_scheme);

@@ -239,4 +239,264 @@ async fn test_replay_corrupt_snapshot_readable_error() {
     assert_eq!(report_empty.total, 0);
     assert_eq!(report_empty.passed, 0);
     assert_eq!(report_empty.failed, 0);
+    assert!(report_empty.entries.is_empty());
+}
+
+/// R6-a：混合成败（3 条 2 成 1 败）单次运行，entries 逐条分辨 + count 守恒 + error 条目二分归类
+#[tokio::test]
+async fn test_replay_mixed_results_entries_structured() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/bad"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("mixed_snapshot.json");
+
+    let make_entry = |id: &str, path_seg: &str, status: u16| SnapshotEntry {
+        id: id.to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: format!("http://original.example.com/{}", path_seg),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status,
+            headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
+        },
+    };
+
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("mixed_test".to_string()),
+        entries: vec![
+            make_entry("id-1", "ok", 200),
+            make_entry("id-2", "bad", 200), // 期望 200 实得 503 → mismatch
+            make_entry("id-3", "ok", 200),
+        ],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+
+    // 聚合守恒：passed + failed = total = entries.len()
+    assert_eq!(report.total, 3);
+    assert_eq!(report.passed, 2);
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.entries.len(), 3);
+    assert_eq!(
+        report.entries.iter().filter(|e| e.matched).count(),
+        report.passed
+    );
+
+    // 失败条目精确定位（1-based request_number 与终端 #N 对齐）
+    let failed_entry = &report.entries[1];
+    assert_eq!(failed_entry.request_number, 2);
+    assert_eq!(failed_entry.method, "GET");
+    assert_eq!(failed_entry.expected_status, 200);
+    assert_eq!(failed_entry.actual_status, Some(503));
+    assert!(!failed_entry.matched);
+    // mismatch 不置 error（传输层语义，expected/actual 由字段承载）
+    assert!(failed_entry.error.is_none());
+    // 失败条目 url 为 --target 覆写后实际请求 URL
+    assert!(
+        failed_entry.url.starts_with(mock_server.uri().as_str()),
+        "entry url should be rewritten to target: {}",
+        failed_entry.url
+    );
+
+    // 成功条目形态
+    assert!(report.entries[0].matched);
+    assert_eq!(report.entries[0].request_number, 1);
+    assert_eq!(report.entries[0].actual_status, Some(200));
+    assert!(report.entries[0].error.is_none());
+}
+
+/// R6-a：传输层失败（不可达端口）落条目——actual_status=None + error=Some，二分归 failed
+#[tokio::test]
+async fn test_replay_transport_error_entry_structured() {
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("dead_port_snapshot.json");
+
+    let entry = SnapshotEntry {
+        id: "id-dead".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://original.example.com/dead".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
+        },
+    };
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("dead_port_test".to_string()),
+        entries: vec![entry],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 指向必然连接拒绝的端口（1 保留端口）
+    let replayer = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false);
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+
+    assert_eq!(report.total, 1);
+    assert_eq!(report.passed, 0);
+    assert_eq!(
+        report.failed, 1,
+        "error entry must be counted as failed (二分不三桶)"
+    );
+
+    let err_entry = &report.entries[0];
+    assert_eq!(err_entry.request_number, 1);
+    assert_eq!(
+        err_entry.actual_status, None,
+        "transport failure → actual_status None"
+    );
+    assert!(
+        err_entry.error.is_some(),
+        "transport failure carries error message"
+    );
+    assert!(!err_entry.matched);
+}
+
+fn rupost_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_rupost")
+}
+
+/// R6-b/c：CLI 子进程级验收——失败时 stdout 含 Failed entries 清单且 exit 1
+#[tokio::test]
+async fn test_replay_cli_exit_code_and_failed_entries_stdout() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/bad"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("cli_mixed_snapshot.json");
+
+    let make_entry = |id: &str, path_seg: &str| SnapshotEntry {
+        id: id.to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: format!("http://original.example.com/{}", path_seg),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
+        },
+    };
+
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("cli_mixed_test".to_string()),
+        entries: vec![make_entry("id-1", "ok"), make_entry("id-2", "bad")],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 进程内 stdout 被 cargo test 捕获——CLI 可见面（Failed entries 块 + 退出码）必须走子进程断言
+    let out = std::process::Command::new(rupost_bin())
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+        ])
+        .output()
+        .expect("run rupost replay");
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "failed replay must exit 1 for CI gating"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Failed entries:"), "got: {stdout}");
+    assert!(
+        stdout.contains("#2 GET"),
+        "failure listed with 1-based #N: {stdout}"
+    );
+    assert!(
+        stdout.contains("expected 200, got 503"),
+        "mismatch detail visible: {stdout}"
+    );
+}
+
+/// R6-b/c：全成功时 exit 0 且无 Failed entries 块（零噪音）
+#[tokio::test]
+async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("cli_ok_snapshot.json");
+
+    let entry = SnapshotEntry {
+        id: "id-ok".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://original.example.com/ok".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: String::new(),
+        },
+    };
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("cli_ok_test".to_string()),
+        entries: vec![entry],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    let out = std::process::Command::new(rupost_bin())
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+        ])
+        .output()
+        .expect("run rupost replay");
+
+    assert_eq!(out.status.code(), Some(0), "all-success replay must exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("Failed entries:"),
+        "zero failures must print no failed-entries block: {stdout}"
+    );
 }

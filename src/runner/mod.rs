@@ -13,7 +13,7 @@ pub use executor::TestExecutor;
 pub use types::{TestResult, TestSummary};
 
 pub use engine::batch::{BatchExecutor, BatchMode, BatchRunRequest};
-pub use engine::replayer::{ReplayExecutor, ReplayReport};
+pub use engine::replayer::{ReplayEntryResult, ReplayExecutor, ReplayReport};
 pub use engine::resolver::DependencyResolver;
 pub use engine::workflow::WorkflowGraph;
 

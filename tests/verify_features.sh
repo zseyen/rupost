@@ -512,6 +512,42 @@ else
 fi
 rm -rf "$HOOK_MOCK" "$HOOK_CASE" "$TRACE_OUT"
 
+# 12. 验证快照重放失败定位 (R6: replay per-entry + exit code)
+echo -e "${BLUE}[*] 验证快照重放失败定位 (replay per-entry)...${NC}"
+REPLAY_MOCK=$(mktemp /tmp/rupost_replay_mock_XXXXXX.json)
+cat << 'EOF' > "$REPLAY_MOCK"
+[
+  { "method": "GET", "path": "/ok", "variants": [ { "condition": null, "status": 200, "headers": { "Content-Type": "application/json" }, "response_body": "{\"ok\":true}" } ] },
+  { "method": "GET", "path": "/bad", "variants": [ { "condition": null, "status": 503, "headers": { "Content-Type": "application/json" }, "response_body": "{\"err\":1}" } ] }
+]
+EOF
+$RUPOST_BIN mock "$REPLAY_MOCK" --port 9004 > /dev/null 2>&1 &
+REPLAY_MOCK_PID=$!
+sleep 2
+# 快照：#1 /ok 期望 200（成）、#2 /bad 期望 200（败，实得 503）
+REPLAY_SNAP=$(mktemp /tmp/rupost_replay_snap_XXXXXX.json)
+cat << 'EOF' > "$REPLAY_SNAP"
+{
+  "timestamp": "2026-11-04T00:00:00Z",
+  "source_file": "verify_replay",
+  "entries": [
+    { "id": "r1", "request": { "method": "GET", "url": "http://origin/ok", "headers": {}, "body": null }, "response": { "status": 200, "headers": {}, "body": "" } },
+    { "id": "r2", "request": { "method": "GET", "url": "http://origin/bad", "headers": {}, "body": null }, "response": { "status": 200, "headers": {}, "body": "" } }
+  ]
+}
+EOF
+REPLAY_STDOUT=$(mktemp /tmp/rupost_replay_out_XXXXXX)
+REPLAY_EXIT=0
+$RUPOST_BIN replay "$REPLAY_SNAP" --target http://127.0.0.1:9004 > "$REPLAY_STDOUT" 2>&1 || REPLAY_EXIT=$?
+kill $REPLAY_MOCK_PID 2>/dev/null
+if [ "$REPLAY_EXIT" -eq 1 ] && grep -q "Failed entries:" "$REPLAY_STDOUT" && grep -q "expected 200, got 503" "$REPLAY_STDOUT"; then
+    echo -e "${GREEN}[✓] 快照重放失败定位验证成功（失败 exit 1 + Failed entries 定位到条）！${NC}"
+else
+    echo -e "${RED}[ERROR] 快照重放定位验证失败（exit=$REPLAY_EXIT）！${NC}"
+    exit 1
+fi
+rm -rf "$REPLAY_MOCK" "$REPLAY_SNAP" "$REPLAY_STDOUT"
+
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"
 echo -e "${GREEN}=====================================================${NC}"

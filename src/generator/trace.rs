@@ -322,7 +322,8 @@ mod tests {
         ];
         let plan = plan_of(&entries);
         assert_eq!(plan.links.len(), 1);
-        // 反序就近：命中 index 1（new），capture 源指向同路径但链标记上游为其自身 idx
+        // 反序就近：命中 index 1（new）——tie 行锁定遍历方向（变异⑤守护）
+        assert_eq!(plan.links[0].upstream_idx, 1, "nearest upstream must win");
         assert_eq!(plan.links[0].capture_source, "body.token");
     }
 

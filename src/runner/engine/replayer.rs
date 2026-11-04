@@ -359,6 +359,7 @@ impl ReplayExecutor {
                         diffs.join("; ")
                     };
                     let summary = crate::ai::redactor::redact_free_text(&summary);
+                    let summary = crate::exporter::redact::mask_pii(&summary);
                     let summary = crate::ai::redactor::truncate_utf8_safe(&summary, 512);
                     (Some(false), Some(summary))
                 }
@@ -454,7 +455,7 @@ fn diff_values(
                 };
                 match act.get(key) {
                     None => {
-                        let v = mask_by_key(&child, &exp_val.to_string());
+                        let v = mask_by_key(&child, &short_value(exp_val));
                         push_diff(diffs, &mut equal, &child, &v, "<missing>");
                     }
                     Some(act_val) => {
@@ -477,7 +478,7 @@ fn diff_values(
                     } else {
                         format!("{path}.{key}")
                     };
-                    let v = mask_by_key(&child, &act[key].to_string());
+                    let v = mask_by_key(&child, &short_value(&act[key]));
                     push_diff(diffs, &mut equal, &child, "<missing>", &v);
                     if diffs.len() >= 3 {
                         return false;
@@ -675,6 +676,51 @@ mod tests {
         assert_eq!(m, Some(false), "array order sensitive by design");
         let (m, _) = diff_of(r#"{"v":1}"#, r#"{"v":1.0}"#, &[]);
         assert_eq!(m, Some(false), "int vs float unequal by design");
+    }
+
+    /// 变异②守护：前 3 处截断——第 4 处差异不进摘要；512B 截断分支真实触发
+    #[test]
+    fn test_compare_bodies_three_cap_and_truncation() {
+        let exp = r#"{"a":1,"b":2,"c":3,"d":4}"#;
+        let act = r#"{"a":9,"b":9,"c":9,"d":9}"#;
+        let (m, d) = diff_of(exp, act, &[]);
+        assert_eq!(m, Some(false));
+        let diff = d.unwrap();
+        assert!(diff.contains("a: 1"), "first diff present: {diff}");
+        assert!(diff.contains("c: 3"), "third diff present: {diff}");
+        assert!(
+            !diff.contains("d: 4"),
+            "fourth diff capped by 3-limit: {diff}"
+        );
+        // 512B 截断分支：3 处差异 × 超长路径名（short_value 只裁值不裁路径，摘要必超限）
+        let key = "K".repeat(180);
+        let long_exp = format!(r#"{{"{key}":1,"{key}2":2,"{key}3":3}}"#);
+        let long_act = format!(r#"{{"{key}":9,"{key}2":9,"{key}3":9}}"#);
+        let (m, d) = diff_of(&long_exp, &long_act, &[]);
+        assert_eq!(m, Some(false));
+        let diff = d.unwrap();
+        assert!(
+            diff.contains("...[truncated]"),
+            "512B truncation must fire: len={} {diff}",
+            diff.len()
+        );
+    }
+
+    /// 变异⑦守护扩展：DEFAULT_IGNORE_FIELDS 14 键逐一过匹配器——常量拼写/大小写
+    /// 回归即红（compare_bodies 不内含 DEFAULT 合并，单测显式传常量锁机制+常量链路）
+    #[test]
+    fn test_default_ignore_fields_all_guarded() {
+        for key in DEFAULT_IGNORE_FIELDS {
+            let exp = format!(r#"{{"{}":"a"}}"#, key);
+            let act = format!(r#"{{"{}":"b"}}"#, key);
+            let (m, d) = diff_of(&exp, &act, &DEFAULT_IGNORE_FIELDS);
+            assert_eq!(
+                m,
+                Some(true),
+                "default key {key:?} must be excluded (jitter tolerated)"
+            );
+            assert!(d.is_none(), "excluded key {key:?} leaves no diff");
+        }
     }
 
     /// T4 skip 分支：占位文本/空 body/超限 → 未参与比对；解析能力不对等 → 内容类型漂移；

@@ -325,6 +325,14 @@ impl HttpGenerator {
         traced: Option<&super::trace::TracePlan>,
     ) -> serde_json::Value {
         use serde_json::Value;
+        // T2 最高优先（评审 F1③）：溯源命中值即使位于敏感键之下也 → {{capture}}，
+        // 字面量明文被替换（严格更安全）；无命中时敏感键早退维持凭据语义
+        if let Value::String(s) = value
+            && let Some(plan) = traced
+            && let Some(l) = plan.links.iter().find(|l| l.value == *s)
+        {
+            return Value::String(format!("{{{{{}}}}}", l.capture_name));
+        }
         if let Some(k) = key
             && crate::exporter::redact::is_sensitive_key(k)
         {
@@ -332,15 +340,8 @@ impl HttpGenerator {
         }
         match value {
             Value::String(s) => {
-                // T2 优先：溯源命中 → {{capture}}；否则 T1 形状
-                let traced_hit = traced.and_then(|plan| {
-                    plan.links
-                        .iter()
-                        .find(|l| l.value == *s)
-                        .map(|l| format!("{{{{{}}}}}", l.capture_name))
-                });
-                traced_hit
-                    .or_else(|| super::dynamic::template_value(s))
+                // T1：非敏感叶子命中动态形状 → 反向模板化
+                super::dynamic::template_value(s)
                     .map(Value::String)
                     .unwrap_or_else(|| value.clone())
             }

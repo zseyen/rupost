@@ -25,7 +25,7 @@
 
 **US-T4**（小张·联调）：Given 快照录制自旧版服务（body 含 `timestamp`/`request_id` 抖动字段），When `replay snap.json -t <新环境>`，Then 状态码 + body（排除抖动字段后）双重比对；抖动差异不假失败、真实字段缺失/值变被抓并定位到条；`--status-only` 可退回 R6 语义。
 
-**US-AI**（小李·开发）：Given replay 有失败条目，When `replay --explain`，Then 失败条目下方输出规则版 `[Possible Causes]`，配置 AI 后按签名去重追加根因（熔断/降级语义与 `t --explain` 一致），退出码仍由比对结果决定。
+**US-AI**（小李·开发）：Given replay 有失败条目，When `replay --explain`，Then 本轮结束后对失败条目集中输出规则版 `[Possible Causes]`（与 `t --explain` 同构），配置 AI 后按签名去重追加根因（熔断/降级语义与 `t --explain` 一致），退出码仍由比对结果决定。
 
 **US-T1/T2**（小赵·沉淀）：Given 历史含登录→下游链路（token 在 body/Authorization），When `g --last N`，Then 动态值按形状模板化（`$uuid`/`$timestamp`），链式值自动重建（上游 `@capture` + 下游 `{{}}`），生成文件直接 `rupost t` 跑通。
 

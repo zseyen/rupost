@@ -27,18 +27,14 @@ async fn test_run_diagnose_cli_json_report_stdout() {
     assert_eq!(value["http_status"], serde_json::json!(200));
 }
 
-/// R3 壳层：诊断失败（DNS 不可解析）→ stderr 错误 + `process::exit(1)` 路径
+/// R3 壳层：诊断失败（TCP 连接拒绝，回环确定性触发）→ stderr 错误 + `process::exit(1)` 路径。
+/// 弃用 .invalid 域名：挟持网络（VPN fake-IP 通配解析）下会假绿（对抗审查预告的风险成真）。
 #[test]
 fn test_run_diagnose_cli_error_exit_one() {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
-        .args([
-            "d",
-            "http://rupost-diagnostics-nonexistent.invalid",
-            "--report",
-            "json",
-        ])
+        .args(["d", "http://127.0.0.1:1", "--report", "json"])
         .output()
-        .expect("run rupost diagnose against unresolvable host");
+        .expect("run rupost diagnose against closed loopback port");
 
     assert_eq!(out.status.code(), Some(1), "diagnose failure must exit 1");
     let stderr = String::from_utf8_lossy(&out.stderr);

@@ -173,6 +173,17 @@ pub fn build_trace_plan(entries: &[HistoryEntry]) -> TracePlan {
                 candidates.push(v.to_string());
             }
         }
+        // URL query 值也进候选（评审 F1：token 在 query 的 API 形态）；
+        // 敏感键值跳过——凭据模板化管线负责（管线序：敏感键凭据 > T2）
+        if let Some((_, query)) = entry.request.url.split_once('?') {
+            for pair in query.split('&') {
+                if let Some((k, v)) = pair.split_once('=')
+                    && !crate::exporter::redact::is_sensitive_key(k)
+                {
+                    candidates.push(v.to_string());
+                }
+            }
+        }
         if let Some(body) = &entry.request.body
             && let Ok(json) = serde_json::from_str::<Value>(body)
         {

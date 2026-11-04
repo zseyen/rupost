@@ -102,14 +102,15 @@ impl HttpGenerator {
             block.push_str(&format!("# @timeout {}ms\n", t.as_millis()));
         }
 
-        // 2. Request Line（可选 origin → {{base_url}}；URL query 敏感键值模板化为变量）
+        // 2. Request Line（可选 origin → {{base_url}}；query 敏感键凭据/T2 溯源/T1 形状）
         let rendered_url = if templatize_host {
-            Self::variablize_url(
+            Self::variabilize_url(
                 &Self::templatize_host_in_url(&entry.request.url, variables),
                 variables,
+                traced,
             )
         } else {
-            Self::variablize_url(&entry.request.url, variables)
+            Self::variabilize_url(&entry.request.url, variables, traced)
         };
         block.push_str(&format!("{} {}\n", entry.request.method, rendered_url));
 
@@ -318,15 +319,14 @@ impl HttpGenerator {
     }
 
     /// T1：递归模板化 JSON 字符串叶子（动态形状 → `{{$...}}`）；
-    /// 敏感键（password/token 等）下的值跳过——凭据语义由既有警告路径负责
+    /// T2 最高优先（评审 F1③）：溯源命中值即使位于敏感键之下也 → `{{capture}}`
+    /// （字面量明文被替换，严格更安全）；无命中时敏感键早退维持凭据语义
     fn templatize_dynamic_leaves(
         value: &serde_json::Value,
         key: Option<&str>,
         traced: Option<&super::trace::TracePlan>,
     ) -> serde_json::Value {
         use serde_json::Value;
-        // T2 最高优先（评审 F1③）：溯源命中值即使位于敏感键之下也 → {{capture}}，
-        // 字面量明文被替换（严格更安全）；无命中时敏感键早退维持凭据语义
         if let Value::String(s) = value
             && let Some(plan) = traced
             && let Some(l) = plan.links.iter().find(|l| l.value == *s)
@@ -365,8 +365,14 @@ impl HttpGenerator {
         }
     }
 
-    /// URL query 中的敏感键值模板化为 `{{变量}}`；其余部分逐字保留（不做重编码）
-    fn variablize_url(raw: &str, variables: &mut BTreeSet<String>) -> String {
+    /// URL query 中的敏感键值模板化为 `{{变量}}`；溯源命中值（T2，最高优先）→ `{{capture}}`；
+    /// 其余 T1 动态形状反向模板化；其余部分逐字保留（不做重编码）。
+    /// 已知限制：URL 编码形态的值（%3A 等）不参与溯源/形状识别。
+    fn variabilize_url(
+        raw: &str,
+        variables: &mut BTreeSet<String>,
+        traced: Option<&super::trace::TracePlan>,
+    ) -> String {
         let Some((base, query)) = raw.split_once('?') else {
             return raw.to_string();
         };
@@ -374,13 +380,20 @@ impl HttpGenerator {
         let rebuilt: Vec<String> = query
             .split('&')
             .map(|pair| match pair.split_once('=') {
-                Some((k, _)) if is_sensitive_key(k) => {
+                Some((k, _v)) if is_sensitive_key(k) => {
                     templated = true;
                     let var = Self::var_name_from_key(k);
                     variables.insert(var.clone());
                     format!("{k}={{{{{var}}}}}")
                 }
                 Some((k, v)) => {
+                    // T2 最高优先：溯源命中 query 值 → {{capture}}（管线序 T2>T1>凭据豁免）
+                    if let Some(plan) = traced
+                        && let Some(l) = plan.links.iter().find(|l| l.value == *v)
+                    {
+                        templated = true;
+                        return format!("{k}={{{{{}}}}}", l.capture_name);
+                    }
                     // T1：非敏感 query 值命中动态形状 → 反向模板化（不进变量符号表）
                     match super::dynamic::template_value(v) {
                         Some(t) => {

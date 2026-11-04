@@ -480,3 +480,96 @@ fn test_generate_templatizes_dynamic_shapes_skips_sensitive_keys() {
         "non-sensitive header uuid templated in place"
     );
 }
+
+/// T2 链式闭环（PRD 验收）：历史含 login→profile 链，生成文件直接 `rupost t` 跑通——
+/// 上游 `@capture` + 下游 `{{token}}`（Bearer scheme 保留），数据流重建
+#[tokio::test]
+async fn test_generate_chain_tracing_closed_loop_reruns() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"token":"live-tok-42"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/profile"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let entries = vec![
+        rupost::history::model::HistoryEntry {
+            id: "l".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 5,
+            request: rupost::history::model::RequestSnapshot {
+                method: "POST".into(),
+                url: format!("{}/login", server.uri()),
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some(r#"{"u":"lee"}"#.into()),
+                timeout: None,
+            },
+            source: Some("t".into()),
+            response: rupost::history::model::ResponseMeta {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some(r#"{"token":"live-tok-42"}"#.into()),
+            },
+        },
+        rupost::history::model::HistoryEntry {
+            id: "p".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 5,
+            request: rupost::history::model::RequestSnapshot {
+                method: "GET".into(),
+                url: format!("{}/profile", server.uri()),
+                headers: {
+                    let mut h = reqwest::header::HeaderMap::new();
+                    h.insert("Authorization", "Bearer live-tok-42".parse().unwrap());
+                    h
+                },
+                body: None,
+                timeout: None,
+            },
+            source: Some("t".into()),
+            response: rupost::history::model::ResponseMeta {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some("{}".into()),
+            },
+        },
+    ];
+
+    let (content, _) =
+        rupost::generator::HttpGenerator::generate_with_variables(&entries, false).unwrap();
+    // 数据流重建：上游 capture + 下游 Bearer {{token}}（非字面量、非 {{authorization}}）
+    assert!(
+        content.contains("# @capture token from body.token"),
+        "capture emitted: {content}"
+    );
+    assert!(
+        content.contains("Bearer {{token}}"),
+        "downstream Bearer uses traced var: {content}"
+    );
+    assert!(
+        !content.contains("live-tok-42"),
+        "token value never literal: {content}"
+    );
+
+    // 生成文件落盘直接跑通（零 --var——数据流由 @capture 自举）
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("chain.http");
+    std::fs::write(&file, &content).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["t", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "chain reruns green: {stdout}");
+    assert!(stdout.contains("2 passed"), "both requests pass: {stdout}");
+}

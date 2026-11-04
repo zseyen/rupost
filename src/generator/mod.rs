@@ -1,5 +1,6 @@
 pub mod dynamic;
 pub mod http;
+pub mod trace;
 
 use crate::Result;
 pub use crate::generator::http::HttpGenerator;

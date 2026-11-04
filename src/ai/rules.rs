@@ -580,6 +580,9 @@ mod tests {
             matched: actual.is_some() && actual == Some(200),
             duration_ms: 45,
             error: None,
+            body_matched: None,
+            body_diff: None,
+            response_body_snippet: None,
         }
     }
 

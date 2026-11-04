@@ -185,6 +185,14 @@ pub enum Commands {
         /// Show detailed request/response details
         #[arg(short, long)]
         verbose: bool,
+
+        /// Additional leaf key names to exclude from body comparison (comma-separated)
+        #[arg(long, value_name = "KEYS")]
+        ignore_fields: Option<String>,
+
+        /// Disable body comparison (status-code-only semantics)
+        #[arg(long)]
+        status_only: bool,
     },
 
     /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
@@ -766,8 +774,21 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             file,
             target,
             verbose,
+            ignore_fields,
+            status_only,
         }) => {
-            let replayer = rupost::runner::ReplayExecutor::new(target, verbose);
+            let mut replayer = rupost::runner::ReplayExecutor::new(target, verbose);
+            if let Some(keys) = ignore_fields {
+                let parsed: Vec<String> = keys
+                    .split(',')
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+                    .collect();
+                replayer = replayer.with_ignore_fields(parsed);
+            }
+            if status_only {
+                replayer = replayer.status_only();
+            }
             let report = replayer.replay_file(&file).await?;
             if report.failed > 0 {
                 std::process::exit(1);

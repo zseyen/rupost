@@ -505,14 +505,15 @@ async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
 #[tokio::test]
 async fn test_history_export_then_replay_closed_loop() {
     let mock_server = MockServer::start().await;
+    // 响应体与录制历史一致（T4 body 比对开启后，内容漂移会正确判失败——本测试聚焦供给链）
     Mock::given(method("GET"))
         .and(path("/one"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_string("resp one"))
         .mount(&mock_server)
         .await;
     Mock::given(method("POST"))
         .and(path("/two"))
-        .respond_with(ResponseTemplate::new(201))
+        .respond_with(ResponseTemplate::new(201).set_body_string("resp two"))
         .mount(&mock_server)
         .await;
 
@@ -631,5 +632,184 @@ async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
         err_entry.duration_ms >= 30 && err_entry.duration_ms <= 1500,
         "error entry duration must reflect actual elapsed (~100ms timeout), got {}",
         err_entry.duration_ms
+    );
+}
+
+// ═══════════════ T4 Smart Diff 集成验收 ═══════════════
+
+/// T4 端到端：抖动字段（排除键）值漂移不假失败；真实业务差异定位到条且携带脱敏摘要
+#[tokio::test]
+async fn test_smart_diff_jitter_tolerated_and_real_diff_caught() {
+    let mock_server = MockServer::start().await;
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("smart_diff_snapshot.json");
+
+    // 快照 body 含 timestamp（默认排除键）与 quota（业务字段）
+    let entry = SnapshotEntry {
+        id: "id-sd".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://original.example.com/data".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: r#"{"quota":100,"timestamp":"2026-01-01T00:00:00Z"}"#.to_string(),
+        },
+    };
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("smart_diff".to_string()),
+        entries: vec![entry],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+
+    // 1) 抖动：timestamp 漂移（quota 相同）→ matched，无假失败
+    mock_server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "quota": 100, "timestamp": "2027-12-31T23:59:59Z"
+        })))
+        .mount(&mock_server)
+        .await;
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report.failed, 0, "jitter on excluded key must not fail");
+    assert_eq!(report.entries[0].body_matched, Some(true));
+    assert!(report.entries[0].body_diff.is_none());
+
+    // 2) 真实差异：quota 漂移 → body 失败定位到条 + 摘要
+    mock_server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "quota": 999, "timestamp": "2027-12-31T23:59:59Z"
+        })))
+        .mount(&mock_server)
+        .await;
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report.failed, 1);
+    let e = &report.entries[0];
+    assert!(!e.matched);
+    assert_eq!(e.body_matched, Some(false));
+    let diff = e.body_diff.as_ref().expect("body_diff carries summary");
+    assert!(diff.contains("quota") && diff.contains("100") && diff.contains("999"));
+    // 脱敏不变量在集成面复核：真实 token 值不出现在摘要
+    assert!(
+        !report.entries[0]
+            .response_body_snippet
+            .as_ref()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// T4 CLI 级：body-only 失败（状态匹配 body 漂移）→ 第四形态输出 + exit 1；
+/// `--status-only` 逃生舱恢复 R6 语义 exit 0；`--ignore-fields` 用户键豁免
+#[tokio::test]
+async fn test_smart_diff_cli_fourth_form_and_escapes() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "quota": 100, "timestamp": "old"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("cli_sd_snapshot.json");
+    let entry = SnapshotEntry {
+        id: "id-cli".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://original.example.com/data".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: r#"{"quota":100,"timestamp":"new"}"#.to_string(),
+        },
+    };
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("cli_sd".to_string()),
+        entries: vec![entry],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+    let uri = mock_server.uri();
+    let target = ["--target", uri.as_str()];
+
+    // 1) 默认语义：timestamp 属默认排除键 → 抖动容忍 exit 0（默认列表生效面）
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["replay", snapshot_file.to_str().unwrap()])
+        .args(target)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "default-list exclusion keeps it green"
+    );
+
+    // 2) 用户排除键：quota 差异在 --ignore-fields 后豁免
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--ignore-fields",
+            "quota",
+        ])
+        .args(target)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "user ignore_fields exempts quota"
+    );
+
+    // 3) 制造 body-only 失败（mock 改 quota）→ 第四形态 + exit 1
+    mock_server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "quota": 555, "timestamp": "old"
+        })))
+        .mount(&mock_server)
+        .await;
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["replay", snapshot_file.to_str().unwrap()])
+        .args(target)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "body-only failure must exit 1");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Body mismatch"),
+        "inline fourth-form line: {stdout}"
+    );
+    assert!(
+        stdout.contains("(body: quota:"),
+        "Failed entries fourth arm: {stdout}"
+    );
+
+    // 4) --status-only 逃生舱：同一失败场景恢复 R6 语义 exit 0
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["replay", snapshot_file.to_str().unwrap(), "--status-only"])
+        .args(target)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "status-only escape hatch restores R6 semantics"
     );
 }

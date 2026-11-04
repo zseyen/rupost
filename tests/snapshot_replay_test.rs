@@ -813,3 +813,97 @@ async fn test_smart_diff_cli_fourth_form_and_escapes() {
         "status-only escape hatch restores R6 semantics"
     );
 }
+
+/// P1 AI 接线：`replay --explain` 无 Key 降级——规则版出现、AI 段不出现、exit 码仍由比对决定
+#[tokio::test]
+async fn test_replay_explain_no_key_degradation() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("down"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("explain_snapshot.json");
+    let entry = SnapshotEntry {
+        id: "id-explain".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://original.example.com/data".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: r#"{"ok":true}"#.to_string(),
+        },
+    };
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: Some("explain".to_string()),
+        entries: vec![entry],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 1) 失败 + --explain（无 AI 配置）：Possible Causes 出现、AI 段不出现、exit 1
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+            "--explain",
+        ])
+        .env_remove("RUPOST_AI_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "exit still driven by comparison"
+    );
+    assert!(
+        stdout.contains("Possible Causes"),
+        "rule baseline present: {stdout}"
+    );
+    assert!(
+        !stdout.contains("AI Explanation"),
+        "no AI section without key: {stdout}"
+    );
+    assert!(
+        stderr.contains("AI 归因已跳过") || stderr.contains("AI"),
+        "degradation hint on stderr: {stderr}"
+    );
+
+    // 2) 全成功 + --explain：exit 0 且无归因块
+    mock_server.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true}"#))
+        .mount(&mock_server)
+        .await;
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+            "--explain",
+        ])
+        .env_remove("RUPOST_AI_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        !stdout.contains("Possible Causes"),
+        "zero failures print no attribution block: {stdout}"
+    );
+}

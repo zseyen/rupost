@@ -193,6 +193,10 @@ pub enum Commands {
         /// Disable body comparison (status-code-only semantics)
         #[arg(long)]
         status_only: bool,
+
+        /// Explain each failed entry in place (rule baseline + AI attribution when configured)
+        #[arg(long, visible_alias = "ai-explain")]
+        explain: bool,
     },
 
     /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
@@ -776,6 +780,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             verbose,
             ignore_fields,
             status_only,
+            explain,
         }) => {
             let mut replayer = rupost::runner::ReplayExecutor::new(target, verbose);
             if let Some(keys) = ignore_fields {
@@ -790,6 +795,23 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 replayer = replayer.status_only();
             }
             let report = replayer.replay_file(&file).await?;
+            // P1 AI 接线：失败条目就地归因（规则版基线 + AI 增强；B1 降级语义同 t --explain）
+            if explain && report.failed > 0 {
+                let mut session = rupost::ai::explain::ExplainSession::new();
+                let client = match rupost::ai::config::resolve().await {
+                    Ok(resolved) => Some(resolved.client),
+                    Err(msg) => {
+                        eprintln!("    {} {}", "⚠".yellow(), msg);
+                        None
+                    }
+                };
+                for entry in report.entries.iter().filter(|e| !e.matched) {
+                    let ctx = rupost::ai::rules::context_from_replay_entry(entry);
+                    session
+                        .explain_context_with_client(ctx, client.as_deref())
+                        .await;
+                }
+            }
             if report.failed > 0 {
                 std::process::exit(1);
             }

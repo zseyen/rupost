@@ -39,13 +39,33 @@ pub fn context_from_json_test_report(r: &JsonTestReport) -> FailureContext {
     }
 }
 
-/// 从 `ReplayEntryResult` 构建 `FailureContext`（R6 AI 预留桥）。
-/// 与 `context_from_json_test_report` 同构对称；v1 建桥不接 CLI——消费落点为 E2 报告
-/// 摄入/归因路径，解冻条件见 PRD `2026-11-04-debug-chain-r6-replay-per-entry-prd.md` §三 R6-d。
+/// 从 `ReplayEntryResult` 构建 `FailureContext`（R6 AI 预留桥，P1 接线解冻）。
+/// 与 `context_from_json_test_report` 同构对称；消费落点为 `replay --explain`。
 /// 防御性脱敏（Gap Review P3）：快照 URL 可能携带 query token、重放错误文本内嵌原始 URL，
-/// 进 LLM/报告前必须掩码。已知限制：mismatch 条目 error=None 且无断言时签名 kind 落
-/// `no-error`（期望值差由条目字段承载，v1 无消费方可接受）。
+/// 进 LLM/报告前必须掩码。
+/// T4 增强（R6 §4.3 已知限制的既定修复）：body 失败条目合成断言证据——首处差异 path
+/// 进 raw（签名区分不同漂移路径，摆脱 no-error kind）；diff 已在采集点脱敏
+/// （mask_by_key + redact_free_text + 512B 截断），此处原样引用不二次处理。
 pub fn context_from_replay_entry(e: &ReplayEntryResult) -> FailureContext {
+    let failed_assertions: Vec<FailedAssertionInfo> = match &e.body_diff {
+        Some(diff) => {
+            let path = diff
+                .split("; ")
+                .next()
+                .and_then(|s| s.split(": ").next())
+                .filter(|p| !p.is_empty())
+                .unwrap_or("body");
+            vec![FailedAssertionInfo {
+                // `body.` 前缀命中 infer_possible_causes 断言臂（raw.contains("body.")）
+                raw: format!("body.{path} deep-compare"),
+                expected: None,
+                actual: Some(diff.clone()),
+                message: None,
+            }]
+        }
+        None => Vec::new(),
+    };
+
     FailureContext {
         // replay 快照无 @name 语义；bucket label 已有 None 降级分支（METHOD url 形态）
         request_name: None,
@@ -56,9 +76,9 @@ pub fn context_from_replay_entry(e: &ReplayEntryResult) -> FailureContext {
             .error
             .as_deref()
             .map(crate::ai::redactor::redact_free_text),
-        // replay 无断言；响应体/响应头 v1 不采集（T4 Smart Diff 扩展面，R7 钩子管线不覆盖 replay）
-        failed_assertions: Vec::new(),
-        response_body_snippet: None,
+        // 响应头 v1 不采集（R7 钩子管线不覆盖 replay）；snippet 由 T4-b 失败条目填充（已脱敏）
+        failed_assertions,
+        response_body_snippet: e.response_body_snippet.clone(),
         warnings: Vec::new(),
         trace_id: None,
     }
@@ -663,5 +683,44 @@ mod tests {
         let sig = failure_signature(&ctx);
         assert!(sig.contains("401"), "签名携带状态码: {sig}");
         assert!(!sig.contains("88"), "数字 ID 应归约为 :id 模式: {sig}");
+    }
+
+    /// T4 接线增强：body 失败条目合成断言证据——签名摆脱 no-error、规则版命中断言臂
+    #[test]
+    fn test_context_from_replay_entry_synthesizes_body_evidence() {
+        let mut entry = make_replay_entry(7, "http://api.example.com/billing", Some(200));
+        entry.matched = false;
+        entry.body_matched = Some(false);
+        entry.body_diff = Some("quota: 100 → 999".to_string());
+        entry.response_body_snippet = Some(r#"{"quota":999}"#.to_string());
+        let ctx = context_from_replay_entry(&entry);
+
+        assert_eq!(ctx.failed_assertions.len(), 1);
+        let fa = &ctx.failed_assertions[0];
+        assert!(
+            fa.raw.contains("body.") && fa.raw.contains("quota"),
+            "raw 带 body. 前缀与漂移路径: {}",
+            fa.raw
+        );
+        // 签名不再落 no-error，且不同漂移路径可区分
+        let sig = failure_signature(&ctx);
+        assert!(
+            !sig.contains("no-error"),
+            "body 证据使签名摆脱 no-error: {sig}"
+        );
+        assert!(sig.contains("quota"), "签名区分漂移路径: {sig}");
+        // 规则版命中断言臂（含 path 与实际值），非误导兜底文案
+        let causes = infer_possible_causes(&ctx);
+        assert!(
+            causes
+                .iter()
+                .any(|c| c.contains("body.quota") && c.contains("999")),
+            "规则版应引用合成证据: {causes:?}"
+        );
+        // snippet 直通 AI 上下文（采集点已脱敏，桥原样引用）
+        assert_eq!(
+            ctx.response_body_snippet.as_deref(),
+            Some(r#"{"quota":999}"#)
+        );
     }
 }

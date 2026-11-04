@@ -548,7 +548,7 @@ fi
 
 # 12.5 export→replay 供给链闭环（T5）：历史 → 快照 → 重放（复用存活的 9004 mock）
 HIST_DIR=$(mktemp -d /tmp/rupost_hist_replay_XXXXXX)
-printf '%s\n' '{"id":"h1","timestamp":"2026-11-04T00:00:00Z","duration_ms":10,"request":{"method":"GET","url":"http://origin/ok","headers":{},"body":null},"source":"smoke","response":{"status":200,"headers":{},"body":"ok"}}' > "$HIST_DIR/history.jsonl"
+printf '%s\n' '{"id":"h1","timestamp":"2026-11-04T00:00:00Z","duration_ms":10,"request":{"method":"GET","url":"http://origin/ok","headers":{},"body":null},"source":"smoke","response":{"status":200,"headers":{},"body":"{\"ok\":true}"}}' > "$HIST_DIR/history.jsonl"
 HIST_SNAP=$(mktemp /tmp/rupost_hist_snap_XXXXXX)
 HIST_OUT=$(mktemp /tmp/rupost_hist_replay_out_XXXXXX)
 RUPOST_HISTORY_DIR="$HIST_DIR" $RUPOST_BIN history export --last 1 -o "$HIST_SNAP" > /dev/null 2>&1 \
@@ -561,6 +561,28 @@ else
     echo -e "${RED}[ERROR] 历史导出→重放闭环验证失败（exit=$HIST_EXIT）！${NC}"
     exit 1
 fi
+# 13. 验证 replay --explain 无 Key 降级契约（对照步骤 8 的 t --explain 四条锁法；
+# 复用 12/12.5 存活的双快照与 9004 mock——须在 HIST_SNAP 清理前执行）
+echo -e "${BLUE}[*] 验证 replay --explain 规则版降级...${NC}"
+EXPLAIN_OUT=$(mktemp /tmp/rupost_explain_XXXXXX)
+EXPLAIN_ERR=$(mktemp /tmp/rupost_explain_err_XXXXXX)
+EXPLAIN_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY $RUPOST_BIN replay "$REPLAY_SNAP" --target http://127.0.0.1:9004 --explain > "$EXPLAIN_OUT" 2> "$EXPLAIN_ERR" || EXPLAIN_EXIT=$?
+if [ "$EXPLAIN_EXIT" -eq 1 ] && grep -q "Possible Causes" "$EXPLAIN_OUT" && ! grep -q "AI Explanation" "$EXPLAIN_OUT" && grep -q "AI 归因已跳过" "$EXPLAIN_ERR"; then
+    echo -e "${GREEN}[✓] replay --explain 规则版降级验证成功（exit 1 + 规则版 + 无 AI 段）！${NC}"
+else
+    echo -e "${RED}[ERROR] replay --explain 降级验证失败（exit=$EXPLAIN_EXIT）！${NC}"
+    exit 1
+fi
+OK_EXIT=0
+env -u RUPOST_AI_API_KEY -u OPENAI_API_KEY $RUPOST_BIN replay "$HIST_SNAP" --target http://127.0.0.1:9004 --explain > "$EXPLAIN_OUT" 2>/dev/null || OK_EXIT=$?
+if [ "$OK_EXIT" -eq 0 ] && ! grep -q "Possible Causes" "$EXPLAIN_OUT"; then
+    echo -e "${GREEN}[✓] 全成功 --explain 零归因噪音验证成功（exit 0）！${NC}"
+else
+    echo -e "${RED}[ERROR] 全成功 --explain 噪音验证失败（exit=$OK_EXIT）！${NC}"
+    exit 1
+fi
+rm -rf "$EXPLAIN_OUT" "$EXPLAIN_ERR"
 rm -rf "$HIST_DIR" "$HIST_SNAP" "$HIST_OUT"
 
 kill $REPLAY_MOCK_PID 2>/dev/null

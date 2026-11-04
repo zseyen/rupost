@@ -97,6 +97,17 @@ impl ExplainSession {
         }
 
         let ctx = Self::build_context(r);
+        self.explain_context_with_client(ctx, client).await;
+    }
+
+    /// FailureContext 级入口（P1 AI 接线）：replay 失败条目经
+    /// `context_from_replay_entry` 合成上下文后复用同一归因管线
+    /// （规则版基线 / 签名去重 / Top-3 配额 / 熔断，渲染不复制格式）。
+    pub async fn explain_context_with_client(
+        &mut self,
+        ctx: FailureContext,
+        client: Option<&dyn AiClient>,
+    ) {
         Self::print_deterministic_causes(&ctx);
 
         // GAP-2（PRD US1）：按错误签名去重——同签名失败只消耗一次 AI 配额

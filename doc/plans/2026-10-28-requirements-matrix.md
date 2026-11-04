@@ -3,7 +3,7 @@
 > **创建日期**: 2026-10-28 ｜ **状态**: v1.2（v1.1 经双子代理对抗审查修订；v1.2 勘误分支归属，见下方注记）
 > **定位**: 把散落在 [主执行文档](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-master-execution-runbook.md)（T/DBG/DX 队列）、[调试体验 PRD](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-28-developer-debug-experience-prd.md)（R1–R10）、[AI 总体规划](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-ai-master-roadmap.md)（P0/Phase1/P2/E 系列/MCP）与 [完整开发方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-complete-development-scheme.md)（Phase 0–3 需求分析）中的全部需求，按**三个维度**统一归位：**环境**（开发/测试/生产）、**阶段**（M1/M2/M3 × S0–S7 旅程）、**画像**（五类用户 + 流式场景标签）。
 > **事实源分工**: 本文件是需求的**三维归属索引**；需求内容以各源文档为准，**队列裁决只属于主执行文档**——本文件的一切排序主张均为"建议提交裁决"，不自行生效。
-> **分支状态注记（2026-10-28，v1.2 勘误）**: ~~E2/E5 已实现于 `feature/API调试功能完善` 分支~~——**勘误：该书签是 2026-07 的遗留旧指针**（指向快照 MVP 时代提交 8c1efe4c，对当前主线**零独有提交**，谱系为 clean architecture 重构/快照 MVP/网络诊断/emoji 清理等已合并历史），与 E2/E5 无关。真实载体是 **rupost-ai 工作区（`.workspace/rupost-ai`）的执行线**（自 2cbd5376 分叉，约 14 提交，+4841/−797）：**M1 三件全交付**——E2/E5（Step 0–3 + review 加固）、P0（B4 配置链 / 脱敏上下文采集 / `--last`·`--response`·`--no-mask` 接线）、import curl（POSIX tokenizer + 语料测试）——另有 T12 治理批（审计 P0 清理 + progress_summary 合并 + P1 横幅批）。下文状态列"待合并"指**该执行线合并主线**后翻正。
+> **分支状态注记（2026-10-28，v1.2 勘误）**: ~~E2/E5 已实现于 `feature/API调试功能完善` 分支~~——**勘误：该书签是 2026-07 的遗留旧指针**（指向快照 MVP 时代提交 8c1efe4c，对当前主线**零独有提交**，谱系为 clean architecture 重构/快照 MVP/网络诊断/emoji 清理等已合并历史），与 E2/E5 无关。真实载体是 **rupost-ai 工作区（`.workspace/rupost-ai`）的执行线**（自 2cbd5376 分叉，约 14 提交，+4841/−797）：**M1 三件全交付**——E2/E5（Step 0–3 + review 加固）、P0（B4 配置链 / 脱敏上下文采集 / `--last`·`--response`·`--no-mask` 接线）、import curl（POSIX tokenizer + 语料测试）——另有 T12 治理批（审计 P0 清理 + progress_summary 合并 + P1 横幅批）。下文状态列原"待合并"已于 2026-11-04 随 PR #12 合并主线（364d0906）全部翻正。
 
 ---
 
@@ -80,15 +80,15 @@
 | :--- | :--- | :- | :- | :- | :--- | :--- | :--- |
 | R1 单请求重跑 | **已实现（tui-audit 工作区 2026-10-28，随工作区合并翻正）** | ● | ○ | — | M1/S3 | 李 | 级联照常；越界零 panic；1b 跳过标记语义（原序号保留） |
 | R2 debug-on-failure 守护 | **已实现（tui-audit 工作区 2026-10-28）** | ● | ○ | — | M1/S3 | 李 | 连接层失败无拆分为已知缺口（Virtual Response 承接） |
-| R3 diagnose json 契约 | **已闭环**（主体 13 键 schema 主线 e5a957c0；`run_diagnose` CLI 壳层 rupost-ai 线 2026-11-04 补测） | ● | ○ | — | ff/S3 | 李 | schema 纪律 |
-| R4 `--explain` | **分支已实现待合并**（Step0–3+加固） | ● | ○ | ○(X6 默认关) | M1/S3·S6 | 李/赵/张 | 脱敏截断进 AI；B1 |
-| R5 `ai triage` | **分支已实现待合并** | ○ | ● | — | M2/S6 | 赵 | 桶守恒；B1 |
-| R6 replay per-entry | **已实现（rupost-ai 线 2026-11-04，与 T5 同批互载）** | ○ | ● | ○ | M2/S6 | 赵 | 灰度比对数据面；本行原注"随 T5 搭车"与 T5 行"随 T3 搭车"方向矛盾，按同批互载勘误 |
-| T5 `export` 桩转实 | **已实现（rupost-ai 线 2026-11-04，与 R6 同批）** | ● | ○ | — | M2/S4 | 李 | body=None 占位导出（复用既有 From 标记文本，前置决策已裁决） |
-| Smart Diff | **已实现（rupost-ai 线 2026-11-04）** | — | ● | ○ | M2/S6 | 赵 | 默认 14 键排除+--ignore-fields；--status-only 逃生；第四形态 body-only exit 1 |
-| R7 钩子 + trace 锚点 | **已实现（rupost-ai 线 2026-11-03）** | ● | ● | ○(默认关形态) | M2/S6 | 李 | X2/X3/X5 护栏随行（脱敏 URL/trace 优先级/进程组超时终结） |
+| R3 diagnose json 契约 | **已闭环**（主体 13 键 schema 主线 e5a957c0；`run_diagnose` CLI 壳层已随 PR #12 合并主线） | ● | ○ | — | ff/S3 | 李 | schema 纪律 |
+| R4 `--explain` | **已合并主线**（PR #12，2026-11-04） | ● | ○ | ○(X6 默认关) | M1/S3·S6 | 李/赵/张 | 脱敏截断进 AI；B1 |
+| R5 `ai triage` | **已合并主线**（PR #12，2026-11-04） | ○ | ● | — | M2/S6 | 赵 | 桶守恒；B1 |
+| R6 replay per-entry | **已合并主线**（PR #12，2026-11-04，与 T5 同批互载） | ○ | ● | ○ | M2/S6 | 赵 | 灰度比对数据面；本行原注"随 T5 搭车"与 T5 行"随 T3 搭车"方向矛盾，按同批互载勘误 |
+| T5 `export` 桩转实 | **已合并主线**（PR #12，2026-11-04，与 R6 同批） | ● | ○ | — | M2/S4 | 李 | body=None 占位导出（复用既有 From 标记文本，前置决策已裁决） |
+| Smart Diff | **已合并主线**（PR #12，2026-11-04） | — | ● | ○ | M2/S6 | 赵 | 默认 14 键排除+--ignore-fields；--status-only 逃生；第四形态 body-only exit 1 |
+| R7 钩子 + trace 锚点 | **已合并主线**（PR #12，2026-11-04） | ● | ● | ○(默认关形态) | M2/S6 | 李 | X2/X3/X5 护栏随行（脱敏 URL/trace 优先级/进程组超时终结） |
 | **审计留痕**（审查新增） | 未立项·候选 | — | ○ | ● | prod×持续 | 李/平台 | **脱敏后结构化落盘**（P0-2 修正） |
-| R8 `--last` + 零配置 | **执行线已实现待合并**（5444ac85 B4 链 / 5a373a7c 上下文采集 / 1cc42b73 接线） | ● | — | — | M1/S4 | 李/评 | 密钥 B4 链；B2 |
+| R8 `--last` + 零配置 | **已合并主线**（PR #12，2026-11-04） | ● | — | — | M1/S4 | 李/评 | 密钥 B4 链；B2 |
 | R9 `ai bootstrap` | 提案 · M2 主线 | ● | ○ | — | M2/S4 | 李/赵 | 脱敏+`--no-mask` 提示；B1 |
 | cURL 导入 | **执行线已实现待合并**（6a70822d POSIX tokenizer + 语料测试）；runbook backlog 与 roadmap M1 的源间张力由 M1 裁决消解 | ● | — | — | M1/S1 | 评/张 | — |
 | `ai gen` OpenAPI 确定性导入 | **fast-follow**（AI 路线裁决；AI 增强部分停泊） | ● | — | — | ff/S1 | 评/张 | B1 机械基线 |
@@ -97,7 +97,7 @@
 | T8 junit | T8 · P3 | — | ● | — | P3/S5 | CI/赵 | schema 契约测试 |
 | T9 分发 | T9 · P3 | 环境正交 | — | — | P3/S0 | 评（全员） | — |
 | T10 TUI 凭据审计 | **P0 下一个动作** | ● | — | — | 立即/S3 | 李 | 泄密面确认 |
-| T1/T2 动态值/链式溯源 | **已实现（rupost-ai 线 2026-11-04）** | ● | ○ | — | P1/S4 | 李 | T1 三形状+新内置；T2 管线序溯源>形状>凭据；Cookie 删头靠罐 |
+| T1/T2 动态值/链式溯源 | **已合并主线**（PR #12，2026-11-04） | ● | ○ | — | P1/S4 | 李 | T1 三形状+新内置；T2 管线序溯源>形状>凭据；Cookie 删头靠罐 |
 | T12 治理批 | **分支已交付待合并**（P0 清理+横幅批+progress 合并） | 开发侧 | — | — | 立即 | 维护者 | — |
 | DX-1 Makefile 等 | DX-1 待做；DX-2 并 T12；DX-3/4 随 DX-1；DX-5 backlog | 开发侧 | — | — | 立即 | 维护者 | — |
 | X2/X3/X5/X6 + 审计留痕 | **候选·未立项** | — | ○ | ● | 建议提交裁决 | 平台 | 本矩阵 §1.4 |

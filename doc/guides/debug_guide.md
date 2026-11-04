@@ -181,7 +181,7 @@ rupost replay snap.json -t http://127.0.0.1:8080 -v   # -v 显示响应体详情
 * **`--target` 覆写**：只改写协议/主机/端口，Path 与 Query 原样保留；
 * **失败定位到条**：汇总后输出 `Failed entries` 清单（序号 1-based，与逐条打印的 `#N` 一致；mismatch 显示 expected/got，网络错误显示 error 原因）；
 * **CI 门禁语义**：任一条目失败进程 **exit 1**，全部成功 exit 0（快照文件损坏/无法解析同样非零）；
-* 比对语义为**状态码精确相等**（录制的响应状态 vs 实际状态）。
+* **比对语义（T4 Smart Diff）**：状态码精确相等 **+ body JSON 深比较**（默认排除 `timestamp`/`uuid`/`token` 等 14 个动态键，业务字段漂移会被抓）。`--ignore-fields <KEY,...>` 追加排除键，`--status-only` 停用 body 比对（恢复仅状态码语义）。**盲区提示**：被排除键上的真实回归会被掩盖（假通过面）——排查字段级内容问题时应收窄排除集。
 
 ---
 
@@ -362,6 +362,9 @@ $ rupost t suite/ --on-failure 'stern deploy/api --since 5m --grep $RUPOST_FAILE
 | 批量失败聚类 | `rupost t ... --triage` ／ `rupost ai triage report.json` |
 | 失败取证钩子 | `rupost t ... --on-failure '<cmd>'` |
 | 快照重放定位 | `rupost replay snap.json -t <url> [-v]` |
+| 重放排除抖动键 | `rupost replay snap.json --ignore-fields my_key,other` |
+| 重放仅状态码 | `rupost replay snap.json --status-only` |
+| 重放就地归因 | `rupost replay snap.json --explain` |
 | 历史导出快照 | `rupost history export --last N -o snap.json` |
 | 报告落盘 | `rupost t ... --report-file report.json` |
 | 成果沉淀 | `rupost ai bootstrap --from history -o regression.http` |

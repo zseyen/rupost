@@ -74,6 +74,8 @@ RuPost 提供了直观且高效的命令行接口：
   ```bash
   rupost replay snap.json --target http://staging.example.com
   # 失败输出 Failed entries 清单（定位到条），并以退出码 1 供 CI 门禁
+  # body 深比较默认开启（timestamp/uuid 等动态键自动排除）；--explain 就地归因
+  rupost replay snap.json -t http://staging.example.com --ignore-fields my_key --explain
   ```
 * **Cookie 会话管理**:
   ```bash

@@ -573,3 +573,32 @@ async fn test_generate_chain_tracing_closed_loop_reruns() {
     assert_eq!(out.status.code(), Some(0), "chain reruns green: {stdout}");
     assert!(stdout.contains("2 passed"), "both requests pass: {stdout}");
 }
+
+/// T1 验收闭环（PRD §七）：模板产物经 resolver 求值——两次求值产生不同值（重跑语义正确）
+#[test]
+fn test_templated_builtins_produce_fresh_values_per_run() {
+    use rupost::variable::resolver::VariableResolver;
+    use rupost::variable::types::VariableContext;
+
+    let ctx = VariableContext::default();
+    // 高分辨率形状：两次求值必不同
+    for tmpl in ["{{$uuid}}", "{{$timestamp_iso}}"] {
+        let first = VariableResolver::substitute(tmpl, &ctx);
+        let second = VariableResolver::substitute(tmpl, &ctx);
+        assert_ne!(
+            first, second,
+            "{tmpl} must yield fresh value per substitution (rerun semantics)"
+        );
+        assert!(
+            !first.contains("{{"),
+            "{tmpl} must be fully resolved: {first}"
+        );
+    }
+    // 毫秒分辨率：同毫秒内两次求值可能相同——断言形态正确（13 位纯数字，重跑语义由分辨率保证）
+    let ms = VariableResolver::substitute("{{$timestamp_ms}}", &ctx);
+    assert_eq!(ms.len(), 13, "epoch millis shape: {ms}");
+    assert!(
+        ms.chars().all(|c| c.is_ascii_digit()),
+        "numeric millis: {ms}"
+    );
+}

@@ -266,3 +266,7 @@ PRD 驱动四域交付（SSE/WS 接入 + 授权 + 消息搜索），全程 TDD�
 **过程记录**：会话开头完成两项重组——①`feature/ai-capability` 蒸馏线 rebase 至 main 尖（bookmark 自动前移）；②rupost-ai 工作区自 TUI 线尖切换落位其上。调试链现状：D0–D7 全通，R 清单仅余 R3（diagnose JSON 契约测试债，fast-follow）与 R6（replay per-entry，随 T4）。
 
 > **2026-11-04 勘误**：上文 R7 节标题"R1–R10 中最后一个未实现的确定性需求落地"与本段"仅余 R3/R6"并存系措辞张力（R7 交付时 R1/R2 已于主线先行、R6 亦为未实现的确定性需求，"最后一个"与"仅余"口径不一）。本日 R6 + T5 搭车 + R3 壳层已交付（见 progress_summary 批次行）——**确定性调试链（R1–R7/R10）就此全绿**，R 清单剩余项均为 AI 增强型（R8/R9 已随本线交付）。另注：本日顺带修复 R7 审查轮孙进程测试的 macOS 可移植性（BSD `sleep` 拒绝附加参数致 fork 不发生）。
+
+## 阶段成果：P1 批次交付（T4 Smart Diff + AI 接线 + T1/T2 生成语义线，2026-11-04）
+
+PRD（双子代理评审 6 P0 吸收）后五原子提交：S1 replay body 深比较（默认 14 键排除 + `--ignore-fields`/`--status-only` 逃生 + 第四形态 body-only exit 1）；S2 `replay --explain`（ExplainSession FailureContext 级入口 + 桥合成 body 证据，无 Key B1 降级）+ verify_features 步骤 13；S3 T1 动态值反向模板化（dynamic.rs 形状扫描 + resolver 新增 `{{$timestamp_iso}}`/`{{$timestamp_ms}}`，敏感键凭据模板化优先）；S4 T2 链式值溯源（trace.rs 反序就近 + Cookie 删头靠罐 + 管线序 T2>T1>凭据）+ wiremock 链式闭环；S5 台账。全量门禁绿 + verify_features 13 步 PASS。**过程记录**：评审"零翻红"实证漏网两处（R6 闭环测试、verify 12.5）为新语义正确触发，对齐测试；verify 步骤 13 曾插入 HIST_SNAP 清理之后（bash -x 实证重排）。调试试跑集 examples/debug_demo 与统一指南同步可用。

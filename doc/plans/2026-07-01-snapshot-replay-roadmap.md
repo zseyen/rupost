@@ -13,7 +13,8 @@
     2.  **Headers 脱敏**：将诸如 `Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie` 等核心头部的值一律重写为 `***` 或仅保留长度前缀（如 `Bearer ***`）。
     3.  **Body 敏感词掩码**：配置内置正则引擎，识别诸如手机号、银行卡号、电子邮箱以及特定密码 JSON 键（如 `"password": "..."`），在 JSON 或纯文本串中利用正则进行打码替换。
 
-### 2. P1：易抖动动态字段的智能 JSON Diff 比对 (Smart Diff)
+### 2. P1：易抖动动态字段的智能 JSON Diff 比对 (Smart Diff)  
+> ✅ **已交付（2026-11-04，rupost-ai 线）**：默认 14 键叶子排除 + `--ignore-fields` 追加；原文 `--ignore-fields <JSON_PATHS>`（JSONPath 语法）与 rupost.toml 全局配置经评审裁定为非目标（见 P1 批次 PRD D2/D4）。
 *   **需求背景**：许多 API 响应体中包含诸如时间戳（`$.timestamp`）、动态 Request ID（`$.uuid`）或生存时间等字段。如果重放时只是进行硬编码的 `String` 相等比对，会导致每次重放即使业务逻辑完全正确也依然报错。
 *   **设计方案**：
     1.  在 `ReplayExecutor` 比对 Body 时，先探测 Content-Type。若是 JSON，则将新旧 Body 解析为 `serde_json::Value`。

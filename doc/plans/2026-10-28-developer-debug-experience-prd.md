@@ -70,7 +70,7 @@
 | **R3** | D2 | `diagnose --report json` 输出契约测试（与 §5.18 schema 纪律同守卫） | 确定性 | **已闭环**（主体 13 键 schema 主线 e5a957c0；CLI 壳层 rupost-ai 线 2026-11-04 补测） | P2 · fast-follow |
 | **R4** | D3 | `rupost test --explain`：规则版 `[Possible Causes (Rule)]` 基线 + AI 根因（Top-3 熔断；LLM 流式响应变体优先） | **B1** | E2/E5 PRD Step 1–3 | P1 · **M1 已含** |
 | **R5** | D4 | `rupost ai triage` / `--triage`：签名桶守恒聚类（100% 计数守恒、O(M) Token、`--json`）＋前置的强类型报告与 `--report-file` | **B1** | E2/E5 PRD Step 0–2 | P1 · **M2 已含** |
-| **R6** | D4 | replay per-entry 结构化结果（`ReplayEntryResult`）——快照重放的"哪条失败"定位；与 R5 报告结构共享 | 确定性 | **已交付**（rupost-ai 线 2026-11-04，runbook T3 + T5 搭车同批） | P2 |
+| **R6** | D4 | replay per-entry 结构化结果（`ReplayEntryResult`）——快照重放的"哪条失败"定位；与 R5 报告结构共享 | 确定性 | **已交付并接线**（rupost-ai 线 2026-11-04：per-entry + T4 Smart Diff + `--explain`） | P2 |
 | **R7** | D5 | `--on-failure <cmd>` 钩子（`tokio::process` + timeout）＋**响应头 trace-id 自动提取**（Traceparent/X-Request-Id/X-Trace-Id → `RUPOST_FAILED_TRACE_ID`；缺失时空串 + warning）——k9s 痛点的最终形态：rupost 给锚点，聚合委托 stern | 确定性 | **已交付**（rupost-ai 线 2026-11-03，trace 协议按本 PRD 落地） | P2 |
 | **R8** | D6 | `--last` 上下文断言（最近响应注入归因）＋零配置链（env > ai.toml > Ollama 探测） | **B2+B4** | P0 PRD 已立项 | P1 · **M1 已含** |
 | **R9** | D7 | `ai bootstrap --from history`（调试成果 → 语义增强回归资产，S4 价值跃迁） | **B1** | bootstrap 提案已立项 | P1 · **M2 已含** |

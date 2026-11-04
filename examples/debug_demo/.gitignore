@@ -1,0 +1,7 @@
+# 演示脚本运行时产物（run_demo.sh 每次重建，不入库）
+.demo-history/
+hook.log
+report.json
+snap.json
+snap_hist.json
+regression.http

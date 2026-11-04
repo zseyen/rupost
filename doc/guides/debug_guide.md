@@ -266,6 +266,8 @@ rupost ai assert "返回的 data.items 数组非空" --last 3
 
 ## 10. 场景化实战演练
 
+> **可一键实跑**：本章 SC-1 ~ SC-4 的脚本化版本在 [`examples/debug_demo/`](file:///examples/debug_demo/README.md)——`./run_demo.sh` 用 mock 双实例（正常态 9500 / 升级故障态 9501）端到端演示全部阶段，零外网、零 AI 配置（展示 B1 降级路径）。
+
 ### 10.1 后端小李：401 归因与修复（SC-1）
 
 ```bash

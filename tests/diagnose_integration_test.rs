@@ -29,8 +29,22 @@ async fn test_run_diagnose_cli_json_report_stdout() {
 
 /// R3 壳层：诊断失败（TCP 连接拒绝，回环确定性触发）→ stderr 错误 + `process::exit(1)` 路径。
 /// 弃用 .invalid 域名：挟持网络（VPN fake-IP 通配解析）下会假绿（对抗审查预告的风险成真）。
+///
+/// 环境哨兵（2026-11-05 勘误）：透明代理/增强模式代理可截胡**任意端口**的出站
+/// 连接——包括回环——使 127.0.0.1:1 "可连"，诊断以代理错误响应正常完成
+/// （exit 0），契约断言在该环境下不再确定性成立。测试前先裸 connect 探测：
+/// 可连则跳过（环境敌意，非产品缺陷）；拒绝则按原契约锁定。
 #[test]
 fn test_run_diagnose_cli_error_exit_one() {
+    if std::net::TcpStream::connect("127.0.0.1:1").is_ok() {
+        eprintln!(
+            "SKIP: 127.0.0.1:1 is connectable in this environment \
+             (transparent proxy interception) — exit-code contract is not \
+             deterministically testable here; re-run on a clean network"
+        );
+        return;
+    }
+
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
         .args(["d", "http://127.0.0.1:1", "--report", "json"])
         .output()

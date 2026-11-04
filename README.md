@@ -16,6 +16,7 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **变量与环境管理**：灵活的变量替换机制与多环境一键切换。详见 [变量与环境管理指南](file:///doc/guides/variables_and_environments.md)。
 - **批量与并发测试**：支持跨文件有向无环图 (DAG) 拓扑排序依赖执行，支持顺序/并行双模式运行与状态单向克隆。详见 [批量测试指南](file:///doc/guides/batch_testing.md)。
 - **网络诊断分析**：细粒度的网络耗时瀑布图与 X.509 证书到期健康分析。详见 [网络诊断工具指南](file:///doc/guides/network_diagnostics.md)。
+- **全链路调试**：失败自动诊断、`--explain` 就地归因、`ai triage` 批量分诊、`--on-failure` trace 取证钩子、快照重放失败定位到条与历史导出供给链。详见 [调试指南](file:///doc/guides/debug_guide.md)。
 - **本地 Mock 服务**：Trie 树路径匹配、路径参数捕获与多分支条件响应。详见 [本地 Mock 服务器指南](file:///doc/guides/mock_server.md)。
 - **WebSocket 协议调试**：支持 WebSocket 订阅流剧本、操作符软匹配断言与自动重连自愈。详见 [WebSocket 协议调试指南](file:///doc/guides/websocket_testing.md)。
 - **历史与追踪**：自动记录请求历史，支持从历史记录交互式生成测试文件。

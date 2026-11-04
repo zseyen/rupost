@@ -1,3 +1,4 @@
+pub mod dynamic;
 pub mod http;
 
 use crate::Result;

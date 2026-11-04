@@ -104,7 +104,10 @@ impl HttpGenerator {
                         None => block.push_str(&format!("{key_str}: {{{{{var}}}}}\n")),
                     }
                 } else {
-                    block.push_str(&format!("{}: {}\n", key_str, val_str));
+                    // T1：非敏感 Header 值命中动态形状 → 反向模板化（凭据模板化优先已由分支保证）
+                    let rendered = super::dynamic::template_value(val_str)
+                        .unwrap_or_else(|| val_str.to_string());
+                    block.push_str(&format!("{}: {}\n", key_str, rendered));
                 }
             }
         }
@@ -124,7 +127,9 @@ impl HttpGenerator {
             block.push('\n');
             // Try to pretty print JSON
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-                if let Ok(pretty) = serde_json::to_string_pretty(&json) {
+                // T1：JSON 字符串叶子命中动态形状 → 反向模板化（敏感键跳过，凭据警告语义不变）
+                let templatized = Self::templatize_dynamic_leaves(&json, None);
+                if let Ok(pretty) = serde_json::to_string_pretty(&templatized) {
                     block.push_str(&pretty);
                 } else {
                     block.push_str(body);
@@ -254,6 +259,37 @@ impl HttpGenerator {
         }
     }
 
+    /// T1：递归模板化 JSON 字符串叶子（动态形状 → `{{$...}}`）；
+    /// 敏感键（password/token 等）下的值跳过——凭据语义由既有警告路径负责
+    fn templatize_dynamic_leaves(
+        value: &serde_json::Value,
+        key: Option<&str>,
+    ) -> serde_json::Value {
+        use serde_json::Value;
+        if let Some(k) = key
+            && crate::exporter::redact::is_sensitive_key(k)
+        {
+            return value.clone();
+        }
+        match value {
+            Value::String(s) => super::dynamic::template_value(s)
+                .map(Value::String)
+                .unwrap_or_else(|| value.clone()),
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), Self::templatize_dynamic_leaves(v, Some(k))))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .map(|v| Self::templatize_dynamic_leaves(v, key))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
     /// URL query 中的敏感键值模板化为 `{{变量}}`；其余部分逐字保留（不做重编码）
     fn variablize_url(raw: &str, variables: &mut BTreeSet<String>) -> String {
         let Some((base, query)) = raw.split_once('?') else {
@@ -268,6 +304,16 @@ impl HttpGenerator {
                     let var = Self::var_name_from_key(k);
                     variables.insert(var.clone());
                     format!("{k}={{{{{var}}}}}")
+                }
+                Some((k, v)) => {
+                    // T1：非敏感 query 值命中动态形状 → 反向模板化（不进变量符号表）
+                    match super::dynamic::template_value(v) {
+                        Some(t) => {
+                            templated = true;
+                            format!("{k}={t}")
+                        }
+                        None => pair.to_string(),
+                    }
                 }
                 _ => pair.to_string(),
             })

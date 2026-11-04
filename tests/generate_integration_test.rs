@@ -415,3 +415,68 @@ fn test_generate_cli_empty_history_friendly_exit() {
         "out.http should not be created on empty history"
     );
 }
+
+/// T1：历史中的动态值（UUID/ISO8601/epoch）生成时反向模板化为 `{{$...}}`，
+/// 敏感键值凭据模板化优先（token 形态 UUID 不被形状扫描覆盖）
+#[test]
+fn test_generate_templatizes_dynamic_shapes_skips_sensitive_keys() {
+    let entries = vec![rupost::history::model::HistoryEntry {
+        id: "t1".to_string(),
+        timestamp: chrono::Utc::now(),
+        duration_ms: 10,
+        request: rupost::history::model::RequestSnapshot {
+            method: "POST".to_string(),
+            url: "http://api.example.com/thing?ts=1772505600&version=12".to_string(),
+            headers: {
+                let mut h = reqwest::header::HeaderMap::new();
+                h.insert("X-Request-Id", "8f9c2d55-1a2b-4c3d-9e4f-5a6b7c8d9e0f".parse().unwrap());
+                h.insert("Authorization", "Bearer sk-live-secret".parse().unwrap());
+                h
+            },
+            body: Some(r#"{"created":"2026-11-04T00:00:00Z","user_token":"8f9c2d55-1a2b-4c3d-9e4f-5a6b7c8d9e0f","memo":"pro"}"#.to_string()),
+            timeout: None,
+        },
+        source: Some("t".to_string()),
+        response: rupost::history::model::ResponseMeta {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: Some("{}".to_string()),
+        },
+    }];
+
+    let (content, _) =
+        rupost::generator::HttpGenerator::generate_with_variables(&entries, false).unwrap();
+
+    // 命中形状 → 模板化
+    assert!(
+        content.contains("{{$timestamp}}"),
+        "epoch secs query templated: {content}"
+    );
+    assert!(content.contains("{{$uuid}}"), "uuid header templated");
+    assert!(
+        content.contains("{{$timestamp_iso}}"),
+        "iso8601 body leaf templated"
+    );
+    // 普通值不误伤
+    assert!(content.contains("version=12"), "plain query preserved");
+    assert!(
+        content.contains("\"memo\": \"pro\""),
+        "plain body leaf preserved"
+    );
+    // 敏感键凭据模板化优先（Header/Query 有管线）；body 敏感键无凭据模板化
+    // 管线（既有行为=黄色警告+原样）：T1 跳过后值保留字面量
+    assert!(
+        content.contains("\"user_token\": \"8f9c2d55"),
+        "body sensitive key value skipped by T1 (literal kept, warning path owns it)"
+    );
+    assert!(
+        content.contains("{{authorization}}"),
+        "sensitive header keeps credential templating"
+    );
+    // 值不再明文（Header 凭据管线）；body 敏感键 UUID 属有意保留（见上）
+    assert!(!content.contains("sk-live-secret"));
+    assert!(
+        content.contains("x-request-id: {{$uuid}}"),
+        "non-sensitive header uuid templated in place"
+    );
+}

@@ -1,4 +1,6 @@
-pub use crate::exporter::redact::{is_sensitive_key, redact_header_value, redact_url};
+pub use crate::exporter::redact::{
+    is_sensitive_key, mask_inline_secrets, redact_free_text, redact_header_value, redact_url,
+};
 use regex::Regex;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -11,14 +13,7 @@ fn url_regex() -> &'static Regex {
     URL_RE.get_or_init(|| Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("valid url regex"))
 }
 
-/// 自由文本脱敏（Gap Review P1-1）：错误消息等散文中内嵌的 URL 走 `redact_url`，
-/// 掩掉 query 中的敏感键值——reqwest 错误 Display 自带完整原始 URL，是密钥外泄主通道。
-pub fn redact_free_text(text: &str) -> String {
-    url_regex()
-        .replace_all(text, |caps: &regex::Captures| redact_url(&caps[0]))
-        .to_string()
-}
-
+/// 自由文本脱敏与内联凭据掩码下沉至 `exporter::redact`（B0 掩码原语统一归位，顶部 re-export）。
 /// 将文本中的 URL 整体替换为 `<url>` 占位符（用于去重签名：同端点不同实例同签名）
 pub fn mask_urls(text: &str) -> String {
     url_regex().replace_all(text, "<url>").to_string()
@@ -108,21 +103,6 @@ pub fn redact_and_truncate_body(body: &str, max_bytes: usize) -> String {
     };
 
     truncate_utf8_safe(&sanitized, max_bytes)
-}
-
-/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` 形态
-/// （键名保留、值替换为 [REDACTED]；值长度 ≥4 才掩，避免误伤短 token 字样）
-fn mask_inline_secrets(text: &str) -> String {
-    static INLINE_SECRET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = INLINE_SECRET.get_or_init(|| {
-        regex::Regex::new(
-            // 值侧允许可选 scheme 前缀（Bearer/Basic/…），否则
-            // "Authorization: Bearer eyJ…" 只掩到 "Bearer" 而 JWT 真值残留
-            r#"(?i)(token|api[_-]?key|secret|password|passwd|authorization)\s*[=:]\s*(?:(?:bearer|basic|digest|token)\s+)?[^\s"'<>&,;}{]{4,}"#,
-        )
-        .expect("inline secret regex")
-    });
-    re.replace_all(text, "${1}=[REDACTED]").into_owned()
 }
 
 #[cfg(test)]

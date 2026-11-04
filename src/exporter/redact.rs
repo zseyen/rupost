@@ -190,3 +190,130 @@ mod tests {
         assert_eq!(redact_url(url), "https://example.com/api?page=2&sort=asc");
     }
 }
+
+// ═══════════ Secrets Masker body 残余（快照 --mask-secrets，路线图条目 1） ═══════════
+
+/// PII 掩码：中国大陆手机号 / 银行卡号（13–19 位数字串）/ 邮箱 → `***`
+/// （值形态掩码，与 is_sensitive_key 的键形态掩码互补；opt-in 旗标下才参与）
+pub fn mask_pii(text: &str) -> String {
+    static EMAIL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static CARD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static PHONE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let email = EMAIL.get_or_init(|| {
+        regex::Regex::new(r#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#).expect("email regex")
+    });
+    // regex crate 无 lookaround——用捕获组锚定非数字边界（${1}/${3} 原样保留）
+    let card = CARD.get_or_init(|| {
+        // 13–19 位数字形态风险由 opt-in 旗标承担（PRD D1）
+        regex::Regex::new(r"(^|[^0-9])[0-9]{13,19}([^0-9]|$)").expect("card regex")
+    });
+    let phone = PHONE.get_or_init(|| {
+        regex::Regex::new(r"(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)").expect("phone regex")
+    });
+    let s = email.replace_all(text, "***").into_owned();
+    let s = card.replace_all(&s, "${1}***${2}").into_owned();
+    phone.replace_all(&s, "${1}***${2}").into_owned()
+}
+
+/// 快照 body 掩码（无截断——分享面要求内容完整、仅值打码）：
+/// JSON：敏感键值 `[REDACTED]`（复用 redact_json_value 语义）+ 字符串叶子 PII 掩码；
+/// 非 JSON：内联键值凭据 + URL query + PII。
+pub fn mask_body_secrets(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        let out = mask_json_pii(&val);
+        serde_json::to_string(&out).unwrap_or_else(|_| trimmed.to_string())
+    } else {
+        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
+    }
+}
+
+/// JSON 掩码变体：敏感键 `[REDACTED]` 之外，普通字符串叶子上的 PII 也打码
+fn mask_json_pii(val: &serde_json::Value) -> serde_json::Value {
+    match val {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    if is_sensitive_key(k) {
+                        (
+                            k.clone(),
+                            serde_json::Value::String("[REDACTED]".to_string()),
+                        )
+                    } else {
+                        (k.clone(), mask_json_pii(v))
+                    }
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(mask_json_pii).collect())
+        }
+        serde_json::Value::String(s) => serde_json::Value::String(mask_pii(s)),
+        other => other.clone(),
+    }
+}
+
+/// 自由文本 URL 掩码（自 ai/redactor 下沉：掩码原语统一归 exporter/redact，ai 侧 re-export）
+pub fn redact_free_text(text: &str) -> String {
+    static URL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re =
+        URL_RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("url regex"));
+    re.replace_all(text, |caps: &regex::Captures| redact_url(&caps[0]))
+        .into_owned()
+}
+
+/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` 形态
+/// （键名保留、值替换为 [REDACTED]；值长度 ≥4 才掩，避免误伤短 token 字样）
+pub fn mask_inline_secrets(text: &str) -> String {
+    static INLINE_SECRET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = INLINE_SECRET.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(token|api[_-]?key|secret|password|passwd|authorization)\s*[=:]\s*(?:(?:bearer|basic|digest|token)\s+)?[^\s"'<>&,;}{]{4,}"#,
+        )
+        .expect("inline secret regex")
+    });
+    re.replace_all(text, "${1}=[REDACTED]").into_owned()
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    /// Secrets Masker 决策表：PII 三形态 + 键形态 + 复合串不误伤
+    #[test]
+    fn test_mask_pii_and_body_secrets_decision_table() {
+        // 手机号（含边界非数字保护）
+        assert_eq!(mask_pii("联系 13812345678 处理"), "联系 *** 处理");
+        assert_eq!(
+            mask_pii("id=113812345678"),
+            "id=113812345678",
+            "长串内不误切"
+        );
+        // 银行卡号（13–19 位）
+        assert_eq!(mask_pii("card=6222021234567890123"), "card=***");
+        // 邮箱
+        assert_eq!(mask_pii("mail lee@example.com ok"), "mail *** ok");
+        // 敏感键 JSON：值整体 [REDACTED]；普通键下的 PII 叶子也打码
+        let out = mask_body_secrets(r#"{"password":"p@ss1234","phone":"13812345678","memo":"ok"}"#);
+        assert!(out.contains("[REDACTED]"), "sensitive key masked: {out}");
+        assert!(out.contains("***"), "PII leaf masked: {out}");
+        assert!(
+            out.contains("\"memo\":\"ok\""),
+            "plain leaf preserved: {out}"
+        );
+        // 非 JSON：内联凭据 + PII
+        let out = mask_body_secrets("token=abcdef123456 call 13812345678");
+        assert!(
+            out.contains("token=[REDACTED]"),
+            "inline credential masked: {out}"
+        );
+        assert!(out.contains("***"), "pii masked in text: {out}");
+        // 空体
+        assert_eq!(mask_body_secrets(""), "");
+    }
+}

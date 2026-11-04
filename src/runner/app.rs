@@ -36,6 +36,8 @@ pub struct TestSuiteOptions {
     pub debug_on_failure: bool,
     pub default_scheme: String,
     pub save_snapshot: Option<String>,
+    /// Secrets Masker（opt-in）：快照 headers/body 掩码后再落盘
+    pub mask_snapshot: bool,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
     /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
@@ -67,6 +69,7 @@ impl Default for TestSuiteOptions {
             debug_on_failure: false,
             default_scheme: "http".to_string(),
             save_snapshot: None,
+            mask_snapshot: false,
         }
     }
 }
@@ -268,7 +271,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
 
     // 保存快照
     if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(&batch_results, &paths, snapshot_path)?;
+        save_batch_snapshot(&batch_results, &paths, snapshot_path, options.mask_snapshot)?;
     }
 
     Ok(has_failure)
@@ -299,6 +302,7 @@ mod tests {
             debug_on_failure: false,
             default_scheme: "http".to_string(),
             save_snapshot: None,
+            mask_snapshot: false,
             only: None,
             on_failure: None,
         };

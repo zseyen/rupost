@@ -441,3 +441,74 @@ fn test_history_export_empty_history_writes_no_file() {
         "empty history must not write snapshot file"
     );
 }
+
+/// Secrets Masker：export --mask-secrets → headers 凭据 redact + body PII/敏感键打码；
+/// schema 不变（产物仍可被 replay 加载）；无旗标保持原样（重放保真度优先，PRD D1）
+#[test]
+fn test_history_export_mask_secrets_flag() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+
+    // 一条含 Authorization 头 + PII body 的历史
+    let e = create_test_entry(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "GET",
+        "http://example.com/one",
+        200,
+    );
+    let mut masked = e.clone();
+    masked.request.headers.insert(
+        reqwest::header::AUTHORIZATION,
+        "Bearer sk-live-secret-value".parse().unwrap(),
+    );
+    masked.response.body =
+        Some(r#"{"phone":"13812345678","password":"p@ss","memo":"ok"}"#.to_string());
+    let raw_view = masked.clone();
+    write_history_entries(dir_path, &[masked]);
+    let out_masked = temp_dir.path().join("masked.json");
+    let out_raw = temp_dir.path().join("raw.json");
+
+    let run_export = |out: &std::path::Path, mask: bool| {
+        let mut args = vec![
+            "history".to_string(),
+            "export".to_string(),
+            "-o".to_string(),
+            out.to_str().unwrap().to_string(),
+        ];
+        if mask {
+            args.push("--mask-secrets".to_string());
+        }
+        Command::new(rupost_bin())
+            .env("RUPOST_HISTORY_DIR", dir_path)
+            .args(&args)
+            .output()
+            .expect("run history export")
+    };
+
+    let out = run_export(&out_masked, true);
+    assert!(out.status.success());
+    let content = fs::read_to_string(&out_masked).unwrap();
+    assert!(
+        content.contains("[REDACTED]"),
+        "authorization header redacted: {content}"
+    );
+    assert!(
+        !content.contains("sk-live-secret-value"),
+        "credential gone: {content}"
+    );
+    assert!(content.contains("***"), "pii masked: {content}");
+    assert!(!content.contains("13812345678"), "phone gone: {content}");
+    assert!(
+        content.contains("memo") && content.contains("ok"),
+        "plain data preserved: {content}"
+    );
+
+    let out = run_export(&out_raw, false);
+    assert!(out.status.success());
+    let raw = fs::read_to_string(&out_raw).unwrap();
+    assert!(
+        raw.contains("sk-live-secret-value"),
+        "no flag keeps fidelity (replay 依据)"
+    );
+    let _ = raw_view;
+}

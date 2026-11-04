@@ -907,3 +907,58 @@ async fn test_replay_explain_no_key_degradation() {
         "zero failures print no attribution block: {stdout}"
     );
 }
+
+/// Secrets Masker：`t --save-snapshot --mask-secrets` → 快照凭据/PII 打码且 schema 可重放加载
+#[tokio::test]
+async fn test_save_snapshot_mask_secrets_flag() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"phone":"13812345678","password":"p@ss","memo":"ok"}),
+        ))
+        .mount(&mock_server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let case = dir.path().join("case.http");
+    std::fs::write(
+        &case,
+        format!(
+            "### fetch\n# @name fetch\nGET {}/data\nAuthorization: Bearer sk-live-secret\n",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+    let snap = dir.path().join("snap_masked.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "t",
+            case.to_str().unwrap(),
+            "--save-snapshot",
+            snap.to_str().unwrap(),
+            "--mask-secrets",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let content = std::fs::read_to_string(&snap).unwrap();
+    assert!(
+        !content.contains("sk-live-secret"),
+        "header credential redacted: {content}"
+    );
+    assert!(
+        content.contains("[REDACTED]"),
+        "authorization masked: {content}"
+    );
+    assert!(!content.contains("13812345678"), "pii masked: {content}");
+    assert!(content.contains("***"), "pii placeholder present");
+
+    // 掩码快照 schema 未变——replay 仍可加载（本测试只验证 loadable，不验证 pass/fail）
+    let replayer = ReplayExecutor::new(None, false);
+    let report = replayer.replay_file(&snap).await.unwrap();
+    assert_eq!(report.total, 1);
+    let _ = mock_server;
+}

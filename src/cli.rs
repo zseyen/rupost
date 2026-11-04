@@ -109,6 +109,10 @@ pub enum Commands {
         #[arg(long, value_name = "FILE")]
         save_snapshot: Option<String>,
 
+        /// Mask headers/body secrets in the saved snapshot (opt-in; keep off for replay body-diff fidelity)
+        #[arg(long)]
+        mask_secrets: bool,
+
         /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
         #[arg(long, value_name = "N|@NAME")]
         only: Option<String>,
@@ -391,6 +395,10 @@ pub enum HistoryCommands {
         /// Output path for the snapshot JSON file
         #[arg(short, long, required = true)]
         output: String,
+
+        /// Mask headers/body secrets in the exported snapshot (opt-in)
+        #[arg(long)]
+        mask_secrets: bool,
     },
 
     /// Show detailed response and body/frames for a specific history entry
@@ -699,6 +707,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             no_cookies,
             cookie_file,
             save_snapshot,
+            mask_secrets,
             only,
             on_failure,
         }) => {
@@ -726,6 +735,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 debug_on_failure: cli.debug_on_failure,
                 default_scheme: cli.default_scheme,
                 save_snapshot,
+                mask_snapshot: mask_secrets,
                 only,
                 on_failure,
             };
@@ -747,8 +757,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             HistoryCommands::Clear { yes, all } => {
                 rupost::history::printer::clear_history(yes, all)?;
             }
-            HistoryCommands::Export { last, output } => {
-                rupost::history::export_history_snapshot(last, &output)?;
+            HistoryCommands::Export {
+                last,
+                output,
+                mask_secrets,
+            } => {
+                rupost::history::export_history_snapshot(last, &output, mask_secrets)?;
             }
         },
         Some(Commands::Diagnose { url, report }) => {

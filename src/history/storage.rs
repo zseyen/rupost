@@ -254,7 +254,7 @@ pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
 /// - `body=None` 旧条目经 `From<HistoryEntry>` 占位导出（"Old snapshot: body not recorded"）
 /// - 空历史：warn 后不写文件、exit 0（对齐 generate 先例）
 /// - 输出路径静默覆盖（`write_snapshot_suite` 无 `--force` 语义）；凭据不脱敏（与 `--save-snapshot` 同暴露面）
-pub fn export_history_snapshot(last: usize, output: &str) -> Result<()> {
+pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) -> Result<()> {
     use super::model::{SnapshotEntry, SnapshotSuite};
     use super::selector::{SelectionStrategy, select_entries};
 
@@ -265,11 +265,16 @@ pub fn export_history_snapshot(last: usize, output: &str) -> Result<()> {
         return Ok(());
     }
 
-    let suite = SnapshotSuite {
+    let mut suite = SnapshotSuite {
         timestamp: chrono::Utc::now(),
         source_file: Some("history".to_string()),
         entries: entries.into_iter().map(SnapshotEntry::from).collect(),
     };
+    if mask_secrets {
+        for e in suite.entries.iter_mut() {
+            mask_snapshot_entry(e);
+        }
+    }
     let count = suite.entries.len();
     write_snapshot_suite(&suite, output)?;
     println!("Exported snapshot: {} ({} requests)", output, count);
@@ -281,6 +286,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
     source_paths: &[String],
     snapshot_path: P,
+    mask_secrets: bool,
 ) -> Result<()> {
     use super::model::{ResponseSnapshot, SnapshotEntry, SnapshotSuite};
     let mut entries = Vec::new();
@@ -289,7 +295,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             if let Some(req) = &r.request
                 && let Some(resp) = &r.response
             {
-                let entry = SnapshotEntry {
+                let mut entry = SnapshotEntry {
                     id: uuid::Uuid::new_v4().to_string(),
                     request: req.clone(),
                     response: ResponseSnapshot {
@@ -298,6 +304,9 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                         body: resp.body.clone(),
                     },
                 };
+                if mask_secrets {
+                    mask_snapshot_entry(&mut entry);
+                }
                 entries.push(entry);
             }
         }
@@ -308,6 +317,28 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
         entries,
     };
     write_snapshot_suite(&suite, snapshot_path)
+}
+
+/// Secrets Masker（路线图条目 1 残余）：opt-in 快照脱敏——headers 走
+/// `redact_header_value`（scheme 前缀保留），body 走 `mask_body_secrets`
+/// （敏感键 `[REDACTED]` + PII 三正则，无截断）。schema 不变，产物仍可被 replay 加载。
+pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
+    use crate::exporter::redact::{mask_body_secrets, redact_header_value};
+    let mask_headers = |map: &mut reqwest::header::HeaderMap| {
+        let keys: Vec<_> = map.keys().cloned().collect();
+        for name in keys {
+            if let Some(val) = map.get(&name).and_then(|v| v.to_str().ok()) {
+                let masked = redact_header_value(name.as_str(), val);
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(&masked) {
+                    map.insert(&name, hv);
+                }
+            }
+        }
+    };
+    mask_headers(&mut entry.request.headers);
+    mask_headers(&mut entry.response.headers);
+    entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
+    entry.response.body = mask_body_secrets(entry.response.body.as_str());
 }
 
 #[cfg(test)]
@@ -421,6 +452,7 @@ mod tests {
             &batch_results,
             &["my_test.http".to_string()],
             &snapshot_file,
+            false,
         )
         .unwrap();
 

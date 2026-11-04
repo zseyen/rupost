@@ -1,7 +1,9 @@
+pub mod dynamic;
 pub mod http;
+pub mod trace;
 
 use crate::Result;
-use crate::generator::http::HttpGenerator;
+pub use crate::generator::http::HttpGenerator;
 use crate::history::selector::{self, SelectionStrategy};
 use crate::history::storage::get_storage;
 use std::fs;

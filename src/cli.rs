@@ -65,6 +65,18 @@ pub enum Commands {
         #[arg(long, default_value = "terminal")]
         report: String,
 
+        /// 将 JSON 格式测试报告额外写入指定文件（不干扰终端输出）
+        #[arg(long, value_name = "FILE")]
+        report_file: Option<String>,
+
+        /// 对每个失败请求输出原位原因分析与修复建议（兼容 --ai-explain 与 RUPOST_AI_EXPLAIN=1）
+        #[arg(long, visible_alias = "ai-explain")]
+        explain: bool,
+
+        /// 在批量测试汇总后输出失败根因聚类分诊报告
+        #[arg(long)]
+        triage: bool,
+
         /// 遇到第一个失败文件时立即停止
         #[arg(long)]
         fail_fast: bool,
@@ -97,9 +109,17 @@ pub enum Commands {
         #[arg(long, value_name = "FILE")]
         save_snapshot: Option<String>,
 
+        /// Mask headers/body secrets in the saved snapshot (opt-in; keep off for replay body-diff fidelity)
+        #[arg(long)]
+        mask_secrets: bool,
+
         /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
         #[arg(long, value_name = "N|@NAME")]
         only: Option<String>,
+
+        /// 失败时执行的 shell 命令（每个失败请求一次；env: RUPOST_FAILED_URL/STATUS/TRACE_ID）
+        #[arg(long, value_name = "CMD")]
+        on_failure: Option<String>,
     },
 
     /// Manage request history
@@ -169,6 +189,18 @@ pub enum Commands {
         /// Show detailed request/response details
         #[arg(short, long)]
         verbose: bool,
+
+        /// Additional leaf key names to exclude from body comparison (comma-separated)
+        #[arg(long, value_name = "KEYS")]
+        ignore_fields: Option<String>,
+
+        /// Disable body comparison (status-code-only semantics)
+        #[arg(long)]
+        status_only: bool,
+
+        /// Explain each failed entry in place (rule baseline + AI attribution when configured)
+        #[arg(long, visible_alias = "ai-explain")]
+        explain: bool,
     },
 
     /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
@@ -179,6 +211,12 @@ pub enum Commands {
     Ai {
         #[command(subcommand)]
         command: AiCommands,
+    },
+
+    /// Import external request formats into rupost files (curl → .http)
+    Import {
+        #[command(subcommand)]
+        command: ImportCommands,
     },
 
     /// Start interactive terminal UI mode
@@ -202,15 +240,134 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
+pub enum ImportCommands {
+    /// Import a curl command into an executable .http request block
+    Curl(ImportCurlArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct ImportCurlArgs {
+    /// curl 命令：整体引号包裹，或直接粘贴为多参数（自动空格拼接）
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "CURL"
+    )]
+    pub curl: Vec<String>,
+
+    /// 写入 .http 文件（已存在则拒绝）；缺省打印 stdout
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<String>,
+
+    /// origin 模板化为 {{base_url}}（跨环境运行）
+    #[arg(long)]
+    pub templatize_host: bool,
+}
+
+impl ImportCurlArgs {
+    pub fn into_request(self) -> rupost::importer::curl::CurlImportRequest {
+        // trailing_var_arg 拦截（AGENTS §5 同源陷阱）：位置参数之后的 -o/--output/--out
+        // 与 --templatize-host 属 rupost 侧开关——从 CURL 序列中摘出。
+        // 已知取舍：curl 自身的 -o（响应落盘）语义在此被覆盖——devtools 复制的
+        // curl 不含 -o，真实冲突罕见；现有测试与 CHANGELOG 契约依赖本拦截，保留。
+        let mut output = self.output;
+        let mut templatize_host = self.templatize_host;
+        let mut kept: Vec<String> = Vec::with_capacity(self.curl.len());
+        let mut it = self.curl.into_iter().peekable();
+        while let Some(tok) = it.next() {
+            match tok.as_str() {
+                "-o" | "--output" | "--out" => {
+                    if let Some(v) = it.next() {
+                        output = Some(v);
+                    }
+                }
+                "--templatize-host" => templatize_host = true,
+                other => kept.push(other.to_string()),
+            }
+        }
+
+        rupost::importer::curl::CurlImportRequest {
+            raw: kept.join(" "),
+            output,
+            templatize_host,
+        }
+    }
+}
+
+#[derive(Subcommand)]
 pub enum AiCommands {
     /// Translate natural language expectations into standard @assert lines
     Assert {
         /// Natural language description of the expected behavior
         text: String,
 
+        /// Attach the last N history entries (redacted) as response context
+        #[arg(long, value_name = "N", conflicts_with = "response")]
+        last: Option<usize>,
+
+        /// Attach a response body file (redacted) as context
+        #[arg(long, value_name = "FILE", conflicts_with = "last")]
+        response: Option<String>,
+
+        /// Disable context redaction (values are sent as-is to the AI endpoint)
+        #[arg(long)]
+        no_mask: bool,
+
         /// Print plain assertion lines only (machine-friendly)
         #[arg(long)]
         raw: bool,
+    },
+
+    /// Cluster failed requests from a JSON test report into root-cause groups
+    Triage {
+        /// Path to the JSON report generated by `rupost test --report-file`
+        #[arg(value_name = "REPORT_JSON")]
+        report_file: String,
+
+        /// Output machine-readable JSON triage report
+        #[arg(long)]
+        json: bool,
+
+        /// Output format (markdown or json)
+        #[arg(long, default_value = "markdown")]
+        format: String,
+    },
+    /// Expand in-file `# @ai-assert` directives into standard @assert lines (B2: AI failure leaves file untouched)
+    Resolve {
+        /// Path to the .http/.md file containing @ai-assert directives
+        #[arg(value_name = "FILE")]
+        file: String,
+
+        /// Print proposed expansion without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Distill recent history into a semantic regression test file (AI-enhanced, degrades to mechanical baseline)
+    Bootstrap {
+        /// Asset source (MVP: "history")
+        #[arg(long, default_value = "history")]
+        from: String,
+
+        /// Take the last N history entries
+        #[arg(long, default_value_t = 10)]
+        last: usize,
+
+        /// Only include entries whose URL contains this prefix
+        #[arg(long, value_name = "PREFIX")]
+        filter: Option<String>,
+
+        /// Output .http file (refuses to overwrite)
+        #[arg(short, long, value_name = "FILE")]
+        output: String,
+
+        /// Skip AI enhancement (emit mechanical baseline only)
+        #[arg(long)]
+        no_ai: bool,
+
+        /// Template request origin as {{base_url}}
+        #[arg(long)]
+        templatize_host: bool,
     },
 }
 
@@ -231,13 +388,17 @@ pub enum HistoryCommands {
     /// Export history entries to a snapshot file
     #[command(alias = "e")]
     Export {
-        /// Number of recent runs to include
+        /// Number of recent requests to include
         #[arg(long, default_value = "1")]
         last: usize,
 
         /// Output path for the snapshot JSON file
         #[arg(short, long, required = true)]
         output: String,
+
+        /// Mask headers/body secrets in the exported snapshot (opt-in)
+        #[arg(long)]
+        mask_secrets: bool,
     },
 
     /// Show detailed response and body/frames for a specific history entry
@@ -523,6 +684,233 @@ pub async fn run(params: RunParams) -> Result<()> {
     let args = params.args.clone();
     let runner = CliRunner::new(&params)?;
     runner.run(args).await
+}
+
+/// 命令派发总入口（自 main.rs 下沉：本文件承载完整 CLI 语义，main.rs 保持无业务逻辑）
+pub async fn dispatch(cli: Cli) -> Result<()> {
+    use colored::Colorize;
+
+    match cli.command {
+        Some(Commands::Test {
+            paths,
+            mode,
+            concurrency,
+            report,
+            report_file,
+            explain,
+            triage,
+            fail_fast,
+            env,
+            var,
+            env_file,
+            verbose,
+            no_cookies,
+            cookie_file,
+            save_snapshot,
+            mask_secrets,
+            only,
+            on_failure,
+        }) => {
+            // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
+            let explain_enabled = explain
+                || std::env::var("RUPOST_AI_EXPLAIN").is_ok_and(|v| {
+                    matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+                });
+            let options = rupost::runner::TestSuiteOptions {
+                paths,
+                mode,
+                concurrency,
+                report,
+                report_file,
+                explain: explain_enabled,
+                triage,
+                fail_fast,
+                env,
+                var,
+                env_file,
+                verbose,
+                no_cookies,
+                cookie_file,
+                debug: cli.debug,
+                debug_on_failure: cli.debug_on_failure,
+                default_scheme: cli.default_scheme,
+                save_snapshot,
+                mask_snapshot: mask_secrets,
+                only,
+                on_failure,
+            };
+            let has_failure = rupost::runner::run_test_suite(options).await?;
+            if has_failure {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::History { command }) => match command {
+            HistoryCommands::List { limit, reverse } => {
+                rupost::history::printer::list_history(limit, reverse)?;
+            }
+            HistoryCommands::Show { target } => {
+                rupost::history::printer::show_history(&target)?;
+            }
+            HistoryCommands::Prune { days, max_size } => {
+                rupost::history::printer::prune_history(days, max_size)?;
+            }
+            HistoryCommands::Clear { yes, all } => {
+                rupost::history::printer::clear_history(yes, all)?;
+            }
+            HistoryCommands::Export {
+                last,
+                output,
+                mask_secrets,
+            } => {
+                rupost::history::export_history_snapshot(last, &output, mask_secrets)?;
+            }
+        },
+        Some(Commands::Diagnose { url, report }) => {
+            rupost::http::run_diagnose(&url, &report).await?;
+        }
+        Some(Commands::Generate(args)) => {
+            let opts = rupost::generator::GenerateOptions {
+                output_file: args.output_file,
+                last: args.last,
+                interactive: args.interactive,
+                templatize_host: args.templatize_host,
+            };
+            rupost::generator::run_generate(opts)?;
+        }
+        Some(Commands::Mock { file, port }) => {
+            rupost::mock::run_server_from_file(&file, port).await?;
+        }
+        Some(Commands::Init {
+            r#type,
+            output,
+            force,
+            list,
+        }) => {
+            rupost::template::run_template(&r#type, output.as_deref(), force, list)?;
+        }
+        Some(Commands::Replay {
+            file,
+            target,
+            verbose,
+            ignore_fields,
+            status_only,
+            explain,
+        }) => {
+            let mut replayer = rupost::runner::ReplayExecutor::new(target, verbose);
+            if let Some(keys) = ignore_fields {
+                let parsed: Vec<String> = keys
+                    .split(',')
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+                    .collect();
+                replayer = replayer.with_ignore_fields(parsed);
+            }
+            if status_only {
+                replayer = replayer.status_only();
+            }
+            let report = replayer.replay_file(&file).await?;
+            // P1 AI 接线：失败条目就地归因（规则版基线 + AI 增强；B1 降级语义同 t --explain）
+            if explain && report.failed > 0 {
+                let mut session = rupost::ai::explain::ExplainSession::new();
+                let client = match rupost::ai::config::resolve().await {
+                    Ok(resolved) => Some(resolved.client),
+                    Err(msg) => {
+                        eprintln!("    {} {}", "⚠".yellow(), msg);
+                        None
+                    }
+                };
+                for entry in report.entries.iter().filter(|e| !e.matched) {
+                    let ctx = rupost::ai::rules::context_from_replay_entry(entry);
+                    session
+                        .explain_context_with_client(ctx, client.as_deref())
+                        .await;
+                }
+            }
+            if report.failed > 0 {
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Export(args)) => {
+            let opts = args.into_run_options(cli.env, cli.cookie_file, cli.default_scheme);
+            rupost::exporter::run_export(opts)?;
+        }
+        Some(Commands::Ai { command }) => match command {
+            AiCommands::Assert {
+                text,
+                last,
+                response,
+                no_mask,
+                raw,
+            } => {
+                let params = rupost::ai::AiAssertParams {
+                    raw,
+                    last,
+                    response,
+                    no_mask,
+                };
+                if let Err(e) = rupost::ai::run_ai_assert(&params, &text).await {
+                    eprintln!("{} {}", "[ERROR]".red().bold(), e.to_user_friendly_string());
+                    std::process::exit(1);
+                }
+            }
+            AiCommands::Triage {
+                report_file,
+                json,
+                format,
+            } => {
+                rupost::ai::triage::run_ai_triage_from_file(&report_file, json, &format).await?;
+            }
+            AiCommands::Resolve { file, dry_run } => {
+                rupost::ai::resolve::run_resolve(&file, dry_run).await?;
+            }
+            AiCommands::Bootstrap {
+                from,
+                last,
+                filter,
+                output,
+                no_ai,
+                templatize_host,
+            } => {
+                let params = rupost::ai::bootstrap::BootstrapParams {
+                    from,
+                    last,
+                    filter,
+                    output,
+                    no_ai,
+                    templatize_host,
+                };
+                rupost::ai::bootstrap::run_bootstrap(&params).await?;
+            }
+        },
+        Some(Commands::Import { command }) => match command {
+            ImportCommands::Curl(args) => rupost::importer::run_curl_import(&args.into_request())?,
+        },
+        Some(Commands::Tui {
+            file,
+            env,
+            var,
+            env_file,
+        }) => {
+            rupost::tui::run(
+                file,
+                rupost::tui::TuiOptions {
+                    env,
+                    vars: var,
+                    env_file,
+                },
+            )
+            .await?;
+        }
+        None => {
+            if cli.args.is_empty() {
+                tracing::error!("No command provided");
+                std::process::exit(1);
+            } else {
+                run(RunParams::from_cli(&cli)).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

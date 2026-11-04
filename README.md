@@ -12,9 +12,11 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **文档即测试**：原生支持 `.http` 与 `.md` 文件解析。你可以直接在 Markdown 文档中编写和执行 API 请求。
 - **强大断言**：内置高性能断言系统，支持 `@assert` 指令，轻松实现全自动接口验证。
 - **AI 创作辅助**：`rupost ai assert` 用一句自然语言生成标准 `@assert` 断言行；支持任意 OpenAI 兼容后端（含本地 Ollama），密钥仅走环境变量，测试执行期零 AI 依赖。详见 [AI 断言生成指南](file:///examples/ai_assert/README.md)。
+- **AI 失败智能处理**：`test --explain` 断言失败就地归因、`ai triage <report.json>` 批量失败聚类（E2/E5）；`ai resolve` 将 `# @ai-assert <自然语言>` 原地展开为标准断言；`ai bootstrap --from history` 把调试历史蒸馏成语义增强回归文件；`import curl` 把 curl 命令逆向为可执行 `.http` 请求块。详见 [AI 能力线文档](doc/plans/2026-10-28-ai-e2e5-master-execution-plan.md)。
 - **变量与环境管理**：灵活的变量替换机制与多环境一键切换。详见 [变量与环境管理指南](file:///doc/guides/variables_and_environments.md)。
 - **批量与并发测试**：支持跨文件有向无环图 (DAG) 拓扑排序依赖执行，支持顺序/并行双模式运行与状态单向克隆。详见 [批量测试指南](file:///doc/guides/batch_testing.md)。
 - **网络诊断分析**：细粒度的网络耗时瀑布图与 X.509 证书到期健康分析。详见 [网络诊断工具指南](file:///doc/guides/network_diagnostics.md)。
+- **全链路调试**：失败自动诊断、`--explain` 就地归因、`ai triage` 批量分诊、`--on-failure` trace 取证钩子、快照重放失败定位到条与历史导出供给链。详见 [调试指南](file:///doc/guides/debug_guide.md)。
 - **本地 Mock 服务**：Trie 树路径匹配、路径参数捕获与多分支条件响应。详见 [本地 Mock 服务器指南](file:///doc/guides/mock_server.md)。
 - **WebSocket 协议调试**：支持 WebSocket 订阅流剧本、操作符软匹配断言与自动重连自愈。详见 [WebSocket 协议调试指南](file:///doc/guides/websocket_testing.md)。
 - **历史与追踪**：自动记录请求历史，支持从历史记录交互式生成测试文件。
@@ -65,6 +67,15 @@ RuPost 提供了直观且高效的命令行接口：
 * **管理请求历史记录**:
   ```bash
   rupost history list --limit 10
+  # 导出最近 N 条历史为可重放快照
+  rupost history export --last 5 -o snap.json
+  ```
+* **快照重放与失败定位**:
+  ```bash
+  rupost replay snap.json --target http://staging.example.com
+  # 失败输出 Failed entries 清单（定位到条），并以退出码 1 供 CI 门禁
+  # body 深比较默认开启（timestamp/uuid 等动态键自动排除）；--explain 就地归因
+  rupost replay snap.json -t http://staging.example.com --ignore-fields my_key --explain
   ```
 * **Cookie 会话管理**:
   ```bash

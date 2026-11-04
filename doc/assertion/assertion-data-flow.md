@@ -366,7 +366,7 @@ TestSummary {
 
 ### **阶段 7：显示输出** 📈 → 🖥️
 
-**Reporter 格式化输出** ([reporter.rs:92-107](../../src/runner/reporter.rs#L92-L107)):
+**Reporter 格式化输出** ([reporter.rs:92-107](../../src/reporter.rs#L92-L107)):
 
 ```rust
 // 显示断言结果

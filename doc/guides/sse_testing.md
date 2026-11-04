@@ -39,7 +39,7 @@ RuPost 针对这一痛点设计了**非阻塞式流解析引擎**：
 在不依赖外部网络与真实 API Key 的情况下，验证 SSE 链路：
 ```bash
 # 终端 1：启动 mock 服务
-rupost mock --port 8080
+rupost mock <mock_config.json> --port 8080  # file 为必填：提供含 /v1/chat/completions 路由的 mock 配置
 ```
 
 ```http
@@ -124,7 +124,7 @@ graph TD
     C --> D[运行 rupost template -t sse -o tests/sse_test.http]
     D --> E[生成 tests/sse_test.http 与 tests/.env.example]
     E --> F[重命名并配置 .env]
-    F --> G[运行 rupost mock --port 8080 本地验证]
+    F --> G[运行 rupost mock <mock_config.json> --port 8080  # file 为必填：提供含 /v1/chat/completions 路由的 mock 配置 本地验证]
     G --> H[运行 rupost test tests/sse_test.http 自动化断言]
 ```
 
@@ -143,5 +143,5 @@ graph TD
 
 3. **配置密钥并执行**：
    * 将 `tests/.env.example` 复制为 `tests/.env`，写入大模型 API KEY。
-   * 启动本地 mock测试：`rupost mock --port 8080`
+   * 启动本地 mock测试：`rupost mock <mock_config.json> --port 8080  # file 为必填：提供含 /v1/chat/completions 路由的 mock 配置`
    * 执行用例：`rupost test tests/my_sse.http --verbose`

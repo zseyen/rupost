@@ -1,0 +1,25 @@
+# 联调回放基线：全绿三连（配合 mock_backend.json 录制，再对 mock_upgraded.json 重放）
+# 录制：rupost t green.http --save-snapshot snap.json --var base_url=http://127.0.0.1:9500 --var password=hunter2
+# 重放：rupost replay snap.json -t http://127.0.0.1:9501
+
+### 用户登录
+# @name login
+# @capture token from body.token
+POST {{base_url}}/api/auth/login
+Content-Type: application/json
+
+{
+    "username": "lee",
+    "password": "{{password}}"
+}
+
+### 用户资料
+# @name profile
+# @assert status == 200
+GET {{base_url}}/api/user/profile
+Authorization: Bearer {{token}}
+
+### 订单列表
+# @name orders
+# @assert status == 200
+GET {{base_url}}/api/orders

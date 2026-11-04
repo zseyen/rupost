@@ -17,6 +17,10 @@ pub fn is_sensitive_key(key: &str) -> bool {
         || lower.contains("password")
         || lower.contains("apikey")
         || lower.contains("api_key")
+        || lower.contains("private_key")
+        || lower.contains("access_key")
+        || lower.contains("credential")
+        || lower.contains("passphrase")
 }
 
 /// 对 Header 凭据值进行掩码脱敏
@@ -45,16 +49,30 @@ pub fn redact_url(raw_url: &str) -> String {
     let Ok(mut parsed) = url::Url::parse(raw_url) else {
         return raw_url.to_string();
     };
+    let mut changed = false;
+
+    // userinfo 密码段（https://user:pass@host）
+    if parsed.password().is_some() {
+        let _ = parsed.set_password(Some("[REDACTED]"));
+        changed = true;
+    }
+
+    // fragment 凭据（OAuth implicit 流：#access_token=...）
+    if let Some(frag) = parsed.fragment()
+        && ["token", "access", "key", "secret"]
+            .iter()
+            .any(|k| frag.to_ascii_lowercase().contains(k))
+    {
+        parsed.set_fragment(Some("[REDACTED]"));
+        changed = true;
+    }
+
+    // query 敏感键值
     let pairs: Vec<(String, String)> = parsed
         .query_pairs()
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
-
-    if pairs.is_empty() || !pairs.iter().any(|(k, _)| is_sensitive_key(k)) {
-        return raw_url.to_string();
-    }
-
-    {
+    if pairs.iter().any(|(k, _)| is_sensitive_key(k)) {
         let mut qp = parsed.query_pairs_mut();
         qp.clear();
         for (k, v) in pairs {
@@ -64,13 +82,56 @@ pub fn redact_url(raw_url: &str) -> String {
                 qp.append_pair(&k, &v);
             }
         }
+        changed = true;
     }
-    parsed.into()
+
+    if changed {
+        parsed.into()
+    } else {
+        raw_url.to_string()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_redact_url_userinfo_password_masked() {
+        assert_eq!(
+            redact_url("https://user:supersecret@api.example.com/v1"),
+            "https://user:%5BREDACTED%5D@api.example.com/v1"
+        );
+        // 空密码段无凭据可掩（url crate 归一化处理空密码），不 panic、不误掩即可
+        let _ = redact_url("https://user:@api.example.com");
+        // IPv6 host 形态不受影响
+        assert!(redact_url("http://user:pass@[::1]:8080/v1").contains("%5BREDACTED%5D"));
+    }
+
+    #[test]
+    fn test_redact_url_oauth_fragment_masked() {
+        // OAuth implicit 流：fragment 携带 access_token
+        let masked =
+            redact_url("https://api.example.com/callback#access_token=eyJhbGciOiJIUzI1NiJ9");
+        assert!(
+            !masked.contains("eyJhbGci"),
+            "fragment token must be masked: {masked}"
+        );
+        // 普通锚点（无敏感键名）不掩
+        assert_eq!(
+            redact_url("https://docs.example.com/guide#section-2"),
+            "https://docs.example.com/guide#section-2"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_query_unchanged_when_not_sensitive() {
+        // 无敏感键时原样返回（无格式漂移）
+        assert_eq!(
+            redact_url("https://api.example.com/v1/users?page=2&limit=10"),
+            "https://api.example.com/v1/users?page=2&limit=10"
+        );
+    }
 
     #[test]
     fn test_is_sensitive_key() {
@@ -127,5 +188,132 @@ mod tests {
     fn test_redact_url_without_sensitive_query() {
         let url = "https://example.com/api?page=2&sort=asc";
         assert_eq!(redact_url(url), "https://example.com/api?page=2&sort=asc");
+    }
+}
+
+// ═══════════ Secrets Masker body 残余（快照 --mask-secrets，路线图条目 1） ═══════════
+
+/// PII 掩码：中国大陆手机号 / 银行卡号（13–19 位数字串）/ 邮箱 → `***`
+/// （值形态掩码，与 is_sensitive_key 的键形态掩码互补；opt-in 旗标下才参与）
+pub fn mask_pii(text: &str) -> String {
+    static EMAIL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static CARD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static PHONE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let email = EMAIL.get_or_init(|| {
+        regex::Regex::new(r#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#).expect("email regex")
+    });
+    // regex crate 无 lookaround——用捕获组锚定非数字边界（${1}/${3} 原样保留）
+    let card = CARD.get_or_init(|| {
+        // 13–19 位数字形态风险由 opt-in 旗标承担（PRD D1）
+        regex::Regex::new(r"(^|[^0-9])[0-9]{13,19}([^0-9]|$)").expect("card regex")
+    });
+    let phone = PHONE.get_or_init(|| {
+        regex::Regex::new(r"(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)").expect("phone regex")
+    });
+    let s = email.replace_all(text, "***").into_owned();
+    let s = card.replace_all(&s, "${1}***${2}").into_owned();
+    phone.replace_all(&s, "${1}***${2}").into_owned()
+}
+
+/// 快照 body 掩码（无截断——分享面要求内容完整、仅值打码）：
+/// JSON：敏感键值 `[REDACTED]`（复用 redact_json_value 语义）+ 字符串叶子 PII 掩码；
+/// 非 JSON：内联键值凭据 + URL query + PII。
+pub fn mask_body_secrets(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        let out = mask_json_pii(&val);
+        serde_json::to_string(&out).unwrap_or_else(|_| trimmed.to_string())
+    } else {
+        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
+    }
+}
+
+/// JSON 掩码变体：敏感键 `[REDACTED]` 之外，普通字符串叶子上的 PII 也打码
+fn mask_json_pii(val: &serde_json::Value) -> serde_json::Value {
+    match val {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    if is_sensitive_key(k) {
+                        (
+                            k.clone(),
+                            serde_json::Value::String("[REDACTED]".to_string()),
+                        )
+                    } else {
+                        (k.clone(), mask_json_pii(v))
+                    }
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(mask_json_pii).collect())
+        }
+        serde_json::Value::String(s) => serde_json::Value::String(mask_pii(s)),
+        other => other.clone(),
+    }
+}
+
+/// 自由文本 URL 掩码（自 ai/redactor 下沉：掩码原语统一归 exporter/redact，ai 侧 re-export）
+pub fn redact_free_text(text: &str) -> String {
+    static URL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re =
+        URL_RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("url regex"));
+    re.replace_all(text, |caps: &regex::Captures| redact_url(&caps[0]))
+        .into_owned()
+}
+
+/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` 形态
+/// （键名保留、值替换为 [REDACTED]；值长度 ≥4 才掩，避免误伤短 token 字样）
+pub fn mask_inline_secrets(text: &str) -> String {
+    static INLINE_SECRET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = INLINE_SECRET.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(token|api[_-]?key|secret|password|passwd|authorization)\s*[=:]\s*(?:(?:bearer|basic|digest|token)\s+)?[^\s"'<>&,;}{]{4,}"#,
+        )
+        .expect("inline secret regex")
+    });
+    re.replace_all(text, "${1}=[REDACTED]").into_owned()
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    /// Secrets Masker 决策表：PII 三形态 + 键形态 + 复合串不误伤
+    #[test]
+    fn test_mask_pii_and_body_secrets_decision_table() {
+        // 手机号（含边界非数字保护）
+        assert_eq!(mask_pii("联系 13812345678 处理"), "联系 *** 处理");
+        assert_eq!(
+            mask_pii("id=113812345678"),
+            "id=113812345678",
+            "长串内不误切"
+        );
+        // 银行卡号（13–19 位）
+        assert_eq!(mask_pii("card=6222021234567890123"), "card=***");
+        // 邮箱
+        assert_eq!(mask_pii("mail lee@example.com ok"), "mail *** ok");
+        // 敏感键 JSON：值整体 [REDACTED]；普通键下的 PII 叶子也打码
+        let out = mask_body_secrets(r#"{"password":"p@ss1234","phone":"13812345678","memo":"ok"}"#);
+        assert!(out.contains("[REDACTED]"), "sensitive key masked: {out}");
+        assert!(out.contains("***"), "PII leaf masked: {out}");
+        assert!(
+            out.contains("\"memo\":\"ok\""),
+            "plain leaf preserved: {out}"
+        );
+        // 非 JSON：内联凭据 + PII
+        let out = mask_body_secrets("token=abcdef123456 call 13812345678");
+        assert!(
+            out.contains("token=[REDACTED]"),
+            "inline credential masked: {out}"
+        );
+        assert!(out.contains("***"), "pii masked in text: {out}");
+        // 空体
+        assert_eq!(mask_body_secrets(""), "");
     }
 }

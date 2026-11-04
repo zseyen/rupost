@@ -19,6 +19,9 @@ impl VariableResolver {
             match var_name {
                 "$uuid" => uuid::Uuid::new_v4().to_string(),
                 "$timestamp" => chrono::Utc::now().timestamp().to_string(),
+                // T1：保形态时间戳（ISO8601 / epoch 毫秒），生成的用例重跑语义正确
+                "$timestamp_iso" => chrono::Utc::now().to_rfc3339(),
+                "$timestamp_ms" => chrono::Utc::now().timestamp_millis().to_string(),
                 "$random_int" => {
                     use rand::Rng;
                     let mut rng = rand::rng();

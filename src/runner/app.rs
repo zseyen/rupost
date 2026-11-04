@@ -2,12 +2,14 @@ use crate::Result;
 use crate::RupostError;
 use crate::history::save_batch_snapshot;
 use crate::middleware::resolve_cookie_path;
+use crate::runner::on_failure;
 use crate::runner::selector;
 use crate::runner::{
     BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
     TestReporter, WorkflowGraph,
 };
 use crate::variable::ConfigLoader;
+use colored::Colorize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -17,6 +19,12 @@ pub struct TestSuiteOptions {
     pub mode: String,
     pub concurrency: usize,
     pub report: String,
+    /// 将 JSON 格式报告额外写入指定文件（不干扰终端输出）
+    pub report_file: Option<String>,
+    /// 对每个失败请求输出原位原因分析（E2，创作/诊断期 AI，B1 基线为规则版）
+    pub explain: bool,
+    /// 批量汇总后输出失败根因聚类分诊报告（E5，B1 基线为确定性签名分组）
+    pub triage: bool,
     pub fail_fast: bool,
     pub env: Option<String>,
     pub var: Vec<String>,
@@ -28,8 +36,42 @@ pub struct TestSuiteOptions {
     pub debug_on_failure: bool,
     pub default_scheme: String,
     pub save_snapshot: Option<String>,
+    /// Secrets Masker（opt-in）：快照 headers/body 掩码后再落盘
+    pub mask_snapshot: bool,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
+    /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
+    /// 经 RUPOST_FAILED_URL/STATUS/TRACE_ID 环境变量暴露锚点
+    pub on_failure: Option<String>,
+}
+
+impl Default for TestSuiteOptions {
+    fn default() -> Self {
+        Self {
+            paths: Vec::new(),
+            mode: "sequential".to_string(),
+            concurrency: 4,
+            report: "terminal".to_string(),
+            report_file: None,
+            explain: false,
+            triage: false,
+            fail_fast: false,
+            env: None,
+            var: Vec::new(),
+            env_file: None,
+            verbose: false,
+            // 与 CLI 默认语义一致：默认启用 cookie 会话
+            no_cookies: false,
+            cookie_file: None,
+            only: None,
+            on_failure: None,
+            debug: false,
+            debug_on_failure: false,
+            default_scheme: "http".to_string(),
+            save_snapshot: None,
+            mask_snapshot: false,
+        }
+    }
 }
 
 /// 执行批处理测试流程，如果发现有测试失败，则返回 Ok(true)，否则返回 Ok(false)
@@ -167,8 +209,13 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         fail_fast: options.fail_fast,
     };
 
-    let batch_results = batch_executor.execute_batch(batch_request).await?;
+    let mut batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
+
+    // 6.5 失败钩子（DX-Debug R7）：渲染前触发，使"无 trace 头"警告进入报告与 explain 上下文
+    if let Some(hook_cmd) = &options.on_failure {
+        on_failure::fire_failure_hooks(&mut batch_results, hook_cmd).await;
+    }
 
     // 7. 渲染与汇报结果
     let has_failure = batch_results
@@ -176,22 +223,55 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         .any(|(_, res_list)| res_list.iter().any(|r| !r.success));
 
     if options.report == "json" {
+        // Gap Review P3-4：JSON 模式下 explain/triage 无法渲染，显式提示而非静默忽略
+        if options.explain || options.triage {
+            eprintln!(
+                "{} --explain/--triage 仅在终端报告模式下渲染（--report json 输出保持纯净，已忽略）",
+                "⚠".yellow()
+            );
+        }
         TestReporter::report_json(&batch_results, &mut std::io::stdout())?;
     } else {
         let reporter = TestReporter::new(options.verbose);
+        let mut explain_session = crate::ai::explain::ExplainSession::new();
+        // AI 客户端每轮构建一次（避免逐请求重建连接池）；无 Key 时由会话打印一次性提示
+        let ai_client = if options.explain {
+            // 与 --triage 同源走 B4 配置链（env > ai.toml > 本地探测），避免只有
+            // ai.toml/Ollama 的用户在 --explain 下永远拿不到归因；未配置降 None
+            crate::ai::config::resolve()
+                .await
+                .ok()
+                .map(|resolved| resolved.client)
+        } else {
+            None
+        };
         for (path, file_results) in &batch_results {
             let path_str = path.to_string_lossy().to_string();
             reporter.print_header(&path_str, file_results.len());
             for r in file_results {
                 reporter.print_result(r);
+                if options.explain {
+                    explain_session
+                        .explain_failure_with_client(r, ai_client.as_deref())
+                        .await;
+                }
             }
         }
         TestReporter::print_batch_summary(&batch_results, duration);
+        if options.triage {
+            crate::ai::triage::run_inline_triage(&batch_results).await;
+        }
+    }
+
+    // 保存 JSON 报告到指定文件（不干扰终端输出）
+    if let Some(report_path) = &options.report_file {
+        let mut file = std::fs::File::create(report_path)?;
+        TestReporter::report_json(&batch_results, &mut file)?;
     }
 
     // 保存快照
     if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(&batch_results, &paths, snapshot_path)?;
+        save_batch_snapshot(&batch_results, &paths, snapshot_path, options.mask_snapshot)?;
     }
 
     Ok(has_failure)
@@ -208,6 +288,9 @@ mod tests {
             mode: "sequential".to_string(),
             concurrency: 4,
             report: "terminal".to_string(),
+            report_file: None,
+            explain: false,
+            triage: false,
             fail_fast: false,
             env: None,
             var: vec![],
@@ -219,7 +302,9 @@ mod tests {
             debug_on_failure: false,
             default_scheme: "http".to_string(),
             save_snapshot: None,
+            mask_snapshot: false,
             only: None,
+            on_failure: None,
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());

@@ -415,3 +415,190 @@ fn test_generate_cli_empty_history_friendly_exit() {
         "out.http should not be created on empty history"
     );
 }
+
+/// T1：历史中的动态值（UUID/ISO8601/epoch）生成时反向模板化为 `{{$...}}`，
+/// 敏感键值凭据模板化优先（token 形态 UUID 不被形状扫描覆盖）
+#[test]
+fn test_generate_templatizes_dynamic_shapes_skips_sensitive_keys() {
+    let entries = vec![rupost::history::model::HistoryEntry {
+        id: "t1".to_string(),
+        timestamp: chrono::Utc::now(),
+        duration_ms: 10,
+        request: rupost::history::model::RequestSnapshot {
+            method: "POST".to_string(),
+            url: "http://api.example.com/thing?ts=1772505600&version=12".to_string(),
+            headers: {
+                let mut h = reqwest::header::HeaderMap::new();
+                h.insert("X-Request-Id", "8f9c2d55-1a2b-4c3d-9e4f-5a6b7c8d9e0f".parse().unwrap());
+                h.insert("Authorization", "Bearer sk-live-secret".parse().unwrap());
+                h
+            },
+            body: Some(r#"{"created":"2026-11-04T00:00:00Z","user_token":"8f9c2d55-1a2b-4c3d-9e4f-5a6b7c8d9e0f","memo":"pro"}"#.to_string()),
+            timeout: None,
+        },
+        source: Some("t".to_string()),
+        response: rupost::history::model::ResponseMeta {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: Some("{}".to_string()),
+        },
+    }];
+
+    let (content, _) =
+        rupost::generator::HttpGenerator::generate_with_variables(&entries, false).unwrap();
+
+    // 命中形状 → 模板化
+    assert!(
+        content.contains("{{$timestamp}}"),
+        "epoch secs query templated: {content}"
+    );
+    assert!(content.contains("{{$uuid}}"), "uuid header templated");
+    assert!(
+        content.contains("{{$timestamp_iso}}"),
+        "iso8601 body leaf templated"
+    );
+    // 普通值不误伤
+    assert!(content.contains("version=12"), "plain query preserved");
+    assert!(
+        content.contains("\"memo\": \"pro\""),
+        "plain body leaf preserved"
+    );
+    // 敏感键凭据模板化优先（Header/Query 有管线）；body 敏感键无凭据模板化
+    // 管线（既有行为=黄色警告+原样）：T1 跳过后值保留字面量
+    assert!(
+        content.contains("\"user_token\": \"8f9c2d55"),
+        "body sensitive key value skipped by T1 (literal kept, warning path owns it)"
+    );
+    assert!(
+        content.contains("{{authorization}}"),
+        "sensitive header keeps credential templating"
+    );
+    // 值不再明文（Header 凭据管线）；body 敏感键 UUID 属有意保留（见上）
+    assert!(!content.contains("sk-live-secret"));
+    assert!(
+        content.contains("x-request-id: {{$uuid}}"),
+        "non-sensitive header uuid templated in place"
+    );
+}
+
+/// T2 链式闭环（PRD 验收）：历史含 login→profile 链，生成文件直接 `rupost t` 跑通——
+/// 上游 `@capture` + 下游 `{{token}}`（Bearer scheme 保留），数据流重建
+#[tokio::test]
+async fn test_generate_chain_tracing_closed_loop_reruns() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"token":"live-tok-42"})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/profile"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let entries = vec![
+        rupost::history::model::HistoryEntry {
+            id: "l".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 5,
+            request: rupost::history::model::RequestSnapshot {
+                method: "POST".into(),
+                url: format!("{}/login", server.uri()),
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some(r#"{"u":"lee"}"#.into()),
+                timeout: None,
+            },
+            source: Some("t".into()),
+            response: rupost::history::model::ResponseMeta {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some(r#"{"token":"live-tok-42"}"#.into()),
+            },
+        },
+        rupost::history::model::HistoryEntry {
+            id: "p".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 5,
+            request: rupost::history::model::RequestSnapshot {
+                method: "GET".into(),
+                url: format!("{}/profile", server.uri()),
+                headers: {
+                    let mut h = reqwest::header::HeaderMap::new();
+                    h.insert("Authorization", "Bearer live-tok-42".parse().unwrap());
+                    h
+                },
+                body: None,
+                timeout: None,
+            },
+            source: Some("t".into()),
+            response: rupost::history::model::ResponseMeta {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some("{}".into()),
+            },
+        },
+    ];
+
+    let (content, _) =
+        rupost::generator::HttpGenerator::generate_with_variables(&entries, false).unwrap();
+    // 数据流重建：上游 capture + 下游 Bearer {{token}}（非字面量、非 {{authorization}}）
+    assert!(
+        content.contains("# @capture token from body.token"),
+        "capture emitted: {content}"
+    );
+    assert!(
+        content.contains("Bearer {{token}}"),
+        "downstream Bearer uses traced var: {content}"
+    );
+    assert!(
+        !content.contains("live-tok-42"),
+        "token value never literal: {content}"
+    );
+
+    // 生成文件落盘直接跑通（零 --var——数据流由 @capture 自举）
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("chain.http");
+    std::fs::write(&file, &content).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["t", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "chain reruns green: {stdout}");
+    assert!(stdout.contains("2 passed"), "both requests pass: {stdout}");
+}
+
+/// T1 验收闭环（PRD §七）：模板产物经 resolver 求值——两次求值产生不同值（重跑语义正确）
+#[test]
+fn test_templated_builtins_produce_fresh_values_per_run() {
+    use rupost::variable::resolver::VariableResolver;
+    use rupost::variable::types::VariableContext;
+
+    let ctx = VariableContext::default();
+    // 高分辨率形状：两次求值必不同
+    for tmpl in ["{{$uuid}}", "{{$timestamp_iso}}"] {
+        let first = VariableResolver::substitute(tmpl, &ctx);
+        let second = VariableResolver::substitute(tmpl, &ctx);
+        assert_ne!(
+            first, second,
+            "{tmpl} must yield fresh value per substitution (rerun semantics)"
+        );
+        assert!(
+            !first.contains("{{"),
+            "{tmpl} must be fully resolved: {first}"
+        );
+    }
+    // 毫秒分辨率：同毫秒内两次求值可能相同——断言形态正确（13 位纯数字，重跑语义由分辨率保证）
+    let ms = VariableResolver::substitute("{{$timestamp_ms}}", &ctx);
+    assert_eq!(ms.len(), 13, "epoch millis shape: {ms}");
+    assert!(
+        ms.chars().all(|c| c.is_ascii_digit()),
+        "numeric millis: {ms}"
+    );
+}

@@ -109,14 +109,14 @@
 | 状态 | 条目 |
 | :--- | :--- |
 | **本会话已修（5）** | ①快照路线图 P1-4 前提（勘误横幅）＋Secrets Masker 范围精确化；②AGENTS §5 CLAP 规则（P0 执行已修）；③`history show` help（P0 执行已修）；④CHANGELOG 无 Unreleased 条目（已补）；⑤generate 凭据泄露（审计时未发现的代码级 P0，`dc1f048c` 修复） |
-| **待修 P0（4，一个原子提交可清）** | plugin feasibility 勾选造假＋分区搁置声明；dev/progress_summary 三重自相矛盾（加归档横幅）；usage_and_testing §4 编辑器宣称对齐只读现实；QUICK_REFERENCE 幽灵文件与反向结论 |
-| **待修 P1（7）** | sse_testing 必败命令；mock "热加载"措辞；quality-hardening 头部回写；file-format-spec @timeout 单位与"暂不支持捕获"两处；production_debug 命令形态（`history replay` → `replay`）；路径漂移群约 6 处；product_strategy 超前宣称标注 |
+| **待修 P0（4）→ 已清（2026-10-28 单原子提交）** | plugin feasibility 勾选造假＋分区搁置声明；dev/progress_summary 三重自相矛盾（加归档横幅）；usage_and_testing §4 编辑器宣称对齐只读现实；QUICK_REFERENCE 幽灵文件与反向结论 |
+| **待修 P1（7）→ 已清（2026-10-28 第二批原子提交）** | sse_testing 必败命令（补必填 file+说明）；mock "热加载"→静态加载措辞；quality-hardening 头部回写（Phase 0–4 完成 + 基线注记）；file-format-spec @timeout 单位与 @capture 两处更正；production_debug 命令形态统一为顶层 `replay <snapshot>`（6 处）；路径漂移群 6 处（src/runner/reporter→src/reporter 等）；product_strategy 加愿景标注 |
 | **待修 P2（约 12）** | 外部 worktree 失效链接、`file:///` 绝对路径、占位符、examples/README 过时等 |
 
 ### 3.3 文档治理方案
 
 **治理批次任务卡（P1，一个原子提交 + 一个跟进提交）**：
-1. **横幅批**：plugin 分区搁置声明（含路线冲突说明与勾选修正）、dev/ 两份同名快照加归档横幅、usage_and_testing §4 对齐、sse_testing/mock 热加载/quality-hardening 头部/file-format-spec 逐条修正；
+1. **横幅批**：plugin 分区搁置声明（含路线冲突说明与勾选修正）、dev/ 两份同名快照加归档横幅、usage_and_testing §4 对齐——**已清（2026-10-28，随 P0 批次交付）**；sse_testing/mock 热加载/quality-hardening 头部/file-format-spec 已全部修正（2026-10-28 第二批）；
 2. **制度化批**：①设想文档头部强制 `状态：设想中|已搁置|已归档` 横幅（效仿 competition 底稿标杆）；②核心集制度——9 份核心文档之外默认"历史"，进核心集须 progress_summary 登记；③PRD 交付物列写**模块域**而非逐文件路径（路径漂移是最高频矛盾根源）；④链接修复批（P2 顺带）。
 
 **验收**：P0 矛盾清零；核心集 9 份全部现行且互相链接闭合；新文档进入仓库前自检"状态横幅 + 事实源分工"两项。

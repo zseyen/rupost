@@ -96,6 +96,7 @@ async fn test_batch_json_report_schema_exact_fields() {
         "method",
         "name",
         "request_number",
+        "response_body_snippet",
         "skipped",
         "status",
         "success",
@@ -125,7 +126,17 @@ async fn test_batch_json_report_schema_exact_fields() {
         .collect();
     let mut a_sorted = a_keys.clone();
     a_sorted.sort_unstable();
-    assert_eq!(a_sorted, vec!["message", "passed", "raw"]);
+    assert_eq!(
+        a_sorted,
+        vec![
+            "actual",
+            "expected",
+            "message",
+            "passed",
+            "raw",
+            "stream_event_index"
+        ]
+    );
 }
 
 /// diagnose JSON 报告：顶层 13 字段精确键集合 + http 场景的空值形态

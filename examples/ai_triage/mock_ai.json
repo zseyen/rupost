@@ -1,0 +1,30 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": "{\"choices\":[{\"message\":{\"content\":\"[{\\\"category\\\":\\\"Auth\\\",\\\"title\\\":\\\"Expired Session Token\\\",\\\"bucket_ids\\\":[0],\\\"root_cause\\\":\\\"All 401 endpoints failed due to expired JWT\\\",\\\"fix_suggestion\\\":\\\"Run login.http first or refresh token\\\"}]\"}}]}"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/v1/users/:id",
+    "variants": [
+      {
+        "condition": null,
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "response_body": "{\"error\":\"unauthorized\",\"access_token\":\"expired-jwt-should-not-leak\"}"
+      }
+    ]
+  }
+]

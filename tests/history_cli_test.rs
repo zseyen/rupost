@@ -290,19 +290,225 @@ fn test_history_clear_semantics() {
 }
 
 #[test]
-fn test_history_export_stub_locked() {
+fn test_history_export_snapshot_schema_and_placeholder() {
+    // 可重放性闭环由 tests/snapshot_replay_test.rs::test_history_export_then_replay_closed_loop 守护
     let temp_dir = tempdir().expect("create temp dir");
-    let dummy_out = temp_dir.path().join("export.json");
+    let dir_path = temp_dir.path();
+    let out_file = temp_dir.path().join("export.json");
 
+    // 两条历史：e1 body=None（旧条目占位导出），e2 body=Some（原样导出）
+    let mut e1 = create_test_entry(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "GET",
+        "http://example.com/one",
+        200,
+    );
+    e1.response.body = None;
+    let e2 = create_test_entry(
+        "22222222-aaaa-bbbb-cccc-222222222222",
+        "POST",
+        "http://example.com/two",
+        201,
+    );
+    write_history_entries(dir_path, &[e1, e2]);
+
+    // 桩转实（T5 搭车）：--last N = 最近 N 条条目，静默覆盖无 --force
     let out = Command::new(rupost_bin())
-        .args(["history", "export", "-o", dummy_out.to_str().unwrap()])
+        .env("RUPOST_HISTORY_DIR", dir_path)
+        .args([
+            "history",
+            "export",
+            "--last",
+            "2",
+            "-o",
+            out_file.to_str().unwrap(),
+        ])
         .output()
         .expect("run history export");
 
-    assert!(out.status.success(), "export stub must exit with 0");
+    assert!(
+        out.status.success(),
+        "export must exit 0: got {:?}",
+        out.status
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("History export is not implemented in MVP stage"),
-        "stdout should inform user export is stubbed: got '{stdout}'"
+        stdout.contains("Exported snapshot:"),
+        "confirmation line expected: {stdout}"
     );
+
+    // 产物是合法快照套件：source_file 标记 history、条目数与 --last 一致
+    let content = fs::read_to_string(&out_file).expect("exported file must exist");
+    let suite: rupost::history::SnapshotSuite =
+        serde_json::from_str(&content).expect("export output must be a valid SnapshotSuite");
+    assert_eq!(suite.entries.len(), 2);
+    assert_eq!(suite.source_file.as_deref(), Some("history"));
+    // body=None 旧条目占位导出：条目保留、body 为既有 From 转换的占位标记文本
+    assert_eq!(
+        suite.entries[0].response.body,
+        "Old snapshot: body not recorded"
+    );
+    // body=Some 条目原样导出
+    assert_eq!(
+        suite.entries[1].response.body,
+        "response body for 22222222-aaaa-bbbb-cccc-222222222222"
+    );
+}
+
+/// D10 验收：`--last N` 截断语义 = 最近 N 条**条目**（tail(n)），旧→新追加序；缺省 --last 1
+#[test]
+fn test_history_export_last_n_truncates() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+    let out_file = temp_dir.path().join("export.json");
+
+    let e1 = create_test_entry(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "GET",
+        "http://example.com/one",
+        200,
+    );
+    let e2 = create_test_entry(
+        "22222222-aaaa-bbbb-cccc-222222222222",
+        "GET",
+        "http://example.com/two",
+        200,
+    );
+    let e3 = create_test_entry(
+        "33333333-aaaa-bbbb-cccc-333333333333",
+        "GET",
+        "http://example.com/three",
+        200,
+    );
+    write_history_entries(dir_path, &[e1, e2, e3]);
+
+    let run_export = |extra: &[&str]| {
+        let mut args = vec!["history", "export", "-o", out_file.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        Command::new(rupost_bin())
+            .env("RUPOST_HISTORY_DIR", dir_path)
+            .args(&args)
+            .output()
+            .expect("run history export")
+    };
+    let read_ids = |path: &std::path::Path| -> Vec<String> {
+        let content = fs::read_to_string(path).expect("exported file must exist");
+        let suite: rupost::history::SnapshotSuite =
+            serde_json::from_str(&content).expect("valid SnapshotSuite");
+        suite.entries.into_iter().map(|e| e.id).collect()
+    };
+
+    // --last 2：只取最近 2 条（e2, e3），旧→新序
+    let out = run_export(&["--last", "2"]);
+    assert!(out.status.success());
+    let ids = read_ids(&out_file);
+    assert_eq!(
+        ids,
+        vec![
+            "22222222-aaaa-bbbb-cccc-222222222222".to_string(),
+            "33333333-aaaa-bbbb-cccc-333333333333".to_string()
+        ],
+        "tail(n) must keep newest N entries in chronological order"
+    );
+
+    // 缺省 --last（默认 1）：只取最新一条
+    let out_default = run_export(&[]);
+    assert!(out_default.status.success());
+    let ids_default = read_ids(&out_file);
+    assert_eq!(
+        ids_default,
+        vec!["33333333-aaaa-bbbb-cccc-333333333333".to_string()],
+        "default --last 1 exports only the newest entry"
+    );
+}
+
+#[test]
+fn test_history_export_empty_history_writes_no_file() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+    let out_file = temp_dir.path().join("should_not_exist.json");
+
+    // 空历史目录（无 history.jsonl）：warn + 不写文件 + exit 0（对齐 generate 先例）
+    let out = Command::new(rupost_bin())
+        .env("RUPOST_HISTORY_DIR", dir_path)
+        .args(["history", "export", "-o", out_file.to_str().unwrap()])
+        .output()
+        .expect("run history export on empty history");
+
+    assert!(out.status.success(), "empty history export must exit 0");
+    assert!(
+        !out_file.exists(),
+        "empty history must not write snapshot file"
+    );
+}
+
+/// Secrets Masker：export --mask-secrets → headers 凭据 redact + body PII/敏感键打码；
+/// schema 不变（产物仍可被 replay 加载）；无旗标保持原样（重放保真度优先，PRD D1）
+#[test]
+fn test_history_export_mask_secrets_flag() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+
+    // 一条含 Authorization 头 + PII body 的历史
+    let e = create_test_entry(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "GET",
+        "http://example.com/one",
+        200,
+    );
+    let mut masked = e.clone();
+    masked.request.headers.insert(
+        reqwest::header::AUTHORIZATION,
+        "Bearer sk-live-secret-value".parse().unwrap(),
+    );
+    masked.response.body =
+        Some(r#"{"phone":"13812345678","password":"p@ss","memo":"ok"}"#.to_string());
+    let raw_view = masked.clone();
+    write_history_entries(dir_path, &[masked]);
+    let out_masked = temp_dir.path().join("masked.json");
+    let out_raw = temp_dir.path().join("raw.json");
+
+    let run_export = |out: &std::path::Path, mask: bool| {
+        let mut args = vec![
+            "history".to_string(),
+            "export".to_string(),
+            "-o".to_string(),
+            out.to_str().unwrap().to_string(),
+        ];
+        if mask {
+            args.push("--mask-secrets".to_string());
+        }
+        Command::new(rupost_bin())
+            .env("RUPOST_HISTORY_DIR", dir_path)
+            .args(&args)
+            .output()
+            .expect("run history export")
+    };
+
+    let out = run_export(&out_masked, true);
+    assert!(out.status.success());
+    let content = fs::read_to_string(&out_masked).unwrap();
+    assert!(
+        content.contains("[REDACTED]"),
+        "authorization header redacted: {content}"
+    );
+    assert!(
+        !content.contains("sk-live-secret-value"),
+        "credential gone: {content}"
+    );
+    assert!(content.contains("***"), "pii masked: {content}");
+    assert!(!content.contains("13812345678"), "phone gone: {content}");
+    assert!(
+        content.contains("memo") && content.contains("ok"),
+        "plain data preserved: {content}"
+    );
+
+    let out = run_export(&out_raw, false);
+    assert!(out.status.success());
+    let raw = fs::read_to_string(&out_raw).unwrap();
+    assert!(
+        raw.contains("sk-live-secret-value"),
+        "no flag keeps fidelity (replay 依据)"
+    );
+    let _ = raw_view;
 }

@@ -1,0 +1,84 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/auth/login",
+    "variants": [
+      {
+        "condition": {
+          "source": "Body",
+          "key": "$.password",
+          "operator": "Equals",
+          "expected_value": "hunter2"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"token\":\"real-token-8842\",\"user\":\"lee\"}"
+      },
+      {
+        "condition": null,
+        "status": 401,
+        "headers": { "Content-Type": "application/json", "X-Request-Id": "req-401-anchor" },
+        "response_body": "{\"error\":\"invalid_credentials\"}"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/user/profile",
+    "variants": [
+      {
+        "condition": {
+          "source": "Header",
+          "key": "Authorization",
+          "operator": "Equals",
+          "expected_value": "Bearer real-token-8842"
+        },
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"name\":\"李雷\",\"plan\":\"pro\",\"timestamp\":\"2026-11-04T00:00:00Z\",\"request_id\":\"uuid-demo-0001\"}"
+      },
+      {
+        "condition": null,
+        "status": 401,
+        "headers": { "Content-Type": "application/json", "X-Request-Id": "req-401-anchor" },
+        "response_body": "{\"error\":\"Unauthorized\"}"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/orders",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"orders\":[{\"id\":1,\"total\":99},{\"id\":2,\"total\":128}]}"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/report/export",
+    "variants": [
+      {
+        "condition": null,
+        "status": 500,
+        "headers": { "Content-Type": "application/json", "X-Request-Id": "trace-anchor-42" },
+        "response_body": "{\"error\":\"internal_error\"}"
+      }
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/billing",
+    "variants": [
+      {
+        "condition": null,
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "response_body": "{\"plan\":\"pro\",\"quota\":100}"
+      }
+    ]
+  }
+]

@@ -1,0 +1,7 @@
+# 获取用户资料（对本地 mock 发起，预期 401 失败用于分诊演示）
+### get-profile
+# @name get-profile
+GET {{base_url}}/v1/users/1
+Accept: application/json
+
+# @assert status == 200

@@ -1,0 +1,91 @@
+# =========================================================================
+# 多租户 IAM 权限体系集成测试套件 (iam_test_suite.http)
+# =========================================================================
+# 运行方式：
+# 1. 终端 A 启动 Mock 服务:
+#    rupost mock examples/scenario_iam_tenant/iam_spec.md --port 9001
+# 2. 终端 B 运行测试套件:
+#    rupost test examples/scenario_iam_tenant/iam_test_suite.http \
+#      --var base_url=http://127.0.0.1:9001 \
+#      --var tenant_id=corp_alpha \
+#      --var auth_token=dev_iam_token_xyz
+# =========================================================================
+
+### 1. 租户管理员权限查询 (验证 query.role == admin 分支返回完整权限)
+GET {{base_url}}/api/v1/tenants/roles?role=admin
+X-Tenant-ID: {{tenant_id}}
+Authorization: Bearer {{auth_token}}
+
+@assert status == 200
+@assert body.role == "admin"
+@assert body.permissions.0 == "user:create"
+
+
+### 2. 普通成员权限查询 (验证 query.role == member 分支)
+GET {{base_url}}/api/v1/tenants/roles?role=member
+X-Tenant-ID: {{tenant_id}}
+Authorization: Bearer {{auth_token}}
+
+@assert status == 200
+@assert body.role == "member"
+@assert body.permissions.0 == "project:read"
+
+
+### 3. 租户冻结拦截测试 (验证 header.X-Tenant-ID == suspended_corp 返回 403)
+GET {{base_url}}/api/v1/tenants/roles
+X-Tenant-ID: suspended_corp
+Authorization: Bearer {{auth_token}}
+
+@assert status == 403
+@assert body.error == "TenantSuspended"
+
+
+### 4. 默认角色兜底测试 (无 role 参数触发 @mock-default)
+GET {{base_url}}/api/v1/tenants/roles
+X-Tenant-ID: {{tenant_id}}
+Authorization: Bearer {{auth_token}}
+
+@assert status == 200
+@assert body.role == "guest"
+
+
+### 5. 租户成员创建成功 (验证 POST @mock-default 返回 201)
+POST {{base_url}}/api/v1/tenants/users
+X-Tenant-ID: {{tenant_id}}
+Content-Type: application/json
+
+{
+  "email": "sarah@corp-alpha.com",
+  "name": "Sarah Connor",
+  "role": "admin"
+}
+
+@assert status == 201
+@assert body.id == "usr_tenant_9901"
+@assert body.status == "active"
+
+
+### 6. 邮箱冲突异常测试 (触发 query.conflict == true 返回 409)
+POST {{base_url}}/api/v1/tenants/users?conflict=true
+X-Tenant-ID: {{tenant_id}}
+Content-Type: application/json
+
+{
+  "email": "alex@corp-alpha.com",
+  "name": "Alex Mercer"
+}
+
+@assert status == 409
+@assert body.error == "UserAlreadyExists"
+
+
+### 7. 缺失租户头边界测试 (触发 header.X-Tenant-ID == None 返回 400)
+POST {{base_url}}/api/v1/tenants/users
+Content-Type: application/json
+
+{
+  "email": "lonely@orphan.com"
+}
+
+@assert status == 400
+@assert body.error == "MissingTenantContext"

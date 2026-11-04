@@ -1,0 +1,172 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "IAM & Tenant Management API",
+    "version": "1.0.0",
+    "description": "Multi-tenant role-based access control and member provisioning."
+  },
+  "servers": [
+    {
+      "url": "http://iam.enterprise.local/api/v1",
+      "description": "IAM Contract Server"
+    }
+  ],
+  "paths": {
+    "/tenants/roles": {
+      "get": {
+        "operationId": "getTenantRoles",
+        "summary": "Get Tenant Roles & Permissions",
+        "parameters": [
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["admin", "member", "guest"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Roles retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantRoleResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Tenant suspended or forbidden"
+          }
+        }
+      }
+    },
+    "/tenants/users": {
+      "post": {
+        "operationId": "createTenantUser",
+        "summary": "Create Tenant User",
+        "parameters": [
+          {
+            "name": "X-Tenant-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "conflict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Member created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantUserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing tenant header"
+          },
+          "409": {
+            "description": "User email conflict"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TenantRoleResponse": {
+        "type": "object",
+        "required": ["tenant_id", "role", "permissions"],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "example": "corp_alpha"
+          },
+          "role": {
+            "type": "string",
+            "example": "admin"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CreateTenantUserRequest": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "sarah@corp-alpha.com"
+          },
+          "name": {
+            "type": "string",
+            "example": "Sarah Connor"
+          },
+          "role": {
+            "type": "string",
+            "example": "admin"
+          }
+        }
+      },
+      "TenantUserResponse": {
+        "type": "object",
+        "required": ["id", "tenant_id", "email", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "usr_tenant_9901"
+          },
+          "tenant_id": {
+            "type": "string",
+            "example": "corp_alpha"
+          },
+          "email": {
+            "type": "string",
+            "example": "sarah@corp-alpha.com"
+          },
+          "status": {
+            "type": "string",
+            "example": "active"
+          }
+        }
+      }
+    }
+  }
+}

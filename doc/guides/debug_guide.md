@@ -15,6 +15,7 @@
 | D5 取证 | 拿着 trace-id 查服务端日志 | `--on-failure` | §5 |
 | D6 修复验证 | 改一处 → 重放验证 | `replay` / `history export` | §6–7 |
 | D7 沉淀 | 调试成果 → 回归资产 | `ai bootstrap --from history` | §8 |
+| 画像与需求 | 谁在用、解决什么问题、边界在哪 | 画像 × 需求映射 × 四场景实战 | §9–10 |
 
 ---
 
@@ -225,7 +226,47 @@ rupost ai assert "返回的 data.items 数组非空" --last 3
 
 ---
 
-## 9. 端到端实战演练：一次 401 的完整排障
+## 9. 用户画像与需求分析
+
+### 9.1 谁在使用（画像 × 环境 × 主场景）
+
+| 画像 | 环境 | 主场景 | 核心调试需求 | 首选能力入口 |
+| :-- | :-- | :--- | :--- | :--- |
+| **小李 · 后端开发** | 开发/测试 | 单接口失败排查 | 失败只给 expected/actual，手动比对平均 10–20 分钟/条；改完参数被迫重跑全文件；查服务端日志要切 k9s 逐 Pod 翻 | `--explain`、`t #3`、`--on-failure` |
+| **小赵 · QA/回归** | 测试（CI 靶场） | CI 批量回归 | 一夜 50 红平铺，人工分诊 1–2 小时；重放只知道"挂了几个"不知道挂了哪几条；CI 需要可编程的成败信号 | `--triage`/`ai triage`、`replay` 定位到条 + exit 1、`history export` |
+| **小张 · 前端联调** | 开发/联调 | 契约与环境差异比对 | 录制过的交互要在灰度/本地复现，定位"哪个接口行为变了" | `history export` → `replay --target` |
+| **评估者** | 本地 | 快速上手与离线验证 | 零配置跑通闭环，不被外部服务卡住 | `init`、`mock`、`bootstrap --no-ai` |
+| **流式场景标签（小王）** | 开发 | SSE/WS 实时链路调试 | 流式剧本、软匹配断言、断线自愈——**边界：快照重放不覆盖流式帧**（replay 走 HTTP 执行器，快照模型不含 SSE/WS 帧数据） | `@websocket`/SSE 剧本（见[协议专章](file:///doc/guides/websocket_testing.md)） |
+
+### 9.2 需求 → 能力映射（每条需求都有"下一条路"）
+
+| 用户需求（痛点实证） | 能力 | 兜底分级 | 机器可验验收 | 章节 |
+| :-- | :--- | :-- | :-- | :-- |
+| 失败只有原始 diff，单条归因 10–20 分钟 | `--explain` 就地归因 | **B1**（规则版确定性基线 + AI 增强） | verify_features 步骤 8（无 Key 降级锁定） | §3 |
+| 修复回路断裂：改一处要跑全文件 | `t api.http#3` / `--only` | **B0 确定性** | 8 项 wiremock 零发包集成测试 | §1.3 |
+| CI 50 红平铺，人工分诊 1–2 小时 | `ai triage` 签名聚类 | **B1**（分桶计数 100% 守恒） | 计数守恒 + 零幻觉 ID 测试 | §4 |
+| 查服务端日志要切 k9s 逐 Pod 翻 | `--on-failure` + trace 锚点 | **B0 确定性** | 假脚本捕获 env 三元组集成测试 | §5 |
+| 重放只回聚合计数，CI 无门禁信号 | replay per-entry + 失败 exit 1 | **B0 确定性** | 混合守恒/退出码双向/stdout 断言 | §6 |
+| 历史无法变成可重放资产（供给链断） | `history export` 桩转实 | **B0 确定性** | 导出→重放闭环测试 | §7 |
+| 网络通/断/TLS 问题难分辨 | `--debug-on-failure` / `diagnose` | **B0 确定性** | 四项守护 + 13 键 schema 契约 | §2 |
+| 调试成果散逸，无法防复发 | `ai bootstrap --from history` | **B1** | 无 Key 机械降级离线闭环 | §8 |
+
+### 9.3 兜底哲学：没有 AI 也能走完修复回路
+
+所有 **B1** 能力（`--explain`/`ai triage`/`ai bootstrap`）都以**确定性规则版为基线**：AI 缺失、无 Key 或调用失败时自动降级（规则版原因 / 确定性签名分组 / 机械模板），黄色提示一行、退出码不变。配合全部 **B0** 确定性能力（定点重跑、重放定位、取证锚点、初诊），**AI 完全缺席时开发者仍能走通约 80% 的修复回路**——AI 是增强，不是依赖。
+
+### 9.4 边界与安全注记
+
+* **凭据外发面**：快照与历史**原样保存凭据头**；`replay`/`export` 把录制凭据打向 `--target` 指向的环境——请勿指向不可信方，对外分享请走 `export --redact`（终端命令导出）路径；
+* **AI 出站默认关**：AI 归因/聚类仅在配置后主动触发，且发送前脱敏截断（4KB/条）；执行期零 AI（测试成败永远由确定性断言决定）；
+* **取证只给锚点**：`--on-failure` 只暴露 URL/状态码/trace-id，日志聚合展示完全委托用户管道（stern/kubectl），rupost 不内建集群操作；
+* **重放不覆盖流式**：快照模型不含 SSE/WS 帧，流式链路用剧本重跑验证。
+
+---
+
+## 10. 场景化实战演练
+
+### 10.1 后端小李：401 归因与修复（SC-1）
 
 ```bash
 # 1) 跑批量，红了
@@ -249,9 +290,66 @@ $ rupost t suite/ --on-failure 'stern api --grep $RUPOST_FAILED_TRACE_ID'
 $ rupost ai bootstrap --from history --last 20 -o regression.http
 ```
 
+**链路复盘**：D0 触发 → D3 归因（规则版直接给出鉴权类目）→ D6 定点重跑（不跑全文件）→ D5 取证（可选项，接日志管道）→ D7 沉淀。全程 AI 缺席也能走完（步骤 2/5 自动降级）。
+
+### 10.2 QA 小赵：CI 一夜 50 红（SC-2）
+
+```bash
+# 1) CI 夜跑落盘强类型报告（终端输出不受影响）
+$ rupost t suite/ --report-file target/report.json
+
+# 2) 早晨离线分诊——不重跑、无 AI 也出确定性根因簇
+$ rupost ai triage target/report.json
+  [Cluster #1] [Auth] 鉴权失败 (31 tests)
+    Signature : HTTP 401 @ /api/v1/*
+    Sample    : tests/auth/login.http#1 (user-login)
+  [Cluster #2] [Server] 服务端异常 (9 tests)
+  [Cluster #3] [Timeout] 请求超时 (10 tests)
+
+# 3) 只修 Cluster #1 的登录服务，然后导出历史 → 重放验证
+$ rupost history export --last 50 -o snap.json
+$ rupost replay snap.json -t http://staging.internal
+  Total: 50, Passed: 48, Failed: 2
+  Failed entries:
+   - #13 GET http://staging.internal/api/v1/orders (expected 200, got 500)
+   - #37 GET http://staging.internal/api/v1/orders/88 (expected 200, got 500)
+
+# 4) 退出码就是 CI 门禁：有失败即非零，接入现有流水线
+```
+
+**链路复盘**：D4 分诊把 50 红收敛为 3 簇（计数守恒，无幻觉 ID）→ 修根因簇 → D6 重放定位到条 → 剩余 2 条属于另一簇，继续按签名排查。
+
+### 10.3 前端小张：联调环境差异定位（SC-3）
+
+```bash
+# 1) 联调时对真服务录制（连同 --save-snapshot 生成快照）
+$ rupost t contract.http --save-snapshot snap.json
+
+# 2) 后端同学改了部署 → 本地/灰度重放，定位行为变化的接口
+$ rupost replay snap.json -t http://127.0.0.1:8080
+  Total: 4, Passed: 3, Failed: 1
+  Failed entries:
+   - #2 POST http://127.0.0.1:8080/login (expected 200, got 401)
+```
+
+**能定位什么**：接口下线/路径变更（404）、鉴权行为差异（401/403）、服务端异常（5xx）、超时劣化——**状态码级**契约差异全部定位到条。**边界**：body 字段级差异比对（状态码不变、内容变了）属 T4 Smart Diff 规划项，当前版本建议配合 `--explain` 的规则版提示或对录制响应用 `ai assert` 生成断言覆盖。
+
+### 10.4 后端小李：生产灰度取证（SC-4）
+
+```bash
+# 取证钩子按团队管道定制——rupost 只给锚点，聚合展示完全委托用户
+$ rupost t suite/ --on-failure \
+    'curl -s "$SLACK_WEBHOOK" -d "{\"text\":\"[$RUPOST_FAILED_STATUS] $RUPOST_FAILED_URL trace=$RUPOST_FAILED_TRACE_ID\"}"'
+
+# 或直连服务端日志聚合（stern 按 trace-id 过滤多 Pod）
+$ rupost t suite/ --on-failure 'stern deploy/api --since 5m --grep $RUPOST_FAILED_TRACE_ID'
+```
+
+**注意**：`RUPOST_FAILED_URL` 已脱敏（敏感 query 掩码）；trace 头全缺失时变量为空串且 `TestResult.warnings` 有一条提示；钩子 10s 超时强制整组终结，不会卡住测试流水线。
+
 ---
 
-## 10. 命令速查表
+## 11. 命令速查表
 
 | 场景 | 命令 |
 | :-- | :-- |

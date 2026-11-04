@@ -61,6 +61,24 @@
 4. body diff 的逐字段 JSON Patch 格式（v1 摘要文本即可，结构化 diff 登记 backlog）；
 5. 语义化命名增强、`--interactive` 组合（生成语义计划既有 backlog 项）。
 
+### 设计注记（两项推迟项的完整设计留档，2026-11-04）
+
+**注记 A：非目标 4（body_diff 结构化 JSON Patch）——"文本摘要 vs 机器可读数据"**
+
+现状：`body_diff` 是给人看的文本（前 3 处 `path: expected → actual`、脱敏、512B），由 `diff_values` 递归比较器 `push` + `join("; ")` 生成；消费方仅终端打印与 AI 归因（均读文本无障碍）。
+
+升级形态：`ReplayEntryResult` 增 `body_diff_ops: Vec<ReplayDiffOp { op, path, expected, actual }>`（serde default，additive 兼容旧文件）；`body_diff` 文本改为**从 ops 派生渲染**（单一事实源不双写）。可选对齐 RFC 6902 JSON Patch（行业标准但需 JSON Pointer 路径转换 `/user/name`、`/orders/0`）或自定义三字段结构（更轻）。
+
+**触发条件**：出现程序化消费方——T8 junit 报告嵌入机器可读 diff、MCP `get_diff` Tool、`ai triage` 按 diff 形状聚类。三者皆不存在，故零消费登记项。工作量约 1 天 + schema 锁定测试一轮。
+
+**注记 B：T1 已知限制（同值多处独立求值）——"单请求内生成值关联缺失"**
+
+现状：T1 逐处扫描替换，resolver `substitute` 为 `replace_all` 逐 match 独立求值（`resolver.rs:15-20` 实证）——同一关联 ID 在 Header 与 Body 两处出现时，重跑各生成新值，一致性断裂（服务端校验关联 ID 的场景重跑必败）。
+
+升级形态：命名形状语法 `{{$uuid@corr}}`（`@组名` 后缀标记关联组），resolver 单次调用内维护"组名 → 已生成值"局部表——同组首处生成、其余复用；决策表新增同组同值/异组异值/跨请求重置三行。**不做无名去重**（同请求两个无关 UUID 会被强行共享，制造错误关联）；**不适用 capture**（其语义为响应侧提取，请求自产值机制错位）。
+
+**触发条件**：用户报告"服务端校验多字段共享一个生成值"。工作量约 1 天。**与 T2 的分工**：跨请求值关联 → T2 溯源（已交付，capture 即天然 hoist）；单请求内生成值关联 → 本注记（deferred）。
+
 ## 六、执行计划（jj 原子提交，rupost-ai 线）
 
 | 步 | 提交 | 内容 | 验证 |

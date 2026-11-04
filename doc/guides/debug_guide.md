@@ -182,6 +182,8 @@ rupost replay snap.json -t http://127.0.0.1:8080 -v   # -v 显示响应体详情
 * **失败定位到条**：汇总后输出 `Failed entries` 清单（序号 1-based，与逐条打印的 `#N` 一致；mismatch 显示 expected/got，网络错误显示 error 原因）；
 * **CI 门禁语义**：任一条目失败进程 **exit 1**，全部成功 exit 0（快照文件损坏/无法解析同样非零）；
 * **比对语义（T4 Smart Diff）**：状态码精确相等 **+ body JSON 深比较**（默认排除 `timestamp`/`uuid`/`token` 等 14 个动态键，业务字段漂移会被抓）。`--ignore-fields <KEY,...>` 追加排除键，`--status-only` 停用 body 比对（恢复仅状态码语义）。**盲区提示**：被排除键上的真实回归会被掩盖（假通过面）——排查字段级内容问题时应收窄排除集。
+* **外发前脱敏（`--mask-secrets`，opt-in）**：快照原样保存凭据头与 PII——把快照发给他人前，录制/导出时加该旗标，headers 凭据与 body 敏感键/PII（手机号/银行卡/邮箱）会被打码，schema 不变仍可重放加载。**默认关**：掩码快照与真实响应必然失配，会破坏 body 比对——分享面才开启。
+* **失败就地归因**：`rupost replay snap.json --explain`——失败条目下方输出规则版 `[Possible Causes]`（配 AI 后追加根因段，无 Key 自动降级），exit 码仍由比对结果决定。
 
 ---
 

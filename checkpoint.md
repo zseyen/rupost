@@ -270,3 +270,7 @@ PRD 驱动四域交付（SSE/WS 接入 + 授权 + 消息搜索），全程 TDD�
 ## 阶段成果：P1 批次交付（T4 Smart Diff + AI 接线 + T1/T2 生成语义线，2026-11-04）
 
 PRD（双子代理评审 6 P0 吸收）后五原子提交：S1 replay body 深比较（默认 14 键排除 + `--ignore-fields`/`--status-only` 逃生 + 第四形态 body-only exit 1）；S2 `replay --explain`（ExplainSession FailureContext 级入口 + 桥合成 body 证据，无 Key B1 降级）+ verify_features 步骤 13；S3 T1 动态值反向模板化（dynamic.rs 形状扫描 + resolver 新增 `{{$timestamp_iso}}`/`{{$timestamp_ms}}`，敏感键凭据模板化优先）；S4 T2 链式值溯源（trace.rs 反序就近 + Cookie 删头靠罐 + 管线序 T2>T1>凭据）+ wiremock 链式闭环；S5 台账。全量门禁绿 + verify_features 13 步 PASS。**过程记录**：评审"零翻红"实证漏网两处（R6 闭环测试、verify 12.5）为新语义正确触发，对齐测试；verify 步骤 13 曾插入 HIST_SNAP 清理之后（bash -x 实证重排）。调试试跑集 examples/debug_demo 与统一指南同步可用。
+
+### Secrets Masker body 残余（2026-11-04，随 P1 批次后同日交付）
+
+路线图条目 1 勘误后残余（header/query 已由 generate 凭据模板化与 export 脱敏覆盖）：`t --save-snapshot` 与 `history export` 新增 `--mask-secrets`（opt-in）——headers 走 `redact_header_value`（Bearer 前缀保留）、body 走 `mask_body_secrets`（敏感键 `[REDACTED]` + PII 三正则手机/银行卡/邮箱，无截断）；掩码产物 schema 不变、仍可 replay 加载。**D1 翻案**：默认关（T4 body 比对上线后默认掩码毒化重放保真度）。掩码原语 `redact_free_text`/`mask_inline_secrets` 自 ai/redactor 下沉 exporter/redact（B0 统一归位）。PII 决策表 + 双命令集成（掩码 vs 无旗标保真对照）+ 掩码快照 schema 可加载，全量门禁绿。

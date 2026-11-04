@@ -33,4 +33,5 @@ cargo build --release
 
 - 全程零外网、零 AI 配置（有意展示 B1 降级路径）；
 - 演示历史隔离在 `.demo-history/`（`RUPOST_HISTORY_DIR`），不污染真实 `~/.rupost`；
-- mock 密码条件值 `hunter2` 仅用于本地演示。
+- mock 密码条件值 `hunter2` 仅用于本地演示；
+- 分享演示快照（`snap.json`/`snap_hist.json`）给他人前，用 `--mask-secrets` 重新录制/导出以打码凭据与 PII（`rupost history export --last 5 -o share.json --mask-secrets`）。

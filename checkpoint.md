@@ -274,3 +274,9 @@ PRD（双子代理评审 6 P0 吸收）后五原子提交：S1 replay body 深�
 ### Secrets Masker body 残余（2026-11-04，随 P1 批次后同日交付）
 
 路线图条目 1 勘误后残余（header/query 已由 generate 凭据模板化与 export 脱敏覆盖）：`t --save-snapshot` 与 `history export` 新增 `--mask-secrets`（opt-in）——headers 走 `redact_header_value`（Bearer 前缀保留）、body 走 `mask_body_secrets`（敏感键 `[REDACTED]` + PII 三正则手机/银行卡/邮箱，无截断）；掩码产物 schema 不变、仍可 replay 加载。**D1 翻案**：默认关（T4 body 比对上线后默认掩码毒化重放保真度）。掩码原语 `redact_free_text`/`mask_inline_secrets` 自 ai/redactor 下沉 exporter/redact（B0 统一归位）。PII 决策表 + 双命令集成（掩码 vs 无旗标保真对照）+ 掩码快照 schema 可加载，全量门禁绿。
+
+---
+
+## TUI 接入 CLI 能力（2026-11-05，tui-cli-bridge workspace）
+
+PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执行模型对齐（多请求 streaming、选择器、cookie bridge）、调试增强（timing 行、Diagnose tab、X 导出）、快照与生成（Ctrl+S、G 键）。executor 新增 `execute_all_streaming` 委托重构（行为零变化）。附带诊断 flake 修复（透明代理环境哨兵）。

@@ -327,10 +327,10 @@ pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
     // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
     // 非 UTF-8 值原样保留（掩码通道不损伤结构）
     let mask_headers = |map: &mut reqwest::header::HeaderMap| {
-        let drained: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> =
-            map.drain()
-                .map(|(name, value)| (name.expect("valid header name"), value))
-                .collect();
+        let drained: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> = map
+            .drain()
+            .map(|(name, value)| (name.expect("valid header name"), value))
+            .collect();
         for (name, value) in drained {
             match value.to_str() {
                 Ok(val) => {

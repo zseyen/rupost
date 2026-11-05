@@ -368,7 +368,10 @@ mod tests {
         assert!(state.run_results[0].skipped);
         assert!(!state.is_loading, "last result lands loading=false");
         // 副作用短路：last_response 未被伪造错误污染
-        assert!(state.last_response.is_none(), "skip must not fabricate error response");
+        assert!(
+            state.last_response.is_none(),
+            "skip must not fabricate error response"
+        );
         // 文件执行状态不得误标 Failed
         assert!(
             !state

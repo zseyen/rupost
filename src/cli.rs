@@ -1219,5 +1219,6 @@ mod tests {
         assert!(env.is_none());
         assert!(var.is_empty());
         assert!(env_file.is_none());
+        assert!(cookie_file.is_none());
     }
 }

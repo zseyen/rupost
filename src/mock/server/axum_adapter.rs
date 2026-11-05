@@ -17,10 +17,6 @@ pub struct AxumMockServer;
 
 impl MockServer for AxumMockServer {
     async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()> {
-        let app: Router = Router::new()
-            .fallback(any(handle_mock_request))
-            .with_state(matcher.clone());
-
         let addr = format!("127.0.0.1:{}", port);
         let listener = tokio::net::TcpListener::bind(&addr)
             .await

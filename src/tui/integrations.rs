@@ -170,16 +170,14 @@ pub fn spawn_ai_assert(event_tx: &tokio::sync::mpsc::Sender<TuiEvent>, text: &st
 
 /// R13：cookie 持久化——桥状态写回 `--cookie-file`（有配置时每次触发末尾调用）
 pub fn persist_cookie_bridge(state: &AppState) {
-    if let Some(path) = &state.cookie_file_path {
-        if let Some(json) = state
+    if let Some(path) = &state.cookie_file_path
+        && let Some(json) = state
             .cookie_bridge
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-        {
-            if let Err(e) = std::fs::write(path, json.to_string()) {
-                tracing::warn!("cookie file persist failed: {}", e);
-            }
-        }
+        && let Err(e) = std::fs::write(path, json.to_string())
+    {
+        tracing::warn!("cookie file persist failed: {}", e);
     }
 }

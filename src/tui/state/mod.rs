@@ -307,6 +307,14 @@ impl AppState {
         run_total: usize,
     ) {
         self.run_total = run_total;
+        // skipped 结果短路：不产生响应/不登记文件执行状态/不触发 finished 副作用
+        // （success=true 且 response=None 的 skip 结果若走 conv 会被误转为伪造错误）
+        if result.skipped {
+            self.run_results.push(result);
+            self.run_index = self.run_results.len();
+            self.is_loading = self.run_index < self.run_total;
+            return;
+        }
         let conv: Result<Response, String> =
             if result.success {
                 result.response.clone().map(Ok).unwrap_or_else(|| {

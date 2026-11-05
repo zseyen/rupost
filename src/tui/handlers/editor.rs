@@ -109,9 +109,16 @@ async fn trigger_file_execution(
         return;
     }
 
-    // 状态机兼容：SendRequest 以首个请求登记（is_loading/文件执行状态/缓冲清理）
-    if let Some(first) = parsed_file.requests.first() {
-        state.update(Action::SendRequest(Box::new(first.clone())));
+    // 状态机兼容：SendRequest 登记当前运行的主请求（is_loading/文件执行状态/缓冲清理）。
+    // 选择器模式下登记**选中请求**而非文件首——current_request 供 Ctrl+S 快照等下游语义。
+    let primary = parsed_file
+        .requests
+        .iter()
+        .find(|r| !r.should_skip())
+        .cloned()
+        .or_else(|| parsed_file.requests.first().cloned());
+    if let Some(primary) = primary {
+        state.update(Action::SendRequest(Box::new(primary)));
     }
     state.run_results.clear();
     state.run_index = 0;

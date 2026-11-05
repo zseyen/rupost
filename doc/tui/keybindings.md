@@ -55,6 +55,19 @@
 | `N` | 上一个 | 跳到上一个匹配行 |
 | `Esc` | 退出搜索 | query 留存，n/N 续跳 |
 
+### 执行模型与 CLI 能力接入（2026-11-05 新增）
+
+| 按键 | 功能 | 说明 |
+|------|------|------|
+| 运行键（`r`/`Ctrl+Enter`） | 整文件执行 | 多请求文件顺序全量执行（变量级联、@skip 跳过）；Results tab 逐条显示状态 |
+| `#`（Editor） | 请求选择器 | `#3` / `@name` / 裸序号；设置后仅执行选中请求（`#` 前缀可选） |
+| `X` / `Shift+X` | 导出 curl | 当前请求导出为 curl 命令弹窗；默认 [REDACTED] 脱敏，Shift+X 原样 |
+| `Ctrl+S` | 快照保存 | 当前请求/响应写入 `./snapshots/`（--mask-secrets 同款脱敏） |
+| `G`（History） | 生成 .http | 选中历史记录经 HttpGenerator 语义化命名写入工作区 |
+| `n`（响应面板） | timing 行 | 运行后显示 DNS/TCP/TTFB/Transfer 四段耗时（有数据时） |
+| 失败自动诊断 | Diagnose tab | 请求失败自动执行诊断并切换到第 5 tab（debug-on-failure 语义） |
+| cookie 延续 | 会话级 | 触发间 cookie 状态经 cookie_bridge 保持（与 CLI 批内共享语义对齐） |
+
 ### WS 交互会话（2026-10-30 新增，Editor 面板）
 
 | 按键 | 功能 | 说明 |

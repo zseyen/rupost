@@ -307,18 +307,17 @@ impl AppState {
         run_total: usize,
     ) {
         self.run_total = run_total;
-        let conv: Result<Response, String> = if result.success {
-            result
-                .response
-                .clone()
-                .map(Ok)
-                .unwrap_or_else(|| Err("request succeeded but no response returned".to_string()))
-        } else {
-            Err(result
-                .error
-                .clone()
-                .unwrap_or_else(|| "Unknown execution error".to_string()))
-        };
+        let conv: Result<Response, String> =
+            if result.success {
+                result.response.clone().map(Ok).unwrap_or_else(|| {
+                    Err("request succeeded but no response returned".to_string())
+                })
+            } else {
+                Err(result
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Unknown execution error".to_string()))
+            };
         self.handle_request_finished(
             conv,
             captured_vars,

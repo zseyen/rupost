@@ -66,22 +66,25 @@ pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Se
     };
 
     // R4：选择器接入（#n / @name，复用 runner 纯函数）
-    if let Some(sel) = state.run_selector.clone() {
-        if !sel.trim().is_empty() {
-            let selector = match crate::runner::selector::parse_only_selector(&sel) {
-                Ok(s) => s,
-                Err(e) => {
-                    state.last_error = Some(format!("selector '{}': {}", sel, e));
-                    return;
-                }
-            };
-            let mut file = parsed_file;
-            if let Err(e) = crate::runner::selector::apply_selector(&mut file, &selector) {
+    if let Some(sel) = state.run_selector.clone()
+        && !sel.trim().is_empty()
+    {
+        // 语法归一化：`#3` 与 `3` 等价（# 前缀来自路径片段语法习惯）
+        let raw = sel.trim();
+        let normalized = raw.strip_prefix('#').unwrap_or(raw);
+        let selector = match crate::runner::selector::parse_only_selector(normalized) {
+            Ok(s) => s,
+            Err(e) => {
                 state.last_error = Some(format!("selector '{}': {}", sel, e));
                 return;
             }
-            return trigger_file_execution(state, file, event_tx).await;
+        };
+        let mut file = parsed_file;
+        if let Err(e) = crate::runner::selector::apply_selector(&mut file, &selector) {
+            state.last_error = Some(format!("selector '{}': {}", sel, e));
+            return;
         }
+        return trigger_file_execution(state, file, event_tx).await;
     }
     trigger_file_execution(state, parsed_file, event_tx).await;
 }
@@ -125,7 +128,11 @@ async fn trigger_file_execution(
     // R5：cookie 会话延续——桥接上一次运行的导出状态
     let mut executor = crate::runner::TestExecutor::with_ephemeral_cookies();
     executor.debug_on_failure = true; // R7：失败自动诊断（对齐 CLI --debug-on-failure）
-    if let Some(state_json) = state.cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    if let Some(state_json) = state
+        .cookie_bridge
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
         && let Err(e) = executor.import_cookie_state(state_json)
     {
         tracing::warn!("cookie bridge import failed: {}", e);
@@ -766,5 +773,123 @@ mod wiring_tests {
             headers.iter().any(|h| h == "x-api: resolved-v1"),
             "variable must be resolved in WS handshake, got {headers:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod selector_wiring_tests {
+    use super::*;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// R4 接线守护：run_selector 生效时仅选中请求收流量——
+    /// `#` 前缀归一化（#2 ≡ 2）+ apply_selector 接入。
+    #[tokio::test]
+    async fn test_trigger_with_selector_hits_only_selected() {
+        let server = MockServer::start().await;
+        for i in 1..=3 {
+            Mock::given(method("GET"))
+                .and(path(format!("/r{i}")))
+                .respond_with(ResponseTemplate::new(200).set_body_string(format!("r{i}")))
+                .mount(&server)
+                .await;
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("multi.http");
+        std::fs::write(
+            &file,
+            format!(
+                "### one\nGET {}/r1\n\n### two\nGET {}/r2\n\n### three\nGET {}/r3\n",
+                server.uri(),
+                server.uri(),
+                server.uri()
+            ),
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        state.editor_text = std::fs::read_to_string(&file).unwrap();
+        state.editor_file_path = Some(file.to_string_lossy().into_owned());
+        state.run_selector = Some("#2".to_string()); // TUI 用户语法
+
+        let (tx, mut rx) = mpsc::channel(64);
+        trigger_request_execution(&mut state, &tx).await;
+
+        // 手动消费事件（模拟 app.rs 主循环），驱动 run_results 簿记
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline && state.run_results.is_empty() {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Some(TuiEvent::RequestResult {
+                    result,
+                    captured_vars,
+                    run_total,
+                })) => {
+                    state.handle_request_result(*result, captured_vars, run_total);
+                }
+                Ok(Some(_)) => continue,
+                _ => {}
+            }
+        }
+        // 等全部结果（含 2 个 SKIP——选择器语义：非选中标记 skip）
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline && state.run_results.len() < 3 {
+            match tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
+                Ok(Some(TuiEvent::RequestResult {
+                    result,
+                    captured_vars,
+                    run_total,
+                })) => {
+                    state.handle_request_result(*result, captured_vars, run_total);
+                }
+                Ok(Some(_)) => continue,
+                _ => {}
+            }
+        }
+        assert_eq!(state.run_results.len(), 3, "skipped requests still report");
+
+        // 选中请求（2）真实执行，1/3 SKIP
+        assert!(state.run_results[0].skipped, "r1 must be skipped");
+        assert!(
+            !state.run_results[1].skipped && state.run_results[1].success,
+            "r2 must execute: {:?}",
+            state.run_results[1].error
+        );
+        assert!(state.run_results[2].skipped, "r3 must be skipped");
+
+        let received = server.received_requests().await.expect("recorded");
+        assert_eq!(received.len(), 1, "exactly one request must hit the wire");
+        assert_eq!(received[0].url.path(), "/r2");
+    }
+
+    /// R4 守护：非法选择器浮出可读错误、不执行
+    #[tokio::test]
+    async fn test_trigger_with_out_of_range_selector_surfaces_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let mut state = AppState::new();
+        state.editor_text = format!(
+            "### one\nGET {}/r1\n\n### two\nGET {}/r2\n",
+            server.uri(),
+            server.uri()
+        );
+        state.run_selector = Some("9".to_string());
+
+        let (tx, _rx) = mpsc::channel(64);
+        trigger_request_execution(&mut state, &tx).await;
+
+        assert!(
+            state.last_error.as_deref().unwrap().contains("越界"),
+            "out-of-range must surface: {:?}",
+            state.last_error
+        );
+        // 无流量
+        let received = server.received_requests().await.unwrap_or_default();
+        assert!(received.is_empty(), "no traffic on selector error");
     }
 }

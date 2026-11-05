@@ -266,7 +266,8 @@ impl TestExecutor {
         parsed_file: ParsedFile,
         context: &mut VariableContext,
     ) -> Result<Vec<TestResult>> {
-        self.execute_all_streaming(parsed_file, context, |_, _| {}).await
+        self.execute_all_streaming(parsed_file, context, |_, _| {})
+            .await
     }
 
     /// 执行单个请求

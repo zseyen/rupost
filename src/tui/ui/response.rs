@@ -207,9 +207,18 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 let (status_text, color) = if r.skipped {
                     ("SKIP".to_string(), t.dim)
                 } else if r.success {
-                    (format!("PASS {}", r.status.map(|s| s.to_string()).unwrap_or_default()), t.ok)
+                    (
+                        format!(
+                            "PASS {}",
+                            r.status.map(|s| s.to_string()).unwrap_or_default()
+                        ),
+                        t.ok,
+                    )
                 } else {
-                    (format!("FAIL {}", r.error.clone().unwrap_or_default()), t.err)
+                    (
+                        format!("FAIL {}", r.error.clone().unwrap_or_default()),
+                        t.err,
+                    )
                 };
                 let passed = r.assertions.iter().filter(|a| a.passed).count();
                 lines.push(Line::from(vec![
@@ -228,7 +237,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                     ),
                     Span::styled(
                         format!("assertions {}/{} passed", passed, r.assertions.len()),
-                        Style::default().fg(if passed == r.assertions.len() { t.ok } else { t.err }),
+                        Style::default().fg(if passed == r.assertions.len() {
+                            t.ok
+                        } else {
+                            t.err
+                        }),
                     ),
                 ]));
                 lines.push(Line::from(Span::styled(
@@ -272,8 +285,14 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                     Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
-                lines.push(kv("URL:", d.url.clone()));
-                lines.push(kv("Scheme:", if d.is_https { "https" } else { "http" }.to_string()));
+                lines.push(Line::from(vec![
+                    Span::styled("URL: ", Style::default().fg(t.dim)),
+                    Span::raw(d.url.clone()),
+                ]));
+                lines.push(kv(
+                    "Scheme:",
+                    if d.is_https { "https" } else { "http" }.to_string(),
+                ));
                 if let Some(status) = d.http_status {
                     lines.push(kv("HTTP Status:", status.to_string()));
                 }
@@ -282,7 +301,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 }
                 lines.push(kv(
                     "Resolved IPs:",
-                    if d.resolved_ips.is_empty() { "-".to_string() } else { d.resolved_ips.join(", ") },
+                    if d.resolved_ips.is_empty() {
+                        "-".to_string()
+                    } else {
+                        d.resolved_ips.join(", ")
+                    },
                 ));
                 lines.push(kv("DNS Lookup:", format!("{:?}", d.dns_lookup_duration)));
                 lines.push(kv("TCP Connect:", format!("{:?}", d.tcp_connect_duration)));
@@ -295,7 +318,10 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 lines.push(kv("Total:", format!("{:?}", d.total_duration)));
                 if let Some(ref cert) = d.cert_info {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled("Certificate:", Style::default().fg(t.accent))));
+                    lines.push(Line::from(Span::styled(
+                        "Certificate:",
+                        Style::default().fg(t.accent),
+                    )));
                     lines.push(kv("  Subject:", cert.subject.clone()));
                     lines.push(kv("  Expires in:", format!("{} days", cert.days_remaining)));
                     if !cert.sans.is_empty() {

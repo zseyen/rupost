@@ -280,3 +280,9 @@ PRD（双子代理评审 6 P0 吸收）后五原子提交：S1 replay body 深�
 ## TUI 接入 CLI 能力（2026-11-05，tui-cli-bridge workspace）
 
 PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执行模型对齐（多请求 streaming、选择器、cookie bridge）、调试增强（timing 行、Diagnose tab、X 导出）、快照与生成（Ctrl+S、G 键）。executor 新增 `execute_all_streaming` 委托重构（行为零变化）。附带诊断 flake 修复（透明代理环境哨兵）。
+
+---
+
+## TUI 接入剩余 CLI 功能（2026-11-05/06，tui-cli-bridge workspace）
+
+"接入所有新增功能"目标收尾：诊断 flake 修复（环境哨兵）→ CLI-parity 三域九项（前批）→ 剩余四项（V 快照重放 / M mock 开关 / I AI 断言 / --cookie-file 持久化）。mock/server.rs 拆分 build/serve 供编程接入。基线 45 套件 807 测试绿；clippy 零警告。

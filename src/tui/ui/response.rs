@@ -118,11 +118,19 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let content_area = chunks[1];
 
     // 2. 渲染详情子选项卡
-    let tab_titles = vec!["[1] Response", "[2] Headers", "[3] Request"];
+    let tab_titles = vec![
+        "[1] Response",
+        "[2] Headers",
+        "[3] Request",
+        "[4] Results",
+        "[5] Diagnose",
+    ];
     let active_idx = match state.active_detail_tab {
         DetailTab::Response => 0,
         DetailTab::Headers => 1,
         DetailTab::Request => 2,
+        DetailTab::Results => 3,
+        DetailTab::Diagnose => 4,
     };
     let tabs = Tabs::new(tab_titles)
         .select(active_idx)
@@ -172,7 +180,133 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // 必须与流式态同路渲染，否则视口恒空且可能串入上一轮运行的旧日志
     let session_active = state.ws_session.is_some();
 
-    if use_streaming && is_ws {
+    if state.active_detail_tab == DetailTab::Results {
+        // R3：多请求执行结果摘要
+        let mut lines: Vec<Line> = Vec::new();
+        if state.run_total == 0 {
+            lines.push(Line::from(Span::styled(
+                "No run in this session. Trigger execution to collect results.",
+                Style::default().fg(t.dim),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "Run progress: {}/{} (selector: {})",
+                    state.run_results.len(),
+                    state.run_total,
+                    state.run_selector.as_deref().unwrap_or("-")
+                ),
+                Style::default().fg(t.info),
+            )));
+            lines.push(Line::from(""));
+            for r in &state.run_results {
+                let name = r
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("request #{}", r.request_number));
+                let (status_text, color) = if r.skipped {
+                    ("SKIP".to_string(), t.dim)
+                } else if r.success {
+                    (format!("PASS {}", r.status.map(|s| s.to_string()).unwrap_or_default()), t.ok)
+                } else {
+                    (format!("FAIL {}", r.error.clone().unwrap_or_default()), t.err)
+                };
+                let passed = r.assertions.iter().filter(|a| a.passed).count();
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("#{:<3} ", r.request_number),
+                        Style::default().fg(t.dim),
+                    ),
+                    Span::styled(format!("{name} "), Style::default().fg(t.text)),
+                    Span::styled(
+                        format!("{status_text} "),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("{}ms ", r.duration.as_millis()),
+                        Style::default().fg(t.dim),
+                    ),
+                    Span::styled(
+                        format!("assertions {}/{} passed", passed, r.assertions.len()),
+                        Style::default().fg(if passed == r.assertions.len() { t.ok } else { t.err }),
+                    ),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    format!("     {}", r.url),
+                    Style::default().fg(t.dim),
+                )));
+            }
+            if state.run_results.len() < state.run_total {
+                lines.push(Line::from(Span::styled(
+                    format!("… running {}/{}", state.run_results.len(), state.run_total),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                )));
+            }
+        }
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, content_area);
+    } else if state.active_detail_tab == DetailTab::Diagnose {
+        // R7：失败自动诊断数据（TUI 原生渲染，非 ANSI 直印）
+        let mut lines: Vec<Line> = Vec::new();
+        match &state.last_diagnose {
+            None => {
+                lines.push(Line::from(Span::styled(
+                    "No diagnose data for the last request.",
+                    Style::default().fg(t.dim),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Diagnose runs automatically when a request fails (debug-on-failure semantics).",
+                    Style::default().fg(t.dim),
+                )));
+            }
+            Some(d) => {
+                let kv = |k: &str, v: String| {
+                    Line::from(vec![
+                        Span::styled(format!("{:<22}", k), Style::default().fg(t.dim)),
+                        Span::raw(v),
+                    ])
+                };
+                lines.push(Line::from(Span::styled(
+                    "Network Diagnostics (auto on failure)",
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                lines.push(kv("URL:", d.url.clone()));
+                lines.push(kv("Scheme:", if d.is_https { "https" } else { "http" }.to_string()));
+                if let Some(status) = d.http_status {
+                    lines.push(kv("HTTP Status:", status.to_string()));
+                }
+                if let Some(ref ver) = d.http_version {
+                    lines.push(kv("HTTP Version:", ver.clone()));
+                }
+                lines.push(kv(
+                    "Resolved IPs:",
+                    if d.resolved_ips.is_empty() { "-".to_string() } else { d.resolved_ips.join(", ") },
+                ));
+                lines.push(kv("DNS Lookup:", format!("{:?}", d.dns_lookup_duration)));
+                lines.push(kv("TCP Connect:", format!("{:?}", d.tcp_connect_duration)));
+                if let Some(tls) = d.tls_handshake_duration {
+                    lines.push(kv("TLS Handshake:", format!("{tls:?}")));
+                }
+                if let Some(ttfb) = d.ttfb {
+                    lines.push(kv("TTFB:", format!("{ttfb:?}")));
+                }
+                lines.push(kv("Total:", format!("{:?}", d.total_duration)));
+                if let Some(ref cert) = d.cert_info {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled("Certificate:", Style::default().fg(t.accent))));
+                    lines.push(kv("  Subject:", cert.subject.clone()));
+                    lines.push(kv("  Expires in:", format!("{} days", cert.days_remaining)));
+                    if !cert.sans.is_empty() {
+                        lines.push(kv("  SANs:", cert.sans.join(", ")));
+                    }
+                }
+            }
+        }
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, content_area);
+    } else if use_streaming && is_ws {
         let visual_lines = if state.is_loading || session_active {
             state.ws_visual_lines.clone()
         } else if state.log_file_path.is_some() {
@@ -389,6 +523,8 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
         let mut raw_lines = Vec::new();
 
         match state.active_detail_tab {
+            // Results/Diagnose 有专属渲染臂，不经 HTTP 缓存管线
+            DetailTab::Results | DetailTab::Diagnose => {}
             DetailTab::Response => {
                 let status_color = if resp.is_success() { t.ok } else { t.err };
 

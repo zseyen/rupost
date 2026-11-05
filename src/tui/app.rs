@@ -129,14 +129,12 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                 TuiEvent::MouseInput(mouse_event) => {
                     super::handlers::handle_mouse(&mut state, mouse_event);
                 }
-                TuiEvent::RequestFinished {
+                TuiEvent::RequestResult {
                     result,
                     captured_vars,
-                    assertions,
-                    warnings,
-                    ..
+                    run_total,
                 } => {
-                    state.handle_request_finished(*result, captured_vars, assertions, warnings);
+                    state.handle_request_result(*result, captured_vars, run_total);
                     state.response_visual_lines.clear(); // 清空缓存以强迫重新计算预折行
                     state.response_scroll = 0; // 请求结束重置滚动
 

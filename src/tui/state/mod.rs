@@ -35,6 +35,10 @@ pub enum DetailTab {
     Response,
     Headers,
     Request,
+    /// 多请求执行结果摘要（run_results）
+    Results,
+    /// 失败自动诊断数据（last_diagnose）
+    Diagnose,
 }
 
 use std::collections::HashSet;
@@ -62,6 +66,8 @@ pub enum InputMode {
     Search(Box<ratatui_textarea::TextArea<'static>>),
     /// WS 交互会话发送（`S` 键，Enter 发送）
     WsSend(Box<ratatui_textarea::TextArea<'static>>),
+    /// 单请求选择器（`#` 键，`#3` / `@name`）
+    Selector(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +163,17 @@ pub struct AppState {
     pub ws_session: Option<crate::tui::ws_interactive::WsInteractiveSession>,
     pub pending_ws_send: Option<String>,
 
+    // CLI 能力接入（R2-R9）：执行模型 / 调试增强 / 快照
+    pub run_results: Vec<crate::runner::types::TestResult>,
+    pub run_total: usize,
+    pub run_index: usize,
+    pub run_selector: Option<String>,
+    pub cookie_bridge: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    pub last_timing: Option<crate::http::timing::RequestTiming>,
+    pub last_diagnose: Option<crate::http::diagnose::DiagnosticsReport>,
+    /// X 键导出的命令文本（弹窗展示，Esc 关闭）
+    pub show_export: Option<String>,
+
     /// 主题种类（`,` 切换）；取色经 palette()
     pub theme: ThemeKind,
 
@@ -232,6 +249,14 @@ impl AppState {
             search_match_index: 0,
             ws_session: None,
             pending_ws_send: None,
+            run_results: Vec::new(),
+            run_total: 0,
+            run_index: 0,
+            run_selector: None,
+            cookie_bridge: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            last_timing: None,
+            last_diagnose: None,
+            show_export: None,
 
             theme: ThemeKind::Dark,
 
@@ -269,6 +294,48 @@ impl AppState {
     /// 当前主题调色板
     pub fn palette(&self) -> &'static Theme {
         palette(self.theme)
+    }
+
+    /// CLI 能力接入（R2/R6/R7）：消费单个请求结果——
+    /// 复用既有 finished 语义（last_response/assertions/warnings/cookie 状态机），
+    /// 叠加多请求簿记（run_results/run_index）与 timing/diagnose 暂存。
+    /// is_loading 在最后一个结果到达时才落 false（多请求运行期保持互斥）。
+    pub fn handle_request_result(
+        &mut self,
+        result: crate::runner::types::TestResult,
+        captured_vars: std::collections::HashMap<String, String>,
+        run_total: usize,
+    ) {
+        self.run_total = run_total;
+        let conv: Result<Response, String> = if result.success {
+            result
+                .response
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(|| Err("request succeeded but no response returned".to_string()))
+        } else {
+            Err(result
+                .error
+                .clone()
+                .unwrap_or_else(|| "Unknown execution error".to_string()))
+        };
+        self.handle_request_finished(
+            conv,
+            captured_vars,
+            result.assertions.clone(),
+            result.warnings.clone(),
+        );
+        self.last_timing = result.timing.clone();
+        self.last_diagnose = result.diagnose_report.clone();
+        let failed = !result.success;
+        self.run_results.push(result);
+        self.run_index = self.run_results.len();
+        self.is_loading = self.run_index < self.run_total;
+        // 失败自动切 Diagnose tab（R7：对齐 CLI --debug-on-failure 的失败即诊语义）
+        if failed && self.last_diagnose.is_some() {
+            self.active_detail_tab = DetailTab::Diagnose;
+            self.response_visual_lines.clear();
+        }
     }
 
     /// 注入文件端口（单测用 InMemoryRepository 隔离真实磁盘）

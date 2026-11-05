@@ -21,6 +21,17 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
         (InputMode::Filter(_), KeyCode::Enter) => {
             state.input_mode = InputMode::None; // 过滤已实时生效，Enter 仅关闭
         }
+        (InputMode::Selector(_), KeyCode::Enter) => {
+            // 选择器：空提交 = 清除；否则存 run_selector
+            if let InputMode::Selector(textarea) = &state.input_mode {
+                let value = textarea.lines().concat().trim().to_string();
+                state.input_mode = InputMode::None;
+                state.run_selector = if value.is_empty() { None } else { Some(value) };
+                if state.run_selector.is_some() {
+                    state.last_error = None;
+                }
+            }
+        }
         (InputMode::WsSend(_), KeyCode::Enter) => {
             // 出站帧由发送侧本地回显（manager 不广播出站帧）
             if let InputMode::WsSend(textarea) = &state.input_mode {
@@ -52,7 +63,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
             | InputMode::Filter(_)
             | InputMode::Auth(_)
             | InputMode::Search(_)
-            | InputMode::WsSend(_),
+            | InputMode::WsSend(_)
+            | InputMode::Selector(_),
             _,
         ) => {
             let is_filter = matches!(state.input_mode, InputMode::Filter(_));
@@ -65,7 +77,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 | InputMode::Filter(t)
                 | InputMode::Auth(t)
                 | InputMode::Search(t)
-                | InputMode::WsSend(t) => std::mem::take(t),
+                | InputMode::WsSend(t)
+                | InputMode::Selector(t) => std::mem::take(t),
                 InputMode::None => return,
             };
             textarea.input(crossterm::event::Event::Key(key));
@@ -77,6 +90,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 InputMode::Search(textarea)
             } else if is_ws_send {
                 InputMode::WsSend(textarea)
+            } else if matches!(state.input_mode, InputMode::Selector(_)) {
+                InputMode::Selector(textarea)
             } else {
                 InputMode::QuickCreate(textarea)
             };

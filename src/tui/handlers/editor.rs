@@ -24,8 +24,8 @@ pub fn inject_quick_auth(req: &mut crate::parser::ParsedRequest, auth: Option<St
     }
 }
 
-/// 处理编辑器面板按键（包括触发运行测试请求）
-/// 触发异步发包测试执行的主控逻辑 (共用于 Files 侧边栏 r/R 键与 Editor 区域 Ctrl+Enter)
+/// 触发异步发包测试执行的主控逻辑（R2/R4/R5：多请求 streaming、选择器、cookie 延续）。
+/// 共用于 Files 侧边栏 r/R 键与 Editor 区域运行键。
 pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
     if state.is_loading {
         return;
@@ -36,112 +36,168 @@ pub async fn trigger_request_execution(state: &mut AppState, event_tx: &mpsc::Se
             Some("interactive WS session active — press D to close before running".to_string());
         return;
     }
-    let parsed_req = if state.active_sidebar_tab == SidebarTab::History {
-        state.current_request.clone()
+    let parsed_file = if state.active_sidebar_tab == SidebarTab::History {
+        // 历史重放：内存中的单请求（不读盘）
+        match state.current_request.clone() {
+            Some(req) => crate::parser::ParsedFile {
+                requests: vec![req],
+                ..Default::default()
+            },
+            None => {
+                state.last_response = Some(crate::http::Response::error(
+                    "No request in history selection.".to_string(),
+                ));
+                state.response_visual_lines.clear();
+                return;
+            }
+        }
     } else {
         match crate::parser::parse_content(&state.editor_text) {
-            Ok(parsed) => parsed.requests.first().cloned(),
+            Ok(parsed) => parsed,
             Err(e) => {
                 state.last_response = Some(crate::http::Response::error(format!(
                     "HTTP Parser Error: {}",
                     e
                 )));
                 state.response_visual_lines.clear();
-                None
+                return;
             }
         }
     };
 
-    if let Some(mut req) = parsed_req {
-        // 快速授权注入（显式 Authorization 声明优先）
-        inject_quick_auth(&mut req, state.quick_auth());
-        state.update(Action::SendRequest(Box::new(req.clone())));
-
-        let mut var_context = state.variables.clone();
-        var_context.insert("__default_scheme", "http");
-
-        let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
-        let executor =
-            crate::runner::TestExecutor::with_ephemeral_cookies().with_stream_sender(stream_tx);
-        let source = state
-            .editor_file_path
-            .clone()
-            .or_else(|| Some("tui".to_string()));
-        let tx_clone = event_tx.clone();
-        let req_id = uuid::Uuid::new_v4();
-
-        let _ = tx_clone.send(TuiEvent::RequestStarted(req_id)).await;
-
-        let s_tx = event_tx.clone();
-        tokio::spawn(async move {
-            while let Some(event) = stream_rx.recv().await {
-                match event {
-                    crate::runner::types::StreamEvent::SseChunk(chunk) => {
-                        let _ = s_tx
-                            .send(TuiEvent::StreamChunk {
-                                id: req_id,
-                                chunk,
-                                total_lines: 0,
-                            })
-                            .await;
-                    }
-                    crate::runner::types::StreamEvent::WsFrame { is_send, content } => {
-                        let _ = s_tx
-                            .send(TuiEvent::WsFrame {
-                                id: req_id,
-                                is_send,
-                                content,
-                                total_lines: 0,
-                            })
-                            .await;
-                    }
-                    crate::runner::types::StreamEvent::InitLogPath(path) => {
-                        let _ = s_tx.send(TuiEvent::InitLogPath { id: req_id, path }).await;
-                    }
+    // R4：选择器接入（#n / @name，复用 runner 纯函数）
+    if let Some(sel) = state.run_selector.clone() {
+        if !sel.trim().is_empty() {
+            let selector = match crate::runner::selector::parse_only_selector(&sel) {
+                Ok(s) => s,
+                Err(e) => {
+                    state.last_error = Some(format!("selector '{}': {}", sel, e));
+                    return;
                 }
-            }
-        });
-
-        let req_snap_arg = req.clone();
-        let source_clone = source.clone();
-        tokio::spawn(async move {
-            let test_res = executor.execute_one(req, 1, &mut var_context, source).await;
-
-            if let Some(ref resp) = test_res.response {
-                let req_snapshot =
-                    crate::history::model::RequestSnapshot::from_parsed(&req_snap_arg);
-                crate::history::recorder::record_history(req_snapshot, resp, source_clone);
-            }
-
-            let captured_vars = var_context.variables().clone();
-            let result = if test_res.success {
-                if let Some(resp) = test_res.response {
-                    Ok(resp)
-                } else {
-                    Err("Request succeeded but no response returned".to_string())
-                }
-            } else {
-                Err(test_res
-                    .error
-                    .unwrap_or_else(|| "Unknown execution error".to_string()))
             };
+            let mut file = parsed_file;
+            if let Err(e) = crate::runner::selector::apply_selector(&mut file, &selector) {
+                state.last_error = Some(format!("selector '{}': {}", sel, e));
+                return;
+            }
+            return trigger_file_execution(state, file, event_tx).await;
+        }
+    }
+    trigger_file_execution(state, parsed_file, event_tx).await;
+}
 
-            let _ = tx_clone
-                .send(TuiEvent::RequestFinished {
-                    id: req_id,
-                    result: Box::new(result),
-                    captured_vars,
-                    assertions: test_res.assertions,
-                    warnings: test_res.warnings,
-                })
-                .await;
-        });
-    } else if state.last_response.is_none() {
+/// 执行已解析文件（单请求与多请求统一走 streaming 路径）
+async fn trigger_file_execution(
+    state: &mut AppState,
+    mut parsed_file: crate::parser::ParsedFile,
+    event_tx: &mpsc::Sender<TuiEvent>,
+) {
+    // R3 快速授权注入：多请求时对每个请求注入（显式 Authorization 优先）
+    for req in &mut parsed_file.requests {
+        inject_quick_auth(req, state.quick_auth());
+    }
+
+    let run_total = parsed_file.requests.len();
+    if run_total == 0 {
         state.last_response = Some(crate::http::Response::error(
             "No request block found in editor.".to_string(),
         ));
         state.response_visual_lines.clear();
+        return;
     }
+
+    // 状态机兼容：SendRequest 以首个请求登记（is_loading/文件执行状态/缓冲清理）
+    if let Some(first) = parsed_file.requests.first() {
+        state.update(Action::SendRequest(Box::new(first.clone())));
+    }
+    state.run_results.clear();
+    state.run_index = 0;
+    state.run_total = run_total;
+    if run_total > 1 {
+        // 多请求：自动切 Results 视图
+        state.active_detail_tab = crate::tui::state::DetailTab::Results;
+        state.response_visual_lines.clear();
+    }
+
+    let mut var_context = state.variables.clone();
+    var_context.insert("__default_scheme", "http");
+
+    // R5：cookie 会话延续——桥接上一次运行的导出状态
+    let mut executor = crate::runner::TestExecutor::with_ephemeral_cookies();
+    executor.debug_on_failure = true; // R7：失败自动诊断（对齐 CLI --debug-on-failure）
+    if let Some(state_json) = state.cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        && let Err(e) = executor.import_cookie_state(state_json)
+    {
+        tracing::warn!("cookie bridge import failed: {}", e);
+    }
+
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
+    let executor = executor.with_stream_sender(stream_tx);
+    let tx_clone = event_tx.clone();
+    let req_id = uuid::Uuid::new_v4();
+
+    let _ = tx_clone.send(TuiEvent::RequestStarted(req_id)).await;
+
+    let s_tx = event_tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = stream_rx.recv().await {
+            match event {
+                crate::runner::types::StreamEvent::SseChunk(chunk) => {
+                    let _ = s_tx
+                        .send(TuiEvent::StreamChunk {
+                            id: req_id,
+                            chunk,
+                            total_lines: 0,
+                        })
+                        .await;
+                }
+                crate::runner::types::StreamEvent::WsFrame { is_send, content } => {
+                    let _ = s_tx
+                        .send(TuiEvent::WsFrame {
+                            id: req_id,
+                            is_send,
+                            content,
+                            total_lines: 0,
+                        })
+                        .await;
+                }
+                crate::runner::types::StreamEvent::InitLogPath(path) => {
+                    let _ = s_tx.send(TuiEvent::InitLogPath { id: req_id, path }).await;
+                }
+            }
+        }
+    });
+
+    let cookie_bridge = state.cookie_bridge.clone();
+    tokio::spawn(async move {
+        // 结果回调走无界内部通道（FnMut 同步上下文不能 await），由转发 task 投递
+        let (res_tx, mut res_rx) = mpsc::unbounded_channel();
+        let relay = tokio::spawn(async move {
+            while let Some((res, captured)) = res_rx.recv().await {
+                let _ = tx_clone
+                    .send(TuiEvent::RequestResult {
+                        result: Box::new(res),
+                        captured_vars: captured,
+                        run_total,
+                    })
+                    .await;
+            }
+        });
+        let results = executor
+            .execute_all_streaming(parsed_file, &mut var_context, |res, captured| {
+                let _ = res_tx.send((res, captured));
+            })
+            .await;
+        if let Err(e) = results {
+            tracing::error!("multi-request execution failed: {}", e);
+        }
+        drop(res_tx);
+        let _ = relay.await;
+        // R5：cookie 状态导出到桥（供下次触发 import——executor 为 &self 调用后仍存活）
+        if let Some(state_json) = executor.export_cookie_state() {
+            *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json);
+        }
+    });
 }
 
 /// 处理编辑器面板按键（包括触发运行测试请求与 WS 交互会话）

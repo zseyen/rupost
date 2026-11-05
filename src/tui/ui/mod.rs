@@ -130,6 +130,16 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
         }
         InputMode::Search(_) => " Search messages (n/N after Esc): ".to_string(),
         InputMode::WsSend(_) => " WS send (Enter to send): ".to_string(),
+        InputMode::Selector(_) => {
+            format!(
+                " Request selector (#3 or @name, empty clears){}: ",
+                if state.run_selector.is_some() {
+                    format!(" [active: {}]", state.run_selector.as_deref().unwrap_or(""))
+                } else {
+                    String::new()
+                }
+            )
+        }
         InputMode::None => String::new(),
     };
     let textarea = match &state.input_mode {
@@ -137,7 +147,8 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
         | InputMode::Filter(t)
         | InputMode::Auth(t)
         | InputMode::Search(t)
-        | InputMode::WsSend(t) => t,
+        | InputMode::WsSend(t)
+        | InputMode::Selector(t) => t,
         InputMode::None => return,
     };
     let popup_layout = Layout::default()

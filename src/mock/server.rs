@@ -56,13 +56,7 @@ fn extract_path(url_str: &str) -> String {
 }
 
 /// 解析 mock 配置文件/文档，并启动 Mock 服务器
-pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
-    println!(
-        "{} Loading configuration from: {}",
-        "[*]".bold().blue(),
-        file_path.cyan()
-    );
-
+pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> {
     let is_doc = file_path.ends_with(".md")
         || file_path.ends_with(".markdown")
         || file_path.ends_with(".http");
@@ -157,6 +151,18 @@ pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
         }
     }
 
+    Ok((matcher, route_count))
+}
+
+/// 解析 mock 配置文件/文档，并启动 Mock 服务器（CLI 路径：阻塞式、固定端口）
+pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
+    println!(
+        "{} Loading configuration from: {}",
+        "[*]".bold().blue(),
+        file_path.cyan()
+    );
+
+    let (matcher, route_count) = build_mock_matcher(file_path)?;
     println!(
         "{} Mock engine initialized with {} routes.",
         "[✓]".bold().green(),

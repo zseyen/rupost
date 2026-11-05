@@ -8,6 +8,9 @@ pub enum TuiEvent {
     Tick,
     Resize(u16, u16),
     RequestStarted(Uuid),
+    ReplayDone(Box<crate::runner::ReplayReport>, String),
+    ReplayFailed(String),
+    AiAssertDone(Result<Vec<String>, String>),
     RequestResult {
         result: Box<crate::runner::types::TestResult>,
         captured_vars: HashMap<String, String>,

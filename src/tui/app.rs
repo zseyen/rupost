@@ -72,6 +72,20 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
     // rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖。
     // 授权（Authorization: Bearer {{token}} 等）依赖于此。
     state.variables = build_initial_context(&options);
+    // R13：cookie 持久化文件——启动时加载进 bridge（触发末尾写回落盘）
+    if let Some(cf) = &options.cookie_file {
+        let path = std::path::Path::new(cf);
+        if path.exists()
+            && let Ok(content) = std::fs::read_to_string(path)
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&content)
+        {
+            *state
+                .cookie_bridge
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(value);
+        }
+        state.cookie_file_path = Some(cf.clone());
+    }
     if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
         // 默认展开所有顶层目录
@@ -129,6 +143,28 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                 TuiEvent::MouseInput(mouse_event) => {
                     super::handlers::handle_mouse(&mut state, mouse_event);
                 }
+                TuiEvent::ReplayDone(report, path) => {
+                    state.last_replay = Some(*report);
+                    state.active_detail_tab = crate::tui::state::DetailTab::Results;
+                    state.response_visual_lines.clear();
+                    state.last_error = None;
+                    let _ = path;
+                }
+                TuiEvent::ReplayFailed(msg) => {
+                    state.last_error = Some(msg);
+                }
+                TuiEvent::AiAssertDone(outcome) => match outcome {
+                    Ok(assertions) => {
+                        for a in &assertions {
+                            state.editor_text.push_str(&format!("\n# @assert {a}"));
+                        }
+                        state.response_visual_lines.clear();
+                        state.last_error = None;
+                    }
+                    Err(msg) => {
+                        state.last_error = Some(msg);
+                    }
+                },
                 TuiEvent::RequestResult {
                     result,
                     captured_vars,
@@ -533,6 +569,7 @@ mod context_tests {
             env: None,
             vars: vec!["token=cli-token-2".to_string()],
             env_file: Some(env_path.to_string_lossy().into_owned()),
+            cookie_file: None,
         };
         let context = build_initial_context(&options);
 

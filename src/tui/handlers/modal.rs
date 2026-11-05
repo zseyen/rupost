@@ -21,6 +21,16 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
         (InputMode::Filter(_), KeyCode::Enter) => {
             state.input_mode = InputMode::None; // 过滤已实时生效，Enter 仅关闭
         }
+        (InputMode::AiAssert(_), KeyCode::Enter) => {
+            // AI 断言：取文本置 pending，异步翻译经事件回流
+            if let InputMode::AiAssert(textarea) = &state.input_mode {
+                let value = textarea.lines().concat().trim().to_string();
+                state.input_mode = InputMode::None;
+                if !value.is_empty() {
+                    state.pending_ai_text = Some(value);
+                }
+            }
+        }
         (InputMode::Selector(_), KeyCode::Enter) => {
             // 选择器：空提交 = 清除；否则存 run_selector
             if let InputMode::Selector(textarea) = &state.input_mode {
@@ -64,7 +74,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
             | InputMode::Auth(_)
             | InputMode::Search(_)
             | InputMode::WsSend(_)
-            | InputMode::Selector(_),
+            | InputMode::Selector(_)
+            | InputMode::AiAssert(_),
             _,
         ) => {
             let is_filter = matches!(state.input_mode, InputMode::Filter(_));
@@ -78,7 +89,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 | InputMode::Auth(t)
                 | InputMode::Search(t)
                 | InputMode::WsSend(t)
-                | InputMode::Selector(t) => std::mem::take(t),
+                | InputMode::Selector(t)
+                | InputMode::AiAssert(t) => std::mem::take(t),
                 InputMode::None => return,
             };
             textarea.input(crossterm::event::Event::Key(key));
@@ -92,6 +104,8 @@ pub(super) fn handle_modal_key(state: &mut AppState, key: KeyEvent) {
                 InputMode::WsSend(textarea)
             } else if matches!(state.input_mode, InputMode::Selector(_)) {
                 InputMode::Selector(textarea)
+            } else if matches!(state.input_mode, InputMode::AiAssert(_)) {
+                InputMode::AiAssert(textarea)
             } else {
                 InputMode::QuickCreate(textarea)
             };

@@ -10,7 +10,7 @@ pub mod triage;
 use crate::{Result, RupostError};
 use colored::Colorize;
 use redactor::truncate_chars;
-use rupost_ai::AssertionTranslator;
+pub use rupost_ai::AssertionTranslator;
 
 /// `ai assert` 运行参数（P0 收尾：上下文感知 + 脱敏开关 + 零配置链）
 #[derive(Debug, Clone, Default)]

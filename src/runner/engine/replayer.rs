@@ -68,7 +68,7 @@ pub struct ReplayEntryResult {
     pub response_body_snippet: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReplayReport {
     pub total: usize,
     pub passed: usize,

@@ -183,6 +183,7 @@ async fn trigger_file_execution(
     });
 
     let cookie_bridge = state.cookie_bridge.clone();
+    let cookie_file_path = state.cookie_file_path.clone();
     tokio::spawn(async move {
         // 结果回调走无界内部通道（FnMut 同步上下文不能 await），由转发 task 投递
         let (res_tx, mut res_rx) = mpsc::unbounded_channel();
@@ -209,7 +210,11 @@ async fn trigger_file_execution(
         let _ = relay.await;
         // R5：cookie 状态导出到桥（供下次触发 import——executor 为 &self 调用后仍存活）
         if let Some(state_json) = executor.export_cookie_state() {
-            *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json);
+            *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json.clone());
+            // R13：--cookie-file 提供时同步落盘
+            if let Some(path) = &cookie_file_path {
+                let _ = std::fs::write(path, state_json.to_string());
+            }
         }
     });
 }

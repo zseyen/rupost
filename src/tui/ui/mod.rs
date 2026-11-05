@@ -130,6 +130,9 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
         }
         InputMode::Search(_) => " Search messages (n/N after Esc): ".to_string(),
         InputMode::WsSend(_) => " WS send (Enter to send): ".to_string(),
+        InputMode::AiAssert(_) => {
+            " AI assert (describe expectations, Enter to translate): ".to_string()
+        }
         InputMode::Selector(_) => {
             format!(
                 " Request selector (#3 or @name, empty clears){}: ",
@@ -148,7 +151,8 @@ fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppSta
         | InputMode::Auth(t)
         | InputMode::Search(t)
         | InputMode::WsSend(t)
-        | InputMode::Selector(t) => t,
+        | InputMode::Selector(t)
+        | InputMode::AiAssert(t) => t,
         InputMode::None => return,
     };
     let popup_layout = Layout::default()

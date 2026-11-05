@@ -68,6 +68,8 @@ pub enum InputMode {
     WsSend(Box<ratatui_textarea::TextArea<'static>>),
     /// 单请求选择器（`#` 键，`#3` / `@name`）
     Selector(Box<ratatui_textarea::TextArea<'static>>),
+    /// AI 断言翻译（`I` 键，Enter 提交自然语言）
+    AiAssert(Box<ratatui_textarea::TextArea<'static>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +171,10 @@ pub struct AppState {
     pub run_index: usize,
     pub run_selector: Option<String>,
     pub cookie_bridge: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    pub cookie_file_path: Option<String>,
+    pub mock_session: Option<super::integrations::MockSessionState>,
+    pub last_replay: Option<crate::runner::ReplayReport>,
+    pub pending_ai_text: Option<String>,
     pub last_timing: Option<crate::http::timing::RequestTiming>,
     pub last_diagnose: Option<crate::http::diagnose::DiagnosticsReport>,
     /// X 键导出的命令文本（弹窗展示，Esc 关闭）
@@ -254,6 +260,10 @@ impl AppState {
             run_index: 0,
             run_selector: None,
             cookie_bridge: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            cookie_file_path: None,
+            mock_session: None,
+            last_replay: None,
+            pending_ai_text: None,
             last_timing: None,
             last_diagnose: None,
             show_export: None,

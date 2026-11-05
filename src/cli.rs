@@ -236,6 +236,10 @@ pub enum Commands {
         /// Path to a local environment file (e.g. .env)
         #[arg(long, value_name = "FILE")]
         env_file: Option<String>,
+
+        /// Cookie store file for persistence across runs
+        #[arg(long, value_name = "FILE")]
+        cookie_file: Option<String>,
     },
 }
 
@@ -890,6 +894,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             env,
             var,
             env_file,
+            cookie_file,
         }) => {
             rupost::tui::run(
                 file,
@@ -897,6 +902,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     env,
                     vars: var,
                     env_file,
+                    cookie_file,
                 },
             )
             .await?;
@@ -1159,6 +1165,8 @@ mod tests {
             "k2=v2",
             "--env-file",
             ".env.staging",
+            "--cookie-file",
+            "cookies_tui.json",
         ])
         .expect("tui args must parse");
 
@@ -1167,6 +1175,7 @@ mod tests {
             env,
             var,
             env_file,
+            cookie_file,
         }) = cli.command
         else {
             panic!("expected Tui subcommand");
@@ -1176,16 +1185,19 @@ mod tests {
             assert_eq!(env.as_deref(), Some("staging"));
             assert_eq!(var, vec!["k1=v1".to_string(), "k2=v2".to_string()]);
             assert_eq!(env_file.as_deref(), Some(".env.staging"));
+            assert_eq!(cookie_file.as_deref(), Some("cookies_tui.json"));
 
             // main.rs 分发处的 TuiOptions 组装映射（字段一一对应）
             let opts = rupost::tui::TuiOptions {
                 env: env.clone(),
                 vars: var.clone(),
                 env_file: env_file.clone(),
+                cookie_file: cookie_file.clone(),
             };
             assert_eq!(opts.env.as_deref(), Some("staging"));
             assert_eq!(opts.vars, vec!["k1=v1".to_string(), "k2=v2".to_string()]);
             assert_eq!(opts.env_file.as_deref(), Some(".env.staging"));
+            assert_eq!(opts.cookie_file.as_deref(), Some("cookies_tui.json"));
         }
     }
 
@@ -1198,6 +1210,7 @@ mod tests {
             env,
             var,
             env_file,
+            cookie_file,
         }) = cli.command
         else {
             panic!("expected Tui subcommand");

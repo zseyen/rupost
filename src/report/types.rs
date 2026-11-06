@@ -94,6 +94,18 @@ pub struct ReportAssertionItem {
     pub actual: Option<String>,
 }
 
+impl From<&crate::assertion::AssertionResult> for ReportAssertionItem {
+    fn from(a: &crate::assertion::AssertionResult) -> Self {
+        Self {
+            raw: a.raw.clone(),
+            passed: a.passed,
+            message: a.message.clone(),
+            expected: Some(a.expected.clone()),
+            actual: a.actual.clone(),
+        }
+    }
+}
+
 /// 归一化的时延瀑布模型（用于渲染时延瀑布条）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimingWaterfall {

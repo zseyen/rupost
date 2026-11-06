@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rupost Living Workbench</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="workbench-layout">
+    <!-- 顶部状态导航 -->
+    <header class="navbar">
+      <div class="brand">
+        <span class="logo">rupost</span>
+        <span class="sub">workbench</span>
+      </div>
+      <div class="nav-controls">
+        <span id="active-file-label" class="file-label">未选择文件</span>
+        <button id="btn-import-modal" class="btn btn-primary" onclick="openImportModal()">+ 装入外部请求</button>
+        <button id="btn-save" class="btn btn-success" onclick="saveActiveFile()">💾 保存文档</button>
+      </div>
+    </header>
+
+    <!-- 工作台三栏布局 -->
+    <div class="workspace-body">
+      <!-- 1. 左侧文件树导航 -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <span>工作区规范文档</span>
+          <button class="btn-icon" onclick="loadFiles()" title="刷新">🔄</button>
+        </div>
+        <ul id="file-list" class="file-tree"></ul>
+      </aside>
+
+      <!-- 2. 中间文档编辑器 -->
+      <main class="editor-pane">
+        <div class="editor-toolbar">
+          <span class="pane-title">文档源码 (Markdown / HTTP DSL)</span>
+          <div class="editor-actions">
+            <span id="save-status" class="save-status"></span>
+          </div>
+        </div>
+        <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="选择左侧文件或直接在此处编写 .md 规范..."></textarea>
+      </main>
+
+      <!-- 3. 右侧原位调试面板 -->
+      <aside class="debug-pane">
+        <div class="debug-toolbar">
+          <span class="pane-title">原位调试响应与时延</span>
+          <button id="btn-run-selection" class="btn btn-accent" onclick="runCurrentBlock()">⚡ 执行当前块</button>
+        </div>
+        <div id="debug-output" class="debug-content">
+          <div class="empty-hint">点击“执行当前块”即可发起单块调试，毫秒级呈现时延瀑布条与断言比对证据。</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 多格式装入模态弹窗 -->
+  <div id="import-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>多格式向导装入器</h3>
+        <button class="close-btn" onclick="closeImportModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>源数据格式：</label>
+          <select id="import-format-select">
+            <option value="auto" selected>✨ 智能嗅探 (Auto-detect)</option>
+            <option value="curl">cURL 命令行</option>
+            <option value="httpie">HTTPie 命令行</option>
+            <option value="rawhttp">Raw HTTP 1.1 原始报文</option>
+            <option value="har">HAR 抓包归档</option>
+            <option value="openapi">OpenAPI 3.x / Swagger 片段</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="checkbox-label">
+            <input type="checkbox" id="import-opt-baseurl" checked> 自动将域名转换为 <code>{{base_url}}</code> 变量
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="import-opt-mock" checked> 自动补齐标准 <code>@mock-default</code> 响应变体
+          </label>
+        </div>
+        <textarea id="import-textarea" class="import-textarea" placeholder="在此粘贴 cURL (curl -X POST ...)、HTTPie 命令或原始 HTTP 报文..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeImportModal()">取消</button>
+        <button class="btn btn-primary" onclick="submitImport()">✨ 转换并插入文档</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

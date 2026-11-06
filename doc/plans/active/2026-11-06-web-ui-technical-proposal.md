@@ -70,6 +70,9 @@
 | R4 | **历史与快照浏览**：`/history` 列表 + 快照 diff 只读视图（复用重放 diff 的动态键排除逻辑） | P2 | 浏览器可见最近 N 条历史与任一快照 diff | 是 |
 | R5 | **Mock 规则可视化**：`/mock` 展示当前配置编译出的路由表（方法+路径模式+分支条件） | P2 | mock 配置的路由与 `@mock-when` 条件逐条可见 | 是 |
 | R6 | **报告产物机器互补**：与 junit 输出（复审已登记的 backlog 项）共用 `TestReporter` 管线，互不阻塞 | P1 | junit 缺位时 HTML 报告独立可用 | — |
+| R7 | **时延瀑布图诊断与网络分析**：在报告与工作台中渲染 DNS 解析、TCP 握手、TLS 协商与 TTFB 耗时瀑布图，标明证书到期告警 | P0 | 复用 `diagnose.rs`，页面原位直观可见网络各阶段耗时 | 否 |
+| R8 | **.md 契约辅助编写与 cURL 导入**：向导式表单插入双角色契约块，剪贴板 cURL 实时转为 Markdown 草稿 | P1 | 页面生成符合规范的双角色代码块并支持落盘 | 是 |
+| R9 | **单块原位调试发包 (In-place Runner)**：在 Web 界面对当前选中的单块发起即时执行并展示断言状态 | P1 | 页面直接呈现请求响应原文与断言对比，无须整文件运行 | 是 |
 
 ---
 
@@ -99,7 +102,7 @@ src/web/                        ← 新增 Adapter（与 tui/、mock/server/ 同
 
 复用（核心零改动）：
 - UseCase 层：runner/executor.rs、batch.rs、history/、replay 管线原样被 Web handler 调用
-- Adapter 先例：mock/server/axum_adapter.rs 证明 axum 0.7 已在依赖树，HTTP 服务框架零新增
+- Adapter 先例：mock/server/axum_adapter.rs 证明 axum 0.8（已升级至 0.8.9 最新版）已在依赖树，HTTP 服务框架零新增，且原生支持 OpenAPI 风格的花括号路径参数
 ```
 
 关键原则：**Web 是又一个 Adapter**。CLI/TUI/Web 三者消费同一批 UseCase，Web handler 内不出现任何新业务规则；出现即视为违反 Clean Architecture，退回 UseCase 层。

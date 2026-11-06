@@ -109,8 +109,11 @@
 3. Mock 模式编译**所有含变体的块**，不论是否有 `@test`；只有 `@test`、没有变体的块
    MUST NOT 注册成 Mock 路由。
 4. 双角色块要求请求 URL 可直接作为 Mock 路由路径（生成物使用相对路径如 `/v1/orders`）；
+   契约声明中禁止将客户端变量写在 URL 动态段（如 `/orders/{{order_id}}` 为未定义反向捕获行为），
+   契约路由声明统一使用 RESTful `:id` 或 OpenAPI `{id}` 标准语法；
+   测试端（.http）在调用时可自由写 `{{order_id}}`；
    若 URL 含 `{{base_url}}`/绝对地址，MockCompiler MUST 提取 path（变量感知/URL 解析），
-   MUST NOT 把变量或 scheme 原样注册进 Trie。
+   MUST NOT 把变量或 scheme 原样注册进 Trie。Trie 匹配算法中，静态段 (Literal) 具有绝对最高优先级，严格优先于动态参数段 (Param) 匹配。
 5. 双角色块的请求元数据（`@test`/`@name`/`@assert`/`@capture` 等）MUST 位于第一个
    `@mock-*` 之前；若解析器支持"请求体后元数据"，可放宽并在文档中说明。
 

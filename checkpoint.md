@@ -395,5 +395,47 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
   3. `examples/run_all.sh`：15 个复杂示例回归测试脚本 100% 全部 PASS。
   4. `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 均零告警零错误。
 
+---
+
+## Stage 5（安全基础设施组件化、核心领域解析内聚与 Web 活文档全景加固）落地完成（2026-11-07）
+
+针对架构评审与安全审查提出的解耦复用与防护漏洞，依据 Clean Architecture 与 DRY 原则完成了系统级安全组件化与核心解析内聚升级：
+
+### 1. 统一安全基础设施构建 (`src/security/`)
+- **`PathSandbox` 路径安全沙箱 (`src/security/path.rs`)**：
+  - 彻底收敛散落各处的路径检查逻辑，统一负责相对路径与绝对路径规范化、扩展名白名单校验（忽略大小写）、隐藏文件拦截（防止读取 `.env`、`.git/` 等敏感配置）。
+  - 实现基于祖先追溯的软链接逃逸防御（符号链接穿越阻断）。
+  - `LocalFsDocumentStore` 与 `LocalDirAssetProvider` 100% 委托 `PathSandbox`，彻底根除了静态资产服务中的任意文件读取漏洞（VULN-01）。
+- **`HtmlSanitizer` 安全转义组件 (`src/security/sanitize.rs`)**：
+  - 严格支持 5 种核心 HTML 实体（`& < > " '`）的高性能转义，基于 `Cow<'a, str>` 实现零额外分配。
+  - `ReportContext` HTML 报告转义与 Web 前端错误横幅统一对齐。
+
+### 2. 核心领域内聚重构与对称性打通
+- **`MockVariantParser` 领域解析组件 (`src/parser/mock_variant.rs`)**：
+  - 提炼变体规则切分与解析核心逻辑，`MarkdownFileParser` 删除 120+ 行冗余代码。
+  - 在 `HttpFileParser` 中原生接入变体解析，使纯 `.http` 格式完整获得单块双角色与 Mock 变体支持，彻底消除了两种格式的不对称性。
+- **`parse_document_by_path` 门面解析分发 (`src/parser/mod.rs`)**：
+  - 统一依据扩展名安全分发 Markdown 与 HTTP 文件解析，Web 保存接口 `save.rs` 统一接入作为预写入语法校验门禁。
+- **`UrlTemplatizer` 强类型 URL 模板化组件 (`src/http/url.rs`)**：
+  - 彻底重构 cURL/HTTPie/RawHTTP 中重复的基准 URL 模板化逻辑。
+  - 杜绝基于字节切片的非 ASCII 国际化中文域名（IDN）Panic 风险，妥善保留 Query 与 Fragment。
+- **纯 `.http` 变量定义兼容**：
+  - 识别并跳过内联/文件级 `@var = value` 变量声明，防止误判为非法 HTTP 请求行导致 422 语法报错。
+
+### 3. Web 活文档端到端加固与契约修复
+- **Host Guard 门禁**：
+  - 在 Axum Web 服务器挂载 Host 检查中间件，严格白名单过滤（`localhost`, `127.0.0.1`, `::1`, `*.localhost`），彻底防御 DNS Rebinding 攻击。
+- **请求体积限制**：挂载 `DefaultBodyLimit::max(10 * 1024 * 1024)`（10MB）。
+- **前端客户端修复**：
+  - 修复 `app.js` 中 `openFile` 对 `json.data` 取值兼容性 Bug（解决编辑器显示 `"undefined"` 的 P0 体验问题）。
+  - 修复前端 `escapeHtml` 实体转义漏洞与错误横幅未转义渲染导致的 DOM XSS 隐患。
+
+### 4. 三层全量质量回归与自动化验证
+- **单元与集成测试**：538 项测试（含新增的 Host 守卫、Path 沙箱阻断、`.http` 语法门禁、IDN 中文域名装入等对抗性测试）100% PASS。
+- **全特性冒烟测试**：`tests/verify_features.sh` 脚本端到端验证 100% PASS。
+- **示例场景全量回归**：`examples/run_all.sh` 15 个场景全部 PASS。
+- **代码规范**：`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 零告警零错误。
+
+
 
 

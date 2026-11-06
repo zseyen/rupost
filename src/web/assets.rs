@@ -1,3 +1,4 @@
+use crate::security::PathSandbox;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,7 @@ pub trait AssetProvider: Send + Sync + 'static {
     fn get_asset(&self, path: &str) -> Option<(Cow<'static, [u8]>, &'static str)>;
 }
 
-/// 外部物理目录托管实现（用于 --static-dir 自定义前端接入）
+/// 外部物理目录托管实现（用于 --static-dir 自定义前端接入，内置统一沙箱）
 pub struct LocalDirAssetProvider {
     base_dir: PathBuf,
 }
@@ -23,16 +24,20 @@ impl LocalDirAssetProvider {
 impl AssetProvider for LocalDirAssetProvider {
     fn get_asset(&self, path: &str) -> Option<(Cow<'static, [u8]>, &'static str)> {
         let clean_path = path.trim_start_matches('/');
-        let target = if clean_path.is_empty() {
-            self.base_dir.join("index.html")
+        let target_rel = if clean_path.is_empty() {
+            "index.html"
         } else {
-            self.base_dir.join(clean_path)
+            clean_path
         };
 
-        if target.is_file()
-            && let Ok(bytes) = std::fs::read(&target)
+        // 复用统一安全沙箱组件，拒绝访问隐藏文件与跨目录逃逸
+        let sandbox = PathSandbox::new(&self.base_dir).allow_hidden(false);
+        let safe_target = sandbox.resolve_safe_path(target_rel).ok()?;
+
+        if safe_target.is_file()
+            && let Ok(bytes) = std::fs::read(&safe_target)
         {
-            let mime = guess_mime_type(&target);
+            let mime = guess_mime_type(&safe_target);
             return Some((Cow::Owned(bytes), mime));
         }
         None
@@ -102,5 +107,13 @@ mod tests {
 
         // 测试不存在的文件
         assert!(provider.get_asset("/missing.png").is_none());
+
+        // 验证目录穿越攻击被成功拦截
+        assert!(
+            provider
+                .get_asset("/../../../../../../etc/passwd")
+                .is_none()
+        );
+        assert!(provider.get_asset("/../secret.txt").is_none());
     }
 }

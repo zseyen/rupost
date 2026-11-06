@@ -42,7 +42,8 @@ async function openFile(path) {
     if (json.success && json.data) {
       currentFilePath = path;
       document.getElementById('active-file-label').textContent = path;
-      document.getElementById('code-editor').value = json.data.content;
+      const fileContent = typeof json.data === 'string' ? json.data : (json.data && json.data.content ? json.data.content : '');
+      document.getElementById('code-editor').value = fileContent;
       document.querySelectorAll('#file-list li').forEach(li => {
         li.classList.toggle('active', li.dataset.path === path);
       });
@@ -109,10 +110,10 @@ async function runCurrentBlock() {
     if (json.success && json.data) {
       renderDebugResult(json.data);
     } else {
-      debugEl.innerHTML = `<div class="error-banner">❌ 执行异常: ${json.error || '未知错误'}</div>`;
+      debugEl.innerHTML = `<div class="error-banner">❌ 执行异常: ${escapeHtml(json.error || '未知错误')}</div>`;
     }
   } catch (e) {
-    debugEl.innerHTML = `<div class="error-banner">❌ 请求失败: ${e.message}</div>`;
+    debugEl.innerHTML = `<div class="error-banner">❌ 请求失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -241,5 +242,10 @@ function insertIntoEditor(text) {
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

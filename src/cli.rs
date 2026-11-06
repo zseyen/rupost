@@ -952,6 +952,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 readonly,
                 working_dir: std::path::PathBuf::from(&dir),
                 default_env: cli.env.clone(),
+                allowed_hosts: Vec::new(),
             };
 
             rupost::web::run_web_server(config, &host, port).await?;

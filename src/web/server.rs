@@ -3,9 +3,10 @@ use crate::web::assets::{AssetProvider, EmbeddedAssetProvider};
 use crate::web::handlers;
 use crate::web::store::{DocumentStore, LocalFsDocumentStore};
 use axum::Router;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, Request, State};
 use axum::http::StatusCode;
-use axum::http::header::{CONTENT_TYPE, HeaderValue};
+use axum::http::header::{CONTENT_TYPE, HOST, HeaderValue};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ pub struct WebServerConfig {
     pub readonly: bool,
     pub working_dir: PathBuf,
     pub default_env: Option<String>,
+    pub allowed_hosts: Vec<String>,
 }
 
 impl Default for WebServerConfig {
@@ -29,6 +31,7 @@ impl Default for WebServerConfig {
             readonly: false,
             working_dir: PathBuf::from("."),
             default_env: None,
+            allowed_hosts: Vec::new(),
         }
     }
 }
@@ -40,6 +43,40 @@ pub struct AppState {
     pub assets: Arc<dyn AssetProvider>,
     pub readonly: bool,
     pub default_env: Option<String>,
+    pub allowed_hosts: Vec<String>,
+}
+
+/// 检查 Host 标头是否属于安全白名单（防御 DNS Rebinding）
+fn is_allowed_host(host_str: &str) -> bool {
+    let host_only = if host_str.starts_with('[') {
+        host_str
+            .split(']')
+            .next()
+            .map(|s| s.trim_start_matches('['))
+            .unwrap_or("")
+    } else {
+        host_str.split(':').next().unwrap_or("")
+    };
+
+    host_only == "localhost"
+        || host_only == "127.0.0.1"
+        || host_only == "::1"
+        || host_only == "0.0.0.0"
+        || host_only.ends_with(".localhost")
+}
+
+/// 防御 DNS Rebinding 的 Host 校验守卫中间件
+async fn host_guard_middleware(
+    req: Request,
+    next: Next,
+) -> std::result::Result<Response, StatusCode> {
+    if let Some(host_val) = req.headers().get(HOST)
+        && let Ok(host_str) = host_val.to_str()
+        && !is_allowed_host(host_str)
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(req).await)
 }
 
 /// 构造统一的 Web Router
@@ -49,6 +86,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         assets: config.assets,
         readonly: config.readonly,
         default_env: config.default_env,
+        allowed_hosts: config.allowed_hosts,
     };
 
     let api_router = Router::new()
@@ -68,6 +106,8 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         .route("/", get(serve_index))
         .route("/{*path}", get(serve_asset))
         .with_state(state)
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(middleware::from_fn(host_guard_middleware))
 }
 
 /// 首页根路径直接投递 index.html

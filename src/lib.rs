@@ -13,6 +13,7 @@ pub mod parser;
 pub mod report;
 pub mod reporter;
 pub mod runner;
+pub mod security;
 pub mod template;
 pub mod utils;
 pub mod variable;

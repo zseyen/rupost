@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::error::RupostError;
+use crate::http::url::UrlTemplatizer;
 use crate::importer::curl::parse_curl_to_entry;
 use crate::parser::types::ParsedRequest;
 use crate::web::types::{ImportFormat, ImportRequest, ImportResponse};
@@ -67,14 +68,11 @@ impl MultiFormatImporter {
         let parsed_requests = match format {
             ImportFormat::Curl | ImportFormat::Auto => {
                 let entry = parse_curl_to_entry(&req.content)?;
-                let mut url = entry.request.url;
-                if req.templatize_host
-                    && url.starts_with("http")
-                    && let Ok(parsed_url) = url::Url::parse(&url)
-                {
-                    let path_and_query = &url[parsed_url.origin().ascii_serialization().len()..];
-                    url = format!("{{{{base_url}}}}{}", path_and_query);
-                }
+                let url = if req.templatize_host {
+                    UrlTemplatizer::templatize_origin(&entry.request.url, "{{base_url}}")
+                } else {
+                    entry.request.url
+                };
                 let mut headers = Vec::new();
                 for (k, v) in &entry.request.headers {
                     headers.push((k.as_str().to_string(), v.to_str().unwrap_or("").to_string()));
@@ -158,12 +156,8 @@ impl MultiFormatImporter {
             }
         }
 
-        if templatize_host
-            && url.starts_with("http")
-            && let Ok(parsed_url) = url::Url::parse(&url)
-        {
-            let path_and_query = &url[parsed_url.origin().ascii_serialization().len()..];
-            url = format!("{{{{base_url}}}}{}", path_and_query);
+        if templatize_host {
+            url = UrlTemplatizer::templatize_origin(&url, "{{base_url}}");
         }
 
         let body = if body_lines.is_empty() {
@@ -184,7 +178,7 @@ impl MultiFormatImporter {
     }
 
     /// 解析 HTTPie 终端命令 (e.g. `http POST :8000/api/users name=alice`)
-    pub fn parse_httpie(cmd: &str, _templatize_host: bool) -> Result<ParsedRequest> {
+    pub fn parse_httpie(cmd: &str, templatize_host: bool) -> Result<ParsedRequest> {
         let trimmed = cmd.trim();
         let tokens: Vec<&str> = trimmed.split_whitespace().collect();
         if tokens.is_empty() {
@@ -211,7 +205,7 @@ impl MultiFormatImporter {
         idx += 1;
 
         // HTTPie 支持简写 URL (e.g. :8000/items -> http://localhost:8000/items)
-        let url = if raw_url.starts_with(':') {
+        let mut url = if raw_url.starts_with(':') {
             format!("http://localhost{}", raw_url)
         } else if !raw_url.starts_with("http://") && !raw_url.starts_with("https://") {
             format!("http://{}", raw_url)
@@ -221,17 +215,33 @@ impl MultiFormatImporter {
 
         let mut headers = Vec::new();
         let mut json_fields = Vec::new();
+        let mut query_params = Vec::new();
 
         while idx < tokens.len() {
             let token = tokens[idx];
             if let Some((k, v)) = token.split_once(':') {
                 headers.push((k.to_string(), v.to_string()));
             } else if let Some((k, v)) = token.split_once("==") {
-                headers.push((format!("X-Query-{}", k), v.to_string()));
+                query_params.push((k.to_string(), v.to_string()));
             } else if let Some((k, v)) = token.split_once('=') {
                 json_fields.push(format!("\"{}\": \"{}\"", k, v));
             }
             idx += 1;
+        }
+
+        // 拼接 query params 到 url
+        if !query_params.is_empty() {
+            let sep = if url.contains('?') { "&" } else { "?" };
+            let query_str = query_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            url = format!("{}{}{}", url, sep, query_str);
+        }
+
+        if templatize_host {
+            url = UrlTemplatizer::templatize_origin(&url, "{{base_url}}");
         }
 
         let body = if !json_fields.is_empty() {
@@ -358,5 +368,37 @@ mod tests {
         let block = &res.markdown_blocks[0];
         assert!(block.contains("POST {{base_url}}/api/v1/orders"));
         assert!(block.contains("@mock-default"));
+    }
+
+    #[test]
+    fn test_import_idn_chinese_domain_safety() {
+        // 中文国际化域名导入（杜绝切片越界 Panic）
+        let raw = "POST http://测试.com:8080/api/v1/orders HTTP/1.1\nHost: 测试.com:8080\n\n{\"order_id\": \"1001\"}";
+        let req = ImportRequest {
+            format: ImportFormat::Auto,
+            content: raw.to_string(),
+            templatize_host: true,
+            generate_mock: false,
+        };
+
+        let res = MultiFormatImporter::import(&req).unwrap();
+        assert_eq!(res.detected_format, ImportFormat::RawHttp);
+        let block = &res.markdown_blocks[0];
+        assert!(block.contains("POST {{base_url}}/api/v1/orders"));
+    }
+
+    #[test]
+    fn test_import_httpie_query_params_and_templatize() {
+        let req = ImportRequest {
+            format: ImportFormat::Httpie,
+            content: "http GET https://api.example.com/items category==books limit==10".to_string(),
+            templatize_host: true,
+            generate_mock: false,
+        };
+
+        let res = MultiFormatImporter::import(&req).unwrap();
+        assert_eq!(res.detected_format, ImportFormat::Httpie);
+        let block = &res.markdown_blocks[0];
+        assert!(block.contains("GET {{base_url}}/items?category=books&limit=10"));
     }
 }

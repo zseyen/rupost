@@ -302,3 +302,192 @@ async fn test_web_multi_format_import_api() {
     assert!(import_res.success);
     assert_eq!(import_res.data.unwrap().detected_format, ImportFormat::Curl);
 }
+
+#[tokio::test]
+async fn test_web_security_host_guard() {
+    let config = WebServerConfig::default();
+    let app = create_web_router(config);
+
+    // 1. 合法 Host (localhost, 127.0.0.1, [::1], sub.localhost) -> 允许通过
+    let valid_hosts = vec![
+        "localhost:3000",
+        "127.0.0.1:8080",
+        "[::1]:8080",
+        "api.localhost",
+    ];
+    for host in valid_hosts {
+        let req = Request::builder()
+            .uri("/")
+            .method("GET")
+            .header("host", host)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_ne!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "Host {} should be allowed",
+            host
+        );
+    }
+
+    // 2. 恶意外部域名 (DNS Rebinding 攻击企图) -> 拦截返回 403 FORBIDDEN
+    let malicious_hosts = vec![
+        "evil.attacker.com",
+        "attacker.internal:8080",
+        "rebind.127.0.0.1.nip.io",
+    ];
+    for evil_host in malicious_hosts {
+        let req = Request::builder()
+            .uri("/api/v1/files")
+            .method("GET")
+            .header("host", evil_host)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "Malicious host {} must be rejected with 403 Forbidden",
+            evil_host
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_web_security_path_sandbox_guards() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    // 在根目录下写入一个隐藏敏感文件 .env 和一个正常 md 文件
+    std::fs::write(root.join(".env"), "DATABASE_URL=postgres://secret").unwrap();
+    std::fs::write(root.join("sample.md"), "# Hello\n").unwrap();
+
+    let store = Arc::new(LocalFsDocumentStore::new(&root));
+    let config = WebServerConfig {
+        store,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+
+    // 1. 尝试读取隐藏敏感文件 .env -> 拦截返回 404 NOT_FOUND（防嗅探）
+    let req = Request::builder()
+        .uri("/api/v1/file?path=.env")
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // 2. 尝试路径穿越跳出工作区 -> 拦截返回 404 NOT_FOUND（防嗅探）
+    let req = Request::builder()
+        .uri("/api/v1/file?path=../../etc/passwd")
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // 3. 尝试越权保存敏感路径或非文档类型（例如隐藏目录中的合法语法文件）-> 被 PathSandbox 拦截返回 400 Bad Request
+    let evil_save_payload = SaveFileRequest {
+        path: ".git/hooks/pre-commit.http".to_string(),
+        content: "GET http://localhost/test\n".to_string(),
+    };
+    let req = Request::builder()
+        .uri("/api/v1/save")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&evil_save_payload).unwrap(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_web_http_file_syntax_guard() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let store = Arc::new(LocalFsDocumentStore::new(&root));
+    let config = WebServerConfig {
+        store,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+
+    // 1. 保存格式正确的纯 .http 文件（包含变量定义与 Mock 变体）-> 200 OK
+    let valid_http_content = r#"
+@base_url = https://api.example.com
+
+# @name getUser
+GET {{base_url}}/users/1
+Accept: application/json
+
+@mock-default
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"id": 1, "name": "Alice"}
+"#;
+    let save_payload = SaveFileRequest {
+        path: "suite.http".to_string(),
+        content: valid_http_content.to_string(),
+    };
+    let req = Request::builder()
+        .uri("/api/v1/save")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&save_payload).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 2. 保存语法损坏的 .http 文件 -> 422 UNPROCESSABLE_ENTITY
+    let invalid_http_content = r#"
+INVALID_HTTP_METHOD https://api.example.com
+"#;
+    let bad_save_payload = SaveFileRequest {
+        path: "suite.http".to_string(),
+        content: invalid_http_content.to_string(),
+    };
+    let req = Request::builder()
+        .uri("/api/v1/save")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&bad_save_payload).unwrap(),
+        ))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn test_web_import_idn_chinese_domain() {
+    let config = WebServerConfig::default();
+    let app = create_web_router(config);
+
+    // 针对中文国际化域名 (IDN) 的导入测试，验证不会 Panic 且正确模板化
+    let idn_curl = "curl -X GET https://测试.中国/v1/users";
+    let req_payload = ImportRequest {
+        format: ImportFormat::Curl,
+        content: idn_curl.to_string(),
+        templatize_host: true,
+        generate_mock: true,
+    };
+    let req = Request::builder()
+        .uri("/api/v1/import")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&req_payload).unwrap()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let resp: ApiResponse<ImportResponse> = serde_json::from_slice(&body).unwrap();
+    assert!(resp.success);
+    let data = resp.data.unwrap();
+    assert!(data.markdown_blocks[0].contains("GET {{base_url}}/v1/users"));
+}

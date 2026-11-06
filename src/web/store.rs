@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::error::RupostError;
+use crate::security::PathSandbox;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -27,7 +28,7 @@ pub trait DocumentStore: Send + Sync + 'static {
     async fn save_document(&self, path: &str, content: &str) -> Result<()>;
 }
 
-/// 基于本地磁盘的标准实现（严格内置防目录越界沙箱检查）
+/// 基于本地磁盘的标准实现（基于统一安全沙箱 PathSandbox）
 #[derive(Debug, Clone)]
 pub struct LocalFsDocumentStore {
     root_dir: PathBuf,
@@ -40,34 +41,16 @@ impl LocalFsDocumentStore {
         Self { root_dir: abs_root }
     }
 
-    /// 防目录穿越安全沙箱校验
-    fn resolve_safe_path(&self, requested: &str) -> Result<PathBuf> {
-        let trimmed = requested.trim_start_matches('/');
-        let candidate = self.root_dir.join(trimmed);
+    /// 获取活文档安全沙箱（限制 .md / .http 扩展名，拒绝隐藏文件）
+    fn document_sandbox(&self) -> PathSandbox {
+        PathSandbox::new(&self.root_dir)
+            .with_extensions(&["md", "http"])
+            .allow_hidden(false)
+    }
 
-        // 如果文件存在，用 canonicalize；如果文件尚不存在（新建），则校验其已存在的祖先目录
-        if candidate.exists() {
-            let canon = candidate.canonicalize().map_err(RupostError::IoError)?;
-            if canon.starts_with(&self.root_dir) {
-                Ok(canon)
-            } else {
-                Err(RupostError::Other(format!(
-                    "Path traversal attempt rejected: {}",
-                    requested
-                )))
-            }
-        } else {
-            // 路径尚未存在，直接检查文本是否包含向上穿越组件
-            for component in Path::new(trimmed).components() {
-                if matches!(component, std::path::Component::ParentDir) {
-                    return Err(RupostError::Other(format!(
-                        "Path traversal attempt rejected: {}",
-                        requested
-                    )));
-                }
-            }
-            Ok(candidate)
-        }
+    /// 获取目录级安全沙箱（用于子目录遍历，不限扩展名）
+    fn dir_sandbox(&self) -> PathSandbox {
+        PathSandbox::new(&self.root_dir).allow_hidden(false)
     }
 }
 
@@ -75,7 +58,7 @@ impl LocalFsDocumentStore {
 impl DocumentStore for LocalFsDocumentStore {
     async fn list_documents(&self, subpath: Option<&str>) -> Result<Vec<FileEntry>> {
         let target_dir = if let Some(sub) = subpath {
-            self.resolve_safe_path(sub)?
+            self.dir_sandbox().resolve_safe_path(sub)?
         } else {
             self.root_dir.clone()
         };
@@ -138,7 +121,7 @@ impl DocumentStore for LocalFsDocumentStore {
     }
 
     async fn read_document(&self, path: &str) -> Result<String> {
-        let safe_path = self.resolve_safe_path(path)?;
+        let safe_path = self.document_sandbox().resolve_safe_path(path)?;
         if !safe_path.exists() {
             return Err(RupostError::Other(format!("File not found: {}", path)));
         }
@@ -146,7 +129,7 @@ impl DocumentStore for LocalFsDocumentStore {
     }
 
     async fn save_document(&self, path: &str, content: &str) -> Result<()> {
-        let safe_path = self.resolve_safe_path(path)?;
+        let safe_path = self.document_sandbox().resolve_safe_path(path)?;
         if let Some(parent) = safe_path.parent()
             && !parent.exists()
         {
@@ -187,5 +170,15 @@ mod tests {
             .save_document("../../evil.md", "malicious payload")
             .await;
         assert!(attack_save.is_err(), "跨根目录保存必须被拦截");
+
+        // 验证非活文档扩展名拦截
+        assert!(store.save_document("hack.sh", "echo 1").await.is_err());
+        assert!(
+            store
+                .save_document(".git/hooks/pre-commit", "echo 1")
+                .await
+                .is_err()
+        );
+        assert!(store.read_document(".env").await.is_err());
     }
 }

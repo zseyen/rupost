@@ -3,12 +3,6 @@ use crate::parser::types::{FileMetadata, ParseResult, ParsedFile, ParsedMockVari
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use std::path::Path;
 
-#[derive(Debug, PartialEq, Eq)]
-enum ParseState {
-    VariantHeaders,
-    VariantBody,
-}
-
 /// Markdown 文件解析器
 pub struct MarkdownFileParser;
 
@@ -152,133 +146,14 @@ impl MarkdownFileParser {
     }
 
     /// 在代码块中识别首个独立的 `@mock-when` 或 `@mock-default` 指令行，
-    /// 将代码块一刀切分为 `(request_part, variants_part)`。
-    /// 严禁全局文本检索，必须逐行词法判定以避免误伤 JSON 字符串内部的 mock 文本。
-    fn split_mock_variants(block_content: &str) -> Option<(String, String)> {
-        let mut req_lines = Vec::new();
-        let mut var_lines = Vec::new();
-        let mut in_variants = false;
-
-        for line in block_content.lines() {
-            if !in_variants {
-                let trimmed = line.trim();
-                let directive = if let Some(s) = trimmed.strip_prefix("//") {
-                    s.trim()
-                } else if let Some(s) = trimmed.strip_prefix('#') {
-                    s.trim()
-                } else {
-                    trimmed
-                };
-
-                let is_mock_directive = directive.starts_with("@mock-when")
-                    || directive == "@mock-default"
-                    || directive.starts_with("@mock-default ");
-
-                if is_mock_directive {
-                    in_variants = true;
-                    var_lines.push(line);
-                } else {
-                    req_lines.push(line);
-                }
-            } else {
-                var_lines.push(line);
-            }
-        }
-
-        if in_variants {
-            Some((req_lines.join("\n"), var_lines.join("\n")))
-        } else {
-            None
-        }
+    /// 将代码块一刀切分为 `(request_part, variants_part)`。（委托 MockVariantParser 统一组件）
+    pub fn split_mock_variants(block_content: &str) -> Option<(String, String)> {
+        crate::parser::mock_variant::MockVariantParser::split_mock_variants(block_content)
     }
 
-    /// 解析切分出的 Mock 变体部分
-    fn parse_mock_variants_part(variants_content: &str) -> Vec<ParsedMockVariant> {
-        let mut variants = Vec::new();
-        let mut current_variant: Option<ParsedMockVariant> = None;
-        let mut current_body_lines: Vec<&str> = Vec::new();
-        let mut state = ParseState::VariantHeaders;
-
-        for line in variants_content.lines() {
-            let trimmed = line.trim();
-            let directive = if let Some(s) = trimmed.strip_prefix("//") {
-                s.trim()
-            } else if let Some(s) = trimmed.strip_prefix('#') {
-                s.trim()
-            } else {
-                trimmed
-            };
-
-            let is_mock_directive = directive.starts_with("@mock-when")
-                || directive == "@mock-default"
-                || directive.starts_with("@mock-default ");
-
-            if is_mock_directive {
-                if let Some(mut var) = current_variant.take() {
-                    let body_str = current_body_lines.join("\n").trim().to_string();
-                    var.body = if body_str.is_empty() {
-                        None
-                    } else {
-                        Some(body_str)
-                    };
-                    variants.push(var);
-                    current_body_lines.clear();
-                }
-
-                if let Some(stripped) = directive.strip_prefix("@mock-when") {
-                    current_variant = Some(ParsedMockVariant {
-                        condition_expr: Some(stripped.trim().to_string()),
-                        status: 200,
-                        headers: Vec::new(),
-                        body: None,
-                    });
-                } else {
-                    current_variant = Some(ParsedMockVariant {
-                        condition_expr: None,
-                        status: 200,
-                        headers: Vec::new(),
-                        body: None,
-                    });
-                }
-                state = ParseState::VariantHeaders;
-                continue;
-            }
-
-            match state {
-                ParseState::VariantHeaders => {
-                    if trimmed.is_empty() {
-                        state = ParseState::VariantBody;
-                    } else if trimmed.starts_with("HTTP/1.1") || trimmed.starts_with("HTTP/2") {
-                        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                        if parts.len() >= 2
-                            && let Ok(code) = parts[1].parse::<u16>()
-                            && let Some(var) = current_variant.as_mut()
-                        {
-                            var.status = code;
-                        }
-                    } else if let Some((k, v)) = HttpFileParser::parse_header(trimmed)
-                        && let Some(var) = current_variant.as_mut()
-                    {
-                        var.headers.push((k.to_string(), v.to_string()));
-                    }
-                }
-                ParseState::VariantBody => {
-                    current_body_lines.push(line);
-                }
-            }
-        }
-
-        if let Some(mut var) = current_variant {
-            let body_str = current_body_lines.join("\n").trim().to_string();
-            var.body = if body_str.is_empty() {
-                None
-            } else {
-                Some(body_str)
-            };
-            variants.push(var);
-        }
-
-        variants
+    /// 解析切分出的 Mock 变体部分（委托 MockVariantParser 统一组件）
+    pub fn parse_mock_variants_part(variants_content: &str) -> Vec<ParsedMockVariant> {
+        crate::parser::mock_variant::MockVariantParser::parse_mock_variants_part(variants_content)
     }
 
     /// 从 Markdown 文件内容中解析并提取该文件声明的全局拓扑依赖文件。

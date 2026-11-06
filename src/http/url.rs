@@ -143,6 +143,36 @@ pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput
     NormalizedInput::NotUrl(input.to_string())
 }
 
+/// 强类型 URL 模板化组件 (消除跨模块切片与 IDN Panic 风险)
+pub struct UrlTemplatizer;
+
+impl UrlTemplatizer {
+    /// 将绝对 URL 的 origin 部分替换为指定占位符（如 `{{base_url}}`）
+    /// 无论是否为国际化域名（中文域名）、包含端口、或包含复杂 query/fragment，均能绝对安全重组
+    pub fn templatize_origin(raw_url: &str, placeholder: &str) -> String {
+        if !raw_url.starts_with("http://") && !raw_url.starts_with("https://") {
+            return raw_url.to_string();
+        }
+
+        if let Ok(parsed) = url::Url::parse(raw_url) {
+            let path = parsed.path();
+            let query_str = parsed
+                .query()
+                .map(|q| format!("?{}", q))
+                .unwrap_or_default();
+            let fragment_str = parsed
+                .fragment()
+                .map(|f| format!("#{}", f))
+                .unwrap_or_default();
+
+            let clean_placeholder = placeholder.trim_end_matches('/');
+            format!("{}{}{}{}", clean_placeholder, path, query_str, fragment_str)
+        } else {
+            raw_url.to_string()
+        }
+    }
+}
+
 pub fn join_paths(parts: &[&str]) -> String {
     let mut result = String::new();
     for part in parts {
@@ -434,6 +464,33 @@ mod tests {
             )
             .unwrap(),
             "wss://example.com/ws"
+        );
+    }
+
+    #[test]
+    fn test_url_templatizer_security_and_idn() {
+        // 1. 标准绝对路径
+        assert_eq!(
+            UrlTemplatizer::templatize_origin(
+                "https://api.example.com/v1/users?page=1",
+                "{{base_url}}"
+            ),
+            "{{base_url}}/v1/users?page=1"
+        );
+
+        // 2. 国际化中文域名（IDN），杜绝字节切片 Panic
+        assert_eq!(
+            UrlTemplatizer::templatize_origin(
+                "http://中国.com:8080/api/users#token",
+                "{{base_url}}"
+            ),
+            "{{base_url}}/api/users#token"
+        );
+
+        // 3. 相对路径原样返回
+        assert_eq!(
+            UrlTemplatizer::templatize_origin("/api/users", "{{base_url}}"),
+            "/api/users"
         );
     }
 }

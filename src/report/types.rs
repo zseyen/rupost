@@ -422,24 +422,9 @@ impl ReportContext {
     }
 }
 
-/// 严格安全的 HTML 字符转义函数，使用 Cow 消除无敏感字符时的不必要堆分配
+/// 严格安全的 HTML 字符转义函数，直接委托统一安全清洗组件 HtmlSanitizer
 pub fn escape_html(input: &str) -> Cow<'_, str> {
-    if !input.contains(['&', '<', '>', '"', '\'']) {
-        return Cow::Borrowed(input);
-    }
-
-    let mut escaped = String::with_capacity(input.len() + 16);
-    for c in input.chars() {
-        match c {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(c),
-        }
-    }
-    Cow::Owned(escaped)
+    crate::security::HtmlSanitizer::escape(input)
 }
 
 #[cfg(test)]

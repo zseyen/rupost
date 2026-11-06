@@ -1,4 +1,4 @@
-use crate::parser::MarkdownFileParser;
+use crate::parser::parse_document_by_path;
 use crate::web::server::AppState;
 use crate::web::types::{ApiResponse, SaveFileRequest, SaveFileResponse};
 use axum::Json;
@@ -18,14 +18,14 @@ pub async fn save_file_handler(
         );
     }
 
-    // 2. 预写入语法校验防线 (AST Pre-write Syntax Guard)
-    let parsed = match MarkdownFileParser::parse_content(&req.content) {
+    // 2. 预写入语法校验防线：统一委托给 parse_document_by_path 门面组件
+    let parsed = match parse_document_by_path(&req.path, &req.content) {
         Ok(p) => p,
         Err(e) => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(ApiResponse::err(format!(
-                    "Syntax guard rejection: Failed to parse markdown/http content: {}",
+                    "Syntax guard rejection: Failed to parse document: {}",
                     e
                 ))),
             );
@@ -35,7 +35,7 @@ pub async fn save_file_handler(
     let verified_blocks = parsed.requests.len();
     let bytes_written = req.content.len();
 
-    // 3. 落盘写入
+    // 3. 落盘写入（存储层通过 PathSandbox 进行绝对路径、隐藏文件与扩展名安全拦截）
     match state.store.save_document(&req.path, &req.content).await {
         Ok(_) => (
             StatusCode::OK,
@@ -46,7 +46,7 @@ pub async fn save_file_handler(
             })),
         ),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_REQUEST,
             Json(ApiResponse::err(format!("Failed to save document: {}", e))),
         ),
     }

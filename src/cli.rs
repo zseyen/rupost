@@ -207,6 +207,30 @@ pub enum Commands {
     #[command(alias = "exp")]
     Export(ExportArgs),
 
+    /// 启动活文档工作台 Web 服务
+    #[command(alias = "w")]
+    Web {
+        /// 监听端口
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+
+        /// 监听地址
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// 自定义外部前端静态资源目录（覆盖内置前端）
+        #[arg(long, value_name = "DIR")]
+        static_dir: Option<String>,
+
+        /// 开启只读保护模式（禁止保存与覆盖文件）
+        #[arg(long)]
+        readonly: bool,
+
+        /// 活文档根目录
+        #[arg(short = 'd', long = "dir", default_value = ".")]
+        dir: String,
+    },
+
     /// AI assisted authoring commands
     Ai {
         #[command(subcommand)]
@@ -907,6 +931,31 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             )
             .await?;
         }
+        Some(Commands::Web {
+            port,
+            host,
+            static_dir,
+            readonly,
+            dir,
+        }) => {
+            let store: std::sync::Arc<dyn rupost::web::DocumentStore> =
+                std::sync::Arc::new(rupost::web::LocalFsDocumentStore::new(&dir));
+
+            let assets: std::sync::Arc<dyn rupost::web::AssetProvider> = match static_dir {
+                Some(d) => std::sync::Arc::new(rupost::web::LocalDirAssetProvider::new(d)),
+                None => std::sync::Arc::new(rupost::web::EmbeddedAssetProvider),
+            };
+
+            let config = rupost::web::WebServerConfig {
+                store,
+                assets,
+                readonly,
+                working_dir: std::path::PathBuf::from(&dir),
+                default_env: cli.env.clone(),
+            };
+
+            rupost::web::run_web_server(config, &host, port).await?;
+        }
         None => {
             if cli.args.is_empty() {
                 tracing::error!("No command provided");
@@ -1220,5 +1269,61 @@ mod tests {
         assert!(var.is_empty());
         assert!(env_file.is_none());
         assert!(cookie_file.is_none());
+    }
+
+    #[test]
+    fn test_web_command_parsing_and_defaults() {
+        // 默认参数
+        let cli_default = Cli::try_parse_from(["rupost", "web"]).expect("bare web must parse");
+        let Some(Commands::Web {
+            port,
+            host,
+            static_dir,
+            readonly,
+            dir,
+        }) = cli_default.command
+        else {
+            panic!("expected Web subcommand");
+        };
+        assert_eq!(port, 3000);
+        assert_eq!(host, "127.0.0.1");
+        assert!(static_dir.is_none());
+        assert!(!readonly);
+        assert_eq!(dir, ".");
+
+        // 自定义全量参数
+        let cli_custom = Cli::try_parse_from([
+            "rupost",
+            "--env",
+            "staging",
+            "web",
+            "--port",
+            "8080",
+            "--host",
+            "0.0.0.0",
+            "--static-dir",
+            "./dist",
+            "--readonly",
+            "--dir",
+            "./docs",
+        ])
+        .expect("custom web args must parse");
+
+        assert_eq!(cli_custom.env.as_deref(), Some("staging"));
+        let Some(Commands::Web {
+            port,
+            host,
+            static_dir,
+            readonly,
+            dir,
+        }) = cli_custom.command
+        else {
+            panic!("expected Web subcommand");
+        };
+        assert_eq!(port, 8080);
+        assert_eq!(host, "0.0.0.0");
+        assert_eq!(static_dir.as_deref(), Some("./dist"));
+        assert!(readonly);
+        assert_eq!(dir, "./docs");
     }
 }

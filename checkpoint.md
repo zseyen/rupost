@@ -1,6 +1,14 @@
-# RuPost 质量加固战役 Checkpoint 归档（2026-10）
+# RuPost 质量加固战役 Checkpoint 归档（2026-10 ~ 2026-11）
 
-## 当前状态总结 (Current Status)
+## 最新里程碑进展 (2026-11-06)
+- **全文档体系重构、内容汇总与分类规整 (Clean Docs & Features Dossiers)**：
+  1. **7 大核心领域三段式技术档案落地 (`doc/architecture/features/`)**：围绕“① 需求是什么、② 演进决策与核心算法、③ 当前落地代码与测试映射、④ 后续演进规划”四大维度，深度整合并提炼了 `cookie_and_session`、`batch_and_workflow`、`ai_engine_system`、`debug_and_diagnostics`、`protocols_and_mock`、`tui_architecture`、`plugin_and_extensibility`，彻底消解早期草案碎片。
+  2. **`doc/plans/` 演进规划大熔炉规整**：100% 物理保留历史 50+ 篇 PRD 原文，按 `2026-q2/`、`2026-q3/`、`2026-q4/` 季度里程碑归档；在 `doc/plans/README.md` 中构建了 5 大业务演进主线（AI 智能线、TUI 终端交互线、执行调度线、排障重放线、质量战役线）的交叉引用矩阵。
+  3. **全局知识中枢 `doc/README.md` 建立**：确立 Diátaxis 与 Clean Architecture 文档组织标准，保持 Makefile、AGENTS.md、README.md 外部契约 100% 兼容无损，全量 512 个单测与端到端 `verify_features.sh` 持续高标准 PASS。
+
+---
+
+## 历史状态总结 (Historical Status)
 
 依据 [质量加固执行方案](doc/plans/2026-10-18-quality-hardening-execution-plan.md)（v3），Phase 0–4 全部完成，**里程碑 C 达成**：方案内全部 25 项审查发现闭环。全程 `jj` 原子提交（修复与对抗性回归测试同提交）。
 

@@ -286,3 +286,31 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 ## TUI 接入剩余 CLI 功能（2026-11-05/06，tui-cli-bridge workspace）
 
 "接入所有新增功能"目标收尾：诊断 flake 修复（环境哨兵）→ CLI-parity 三域九项（前批）→ 剩余四项（V 快照重放 / M mock 开关 / I AI 断言 / --cookie-file 持久化）。mock/server.rs 拆分 build/serve 供编程接入。基线 45 套件 807 测试绿；clippy 零警告。
+
+
+---
+
+## TUI 组件化重构与冲突清理战役（2026-11-06，tui-tests-full 分支）
+
+完成 TUI 历史冲突整理、全量回归验证、Code Review 修复及 UI 模块组件化重构：
+
+### 1. 提交树整理与冲突根除 (Conflict Cleansing)
+- **基线对齐**：以稳定的 `sntzqrmv (tui-cli-bridge)` 为基准，将包含 3 个历史冲突提交的旧链原子化重构为 3 个标准清晰提交（`feat(tui)`、`test(tui)`、`docs(tui)`）。
+- **废弃脏提交**：彻底 `abandon` 旧冲突链（`wvwymprs::lowvxnxu`）及历史悬空冲突 `mpyyoknn`，同步更新辅助工作区 `.workspace/tui-tests-full`。
+- **冲突清零**：`jj log -r 'conflicts()'` 当前全仓库 0 冲突。
+
+### 2. Code Review 缺陷手术式修复 (Surgical Fixes)
+- **UX 语义纠正**：修复 `save_current_snapshot` 成功时误写 `last_error` 导致状态栏飘红的缺陷，成功时置 `state.last_error = None`。
+- **渲染零复制优化**：消除 `src/tui/ui/mod.rs` 中 `show_export.clone()` 在每帧渲染循环中的深层堆内存分配，改为借用零拷贝渲染。
+- **代码卫生治理**：清理 `src/tui/handlers/editor.rs` 中重复与错位的注释。
+
+### 3. 第一性原理组件化解耦 (UI Componentization)
+- **布局抽象**：新增 `src/tui/ui/popups.rs`，提取 `centered_rect` 与 `centered_rect_exact` 无状态居中算法，消除 4 处重复布局数学运算。
+- **弹窗组件化**：将 Help、Unsaved Confirm、Export、Modal Input 弹窗统一收敛至 `popups` 模块，遵循纯函数只读入参契约。
+- **状态栏解耦**：新增 `src/tui/ui/status_bar.rs`，独立承载错误提示、认证与 Mock 会话指示、上下文敏捷按键映射。
+- **主入口极简**：`src/tui/ui/mod.rs` 从 589 行压缩至 ~180 行（净减 400+ 行），蜕变为纯粹的布局分发 Orchestrator。
+- **离屏测试加固**：新增 4 组离屏 `TestBackend` 组件级单元测试，全量 52 个冒烟测试 + 8 个特性保障测试全部 PASS，clippy 零告警。
+
+### 下一步计划 (Next Steps)
+- 探索 `src/tui/ui/response.rs`（870+ 行）的 5-Tab（Timing / Diagnose / Headers / Body / Stream）子面板组件化拆分。
+- 完善 Web 界面 / 跨平台终端自适应交互细节。

@@ -149,6 +149,11 @@ pub(super) async fn handle_sidebar_key(
                 }
             }
         },
+        KeyCode::Char('G')
+            // R9：History 侧栏 G 一键生成 .http 文件入工作区
+            if state.active_sidebar_tab == SidebarTab::History => {
+                crate::tui::handlers::editor::generate_history_to_file(state).await;
+            }
         _ => {}
     }
 }

@@ -110,6 +110,36 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         render_unsaved_popup(frame, main_area, t);
     }
 
+    // 4.4. X 导出弹窗（curl 命令文本，Esc 关闭）
+    if let Some(cmd) = state.show_export.clone() {
+        let block = Block::default()
+            .title(" Export: curl (Esc to close) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(t.accent));
+        let popup = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(15),
+                Constraint::Percentage(70),
+                Constraint::Percentage(15),
+            ])
+            .split(main_area);
+        let h_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(10),
+                Constraint::Percentage(80),
+                Constraint::Percentage(10),
+            ])
+            .split(popup[1]);
+        let area = h_layout[1];
+        let paragraph = Paragraph::new(Line::from(cmd))
+            .block(block)
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(ratatui::widgets::Clear, area);
+        frame.render_widget(paragraph, area);
+    }
+
     // 4.5. 模态输入弹窗（快速新建 / 文件过滤）
     if !matches!(state.input_mode, InputMode::None) {
         render_modal_input_popup(frame, main_area, state);
@@ -338,11 +368,18 @@ fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    // 快速授权指示（R3：`A` 设置后全面板可见）
+    // 快速授权指示（R3）与 mock 会话指示（R11）：全面板可见
     let mut spans = Vec::new();
     if state.quick_auth().is_some() {
         spans.push(Span::styled(
             " AUTH✓ ",
+            Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("│ "));
+    }
+    if let Some(sess) = &state.mock_session {
+        spans.push(Span::styled(
+            format!(" MOCK :{} ", sess.port),
             Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw("│ "));

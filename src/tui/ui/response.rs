@@ -605,6 +605,17 @@ fn rebuild_http_visual_lines(state: &mut AppState, max_width: usize) {
                 raw_lines.push(Line::from(time_size_spans));
 
                 // 非致命告警必须可见，避免静默假通过
+
+                // R6：四段耗时（timing 存在时）
+                if let Some(timing) = &state.last_timing {
+                    raw_lines.push(Line::from(Span::styled(
+                        format!(
+                            "DNS {:?} · TCP {:?} · TTFB {:?} · Transfer {:?}",
+                            timing.dns_lookup, timing.tcp_connect, timing.ttfb, timing.transfer
+                        ),
+                        Style::default().fg(t.dim),
+                    )));
+                }
                 if !state.warnings.is_empty() {
                     raw_lines.push(Line::from(Span::styled(
                         format!("Warnings: {}", state.warnings.len()),

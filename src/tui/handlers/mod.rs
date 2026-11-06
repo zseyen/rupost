@@ -74,6 +74,11 @@ pub async fn handle_key(state: &mut AppState, key: KeyEvent, event_tx: &mpsc::Se
             state.show_help = false;
             return;
         }
+        // X 导出弹窗：Esc 关闭
+        if state.show_export.is_some() {
+            state.show_export = None;
+            return;
+        }
         if state.active_panel != Panel::Files {
             state.active_panel = Panel::Files;
             return;

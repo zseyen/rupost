@@ -237,6 +237,42 @@ pub(super) async fn handle_editor_key(
         match key.code {
             // R6：`W` 建立交互式 WS 会话（编辑器须为 @websocket 请求）
             KeyCode::Char('W') => start_ws_session(state, event_tx).await,
+            // R4：`#` 打开单请求选择器模态（`#3` / `@name`）
+            KeyCode::Char('#') => {
+                state.input_mode = InputMode::Selector(Box::new(
+                    super::sidebar::new_input_textarea(state.palette()),
+                ));
+            }
+            // R8：`X`/`Shift+X` 导出当前请求为 curl 命令（脱敏/原样）
+            KeyCode::Char('X') => {
+                let redact = !key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT);
+                export_current_request(state, redact);
+            }
+            // R9：`Ctrl+S` 保存当前请求/响应快照（默认脱敏）
+            KeyCode::Char('s')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                save_current_snapshot(state);
+            }
+            // R10：`V` 重放最新快照
+            KeyCode::Char('V') => {
+                crate::tui::integrations::replay_latest_snapshot(state, event_tx).await;
+            }
+            // R11：`M` 开关当前文件 mock 服务器
+            KeyCode::Char('M') => {
+                crate::tui::integrations::toggle_mock_server(state).await;
+            }
+            // R12：`I` AI 断言翻译模态
+            KeyCode::Char('I') => {
+                state.input_mode = InputMode::AiAssert(Box::new(
+                    super::sidebar::new_input_textarea(state.palette()),
+                ));
+            }
+            // R6：`D` 关闭活跃会话（drop → SessionManager 退出 → 连接关闭）
             // R6：`D` 关闭活跃会话（drop → SessionManager 退出 → 连接关闭）
             KeyCode::Char('D') => {
                 if state.ws_session.take().is_some() {
@@ -254,6 +290,7 @@ pub(super) async fn handle_editor_key(
                         Some("no active WS session — press W to open one".to_string());
                 }
             }
+            // R4：`#` 打开单请求选择器模态（`#3` / `@name`）
             KeyCode::Up | KeyCode::Char('k') => {
                 state.editor_scroll = nav::scroll_up(state.editor_scroll, 1);
             }
@@ -268,6 +305,152 @@ pub(super) async fn handle_editor_key(
             }
             _ => {}
         }
+    }
+}
+
+/// R8：导出当前编辑器请求为 curl 命令。
+/// 复用 exporter 全管线（`RequestPreparer::prepare_one`：变量解析 + 注入 + [REDACTED] 脱敏）
+/// —— 脱敏语义与 CLI export 完全一致，手拼 ExportableRequest 会绕过 redact 管线。
+pub fn export_current_request(state: &mut AppState, redact: bool) {
+    let parsed = match crate::parser::parse_content(&state.editor_text) {
+        Ok(p) => p,
+        Err(e) => {
+            state.last_error = Some(format!("HTTP Parser Error: {e}"));
+            return;
+        }
+    };
+    let Some(mut req) = parsed.requests.first().cloned() else {
+        state.last_error = Some("No request block found in editor.".to_string());
+        return;
+    };
+    inject_quick_auth(&mut req, state.quick_auth());
+
+    let mut ctx = state.variables.clone();
+    ctx.insert("__default_scheme", "http");
+    let captured: std::collections::HashSet<String> =
+        state.variables.variables().keys().cloned().collect();
+
+    let cookie_store = None; // TUI 会话 cookie 在 bridge 中，导出不注入（与 CLI export 默认一致）
+    let exportable = match crate::exporter::preparer::RequestPreparer::prepare_one(
+        req,
+        &mut ctx,
+        cookie_store,
+        state.editor_file_path.as_deref(),
+        redact,
+        &captured,
+    ) {
+        Ok(x) => x,
+        Err(e) => {
+            state.last_error = Some(format!("export prepare: {e}"));
+            return;
+        }
+    };
+
+    let registry = crate::exporter::plugin::ExporterRegistry::new_builtin();
+    let opts = crate::exporter::types::ExportOptions {
+        compact: false,
+        redact_secrets: redact,
+    };
+    match registry.find("curl") {
+        Some(exporter) => match exporter.export_one(&exportable, &opts) {
+            Ok(cmd) => {
+                state.show_export = Some(if redact {
+                    format!("curl (secrets [REDACTED])\n\n{cmd}")
+                } else {
+                    format!("curl (raw secrets — do not share)\n\n{cmd}")
+                });
+                state.last_error = None;
+            }
+            Err(e) => state.last_error = Some(format!("export failed: {e}")),
+        },
+        None => state.last_error = Some("curl exporter not registered".to_string()),
+    }
+}
+
+/// R9：保存当前请求/响应快照（默认脱敏）到 ./snapshots/
+pub fn save_current_snapshot(state: &mut AppState) {
+    use crate::history::model::{RequestSnapshot, ResponseSnapshot, SnapshotEntry, SnapshotSuite};
+
+    let Some(resp) = state.last_response.clone() else {
+        state.last_error = Some("no response to snapshot — run a request first".to_string());
+        return;
+    };
+    let Some(req) = state.current_request.clone() else {
+        state.last_error = Some("no current request to snapshot".to_string());
+        return;
+    };
+
+    let mut entry = SnapshotEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        request: RequestSnapshot::from_parsed(&req),
+        response: ResponseSnapshot {
+            status: resp.status.code(),
+            headers: resp.headers.clone(),
+            body: resp.body.clone(),
+        },
+    };
+    crate::history::storage::mask_snapshot_entry(&mut entry);
+
+    let suite = SnapshotSuite {
+        timestamp: chrono::Utc::now(),
+        source_file: state.editor_file_path.clone(),
+        entries: vec![entry],
+    };
+    let dir = state.workspace_root.join("snapshots");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        state.last_error = Some(format!("snapshot dir: {e}"));
+        return;
+    }
+    let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let path = dir.join(format!("snapshot_{ts}.json"));
+    match crate::history::storage::write_snapshot_suite(&suite, &path) {
+        Ok(()) => {
+            state.last_error = Some(format!("snapshot saved: {}", path.to_string_lossy()));
+        }
+        Err(e) => state.last_error = Some(format!("snapshot write: {e}")),
+    }
+}
+
+/// R9：History 侧栏 `G` 一键生成 .http（复用 HttpGenerator 语义化命名）写入工作区
+pub async fn generate_history_to_file(state: &mut AppState) {
+    use crate::generator::HttpGenerator;
+    let idx = state.history_state.selected_index;
+    let Some(entry) = state.history_list.get(idx).cloned() else {
+        state.last_error = Some("no history entry selected".to_string());
+        return;
+    };
+    match HttpGenerator::generate_with_variables(std::slice::from_ref(&entry), false) {
+        Ok((content, warnings)) => {
+            let id8: String = entry.id.chars().take(8).collect();
+            let path = state.workspace_root.join(format!("generated_{id8}.http"));
+            match std::fs::write(&path, &content) {
+                Ok(()) => {
+                    let path_str = path.to_string_lossy().into_owned();
+                    if !state.raw_file_list.contains(&path_str) {
+                        state.raw_file_list.push(path_str.clone());
+                    }
+                    state.rebuild_visible_tree_nodes();
+                    if let Some(pos) = state
+                        .visible_file_nodes
+                        .iter()
+                        .position(|n| n.abs_path == path_str)
+                    {
+                        state.files_state.selected_index = pos;
+                        state.editor_text = content;
+                        state.editor_file_path = Some(path_str);
+                        state.active_panel = crate::tui::state::Panel::Editor;
+                    }
+                    if warnings.is_empty() {
+                        state.last_error = None;
+                    } else {
+                        state.last_error =
+                            Some(format!("generated with {} warning(s)", warnings.len()));
+                    }
+                }
+                Err(e) => state.last_error = Some(format!("generate write: {e}")),
+            }
+        }
+        Err(e) => state.last_error = Some(format!("generate: {e}")),
     }
 }
 

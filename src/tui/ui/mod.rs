@@ -1,17 +1,18 @@
 pub mod editor;
+pub mod popups;
 pub mod response;
 pub mod sidebar;
+pub mod status_bar;
 
 use super::state::{AppState, InputMode, LayoutMode, Panel};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Paragraph, Tabs},
 };
 
-/// 渲染 TUI 面板布局主入口
+/// 渲染 TUI 面板布局主入口 (Orchestrator)
 pub fn render(frame: &mut Frame, state: &mut AppState) {
     let t = state.palette();
     let size = frame.area();
@@ -36,7 +37,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     // 2. 根据自适应模式划分主显示区，分派子组件渲染
     match state.layout_mode {
         LayoutMode::Wide => {
-            // 三栏并排
+            // 三栏并排 (25% sidebar, 40% editor, 35% response)
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -51,7 +52,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
             response::render(frame, chunks[2], state);
         }
         LayoutMode::Narrow => {
-            // 重构为三栏并排 (20% sidebar, 40% editor, 40% response)
+            // 三栏并排 (20% sidebar, 40% editor, 40% response)
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -75,7 +76,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
                 ])
                 .split(main_area);
 
-            // 渲染大 Tab 导航头
             let titles = vec!["[1] Files", "[2] Editor", "[3] Response"];
             let active_idx = match state.active_panel {
                 Panel::Files => 0,
@@ -91,7 +91,6 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
 
             frame.render_widget(tabs, chunks[0]);
 
-            // 根据当前激活面板进行渲染
             match state.active_panel {
                 Panel::Files => sidebar::render(frame, chunks[1], state),
                 Panel::Editor => editor::render(frame, chunks[1], state),
@@ -100,415 +99,28 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         }
     }
 
-    // 3. 渲染全局帮助悬浮窗 (Modal Panel)
+    // 3. 渲染全局快捷键帮助悬浮窗 (Modal Panel)
     if state.show_help {
-        render_help_popup(frame, main_area, t);
+        popups::render_help(frame, main_area, t);
     }
 
     // 4. 渲染未保存强确认弹窗 (Unsaved Changes Alert Modal)
     if state.show_unsaved_confirm {
-        render_unsaved_popup(frame, main_area, t);
+        popups::render_unsaved_confirm(frame, main_area, t);
     }
 
-    // 4.4. X 导出弹窗（curl 命令文本，Esc 关闭）
+    // 5. 渲染 X 键导出弹窗
     if let Some(cmd) = &state.show_export {
-        let block = Block::default()
-            .title(" Export: curl (Esc to close) ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(t.accent));
-        let popup = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(15),
-                Constraint::Percentage(70),
-                Constraint::Percentage(15),
-            ])
-            .split(main_area);
-        let h_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(10),
-                Constraint::Percentage(80),
-                Constraint::Percentage(10),
-            ])
-            .split(popup[1]);
-        let area = h_layout[1];
-        let paragraph = Paragraph::new(Line::from(cmd.as_str()))
-            .block(block)
-            .wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(ratatui::widgets::Clear, area);
-        frame.render_widget(paragraph, area);
+        popups::render_export(frame, main_area, cmd, t);
     }
 
-    // 4.5. 模态输入弹窗（快速新建 / 文件过滤）
+    // 6. 渲染统一模态输入弹窗（快速新建 / 文件过滤 / 选择器 / AI断言等）
     if !matches!(state.input_mode, InputMode::None) {
-        render_modal_input_popup(frame, main_area, state);
+        popups::render_modal_input(frame, main_area, state);
     }
 
-    // 5. 渲染底部 lazygit 风格状态栏
-    render_help_bar(frame, help_bar_area, state);
-}
-
-fn render_modal_input_popup(frame: &mut Frame, screen_size: Rect, state: &AppState) {
-    let t = state.palette();
-    use InputMode;
-    let title = match &state.input_mode {
-        InputMode::QuickCreate(_) => format!(" {} ", state.quick_input_title),
-        InputMode::Filter(_) => " Filter files (substring, live): ".to_string(),
-        InputMode::Auth(_) => {
-            " Authorization header value (e.g. Bearer <token>, empty clears): ".to_string()
-        }
-        InputMode::Search(_) => " Search messages (n/N after Esc): ".to_string(),
-        InputMode::WsSend(_) => " WS send (Enter to send): ".to_string(),
-        InputMode::AiAssert(_) => {
-            " AI assert (describe expectations, Enter to translate): ".to_string()
-        }
-        InputMode::Selector(_) => {
-            format!(
-                " Request selector (#3 or @name, empty clears){}: ",
-                if state.run_selector.is_some() {
-                    format!(" [active: {}]", state.run_selector.as_deref().unwrap_or(""))
-                } else {
-                    String::new()
-                }
-            )
-        }
-        InputMode::None => String::new(),
-    };
-    let textarea = match &state.input_mode {
-        InputMode::QuickCreate(t)
-        | InputMode::Filter(t)
-        | InputMode::Auth(t)
-        | InputMode::Search(t)
-        | InputMode::WsSend(t)
-        | InputMode::Selector(t)
-        | InputMode::AiAssert(t) => t,
-        InputMode::None => return,
-    };
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(3), // 高度为 3
-            Constraint::Min(0),
-        ])
-        .split(screen_size);
-
-    let popup_area = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(60), // 宽度占 60%
-            Constraint::Percentage(20),
-        ])
-        .split(popup_layout[1])[1];
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(t.accent).add_modifier(Modifier::BOLD));
-
-    frame.render_widget(Clear, popup_area);
-    let block = block.title(title);
-    frame.render_widget(block, popup_area);
-
-    let inner = Rect {
-        x: popup_area.x + 1,
-        y: popup_area.y + 1,
-        width: popup_area.width.saturating_sub(2),
-        height: popup_area.height.saturating_sub(2),
-    };
-    frame.render_widget(textarea.as_ref(), inner);
-    // 真实光标替代旧的 "█" 伪光标（screen_cursor 给出渲染后的绝对坐标）
-    let cursor = textarea.screen_cursor();
-    frame.set_cursor_position((inner.x + cursor.col as u16, inner.y + cursor.row as u16));
-}
-
-fn render_help_popup(frame: &mut Frame, screen_size: Rect, t: &crate::tui::theme::Theme) {
-    let help_text = vec![
-        Line::from(Span::styled(
-            " RuPost TUI Shortcuts Reference ",
-            Style::default().add_modifier(Modifier::BOLD).fg(t.accent),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Tab        ", Style::default().fg(t.info)),
-            Span::raw(" Switch active panels (Files -> Editor -> Response)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Left/Right ", Style::default().fg(t.info)),
-            Span::raw(" Switch Sidebar sub-tabs (Files <-> History)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  p          ", Style::default().fg(t.info)),
-            Span::raw(" Toggle display full file path in Files tab"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+Enter ", Style::default().fg(t.info)),
-            Span::raw(" Send current HTTP request"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Ctrl+R     ", Style::default().fg(t.info)),
-            Span::raw(" Send current HTTP request (Backup key)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Enter      ", Style::default().fg(t.info)),
-            Span::raw(" In History tab, restore request to Preview"),
-        ]),
-        Line::from(vec![
-            Span::styled("  /          ", Style::default().fg(t.info)),
-            Span::raw(" Filter files (live, Esc clears)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ,          ", Style::default().fg(t.accent)),
-            Span::raw(" Toggle dark/light theme"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?          ", Style::default().fg(t.info)),
-            Span::raw(" Toggle this help panel"),
-        ]),
-        Line::from(vec![
-            Span::styled("  q          ", Style::default().fg(t.info)),
-            Span::raw(" Safe exit TUI mode"),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  * History Storage: ~/.rupost/history.jsonl",
-            Style::default().fg(t.dim),
-        )),
-        Line::from(Span::styled(
-            "  * Run `rupost history show <Short ID>` in terminal to view details.",
-            Style::default().fg(t.dim),
-        )),
-    ];
-
-    let width = 74.min(screen_size.width - 4);
-    let height = 16.min(screen_size.height - 2);
-
-    let area = Rect::new(
-        (screen_size.width - width) / 2,
-        (screen_size.height - height) / 2,
-        width,
-        height,
-    );
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(t.accent));
-
-    let paragraph = Paragraph::new(help_text).block(block);
-
-    // 擦除底层界面，防止透字
-    frame.render_widget(Clear, area);
-    frame.render_widget(paragraph, area);
-}
-
-fn render_unsaved_popup(frame: &mut Frame, screen_size: Rect, t: &crate::tui::theme::Theme) {
-    let text = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            " WARNING: Unsaved Changes! ",
-            Style::default().add_modifier(Modifier::BOLD).fg(t.err),
-        )),
-        Line::from(""),
-        Line::from(" You have unsaved modifications in the editor."),
-        Line::from(" Do you want to discard them and continue?"),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(
-                "  [y] ",
-                Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Yes, discard changes"),
-            Span::styled(
-                "     [n/Esc] ",
-                Style::default().fg(t.err).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" No, keep editing"),
-        ]),
-    ];
-
-    let width = 50.min(screen_size.width - 4);
-    let height = 10.min(screen_size.height - 2);
-
-    let area = Rect::new(
-        (screen_size.width - width) / 2,
-        (screen_size.height - height) / 2,
-        width,
-        height,
-    );
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(t.err).add_modifier(Modifier::BOLD));
-
-    let paragraph = Paragraph::new(text)
-        .block(block)
-        .alignment(ratatui::layout::Alignment::Center);
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(paragraph, area);
-}
-
-fn render_help_bar(frame: &mut Frame, area: Rect, state: &AppState) {
-    let t = state.palette();
-    use crate::tui::state::{Panel, SidebarTab};
-
-    let style = Style::default().bg(t.status_bg).fg(t.status_fg);
-
-    // 写路径失败优先呈现（替代快捷键提示；下一次成功操作清除）
-    if let Some(err) = &state.last_error {
-        let spans = vec![
-            Span::styled(
-                " ! ",
-                Style::default().fg(t.err).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(err.clone(), Style::default().fg(t.err)),
-        ];
-        frame.render_widget(Paragraph::new(Line::from(spans)).style(style), area);
-        return;
-    }
-
-    // 快速授权指示（R3）与 mock 会话指示（R11）：全面板可见
-    let mut spans = Vec::new();
-    if state.quick_auth().is_some() {
-        spans.push(Span::styled(
-            " AUTH✓ ",
-            Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw("│ "));
-    }
-    if let Some(sess) = &state.mock_session {
-        spans.push(Span::styled(
-            format!(" MOCK :{} ", sess.port),
-            Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::raw("│ "));
-    }
-    spans.extend(match state.active_panel {
-        Panel::Files => match state.active_sidebar_tab {
-            SidebarTab::Files => vec![
-                Span::styled(
-                    " q ",
-                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Quit │ "),
-                Span::styled(
-                    " ? ",
-                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Help │ "),
-                Span::styled(
-                    " Tab ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Focus Editor │ "),
-                Span::styled(
-                    " h/l (←/→) ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Switch Tab │ "),
-                Span::styled(
-                    " j/k (↑/↓) / Click ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Select │ "),
-                Span::styled(
-                    " Enter ",
-                    Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Edit File │ "),
-                Span::styled(
-                    " p ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Toggle Path"),
-            ],
-            SidebarTab::History => vec![
-                Span::styled(
-                    " q ",
-                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Quit │ "),
-                Span::styled(
-                    " ? ",
-                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Help │ "),
-                Span::styled(
-                    " Tab ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Focus Editor │ "),
-                Span::styled(
-                    " h/l (←/→) ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Switch Tab │ "),
-                Span::styled(
-                    " j/k (↑/↓) / Click ",
-                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Select │ "),
-                Span::styled(
-                    " Enter ",
-                    Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Load History"),
-            ],
-        },
-        Panel::Editor => vec![
-            Span::styled(
-                " q ",
-                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Quit │ "),
-            Span::styled(
-                " ? ",
-                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Help │ "),
-            Span::styled(
-                " Tab ",
-                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Focus Response │ "),
-            Span::styled(
-                " Ctrl+Enter / Ctrl+R ",
-                Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Run Request │ "),
-            Span::styled(
-                " Ctrl+S ",
-                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Save"),
-        ],
-        Panel::Response => vec![
-            Span::styled(
-                " q ",
-                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Quit │ "),
-            Span::styled(
-                " ? ",
-                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Help │ "),
-            Span::styled(
-                " Tab ",
-                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Focus Sidebar │ "),
-            Span::styled(
-                " j/k (↑/↓) ",
-                Style::default().fg(t.info).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("Scroll Response"),
-        ],
-    });
-
-    let paragraph = Paragraph::new(Line::from(spans)).style(style);
-    frame.render_widget(paragraph, area);
+    // 7. 渲染底部 lazygit 风格状态栏
+    status_bar::render(frame, help_bar_area, state);
 }
 
 #[cfg(test)]
@@ -579,6 +191,16 @@ mod tests {
                                         render(f, &mut state);
                                     })
                                     .unwrap();
+
+                                // 验证导出弹窗渲染
+                                state.show_unsaved_confirm = false;
+                                state.show_export = Some("curl http://example.com".to_string());
+                                terminal
+                                    .draw(|f| {
+                                        render(f, &mut state);
+                                    })
+                                    .unwrap();
+                                state.show_export = None;
                             }
                         }
                     }

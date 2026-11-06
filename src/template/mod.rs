@@ -3,7 +3,7 @@ pub mod strategy;
 use colored::Colorize;
 use std::fs;
 use std::path::Path;
-use strategy::{ConfigTemplate, LlmTemplate, SseTemplate, TemplateStrategy};
+use strategy::{ConfigTemplate, LlmTemplate, SpecTemplate, SseTemplate, TemplateStrategy};
 
 /// 获取所有可用的模板策略列表
 pub fn get_templates() -> Vec<Box<dyn TemplateStrategy>> {
@@ -11,6 +11,7 @@ pub fn get_templates() -> Vec<Box<dyn TemplateStrategy>> {
         Box::new(ConfigTemplate),
         Box::new(SseTemplate),
         Box::new(LlmTemplate),
+        Box::new(SpecTemplate),
     ]
 }
 

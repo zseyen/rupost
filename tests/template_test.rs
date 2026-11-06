@@ -172,7 +172,35 @@ fn test_default_output_path_resolution() {
     assert!(res_llm.is_ok());
     assert!(temp_dir.path().join("llm_template.http").exists());
 
+    // 清理已生成的 .env.example，防止干扰下一个带有伴生 env 的模板
+    let _ = fs::remove_file(temp_dir.path().join(".env.example"));
+
+    let res_spec = run_template("spec", None, false, false);
+    assert!(res_spec.is_ok());
+    assert!(temp_dir.path().join("spec_template.http").exists());
+
     std::env::set_current_dir(old_dir).unwrap();
+}
+
+#[test]
+fn test_spec_template_generation_markdown_and_env() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec_path = temp_dir.path().join("api_spec.md");
+    let env_path = temp_dir.path().join(".env.example");
+
+    let res = run_template("spec", Some(spec_path.to_str().unwrap()), false, false);
+    assert!(res.is_ok());
+    assert!(spec_path.exists());
+    assert!(env_path.exists());
+
+    let content = fs::read_to_string(&spec_path).unwrap();
+    assert!(content.contains("Living API Specification"));
+    assert!(content.contains("@mock-when header.X-Role == admin"));
+    assert!(content.contains("@mock-default"));
+
+    let env_content = fs::read_to_string(&env_path).unwrap();
+    assert!(env_content.contains("base_url="));
+    assert!(env_content.contains("auth_token="));
 }
 
 #[test]

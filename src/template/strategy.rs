@@ -77,3 +77,27 @@ impl TemplateStrategy for LlmTemplate {
         Some(include_str!("../../templates/llm/env.example"))
     }
 }
+
+pub struct SpecTemplate;
+
+impl TemplateStrategy for SpecTemplate {
+    fn name(&self) -> &'static str {
+        "spec"
+    }
+
+    fn description(&self) -> &'static str {
+        "Living API specification and dual-role contract testing template"
+    }
+
+    fn http_content(&self) -> &'static str {
+        include_str!("../../templates/spec/template.http")
+    }
+
+    fn markdown_content(&self) -> &'static str {
+        include_str!("../../templates/spec/template.md")
+    }
+
+    fn env_content(&self) -> Option<&'static str> {
+        Some(include_str!("../../templates/spec/env.example"))
+    }
+}

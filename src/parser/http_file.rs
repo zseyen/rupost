@@ -188,7 +188,10 @@ impl HttpFileParser {
     }
 
     /// 解析单个请求块
-    fn parse_request_block(block: &str, start_line: usize) -> ParseResult<Option<ParsedRequest>> {
+    pub(crate) fn parse_request_block(
+        block: &str,
+        start_line: usize,
+    ) -> ParseResult<Option<ParsedRequest>> {
         let mut request = ParsedRequest::new(start_line);
         let mut http_lines = Vec::new();
         let mut current_line = start_line;

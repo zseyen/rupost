@@ -1,13 +1,10 @@
 use crate::parser::http_file::HttpFileParser;
-use crate::parser::types::{
-    FileMetadata, ParseResult, ParsedFile, ParsedMockVariant, ParsedRequest,
-};
+use crate::parser::types::{FileMetadata, ParseResult, ParsedFile, ParsedMockVariant};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use std::path::Path;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ParseState {
-    RequestLineAndHeaders,
     VariantHeaders,
     VariantBody,
 }
@@ -50,16 +47,26 @@ impl MarkdownFileParser {
         let base_path = parsed_file.metadata.base_path.clone();
 
         for block in code_blocks {
-            let has_mock_variants =
-                block.content.contains("@mock-when") || block.content.contains("@mock-default");
+            let split_result = Self::split_mock_variants(&block.content);
 
-            if has_mock_variants {
-                let mut req = Self::parse_mock_block(&block.content, 1)?;
-                if req.metadata.name.is_none() {
-                    req.metadata.name = block.preceding_header.clone();
+            if let Some((request_part, variants_part)) = split_result {
+                let parsed_opt =
+                    HttpFileParser::parse_request_block(&request_part, block.line_number)?;
+                if let Some(mut req) = parsed_opt {
+                    if req.metadata.name.is_none() {
+                        req.metadata.name = block.preceding_header.clone();
+                    }
+                    if req.base_path.is_none() {
+                        req.base_path = base_path.clone();
+                    }
+                    let is_test = block.content.contains("@test");
+                    req.metadata.is_test = is_test;
+
+                    let variants = Self::parse_mock_variants_part(&variants_part);
+                    req.metadata.mock_variants = variants;
+
+                    parsed_file.add_request(req);
                 }
-                req.base_path = base_path.clone();
-                parsed_file.add_request(req);
             } else {
                 // 解析代码块内容为请求
                 let mut block_parsed = HttpFileParser::parse_content(&block.content)?;
@@ -144,127 +151,134 @@ impl MarkdownFileParser {
         meta
     }
 
-    fn parse_mock_block(block_content: &str, start_line: usize) -> ParseResult<ParsedRequest> {
-        let mut request = ParsedRequest::new(start_line);
-        let mut state = ParseState::RequestLineAndHeaders;
+    /// 在代码块中识别首个独立的 `@mock-when` 或 `@mock-default` 指令行，
+    /// 将代码块一刀切分为 `(request_part, variants_part)`。
+    /// 严禁全局文本检索，必须逐行词法判定以避免误伤 JSON 字符串内部的 mock 文本。
+    fn split_mock_variants(block_content: &str) -> Option<(String, String)> {
+        let mut req_lines = Vec::new();
+        let mut var_lines = Vec::new();
+        let mut in_variants = false;
 
+        for line in block_content.lines() {
+            if !in_variants {
+                let trimmed = line.trim();
+                let directive = if let Some(s) = trimmed.strip_prefix("//") {
+                    s.trim()
+                } else if let Some(s) = trimmed.strip_prefix('#') {
+                    s.trim()
+                } else {
+                    trimmed
+                };
+
+                let is_mock_directive = directive.starts_with("@mock-when")
+                    || directive == "@mock-default"
+                    || directive.starts_with("@mock-default ");
+
+                if is_mock_directive {
+                    in_variants = true;
+                    var_lines.push(line);
+                } else {
+                    req_lines.push(line);
+                }
+            } else {
+                var_lines.push(line);
+            }
+        }
+
+        if in_variants {
+            Some((req_lines.join("\n"), var_lines.join("\n")))
+        } else {
+            None
+        }
+    }
+
+    /// 解析切分出的 Mock 变体部分
+    fn parse_mock_variants_part(variants_content: &str) -> Vec<ParsedMockVariant> {
+        let mut variants = Vec::new();
         let mut current_variant: Option<ParsedMockVariant> = None;
-        let mut current_body_lines = Vec::new();
+        let mut current_body_lines: Vec<&str> = Vec::new();
+        let mut state = ParseState::VariantHeaders;
 
-        for (line_idx, line) in block_content.lines().enumerate() {
-            let current_line_num = start_line + line_idx;
+        for line in variants_content.lines() {
             let trimmed = line.trim();
+            let directive = if let Some(s) = trimmed.strip_prefix("//") {
+                s.trim()
+            } else if let Some(s) = trimmed.strip_prefix('#') {
+                s.trim()
+            } else {
+                trimmed
+            };
+
+            let is_mock_directive = directive.starts_with("@mock-when")
+                || directive == "@mock-default"
+                || directive.starts_with("@mock-default ");
+
+            if is_mock_directive {
+                if let Some(mut var) = current_variant.take() {
+                    let body_str = current_body_lines.join("\n").trim().to_string();
+                    var.body = if body_str.is_empty() {
+                        None
+                    } else {
+                        Some(body_str)
+                    };
+                    variants.push(var);
+                    current_body_lines.clear();
+                }
+
+                if let Some(stripped) = directive.strip_prefix("@mock-when") {
+                    current_variant = Some(ParsedMockVariant {
+                        condition_expr: Some(stripped.trim().to_string()),
+                        status: 200,
+                        headers: Vec::new(),
+                        body: None,
+                    });
+                } else {
+                    current_variant = Some(ParsedMockVariant {
+                        condition_expr: None,
+                        status: 200,
+                        headers: Vec::new(),
+                        body: None,
+                    });
+                }
+                state = ParseState::VariantHeaders;
+                continue;
+            }
 
             match state {
-                ParseState::RequestLineAndHeaders => {
-                    if trimmed.starts_with("@mock-when") || trimmed.starts_with("@mock-default") {
-                        Self::process_variant_line(
-                            trimmed,
-                            &mut current_variant,
-                            &mut request,
-                            &mut current_body_lines,
-                        );
-                        state = ParseState::VariantHeaders;
-                    } else if trimmed.starts_with('@') {
-                        if let Some(meta) = crate::parser::metadata::parse_metadata(trimmed)? {
-                            crate::parser::metadata::apply_metadata(&meta, &mut request.metadata);
-                        }
-                    } else if request.url.is_empty() {
-                        if !trimmed.is_empty()
-                            && !trimmed.starts_with('#')
-                            && !trimmed.starts_with("//")
-                        {
-                            HttpFileParser::parse_request_line(
-                                trimmed,
-                                current_line_num,
-                                &mut request,
-                            )?;
-                        }
-                    } else if !trimmed.is_empty()
-                        && !trimmed.starts_with('#')
-                        && !trimmed.starts_with("//")
-                    {
-                        let header = HttpFileParser::parse_header(trimmed);
-                        if let Some((k, v)) = header {
-                            request.headers.push((k.to_string(), v.to_string()));
-                        }
-                    }
-                }
                 ParseState::VariantHeaders => {
                     if trimmed.is_empty() {
                         state = ParseState::VariantBody;
                     } else if trimmed.starts_with("HTTP/1.1") || trimmed.starts_with("HTTP/2") {
                         let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                        if parts.len() >= 2 {
-                            let parsed_code = parts[1].parse::<u16>();
-                            if let Ok(code) = parsed_code {
-                                let var_opt = current_variant.as_mut();
-                                if let Some(var) = var_opt {
-                                    var.status = code;
-                                }
-                            }
+                        if parts.len() >= 2
+                            && let Ok(code) = parts[1].parse::<u16>()
+                            && let Some(var) = current_variant.as_mut()
+                        {
+                            var.status = code;
                         }
-                    } else if let Some((k, v)) = HttpFileParser::parse_header(trimmed) {
-                        let var_opt = current_variant.as_mut();
-                        if let Some(var) = var_opt {
-                            var.headers.push((k.to_string(), v.to_string()));
-                        }
+                    } else if let Some((k, v)) = HttpFileParser::parse_header(trimmed)
+                        && let Some(var) = current_variant.as_mut()
+                    {
+                        var.headers.push((k.to_string(), v.to_string()));
                     }
                 }
                 ParseState::VariantBody => {
-                    if trimmed.starts_with("@mock-when") || trimmed.starts_with("@mock-default") {
-                        Self::process_variant_line(
-                            trimmed,
-                            &mut current_variant,
-                            &mut request,
-                            &mut current_body_lines,
-                        );
-                        state = ParseState::VariantHeaders;
-                    } else {
-                        current_body_lines.push(line);
-                    }
+                    current_body_lines.push(line);
                 }
             }
         }
 
         if let Some(mut var) = current_variant {
-            var.body = Some(current_body_lines.join("\n"));
-            request.metadata.mock_variants.push(var);
+            let body_str = current_body_lines.join("\n").trim().to_string();
+            var.body = if body_str.is_empty() {
+                None
+            } else {
+                Some(body_str)
+            };
+            variants.push(var);
         }
 
-        request.metadata.is_test = block_content.contains("@test");
-
-        Ok(request)
-    }
-
-    fn process_variant_line(
-        trimmed: &str,
-        current_variant: &mut Option<ParsedMockVariant>,
-        request: &mut ParsedRequest,
-        current_body_lines: &mut Vec<&str>,
-    ) {
-        if let Some(mut var) = current_variant.take() {
-            var.body = Some(current_body_lines.join("\n"));
-            request.metadata.mock_variants.push(var);
-            current_body_lines.clear();
-        }
-
-        if let Some(stripped) = trimmed.strip_prefix("@mock-when") {
-            let cond = stripped.trim().to_string();
-            *current_variant = Some(ParsedMockVariant {
-                condition_expr: Some(cond),
-                status: 200,
-                headers: Vec::new(),
-                body: None,
-            });
-        } else if trimmed.starts_with("@mock-default") {
-            *current_variant = Some(ParsedMockVariant {
-                condition_expr: None,
-                status: 200,
-                headers: Vec::new(),
-                body: None,
-            });
-        }
+        variants
     }
 
     /// 从 Markdown 文件内容中解析并提取该文件声明的全局拓扑依赖文件。
@@ -357,6 +371,7 @@ impl MarkdownFileParser {
                     blocks.push(ExtractedCodeBlock {
                         content: current_code.clone(),
                         preceding_header: current_header.clone(),
+                        line_number: 1, // 缺省从 1 开始
                     });
 
                     in_code_block = false;
@@ -375,6 +390,7 @@ impl MarkdownFileParser {
 struct ExtractedCodeBlock {
     content: String,
     preceding_header: Option<String>,
+    line_number: usize,
 }
 
 #[cfg(test)]

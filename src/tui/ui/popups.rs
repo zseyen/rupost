@@ -1,10 +1,10 @@
 use crate::tui::state::{AppState, InputMode};
 use crate::tui::theme::Theme;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 /// 计算基于屏幕百分比居中的 Rect
 pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
@@ -244,8 +244,8 @@ pub(crate) fn render_modal_input(frame: &mut Frame, screen_size: Rect, state: &A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn test_centered_rect_bounds() {
@@ -288,4 +288,3 @@ mod tests {
             .unwrap();
     }
 }
-

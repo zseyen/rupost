@@ -1,9 +1,9 @@
 use crate::tui::state::{AppState, Panel, SidebarTab};
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 /// 渲染底部 lazygit 风格状态栏与上下文快捷键指示
 pub(crate) fn render(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -171,8 +171,8 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn test_status_bar_error_renders_priority() {
@@ -206,4 +206,3 @@ mod tests {
             .unwrap();
     }
 }
-

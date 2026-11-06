@@ -13,7 +13,7 @@ impl MockCompiler {
 
         // 过滤非测试块，只编译契约块
         for req in &parsed_file.requests {
-            if req.metadata.is_test {
+            if req.metadata.mock_variants.is_empty() {
                 continue;
             }
 

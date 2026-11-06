@@ -11,7 +11,14 @@ RuPost 项目的根目录由以下核心文件夹和配置文件组成：
 *   [crates/](file:///Users/zsyzzx/project/rust/rupost/crates)：用于存放独立拆分的子 Crate。目前包含 AI 创作辅助模块 `rupost-ai`（已接线 `rupost ai assert`、`rupost ai triage` 命令）。
 *   [src/](file:///Users/zsyzzx/project/rust/rupost/src)：主程序核心代码区，承载绝大部分的核心算法、执行流程与适配层。
 *   [tests/](file:///Users/zsyzzx/project/rust/rupost/tests)：集成测试和端到端 (E2E) 测试目录，验证完整的命令行或网络交互。
-*   [doc/](file:///Users/zsyzzx/project/rust/rupost/doc)：项目文档库（包括架构设计、开发流程规范、未来规划与进度汇总）。
+*   [doc/](file:///Users/zsyzzx/project/rust/rupost/doc)：项目文档库。遵循 Clean Docs 与 Diátaxis 架构原则进行分类与分层：
+    *   `README.md`：全局知识导航地图与文档检索中枢。
+    *   `guides/`：用户指南与操作手册（各功能实战教程，对齐 README 链接）。
+    *   `architecture/`：核心系统架构与各特性领域三段式档案 (`features/`)。
+    *   `dev/`：研发流程规范（如 `development_workflow.md`）与工程标准。
+    *   `competition/`：行业竞争格局与终端工具差异化深度调研。
+    *   `plans/`：演进规划总纲、唯一进度事实来源 (`progress_summary.md`)、待办池与历史归档。
+    *   `templates/`：PRD 与设计规范模版。
 *   [examples/](file:///Users/zsyzzx/project/rust/rupost/examples)：演示用例，包含 `.http` 与 `.md` 文件，用于展示功能并作为 CI 冒烟测试的输入。
 *   [templates/](file:///Users/zsyzzx/project/rust/rupost/templates)：编译期通过 `include_str!` 内置的初始配置与用例模板。
 *   [benches/](file:///Users/zsyzzx/project/rust/rupost/benches)：基准性能测试模块。

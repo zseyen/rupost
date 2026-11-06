@@ -10,6 +10,7 @@
 
 | 阶段 / 功能模块 | 目标与核心特征 | 状态 | 交付物 |
 | :--- | :--- | :--- | :--- |
+| **全文档体系重构、内容汇总与分类规整 (Clean Docs & Dossiers, 2026-11-06)** | 1. 提炼 7 大权威领域三段式技术档案（`cookie`、`batch/workflow`、`ai_engine`、`debug/diagnostics`、`protocols/mock`、`tui_architecture`、`plugin_extensibility`），深入汇总业务需求、演进抉择、源码映射与后续规划；2. 规整 `doc/plans/` 50+ 篇历史 PRD，100% 物理保留并按 2026-q2/q3/q4 里程碑分层归档，在 `doc/plans/README.md` 中构建 5 大业务主线交叉引用矩阵，消解重复内容；3. 建立顶层知识中枢 `doc/README.md`，同步更新 `doc/architecture/directory_structure.md`，保持 Makefile/AGENTS/README 外部契约 100% 零破损。 | 已完成 | `doc/README.md`, `doc/architecture/features/`, `doc/plans/README.md`, `doc/plans/archive/` |
 | **Phase 2 早期（Stage 2–4）** | HTTP 文件解析（Stage 2）→ 请求转换器 MVP（Stage 3）→ 批量执行引擎（Stage 4）；2026-07-01 完成 `main.rs` 架构解耦与 Clean Architecture 初步重构。原记录见 `doc/dev/progress_summary.md` 归档快照（2026-01-22，已于 2026-10-28 合并入本文件）与 git 历史。 | 已完成 | git 历史 |
 | **Sprint 1: 核心重构与优化** | 引入 User-Agent 动态配置与 Request 级覆盖，收敛 Cookie 管理管道 | 已完成 | `src/http/client.rs`, `src/runner/executor.rs`, `tests/user_agent_test.rs` |
 | **Sprint 2: 多文件与目录递归测试** | 递归扫描过滤、有向无环图 (DAG) 拓扑排序、顺序/并行双执行模式、并发 Cookie 隔离保护、Fail-Fast 流程中断、JSON 结构化报告、递归依赖补全与安全沙箱、并行状态克隆传递 | 已完成 | `src/parser/scanner.rs`, `src/runner/workflow.rs`, `src/runner/batch.rs`, `src/runner/resolver.rs`, `src/runner/parallel.rs`, `tests/batch_testing_test.rs` |

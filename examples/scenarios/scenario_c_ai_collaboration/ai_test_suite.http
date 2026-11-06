@@ -1,0 +1,52 @@
+### 1. 验证 AI 流式打字机逐帧及增量合成
+POST {{host}}/api/v1/chat/completions
+Content-Type: application/json
+Accept: text/event-stream
+@sse
+@sse_timeout 5s
+@stream_to test_scratch/scenario_c_chat.txt
+
+{
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello Rupost"
+    }
+  ],
+  "stream": true
+}
+
+@assert status == 200
+@assert headers.Content-Type contains "text/event-stream"
+@assert stream.llm.content contains "Hello from Rupost!"
+
+### 2. 验证 429 限流降级捕获
+POST {{host}}/api/v1/chat/completions
+Content-Type: application/json
+X-RateLimit-Test: 1
+
+{
+  "model": "gpt-4o",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Trigger rate limit"
+    }
+  ]
+}
+
+@assert status == 429
+@assert body.error.code == "rate_limit_exceeded"
+
+### 3. 验证 WebSocket 全双工协同握手与动作断言
+GET {{ws_host}}/api/v1/collaboration/canvas_101
+@websocket
+@timeout 5s
+@decoder json
+
+SEND {"action":"join","user":"designer_a"}
+EXPECT {"event":"user_joined","user":"designer_a"}
+SEND {"action":"draw","shape":"rectangle","x":100,"y":200}
+EXPECT {"event":"shape_added","shape":"rectangle"}
+CLOSE

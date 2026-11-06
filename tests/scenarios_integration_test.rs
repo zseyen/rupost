@@ -1,12 +1,16 @@
 // 进程级静音历史落盘
 mod common;
 
+use futures_util::{SinkExt, StreamExt};
 use rupost::mock::compiler::MockCompiler;
 use rupost::mock::matcher::TrieRouteMatcher;
 use rupost::mock::server::{AxumMockServer, MockServer};
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpListener;
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 #[test]
 fn test_scenario_order_fulfillment_spec_structure() {
@@ -462,4 +466,211 @@ async fn test_scenario_order_suite_runs_against_mock_server() {
         res_escape.skipped,
         "外网逃逸且标有 @skip 的用例必须保持跳过"
     );
+}
+
+// 辅助工具：启动场景 C 专属的本地 Mock WebSocket 服务
+async fn start_scenario_c_ws_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let ws_url = format!("ws://127.0.0.1:{}", port);
+
+    let handle = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await
+            && let Ok(mut ws_stream) = tokio_tungstenite::accept_async(stream).await
+        {
+            let mut heartbeat_timer = tokio::time::interval(Duration::from_millis(80));
+
+            loop {
+                tokio::select! {
+                    // 模拟高频心跳广播帧，验证引擎软过滤
+                    _ = heartbeat_timer.tick() => {
+                        let heartbeat_msg = Message::Text(r#"{"type":"heartbeat"}"#.to_string());
+                        if ws_stream.send(heartbeat_msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    maybe_msg = ws_stream.next() => {
+                        match maybe_msg {
+                            Some(Ok(Message::Text(txt))) => {
+                                if txt.contains(r#""action":"join""#) {
+                                    let resp = Message::Text(r#"{"event":"user_joined","user":"designer_a"}"#.to_string());
+                                    if ws_stream.send(resp).await.is_err() {
+                                        break;
+                                    }
+                                } else if txt.contains(r#""action":"draw""#) {
+                                    let resp = Message::Text(r#"{"event":"shape_added","shape":"rectangle"}"#.to_string());
+                                    if ws_stream.send(resp).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) | None => break,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    (ws_url, handle)
+}
+
+#[test]
+fn test_scenario_c_spec_structure_and_mock_compilation() {
+    let spec_path = PathBuf::from("examples/scenarios/scenario_c_ai_collaboration/ai_spec.md");
+    let parsed_spec =
+        MarkdownFileParser::parse_file(&spec_path).expect("ai_spec.md should parse cleanly");
+
+    // 验证包含 2 个核心协议块：SSE 和 WebSocket
+    assert_eq!(
+        parsed_spec.requests.len(),
+        2,
+        "场景 C 必须包含 SSE 聊天和 WS 协同两个协议块"
+    );
+
+    // 验证请求 1：AI 聊天流式补全 (SSE)
+    let sse_req = &parsed_spec.requests[0];
+    assert_eq!(sse_req.method.as_deref(), Some("POST"));
+    assert_eq!(sse_req.url, "/api/v1/chat/completions");
+    assert!(sse_req.metadata.sse, "必须标注 @sse");
+    assert_eq!(
+        sse_req.metadata.sse_timeout,
+        Some(Duration::from_secs(5)),
+        "必须标注 @sse_timeout 5s"
+    );
+    assert_eq!(
+        sse_req.metadata.stream_to,
+        Some("test_scratch/scenario_c_chat.txt".to_string()),
+        "必须标注 @stream_to 路径"
+    );
+
+    // 验证请求 2：白板协同 (WebSocket)
+    let ws_req = &parsed_spec.requests[1];
+    assert_eq!(ws_req.method.as_deref(), Some("GET"));
+    assert_eq!(ws_req.url, "/api/v1/collaboration/canvas_101");
+    assert!(ws_req.metadata.websocket, "必须标注 @websocket");
+    assert_eq!(
+        ws_req.metadata.timeout,
+        Some(Duration::from_secs(5)),
+        "必须标注 @timeout 5s"
+    );
+    assert_eq!(ws_req.metadata.decoder.as_deref(), Some("json"));
+    let ws_body = ws_req.body.as_deref().unwrap_or("");
+    assert!(
+        ws_body.contains("SEND") && ws_body.contains("EXPECT") && ws_body.contains("CLOSE"),
+        "WebSocket 块必须包含完整的 SEND/EXPECT/CLOSE 剧本"
+    );
+
+    // 编译 Mock 路由
+    let routes = MockCompiler::compile(&parsed_spec);
+    // 注意：目前 Mock 编译器仅编译具有 mock_variants 的请求（即 SSE 聊天块）
+    assert_eq!(routes.len(), 1, "SSE 聊天块必须成功编译为 Mock 路由");
+    let route = &routes[0];
+    assert_eq!(route.path, "/api/v1/chat/completions");
+    assert_eq!(route.variants.len(), 2, "必须包含默认 200 和 429 两个变体");
+}
+
+#[tokio::test]
+async fn test_scenario_c_suite_full_execution_against_mock_servers() {
+    let spec_path = PathBuf::from("examples/scenarios/scenario_c_ai_collaboration/ai_spec.md");
+    let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
+
+    // 1. 启动本地 SSE Mock 服务（基于 ai_spec.md 编译出的路由）
+    let routes = MockCompiler::compile(&parsed_spec);
+    let mut matcher = TrieRouteMatcher::new();
+    for r in routes {
+        matcher.add_route(&r.method, &r.path, r.variants);
+    }
+    let matcher = Arc::new(matcher);
+    let http_port = 19194;
+
+    let server = AxumMockServer;
+    tokio::spawn(async move {
+        let _ = server.start(http_port, matcher).await;
+    });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+
+    // 2. 启动本地 WS 协同 Mock 服务
+    let (ws_url, _ws_handle) = start_scenario_c_ws_server().await;
+
+    // 确保测试落盘目录存在，并清理残留文件
+    let scratch_file = PathBuf::from("test_scratch/scenario_c_chat.txt");
+    if let Some(parent) = scratch_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::remove_file(&scratch_file);
+
+    // 3. 解析并运行 ai_test_suite.http
+    let suite_path =
+        PathBuf::from("examples/scenarios/scenario_c_ai_collaboration/ai_test_suite.http");
+    let parsed_suite = HttpFileParser::parse_file(&suite_path).unwrap();
+
+    let executor = rupost::runner::TestExecutor::new();
+    let mut context = rupost::variable::VariableContext::new();
+    context.insert("host", format!("http://127.0.0.1:{}", http_port));
+    context.insert("ws_host", ws_url);
+
+    let results = executor
+        .execute_all(parsed_suite, &mut context)
+        .await
+        .expect("Scenario C test suite should execute cleanly");
+
+    assert_eq!(results.len(), 3, "套件应包含 3 个测试用例");
+
+    // 验证用例 1: SSE 流式打字机
+    let sse_result = &results[0];
+    assert!(
+        sse_result.success,
+        "SSE 用例必须执行成功，error: {:?}",
+        sse_result.error
+    );
+    assert_eq!(sse_result.status, Some(200));
+    assert!(!sse_result.assertions.is_empty(), "SSE 用例必须包含断言");
+    assert!(
+        sse_result.assertions.iter().all(|a| a.passed),
+        "SSE 用例的所有断言必须全部 PASS: {:?}",
+        sse_result.assertions
+    );
+    // 验证 @stream_to 文件实时落盘
+    assert!(
+        scratch_file.exists(),
+        "已标注 @stream_to 的落盘文件必须被创建"
+    );
+    let dumped_content = std::fs::read_to_string(&scratch_file).unwrap_or_default();
+    assert!(
+        dumped_content.contains("Hello from Rupost!"),
+        "落盘文件必须包含增量累积的内容，实际内容: {}",
+        dumped_content
+    );
+
+    // 验证用例 2: 429 限流降级
+    let rate_limit_result = &results[1];
+    assert!(
+        rate_limit_result.success,
+        "429 降级用例必须执行成功，error: {:?}",
+        rate_limit_result.error
+    );
+    assert_eq!(rate_limit_result.status, Some(429));
+    assert!(
+        rate_limit_result.assertions.iter().all(|a| a.passed),
+        "429 降级用例的所有断言必须全部 PASS: {:?}",
+        rate_limit_result.assertions
+    );
+
+    // 验证用例 3: WebSocket 全双工协同
+    let ws_result = &results[2];
+    assert!(
+        ws_result.success,
+        "WebSocket 协同用例必须执行成功，error: {:?}",
+        ws_result.error
+    );
+    assert!(
+        ws_result.assertions.iter().all(|a| a.passed),
+        "WebSocket 用例的所有动作匹配必须通过: {:?}",
+        ws_result.assertions
+    );
+
+    // 测试完毕后清理临时文件
+    let _ = std::fs::remove_file(&scratch_file);
 }

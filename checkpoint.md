@@ -322,3 +322,21 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 ### 下一步计划 (Next Steps)
 - 探索 `src/tui/ui/response.rs`（870+ 行）的 5-Tab（Timing / Diagnose / Headers / Body / Stream）子面板组件化拆分。
 - 完善 Web 界面 / 跨平台终端自适应交互细节。
+
+---
+
+## 场景 C（AI/SSE + WebSocket 协同）规划与测试落地（2026-11-07，role-alignment-scenario 工作区）
+
+依据四大调试模式（CLI 深度诊断、TUI 交互面板、双角色本地 Mock、网络瀑布诊断）完成场景 C 的全套规划、规范契约与离线端到端测试用例：
+
+### 1. 计划与规范归档
+- **规划文档**：保存至 [2026-11-06-scenario-c-ai-collaboration-testing-plan.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/doc/plans/active/2026-11-06-scenario-c-ai-collaboration-testing-plan.md)。
+- **契约定义**：新增 [ai_spec.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/examples/scenarios/scenario_c_ai_collaboration/ai_spec.md)，定义 `@sse` 流式打字机（包含 200 流式分块与 429 限流降级分支）以及 `@websocket` 协同白板剧本。
+- **回归套件**：新增 [ai_test_suite.http](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/examples/scenarios/scenario_c_ai_collaboration/ai_test_suite.http)，声明式断言 Token 流、429 错误体与 WebSocket 双向握手/收发/关闭。
+
+### 2. 自动化集成测试闭环
+- 在 [tests/scenarios_integration_test.rs](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/tests/scenarios_integration_test.rs) 中实现场景 C 专属用例：
+  1. `test_scenario_c_spec_structure_and_mock_compilation`：验证 `@sse`、`@stream_to`、`@websocket` 等元数据与 Mock 变体编译。
+  2. `test_scenario_c_suite_full_execution_against_mock_servers`：拉起本地 AxumMockServer 与内存级 WS 协同虚拟服务（带高频心跳软过滤），完整验证 SSE 逐行推流、增量 LLM 合成文本断言、429 降级断言、WebSocket 动作序列匹配与 `@stream_to` 实时落盘。
+- **全量回归保障**：513 单元测试 + 全量集成测试 100% 绿灯，clippy 零告警，fmt 格式合规。
+

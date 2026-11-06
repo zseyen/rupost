@@ -10,6 +10,7 @@ pub mod logger;
 pub mod middleware;
 pub mod mock;
 pub mod parser;
+pub mod report;
 pub mod reporter;
 pub mod runner;
 pub mod template;

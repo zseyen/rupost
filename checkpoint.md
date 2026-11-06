@@ -340,3 +340,27 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
   2. `test_scenario_c_suite_full_execution_against_mock_servers`：拉起本地 AxumMockServer 与内存级 WS 协同虚拟服务（带高频心跳软过滤），完整验证 SSE 逐行推流、增量 LLM 合成文本断言、429 降级断言、WebSocket 动作序列匹配与 `@stream_to` 实时落盘。
 - **全量回归保障**：513 单元测试 + 全量集成测试 100% 绿灯，clippy 零告警，fmt 格式合规。
 
+---
+
+## Stage 2（Web Phase 0 静态 HTML 报告与时延瀑布图）落地完成（2026-11-07）
+
+依据 Clean Architecture 原则与第一性原理，完成零外部网络依赖、单文件自包含、高审美现代化 Dashboard 静态 HTML 报告生成管线：
+
+### 1. 领域模型与开闭接口
+- 新增 `src/report/` 模块：
+  - `src/report/types.rs`：定义归一化领域视图 `ReportContext`、`ReportSummary`、`ReportRequestItem`、`TimingWaterfall`，实现从执行结果到视图上下文的解耦转换，内置防 XSS 的安全转义函数 `escape_html`。
+  - `src/report/generator.rs`：抽象开闭接口 `ReportGenerator`，统一支持 HTML、JSON 及未来多目标渲染。
+  - `src/report/html.rs`：实现高审美 `HtmlReportGenerator`（极简暗色 HSL 调色、Summary KPI 卡片、进度条、Failed-first 树形卡片、断言对比证据链、以及原生 CSS 时延瀑布图）。
+
+### 2. 执行流与 CLI 接入
+- 在 `src/runner/app.rs` 中集成 HTML 报告输出，当传入 `--report html` 或 `--report-file <path.html>` 时，自动渲染并生成自包含单文件。
+- 在 `src/cli.rs` 中扩展文档说明。
+
+### 3. 测试与验证闭环
+- 新增集成测试 [tests/html_report_integration_test.rs](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/tests/html_report_integration_test.rs)：
+  - `test_e2e_run_test_suite_generates_html_report`：真实命令行套件端到端导出自包含 HTML，断言内联样式与极简控制脚本。
+  - `test_e2e_html_report_with_mock_and_waterfall`：本地 Mock 真实发包并生成时延瀑布图（`wf-dns`、`wf-tcp`、`wf-ttfb`）及断言证据。
+  - `test_offline_json_report_to_html_generation`：验证脱机从 JSON 报告二次渲染 HTML。
+- 全量回归：516 单元测试 + 全量集成测试 100% 绿灯，clippy 零告警，代码格式合规。
+
+

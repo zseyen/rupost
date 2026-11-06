@@ -61,11 +61,11 @@ pub enum Commands {
         #[arg(long, default_value = "4")]
         concurrency: usize,
 
-        /// 报告输出格式 (terminal 或 json)
+        /// 报告输出格式 (terminal, json 或 html)
         #[arg(long, default_value = "terminal")]
         report: String,
 
-        /// 将 JSON 格式测试报告额外写入指定文件（不干扰终端输出）
+        /// 将测试报告额外写入指定文件（支持 .json 或 .html 自动识别，不干扰终端输出）
         #[arg(long, value_name = "FILE")]
         report_file: Option<String>,
 

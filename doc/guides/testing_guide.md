@@ -165,3 +165,43 @@ make coverage
     cargo tarpaulin --out Html --output-dir target/tarpaulin/
     ```
     运行结束后，您可以在浏览器中打开 `target/tarpaulin/tarpaulin-report.html` 查看每一行代码的覆盖状态。
+
+---
+
+## 5. 新增功能完整守护套件（2026-11 整理）
+
+围绕 CLI-parity 与 TUI 流式调试两大批次，建立了按 PRD 需求编号（R 系列）对应的功能守护矩阵。全部可离线运行（wiremock / TcpListener / ratatui TestBackend），无需真实外网。
+
+### 5.1 守护矩阵速查
+
+| 套件 / 所在文件 | 守护功能 | 快速运行 |
+| :--- | :--- | :--- |
+| `tests/tui_features_full_test.rs` | **九项功能全量守护**：多请求执行簿记与 `is_loading` 生命周期（R2/R3）、cookie 会话延续（R5，服务端实收断言）、timing 四段渲染（R6）、失败自动切 Diagnose tab（R7）、X 导出脱敏决策表（R8）、快照脱敏落盘（R9）、History 生成可解析（R9）、mock 开关真实 HTTP 往返（R11） | `cargo test --test tui_features_full_test` |
+| `tests/tui_ws_session_test.rs` | **WS 交互会话**：echo 回环 + 授权握手捕获（`accept_hdr_async`）+ 非 WS/死端口拒绝 + 关闭通知 | `cargo test --test tui_ws_session_test` |
+| `tests/tui_smoke_test.rs`（52 项） | **TestBackend 渲染冒烟**：布局三态、主题轴（Dark/Light 取色差异）、消息搜索高亮、Auth/Search/WsSend/Selector 模态矩阵、Results/Diagnose tab、快照跳转可见性、新键臂 | `cargo test --test tui_smoke_test` |
+| `src/tui/handlers/editor.rs`（selector_wiring/wiring/quick_auth/ws_orchestration 测试模块） | **接线层**：触发链注入实收、选择器 `#2` 归一化后仅选中端点收流量、越界零流量浮错、W/S/D/A 全键编排、互斥 | `cargo test --lib tui::handlers` |
+| `src/tui/state/search.rs`、`stream.rs` | **流式与搜索纯函数**：增量折行位点、CJK、1MB 截断复位、WS 溢出重建、环绕跳转决策表、吸底暂停 | `cargo test --lib tui::state` |
+| `tests/capture_integration_test.rs` | **变量捕获**：逐条降级（坏的进 warnings 不污染 success）、变量名含 `from`、regex 源内含 `from`、`global.` 跨文件可见 | `cargo test --test capture_integration_test` |
+| `tests/cookie_persistence_test.rs` | **cookie 持久化契约**：串行逐文件落盘 / 并行不落盘 / 触发运行中的外部观测 | `cargo test --test cookie_persistence_test` |
+| `tests/report_schema_test.rs` | **JSON 报告 schema**：批量报告与 diagnose 报告精确键集合、失败形态、Duration 序列化 | `cargo test --test report_schema_test` |
+| `tests/sse_stream_resilience_test.rs` | **SSE 韧性**：EOF/RST 断流尾帧 flush、1MB 单事件截断复位、无换行残片截断 | `cargo test --test sse_stream_resilience_test` |
+| `tests/single_request_test.rs` | **单请求重跑**：`t case.http#3` / `--only <n\|@name>` 片段与选择器契约 | `cargo test --test single_request_test` |
+
+### 5.2 分层验证模型（如何跑）
+
+1. **纯函数 / 状态机层（L0–L1）**：`cargo test --lib`——秒级，提交前必跑；
+2. **接线 / 集成层（L2）**：`cargo test --workspace`——CI 门禁同口径（含子 crate 与全部 tests/），本地约 1–2 分钟；
+3. **渲染冒烟（TestBackend）**：`cargo test --test tui_smoke_test`——多尺寸 × 主题 × 模态矩阵，改 UI 后必跑；
+4. **真机手工冒烟（L5）**：`doc/tui/usage_and_testing.md` 的三组清单（流式调试 / CLI 能力接入 / WS 交互），覆盖 IME、真实光标、外网、WS 重连等 TestBackend 不可达项。
+
+### 5.3 红验证纪律（本批次方法论沉淀）
+
+功能守护测试要求"改坏即红"——写完后临时破坏被测实现跑一次，确认测试变红再还原：
+
+- 例：验证 `inject_quick_auth` 接线时，临时删除触发链中的注入调用 → wiremock 实收断言必须变红；
+- 例：验证完成态日志跳转锚点时，临时还原旧的窗口局部长度钳制 → 深行号跳转可见性断言必须变红；
+- 还原后必须 `diff` 基线确认实现零残留（历史教训：回写静默失败导致两测试无感知变红）。
+
+### 5.4 环境哨兵（敌意网络下的 flake 防护）
+
+依赖"连接被拒绝"这一网络行为的契约测试（如诊断退出码）需带环境哨兵：测试前裸 `TcpStream::connect` 探测——若透明代理/VPN 截胡使目标"可连"，打印跳过说明而非硬断言。样例见 `test_run_diagnose_cli_error_exit_one`。

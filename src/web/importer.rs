@@ -19,10 +19,15 @@ impl MultiFormatImporter {
             || trimmed.starts_with("http\n")
         {
             ImportFormat::Httpie
-        } else if trimmed.starts_with('{') && trimmed.contains("\"log\"") && trimmed.contains("\"entries\"") {
+        } else if trimmed.starts_with('{')
+            && trimmed.contains("\"log\"")
+            && trimmed.contains("\"entries\"")
+        {
             ImportFormat::Har
         } else if (trimmed.starts_with('{') || trimmed.starts_with("openapi:"))
-            && (trimmed.contains("\"openapi\"") || trimmed.contains("openapi:") || trimmed.contains("swagger:"))
+            && (trimmed.contains("\"openapi\"")
+                || trimmed.contains("openapi:")
+                || trimmed.contains("swagger:"))
         {
             ImportFormat::OpenApi
         } else if trimmed.starts_with('{') && trimmed.contains("\"_postman_id\"") {
@@ -40,7 +45,9 @@ impl MultiFormatImporter {
         let first_line = text.lines().next().unwrap_or("").trim();
         let methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
         for m in &methods {
-            if first_line.starts_with(m) && (first_line.contains("HTTP/1.") || first_line.contains("HTTP/2")) {
+            if first_line.starts_with(m)
+                && (first_line.contains("HTTP/1.") || first_line.contains("HTTP/2"))
+            {
                 return true;
             }
         }
@@ -61,11 +68,12 @@ impl MultiFormatImporter {
             ImportFormat::Curl | ImportFormat::Auto => {
                 let entry = parse_curl_to_entry(&req.content)?;
                 let mut url = entry.request.url;
-                if req.templatize_host && url.starts_with("http") {
-                    if let Ok(parsed_url) = url::Url::parse(&url) {
-                        let path_and_query = &url[parsed_url.origin().ascii_serialization().len()..];
-                        url = format!("{{{{base_url}}}}{}", path_and_query);
-                    }
+                if req.templatize_host
+                    && url.starts_with("http")
+                    && let Ok(parsed_url) = url::Url::parse(&url)
+                {
+                    let path_and_query = &url[parsed_url.origin().ascii_serialization().len()..];
+                    url = format!("{{{{base_url}}}}{}", path_and_query);
                 }
                 let mut headers = Vec::new();
                 for (k, v) in &entry.request.headers {
@@ -117,9 +125,9 @@ impl MultiFormatImporter {
     /// 解析 Raw HTTP 报文
     pub fn parse_raw_http(raw: &str, templatize_host: bool) -> Result<ParsedRequest> {
         let mut lines = raw.lines();
-        let request_line = lines.next().ok_or_else(|| {
-            RupostError::ParseError("Empty raw HTTP request".to_string())
-        })?;
+        let request_line = lines
+            .next()
+            .ok_or_else(|| RupostError::ParseError("Empty raw HTTP request".to_string()))?;
 
         let parts: Vec<&str> = request_line.split_whitespace().collect();
         if parts.len() < 2 {
@@ -150,11 +158,12 @@ impl MultiFormatImporter {
             }
         }
 
-        if templatize_host && url.starts_with("http") {
-            if let Ok(parsed_url) = url::Url::parse(&url) {
-                let path_and_query = &url[parsed_url.origin().ascii_serialization().len()..];
-                url = format!("{{{{base_url}}}}{}", path_and_query);
-            }
+        if templatize_host
+            && url.starts_with("http")
+            && let Ok(parsed_url) = url::Url::parse(&url)
+        {
+            let path_and_query = &url[parsed_url.origin().ascii_serialization().len()..];
+            url = format!("{{{{base_url}}}}{}", path_and_query);
         }
 
         let body = if body_lines.is_empty() {
@@ -195,7 +204,9 @@ impl MultiFormatImporter {
         let raw_url = if idx < tokens.len() {
             tokens[idx]
         } else {
-            return Err(RupostError::ParseError("Missing URL in HTTPie command".to_string()));
+            return Err(RupostError::ParseError(
+                "Missing URL in HTTPie command".to_string(),
+            ));
         };
         idx += 1;
 
@@ -290,7 +301,9 @@ mod tests {
             ImportFormat::RawHttp
         );
         assert_eq!(
-            MultiFormatImporter::sniff_format("{\n  \"log\": {\n    \"version\": \"1.2\",\n    \"entries\": []\n  }\n}"),
+            MultiFormatImporter::sniff_format(
+                "{\n  \"log\": {\n    \"version\": \"1.2\",\n    \"entries\": []\n  }\n}"
+            ),
             ImportFormat::Har
         );
     }

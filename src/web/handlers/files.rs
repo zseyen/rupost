@@ -1,9 +1,9 @@
 use crate::web::server::AppState;
 use crate::web::types::ApiResponse;
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +37,10 @@ pub async fn get_file_handler(
         Ok(content) => (StatusCode::OK, Json(ApiResponse::ok(content))),
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(ApiResponse::err(format!("File not found or unreadable: {}", e))),
+            Json(ApiResponse::err(format!(
+                "File not found or unreadable: {}",
+                e
+            ))),
         ),
     }
 }

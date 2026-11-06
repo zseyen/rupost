@@ -1,13 +1,13 @@
+use crate::Result;
 use crate::web::assets::{AssetProvider, EmbeddedAssetProvider};
 use crate::web::handlers;
 use crate::web::store::{DocumentStore, LocalFsDocumentStore};
-use crate::Result;
+use axum::Router;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::header::{CONTENT_TYPE, HeaderValue};
 use axum::http::StatusCode;
+use axum::http::header::{CONTENT_TYPE, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -56,7 +56,10 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         .route("/file", get(handlers::files::get_file_handler))
         .route("/save", post(handlers::save::save_file_handler))
         .route("/run/block", post(handlers::run::run_block_handler))
-        .route("/mock/simulate", post(handlers::mock::simulate_mock_handler))
+        .route(
+            "/mock/simulate",
+            post(handlers::mock::simulate_mock_handler),
+        )
         .route("/import", post(handlers::import::import_handler))
         .route("/import/curl", post(handlers::import::import_curl_handler));
 
@@ -73,10 +76,7 @@ async fn serve_index(State(state): State<AppState>) -> Response {
 }
 
 /// 资产静态服务 fallback
-async fn serve_asset(
-    State(state): State<AppState>,
-    AxumPath(path): AxumPath<String>,
-) -> Response {
+async fn serve_asset(State(state): State<AppState>, AxumPath(path): AxumPath<String>) -> Response {
     serve_asset_internal(&state, &path)
 }
 

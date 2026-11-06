@@ -4,10 +4,10 @@ use crate::runner::TestExecutor;
 use crate::variable::ConfigLoader;
 use crate::web::server::AppState;
 use crate::web::types::{ApiResponse, RunBlockRequest, RunBlockResponse};
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use std::collections::HashMap;
 
 pub async fn run_block_handler(
@@ -27,7 +27,10 @@ pub async fn run_block_handler(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::err(format!("Failed to parse request block: {}", e))),
+                Json(ApiResponse::err(format!(
+                    "Failed to parse request block: {}",
+                    e
+                ))),
             );
         }
     };
@@ -37,7 +40,9 @@ pub async fn run_block_handler(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::err("No executable HTTP request found in the provided block")),
+                Json(ApiResponse::err(
+                    "No executable HTTP request found in the provided block",
+                )),
             );
         }
     };

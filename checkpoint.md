@@ -363,4 +363,37 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
   - `test_offline_json_report_to_html_generation`：验证脱机从 JSON 报告二次渲染 HTML。
 - 全量回归：516 单元测试 + 全量集成测试 100% 绿灯，clippy 零告警，代码格式合规。
 
+---
+
+## Stage 3 & 4（Web Phase 1 活文档工作台、自定义扩展架构与 Spec 脚手架）落地完成（2026-11-07）
+
+依据 [2026-11-07-web-workbench-and-customization-architecture.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/doc/plans/active/2026-11-07-web-workbench-and-customization-architecture.md)，完成了 Web 活文档工作台的核心后端 API、内嵌高质感交互界面、多格式智能装入器、CLI `rupost web` 指令及 `rupost init spec` 脚手架生成：
+
+### 1. Web 领域抽象与插件化架构 (`src/web/`)
+- **开闭接口抽象**：
+  - `DocumentStore`：解耦文档文件系统操作，内置 `LocalFsDocumentStore` 并提供严格的 canonical 路径穿越沙箱拦截保护。
+  - `AssetProvider`：解耦静态资产托管，同时内置 `EmbeddedAssetProvider`（零外部依赖直接内嵌高审美前端）与 `LocalDirAssetProvider`（支持 `--static-dir` 用户接入自主实现的第三方前端应用，彻底解除 UI 绑定）。
+  - `MultiFormatImporter`：支持多格式（cURL, HTTPie, Raw HTTP, HAR, OpenAPI, Postman）智能格式嗅探与转换为规范的 Markdown/HTTP 块，支持 origin 模板化为 `{{base_url}}` 并可选生成 `@mock-default` 兜底变体。
+- **核心 RESTful API 契约与防线**：
+  - `GET /api/v1/files` & `GET /api/v1/file`：列出及读取工作区活文档。
+  - `POST /api/v1/save`：文档落盘保存，严格内嵌**只读保护防线**（403 Forbidden）与 **AST 预写入语法校验门禁**（422 Unprocessable Entity）。
+  - `POST /api/v1/run/block`：原位单块调试执行，无缝复用 `TestExecutor` 内存会话与时延瀑布图转换，直接返回细粒度响应与断言结果。
+  - `POST /api/v1/mock/simulate`：Mock 变体规则诊断仿真探针，针对传入的变体条件（Header, Query, Body JSONPath）实时求值并输出命中诊断树。
+  - `POST /api/v1/import` & `POST /api/v1/import/curl`：统一装入与 cURL 别名接口。
+- **现代化内嵌前端**：
+  - 零外部 npm/node 依赖，单文件自包含 HTML/CSS/JS，遵循 HSL 调色规范与三栏响应式活文档编辑/原位调试体验，内置代码智能装入向导 Modal。
+
+### 2. CLI `rupost web` 指令集成
+- 在 `src/cli.rs` 中新增 `Web` 子命令，支持 `--port` (默认 3000)、`--host` (默认 127.0.0.1)、`--static-dir` (外部静态资源覆盖)、`--readonly` (只读保护模式) 与 `-d, --dir`。
+- 严格遵循 Clean Architecture 入口解耦规范与 CLAP Parser Rule，补齐表驱动参数解析单元测试。
+
+### 3. 脚手架生成与全量三层质量验收
+- 新增 `SpecTemplate` 策略与内置模板文件（`templates/spec/template.md`, `template.http`, `env.example`），原生支持 `rupost init spec` 生成标准活文档契约规格与双角色用例。
+- **三层质量全量回归**：
+  1. `cargo test`：522 个单元测试与集成测试（包含新增的 `tests/web_api_integration_test.rs` 与 `tests/template_test.rs`）100% 全部通过。
+  2. `tests/verify_features.sh`：全特性集成冒烟测试脚本 100% PASS。
+  3. `examples/run_all.sh`：15 个复杂示例回归测试脚本 100% 全部 PASS。
+  4. `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 均零告警零错误。
+
+
 

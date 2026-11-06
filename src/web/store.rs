@@ -15,6 +15,7 @@ pub struct FileEntry {
 
 /// 活文档存储接口（解耦文件系统与外部存储源）
 #[async_trait::async_trait]
+#[allow(clippy::double_must_use)]
 pub trait DocumentStore: Send + Sync + 'static {
     /// 列出工作区内的活文档（.md, .http）
     async fn list_documents(&self, subpath: Option<&str>) -> Result<Vec<FileEntry>>;
@@ -46,9 +47,7 @@ impl LocalFsDocumentStore {
 
         // 如果文件存在，用 canonicalize；如果文件尚不存在（新建），则校验其已存在的祖先目录
         if candidate.exists() {
-            let canon = candidate
-                .canonicalize()
-                .map_err(|e| RupostError::IoError(e))?;
+            let canon = candidate.canonicalize().map_err(RupostError::IoError)?;
             if canon.starts_with(&self.root_dir) {
                 Ok(canon)
             } else {
@@ -148,10 +147,10 @@ impl DocumentStore for LocalFsDocumentStore {
 
     async fn save_document(&self, path: &str, content: &str) -> Result<()> {
         let safe_path = self.resolve_safe_path(path)?;
-        if let Some(parent) = safe_path.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-            }
+        if let Some(parent) = safe_path.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(RupostError::IoError)?;
         }
         std::fs::write(&safe_path, content).map_err(RupostError::IoError)
     }

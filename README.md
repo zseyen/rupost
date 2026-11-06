@@ -40,9 +40,19 @@ cargo build --release
 
 RuPost 提供了直观且高效的命令行接口：
 
-* **初始化环境模板**:
+* **启动活文档工作台 (Web Workbench)**:
+  ```bash
+  rupost web
+  # 指定端口与外部自定义前端静态目录 (覆盖内置前端)
+  rupost web --port 8080 --static-dir ./custom_web_dist
+  # 开启只读保护模式 (禁止在线保存覆盖文档)
+  rupost web --readonly
+  ```
+* **初始化环境模板与契约规格脚手架**:
   ```bash
   rupost init
+  # 生成双角色活文档与 Mock 变体规格书
+  rupost init spec -o spec.md
   ```
 * **运行单个测试文件 (REST / WebSocket / SSE)**:
   ```bash

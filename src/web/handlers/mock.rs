@@ -2,11 +2,13 @@ use crate::mock::compiler::MockCompiler;
 use crate::mock::variant::{CompareOp, ConditionSource};
 use crate::parser::MarkdownFileParser;
 use crate::web::server::AppState;
-use crate::web::types::{ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse};
+use crate::web::types::{
+    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse,
+};
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 
 pub async fn simulate_mock_handler(
     State(_state): State<AppState>,
@@ -23,7 +25,10 @@ pub async fn simulate_mock_handler(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::err(format!("Failed to parse mock block: {}", e))),
+                Json(ApiResponse::err(format!(
+                    "Failed to parse mock block: {}",
+                    e
+                ))),
             );
         }
     };
@@ -32,7 +37,9 @@ pub async fn simulate_mock_handler(
     if routes.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::err("No mock route definition found in the provided block")),
+            Json(ApiResponse::err(
+                "No mock route definition found in the provided block",
+            )),
         );
     }
 
@@ -41,7 +48,8 @@ pub async fn simulate_mock_handler(
         .iter()
         .find(|r| {
             r.method.eq_ignore_ascii_case(&req.method)
-                && (r.path == req.path || r.path.trim_start_matches('/') == req.path.trim_start_matches('/'))
+                && (r.path == req.path
+                    || r.path.trim_start_matches('/') == req.path.trim_start_matches('/'))
         })
         .unwrap_or(&routes[0]);
 
@@ -62,7 +70,10 @@ pub async fn simulate_mock_handler(
                         .get(&cond.key)
                         .or_else(|| {
                             let lk = cond.key.to_lowercase();
-                            req.headers.iter().find(|(k, _)| k.to_lowercase() == lk).map(|(_, v)| v)
+                            req.headers
+                                .iter()
+                                .find(|(k, _)| k.to_lowercase() == lk)
+                                .map(|(_, v)| v)
                         })
                         .cloned();
                     ("header", val)
@@ -96,7 +107,10 @@ pub async fn simulate_mock_handler(
             };
 
             evaluations.push(ConditionEvaluation {
-                condition_str: format!("[{}] {} {} {}", source_desc, cond.key, op_str, cond.expected_value),
+                condition_str: format!(
+                    "[{}] {} {} {}",
+                    source_desc, cond.key, op_str, cond.expected_value
+                ),
                 passed,
                 expected: cond.expected_value.clone(),
                 actual: actual_val,

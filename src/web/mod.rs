@@ -7,6 +7,6 @@ pub mod types;
 
 pub use assets::{AssetProvider, EmbeddedAssetProvider, LocalDirAssetProvider};
 pub use importer::MultiFormatImporter;
-pub use server::{create_web_router, run_web_server, AppState, WebServerConfig};
+pub use server::{AppState, WebServerConfig, create_web_router, run_web_server};
 pub use store::{DocumentStore, FileEntry, LocalFsDocumentStore};
 pub use types::*;

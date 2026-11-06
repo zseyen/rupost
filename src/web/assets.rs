@@ -29,11 +29,11 @@ impl AssetProvider for LocalDirAssetProvider {
             self.base_dir.join(clean_path)
         };
 
-        if target.is_file() {
-            if let Ok(bytes) = std::fs::read(&target) {
-                let mime = guess_mime_type(&target);
-                return Some((Cow::Owned(bytes), mime));
-            }
+        if target.is_file()
+            && let Ok(bytes) = std::fs::read(&target)
+        {
+            let mime = guess_mime_type(&target);
+            return Some((Cow::Owned(bytes), mime));
         }
         None
     }
@@ -94,7 +94,9 @@ mod tests {
         let provider = LocalDirAssetProvider::new(temp.path());
 
         // 测试根路径自动映射 index.html
-        let asset = provider.get_asset("/").expect("Root should map to index.html");
+        let asset = provider
+            .get_asset("/")
+            .expect("Root should map to index.html");
         assert_eq!(asset.1, "text/html; charset=utf-8");
         assert_eq!(String::from_utf8_lossy(&asset.0), "<h1>Custom UI</h1>");
 

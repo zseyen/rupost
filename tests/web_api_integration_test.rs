@@ -1,6 +1,6 @@
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use rupost::web::server::{create_web_router, WebServerConfig};
+use rupost::web::server::{WebServerConfig, create_web_router};
 use rupost::web::store::LocalFsDocumentStore;
 use rupost::web::types::{
     ApiResponse, ImportFormat, ImportRequest, ImportResponse, MockSimulateRequest,
@@ -56,9 +56,11 @@ async fn test_web_document_store_and_save_guards() {
     .unwrap();
 
     let store = Arc::new(LocalFsDocumentStore::new(&root));
-    let mut config = WebServerConfig::default();
-    config.store = store;
-    config.readonly = false;
+    let config = WebServerConfig {
+        store,
+        readonly: false,
+        ..Default::default()
+    };
 
     let app = create_web_router(config.clone());
 
@@ -71,8 +73,7 @@ async fn test_web_document_store_and_save_guards() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let api_res: ApiResponse<Vec<rupost::web::FileEntry>> =
-        serde_json::from_slice(&body).unwrap();
+    let api_res: ApiResponse<Vec<rupost::web::FileEntry>> = serde_json::from_slice(&body).unwrap();
     assert!(api_res.success);
     let files = api_res.data.unwrap();
     assert_eq!(files.len(), 1);
@@ -100,7 +101,9 @@ async fn test_web_document_store_and_save_guards() {
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(&save_req_payload).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&save_req_payload).unwrap(),
+        ))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -117,13 +120,16 @@ async fn test_web_document_store_and_save_guards() {
     // 故意写入损坏或不合法的 HTTP 请求行（如未定义的方法），验证拦截
     let invalid_syntax_payload = SaveFileRequest {
         path: "api_spec.md".to_string(),
-        content: "# Broken Spec\n\n```http\nINVALID_METHOD http://example.com/bad\n```\n".to_string(),
+        content: "# Broken Spec\n\n```http\nINVALID_METHOD http://example.com/bad\n```\n"
+            .to_string(),
     };
     let req = Request::builder()
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(&invalid_syntax_payload).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&invalid_syntax_payload).unwrap(),
+        ))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     // 语法错误应被防线拦截，返回 422 Unprocessable Entity
@@ -165,7 +171,9 @@ async fn test_web_run_block_and_mock_simulate() {
         .uri("/api/v1/run/block")
         .method("POST")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(&run_block_payload).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&run_block_payload).unwrap(),
+        ))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -209,7 +217,9 @@ Content-Type: application/json
         .uri("/api/v1/mock/simulate")
         .method("POST")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(&simulate_req_admin).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&simulate_req_admin).unwrap(),
+        ))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -235,7 +245,9 @@ Content-Type: application/json
         .uri("/api/v1/mock/simulate")
         .method("POST")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(&simulate_req_guest).unwrap()))
+        .body(Body::from(
+            serde_json::to_string(&simulate_req_guest).unwrap(),
+        ))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);

@@ -332,6 +332,7 @@ fn test_r9_snapshot_saved_masked_and_parseable() {
     state.last_response = Some(resp);
 
     rupost::tui::handlers::editor::save_current_snapshot(&mut state);
+    assert_eq!(state.last_error, None, "snapshot success must clear last_error");
 
     let dir = temp.path().join("snapshots");
     assert!(dir.exists(), "snapshots dir must be created");

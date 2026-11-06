@@ -273,7 +273,6 @@ pub(super) async fn handle_editor_key(
                 ));
             }
             // R6：`D` 关闭活跃会话（drop → SessionManager 退出 → 连接关闭）
-            // R6：`D` 关闭活跃会话（drop → SessionManager 退出 → 连接关闭）
             KeyCode::Char('D') => {
                 if state.ws_session.take().is_some() {
                     state.last_error = None;
@@ -290,7 +289,6 @@ pub(super) async fn handle_editor_key(
                         Some("no active WS session — press W to open one".to_string());
                 }
             }
-            // R4：`#` 打开单请求选择器模态（`#3` / `@name`）
             KeyCode::Up | KeyCode::Char('k') => {
                 state.editor_scroll = nav::scroll_up(state.editor_scroll, 1);
             }
@@ -405,7 +403,7 @@ pub fn save_current_snapshot(state: &mut AppState) {
     let path = dir.join(format!("snapshot_{ts}.json"));
     match crate::history::storage::write_snapshot_suite(&suite, &path) {
         Ok(()) => {
-            state.last_error = Some(format!("snapshot saved: {}", path.to_string_lossy()));
+            state.last_error = None;
         }
         Err(e) => state.last_error = Some(format!("snapshot write: {e}")),
     }

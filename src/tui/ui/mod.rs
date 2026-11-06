@@ -111,7 +111,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     }
 
     // 4.4. X 导出弹窗（curl 命令文本，Esc 关闭）
-    if let Some(cmd) = state.show_export.clone() {
+    if let Some(cmd) = &state.show_export {
         let block = Block::default()
             .title(" Export: curl (Esc to close) ")
             .borders(Borders::ALL)
@@ -133,7 +133,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
             ])
             .split(popup[1]);
         let area = h_layout[1];
-        let paragraph = Paragraph::new(Line::from(cmd))
+        let paragraph = Paragraph::new(Line::from(cmd.as_str()))
             .block(block)
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(ratatui::widgets::Clear, area);

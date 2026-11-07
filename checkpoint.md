@@ -489,3 +489,35 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 
 
 
+
+---
+
+## Web 安全防线与基础功能批次交付 + CLI 安全评估归档（2026-11-07 深夜）
+
+依据用户裁决执行顺序（安全 → 基础功能 → CLI 评估 → 导入 PRD 归档），7 个原子提交 + 2 份文档交付：
+
+### 1. 批次 1：Web 安全防线（4 提交，TDD 对抗测试同提交）
+- **SEC-01/02**：host_guard 中间件 Default-Deny 闭环——缺失/非法编码 Host 标头返回 400（RFC 9112，杜绝 HTTP/1.0 绕过），`is_allowed_host` 接入 `state.allowed_hosts` 动态白名单；CLI `rupost web` 新增 `--allowed-hosts`（逗号分隔多值）。
+- **SEC-03**：PathSandbox 以 `symlink_metadata` 判存在——悬空软链接（旧实现 exists() 判 false 走"新建文件"分支放行，写入跟随链接逃逸沙箱外）一律拒绝。
+- **SEC-04**：run_block_handler 只读模式 403（与 save 对称，SSRF 内网嗅探防线闭环）。
+- **SEC-05**：LocalDirAssetProvider 扩展名白名单（html/css/js/mjs/json/svg/png/jpg/jpeg/ico/woff/woff2），防 --static-dir 误挂载外泄源码。
+- 回归：批次收尾 `cargo test --workspace` **860 passed / 0 failed**，clippy/fmt 双零。
+
+### 2. 批次 2：基础功能完善（6 提交）
+- **ARCH-03**：`RupostError::SecurityViolation` 强类型变体 + save handler 精准映射 403（原 400 契约随测试更新）。
+- **ARCH-01**：提取 `parser::parse_http_header` 公共函数，解除 mock_variant ↔ http_file 模块内循环引用。
+- **ARCH-02**：run_block 复用 `parse_document_by_path` 门面分发，纯 .http 原生解析（消除硬编码 Markdown 栅栏迂回）。
+- **ROBUST-01**：mock 变体切分器 Body 边界上下文感知——请求体内以 `@mock-when` 开头的内容行不再误判截断（对抗测试锁定）。
+- **ROBUST-02**：PathSandbox 词法 `..` 前置拦截（零磁盘探测，两分支统一）。
+- **UX-01**：`GET /api/v1/meta` 端点 + 前端只读徽章与写路径按钮置灰。
+- **批次 2b**：`POST /api/v1/run/suite` 整文档批量执行端点（readonly 403 防线自带 + wiremock 真实三块套件聚合断言 + 404/422 错误形态）。
+- 回归：**866 passed / 0 failed**，clippy/fmt 双零。
+
+### 3. 批次 3：CLI 安全评估（只读 + 隔离 PoC 实证，报告归档）
+- 报告：[doc/dev/2026-11-07-cli-security-assessment.md](doc/dev/2026-11-07-cli-security-assessment.md)。
+- **P1-1（实证）**：`--report-file` 静默覆盖已存在文件且跟随符号链接写入任意用户可写目标——修复建议与"分支收尾批次"报告覆盖提示同源合并。
+- **P2-1（实证但不可执行注入）**：import/generate 生成物结构污染——body 中 `###`/指令样文本行原样写入；三类走私（header 换行 / 裸元数据 / 谓词拆分）均被既有防线阻断。
+- 其余面板（钩子/沙箱/泄露/Cookie）防线充分；建议 `make audit`（cargo audit）纳入发版仪式。
+
+### 4. 导入功能：PRD 归档（不实施，用户裁决后移 + CLI 结合）
+- [doc/plans/active/2026-11-07-importer-unification-prd.md](doc/plans/active/2026-11-07-importer-unification-prd.md)：HAR/Postman/OpenAPI 真实解析落位 `src/importer/` 领域层，CLI `import --format` + Web `/api/v1/import` 双端同源；R1-R6 需求 + 6 提交切分 + 勘误 `:376` 失实宣称的联动登记。

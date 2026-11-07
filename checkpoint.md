@@ -436,6 +436,56 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 - **示例场景全量回归**：`examples/run_all.sh` 15 个场景全部 PASS。
 - **代码规范**：`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 零告警零错误。
 
+---
+
+## 7 轮对话阶段性归档与待执行任务清单 (2026-11-07 19:10)
+
+本阶段完成了核心领域组件化先行方案落地、双子代理对抗式 Code Review（Blue Team 架构专家 + Red Team 安全审计专家）以及网络层 Default-Deny 原理审查。全量自动化测试基线维持在 538 tests 100% PASS。
+
+### 待执行任务全景清单 (按严重性与落地优先级分级)
+
+#### 🚨 第一梯队：高危安全防线加固 (P0/P1)
+1. **【SEC-01】Host 校验缺失拦截与 Default-Deny 闭环 (`src/web/server.rs`)**：
+   - 贯彻 RFC 9112 契约，缺少 `Host` 标头或格式非法时，直接拒绝返回 `400 Bad Request`，杜绝 HTTP/1.0 绕过。
+2. **【SEC-02】`allowed_hosts` 运行时配置接线与 CLI 扩展 (`src/web/server.rs`, `src/cli.rs`)**：
+   - 中间件注入 `State(state)`，使用户的 `--allowed-hosts` 真正参与白名单校验，防止内网合法访问被误杀。
+3. **【SEC-03】`PathSandbox` 悬空软链接逃逸阻断 (`src/security/path.rs`)**：
+   - 使用 `candidate.symlink_metadata().is_ok()` 替代 `candidate.exists()`，严防指向沙箱外不存在目标的软链接穿透写入。
+4. **【SEC-04】只读模式（`--readonly`）单块发包拦截 (`src/web/handlers/run.rs`)**：
+   - 在 `run_block_handler` 增加 `state.readonly` 检查（返回 403），防御内网 SSRF 嗅探探测。
+5. **【SEC-05】外部静态资产目录扩展名白名单 (`src/web/assets.rs`)**：
+   - 为 `LocalDirAssetProvider` 沙箱配置合法 Web 资产白名单（`.html`, `.css`, `.js`, `.svg`, `.png`, `.json` 等），防止误挂载导致源码泄露。
+
+#### ⚠️ 第二梯队：Clean Architecture 解耦与健壮性 (P2)
+6. **【ARCH-01】解除 `MockVariantParser` 与 `HttpFileParser` 的循环依赖 (`src/parser/`)**：
+   - 提取通用的 Header 词法解析工具函数，阻断 `mock_variant` 对 `http_file` 的反向引用。
+7. **【ARCH-02】单块执行自适应复用 `parse_document_by_path` (`src/web/handlers/run.rs`)**：
+   - 消除硬编码包裹 Markdown 栅栏的迂回逻辑，对纯 `.http` 原生解析。
+8. **【ARCH-03】安全领域错误强类型化 (`src/error.rs`, `src/security/path.rs`)**：
+   - 引入 `SecurityViolation` 强类型枚举变体，使安全拦截精准映射为 HTTP 403。
+9. **【ROBUST-01】Mock 变体切分器增加 Body 边界上下文感知 (`src/parser/mock_variant.rs`)**：
+   - 防止 POST 请求体 JSON 内含有 `@mock-when` 字符串时被破坏截断。
+10. **【ROBUST-02】`PathSandbox` 前置纯词法 `..` 判定 (`src/security/path.rs`)**：
+    - 词法阶段拦截目录穿越，减少不必要的物理磁盘探测。
+11. **【UX-01】前端界面对 `--readonly` 状态的感知与置灰 (`src/web/assets/app.js`, `index.html`)**：
+    - 顶部展示 `[Read-Only]` 徽章，置灰保存与执行按钮。
+
+#### 💡 第三梯队：异步性能与代码微调 (P3)
+12. **【PERF-01】`LocalFsDocumentStore` 同步 I/O 异步化 (`src/web/store.rs`)**：逐步由 `std::fs` 迁移为 `tokio::fs`。
+13. **【PERF-02】单块发包热路径配置缓存 (`src/web/handlers/run.rs`)**：缓存 `ConfigLoader` 结果。
+14. **【ROBUST-03】IPv6 独立主机识别增强 (`src/http/url.rs`)**。
+15. **【UX-02】前端调试面板 `data.status` 防御性转义 (`src/web/assets/app.js`)**。
+
+---
+
+## 查漏补缺与加固综合执行方案归档 (2026-11-07 21:35)
+
+已将完整的产品功能查漏补缺（包含 `run/suite`、多格式 HAR/Postman 真实解析、`--dev` 与 CORS 跨域支持、前端一键整套测试交互）与红蓝审查加固方案完整落地保存至本地文件：
+- 活跃规划文档：[doc/plans/active/2026-11-07-web-workbench-missing-features-and-hardening-plan.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/doc/plans/active/2026-11-07-web-workbench-missing-features-and-hardening-plan.md)
+- 包含详尽的数据模型、架构分层、安全防线加固算法以及 5 组生产级核心示例代码。
+
+
+
 
 
 

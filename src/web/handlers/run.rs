@@ -14,6 +14,16 @@ pub async fn run_block_handler(
     State(state): State<AppState>,
     Json(req): Json<RunBlockRequest>,
 ) -> impl IntoResponse {
+    // 0. 只读模式网络发包阻断（防 SSRF 内网嗅探探测：--readonly 下执行与保存双双关闭）
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "Request execution is disabled in read-only mode",
+            )),
+        );
+    }
+
     // 1. 规范化代码块：如果传入裸 HTTP 请求，自动包裹为 ```http ... ```
     let markdown_payload = if req.raw_block.contains("```") {
         req.raw_block.clone()

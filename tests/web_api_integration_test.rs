@@ -162,6 +162,38 @@ async fn test_web_document_store_and_save_guards() {
 }
 
 #[tokio::test]
+async fn test_web_readonly_mode_blocks_request_execution() {
+    let tmp = tempdir().unwrap();
+    let store = Arc::new(LocalFsDocumentStore::new(tmp.path()));
+    let config = WebServerConfig {
+        store,
+        readonly: true,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = RunBlockRequest {
+        file_path: "spec.md".to_string(),
+        raw_block: "GET http://127.0.0.1:59999/internal-probe\n".to_string(),
+        env: None,
+        extra_variables: None,
+    };
+    let req = Request::builder()
+        .uri("/api/v1/run/block")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "read-only mode must block request execution (SSRF probe defense)"
+    );
+}
+
+#[tokio::test]
 async fn test_web_run_block_and_mock_simulate() {
     let config = WebServerConfig::default();
     let app = create_web_router(config);

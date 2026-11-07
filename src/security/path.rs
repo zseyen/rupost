@@ -91,6 +91,20 @@ impl PathSandbox {
             }
         }
 
+        // 3.5 词法阶段前置拦截目录穿越（零物理磁盘探测）：
+        // 相对路径组件包含 ParentDir (..)、RootDir 或 Windows Prefix 一律拒绝
+        for component in path.components() {
+            if matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            ) {
+                return Err(RupostError::SecurityViolation(format!(
+                    "Path traversal attempt rejected: {}",
+                    requested
+                )));
+            }
+        }
+
         let candidate = self.root.join(clean);
 
         // 4. 符号链接与目录穿越深层校验
@@ -131,19 +145,6 @@ impl PathSandbox {
                     "Symlink directory traversal rejected: {}",
                     requested
                 )));
-            }
-
-            // 检查相对路径组件中是否包含 ParentDir (..) 或 RootDir
-            for component in path.components() {
-                if matches!(
-                    component,
-                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                ) {
-                    return Err(RupostError::SecurityViolation(format!(
-                        "Path traversal attempt rejected: {}",
-                        requested
-                    )));
-                }
             }
 
             Ok(candidate)

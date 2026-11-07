@@ -46,8 +46,8 @@ pub struct AppState {
     pub allowed_hosts: Vec<String>,
 }
 
-/// 检查 Host 标头是否属于安全白名单（防御 DNS Rebinding）
-fn is_allowed_host(host_str: &str) -> bool {
+/// 检查 Host 标头是否属于安全白名单（本地基础名单 + 用户自定义名单，防御 DNS Rebinding）
+fn is_allowed_host(host_str: &str, custom_allowed: &[String]) -> bool {
     let host_only = if host_str.starts_with('[') {
         host_str
             .split(']')
@@ -58,24 +58,40 @@ fn is_allowed_host(host_str: &str) -> bool {
         host_str.split(':').next().unwrap_or("")
     };
 
-    host_only == "localhost"
+    if host_only == "localhost"
         || host_only == "127.0.0.1"
         || host_only == "::1"
         || host_only == "0.0.0.0"
         || host_only.ends_with(".localhost")
+    {
+        return true;
+    }
+
+    custom_allowed.iter().any(|allowed| allowed == host_only)
 }
 
-/// 防御 DNS Rebinding 的 Host 校验守卫中间件
+/// 防御 DNS Rebinding 的 Host 校验守卫中间件（RFC 9112 Default-Deny）：
+/// 缺失或非法编码的 Host 标头一律 400，白名单外 Host 一律 403
 async fn host_guard_middleware(
+    State(state): State<AppState>,
     req: Request,
     next: Next,
-) -> std::result::Result<Response, StatusCode> {
-    if let Some(host_val) = req.headers().get(HOST)
-        && let Ok(host_str) = host_val.to_str()
-        && !is_allowed_host(host_str)
-    {
-        return Err(StatusCode::FORBIDDEN);
+) -> std::result::Result<Response, (StatusCode, &'static str)> {
+    // 1. RFC 9112 契约：HTTP/1.1 请求必须携带 Host 标头，缺失即拒绝（杜绝 HTTP/1.0 绕过）
+    let Some(host_val) = req.headers().get(HOST) else {
+        return Err((StatusCode::BAD_REQUEST, "Missing Host header"));
+    };
+
+    // 2. 非法编码的 Host 标头同样拒绝
+    let Ok(host_str) = host_val.to_str() else {
+        return Err((StatusCode::BAD_REQUEST, "Malformed Host header"));
+    };
+
+    // 3. 白名单校验（本地基础名单 + 用户 --allowed-hosts 配置联动）
+    if !is_allowed_host(host_str, &state.allowed_hosts) {
+        return Err((StatusCode::FORBIDDEN, "Host not allowed"));
     }
+
     Ok(next.run(req).await)
 }
 
@@ -105,9 +121,12 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         .nest("/api/v1", api_router)
         .route("/", get(serve_index))
         .route("/{*path}", get(serve_asset))
-        .with_state(state)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(middleware::from_fn(host_guard_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            host_guard_middleware,
+        ))
+        .with_state(state)
 }
 
 /// 首页根路径直接投递 index.html

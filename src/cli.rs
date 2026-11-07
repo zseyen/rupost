@@ -226,6 +226,10 @@ pub enum Commands {
         #[arg(long)]
         readonly: bool,
 
+        /// 追加允许访问工作台的 Host 白名单（可逗号分隔多项，如内网域名），防御 DNS Rebinding
+        #[arg(long, value_name = "HOST", value_delimiter = ',')]
+        allowed_hosts: Vec<String>,
+
         /// 活文档根目录
         #[arg(short = 'd', long = "dir", default_value = ".")]
         dir: String,
@@ -936,6 +940,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             host,
             static_dir,
             readonly,
+            allowed_hosts,
             dir,
         }) => {
             let store: std::sync::Arc<dyn rupost::web::DocumentStore> =
@@ -952,7 +957,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 readonly,
                 working_dir: std::path::PathBuf::from(&dir),
                 default_env: cli.env.clone(),
-                allowed_hosts: Vec::new(),
+                allowed_hosts,
             };
 
             rupost::web::run_web_server(config, &host, port).await?;
@@ -1281,6 +1286,7 @@ mod tests {
             host,
             static_dir,
             readonly,
+            allowed_hosts,
             dir,
         }) = cli_default.command
         else {
@@ -1290,6 +1296,7 @@ mod tests {
         assert_eq!(host, "127.0.0.1");
         assert!(static_dir.is_none());
         assert!(!readonly);
+        assert!(allowed_hosts.is_empty());
         assert_eq!(dir, ".");
 
         // 自定义全量参数
@@ -1316,6 +1323,7 @@ mod tests {
             host,
             static_dir,
             readonly,
+            allowed_hosts,
             dir,
         }) = cli_custom.command
         else {
@@ -1325,6 +1333,7 @@ mod tests {
         assert_eq!(host, "0.0.0.0");
         assert_eq!(static_dir.as_deref(), Some("./dist"));
         assert!(readonly);
+        assert!(allowed_hosts.is_empty());
         assert_eq!(dir, "./docs");
     }
 }

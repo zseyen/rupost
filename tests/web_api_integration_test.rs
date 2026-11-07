@@ -1,5 +1,5 @@
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderValue, Request, StatusCode};
 use rupost::web::server::{WebServerConfig, create_web_router};
 use rupost::web::store::LocalFsDocumentStore;
 use rupost::web::types::{
@@ -17,6 +17,7 @@ async fn test_web_static_assets_serving() {
 
     // 1. 请求根路径 / -> 返回 index.html
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/")
         .method("GET")
         .body(Body::empty())
@@ -34,6 +35,7 @@ async fn test_web_static_assets_serving() {
 
     // 2. 请求不存在的静态资产 -> 404
     let req_not_found = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/not_exist_file.xyz")
         .method("GET")
         .body(Body::empty())
@@ -66,6 +68,7 @@ async fn test_web_document_store_and_save_guards() {
 
     // 1. GET /api/v1/files -> 列出文件列表
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/files")
         .method("GET")
         .body(Body::empty())
@@ -81,6 +84,7 @@ async fn test_web_document_store_and_save_guards() {
 
     // 2. GET /api/v1/file?path=api_spec.md -> 获取文件内容
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/file?path=api_spec.md")
         .method("GET")
         .body(Body::empty())
@@ -98,6 +102,7 @@ async fn test_web_document_store_and_save_guards() {
         content: "# Updated Spec\n\n```http\nPOST http://example.com/create\nContent-Type: application/json\n\n{\"msg\":\"hi\"}\n```\n".to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
@@ -124,6 +129,7 @@ async fn test_web_document_store_and_save_guards() {
             .to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
@@ -145,6 +151,7 @@ async fn test_web_document_store_and_save_guards() {
         content: "# New Content".to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
@@ -168,6 +175,7 @@ async fn test_web_run_block_and_mock_simulate() {
         extra_variables: None,
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/run/block")
         .method("POST")
         .header("content-type", "application/json")
@@ -214,6 +222,7 @@ Content-Type: application/json
         raw_block: mock_block.to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/mock/simulate")
         .method("POST")
         .header("content-type", "application/json")
@@ -242,6 +251,7 @@ Content-Type: application/json
         raw_block: mock_block.to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/mock/simulate")
         .method("POST")
         .header("content-type", "application/json")
@@ -272,6 +282,7 @@ async fn test_web_multi_format_import_api() {
         generate_mock: true,
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/import")
         .method("POST")
         .header("content-type", "application/json")
@@ -290,6 +301,7 @@ async fn test_web_multi_format_import_api() {
 
     // 2. POST /api/v1/import/curl (明确指向 curl 别名路由)
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/import/curl")
         .method("POST")
         .header("content-type", "application/json")
@@ -355,6 +367,72 @@ async fn test_web_security_host_guard() {
 }
 
 #[tokio::test]
+async fn test_web_security_host_guard_default_deny_and_allowed_hosts() {
+    // 1. 缺失 Host 标头 -> 400 Bad Request（RFC 9112 Default-Deny，杜绝 HTTP/1.0 绕过）
+    let app = create_web_router(WebServerConfig::default());
+    let req = Request::builder()
+        .uri("/")
+        .method("GET")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "Request without Host header must be rejected with 400"
+    );
+
+    // 2. 非法编码的 Host 标头 -> 400 Bad Request
+    let app = create_web_router(WebServerConfig::default());
+    let malformed_host = HeaderValue::from_bytes(&[0xff, 0xfe, 0xfd]).unwrap();
+    let req = Request::builder()
+        .uri("/")
+        .method("GET")
+        .header("host", malformed_host)
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "Non-UTF-8 Host header must be rejected with 400"
+    );
+
+    // 3. 自定义 --allowed-hosts 白名单联动生效：配置内 Host 放行（首页正常 200）
+    let config = WebServerConfig {
+        allowed_hosts: vec!["dev.internal.example".to_string()],
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let req = Request::builder()
+        .uri("/")
+        .method("GET")
+        .header("host", "dev.internal.example")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "Custom allowed host must be served normally"
+    );
+
+    // 4. 自定义白名单之外的 Host 仍被 403 拦截
+    let req = Request::builder()
+        .uri("/api/v1/files")
+        .method("GET")
+        .header("host", "other.example.com")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "Host outside custom allowlist must still be rejected"
+    );
+}
+
+#[tokio::test]
 async fn test_web_security_path_sandbox_guards() {
     let tmp = tempdir().unwrap();
     let root = tmp.path().to_path_buf();
@@ -372,6 +450,7 @@ async fn test_web_security_path_sandbox_guards() {
 
     // 1. 尝试读取隐藏敏感文件 .env -> 拦截返回 404 NOT_FOUND（防嗅探）
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/file?path=.env")
         .method("GET")
         .body(Body::empty())
@@ -381,6 +460,7 @@ async fn test_web_security_path_sandbox_guards() {
 
     // 2. 尝试路径穿越跳出工作区 -> 拦截返回 404 NOT_FOUND（防嗅探）
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/file?path=../../etc/passwd")
         .method("GET")
         .body(Body::empty())
@@ -394,6 +474,7 @@ async fn test_web_security_path_sandbox_guards() {
         content: "GET http://localhost/test\n".to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
@@ -436,6 +517,7 @@ Content-Type: application/json
         content: valid_http_content.to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
@@ -453,6 +535,7 @@ INVALID_HTTP_METHOD https://api.example.com
         content: invalid_http_content.to_string(),
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/save")
         .method("POST")
         .header("content-type", "application/json")
@@ -478,6 +561,7 @@ async fn test_web_import_idn_chinese_domain() {
         generate_mock: true,
     };
     let req = Request::builder()
+        .header("host", "127.0.0.1")
         .uri("/api/v1/import")
         .method("POST")
         .header("content-type", "application/json")

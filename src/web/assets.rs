@@ -8,6 +8,12 @@ pub trait AssetProvider: Send + Sync + 'static {
     fn get_asset(&self, path: &str) -> Option<(Cow<'static, [u8]>, &'static str)>;
 }
 
+/// 允许投递的静态资产扩展名白名单（防误挂载导致源码/敏感文件外泄）
+const ASSET_EXTENSIONS: &[&str] = &[
+    "html", "htm", "css", "js", "mjs", "json", "svg", "png", "jpg", "jpeg", "ico", "woff",
+    "woff2",
+];
+
 /// 外部物理目录托管实现（用于 --static-dir 自定义前端接入，内置统一沙箱）
 pub struct LocalDirAssetProvider {
     base_dir: PathBuf,
@@ -30,8 +36,10 @@ impl AssetProvider for LocalDirAssetProvider {
             clean_path
         };
 
-        // 复用统一安全沙箱组件，拒绝访问隐藏文件与跨目录逃逸
-        let sandbox = PathSandbox::new(&self.base_dir).allow_hidden(false);
+        // 复用统一安全沙箱组件：拒绝访问隐藏文件与跨目录逃逸，并收敛可投递的扩展名白名单
+        let sandbox = PathSandbox::new(&self.base_dir)
+            .allow_hidden(false)
+            .with_extensions(ASSET_EXTENSIONS);
         let safe_target = sandbox.resolve_safe_path(target_rel).ok()?;
 
         if safe_target.is_file()
@@ -80,7 +88,10 @@ pub fn guess_mime_type(path: &Path) -> &'static str {
         "json" => "application/json",
         "svg" => "image/svg+xml",
         "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
         "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
         _ => "application/octet-stream",
     }
 }
@@ -115,5 +126,31 @@ mod tests {
                 .is_none()
         );
         assert!(provider.get_asset("/../secret.txt").is_none());
+    }
+
+    #[test]
+    fn test_local_dir_asset_provider_extension_whitelist() {
+        let temp = TempDir::new().unwrap();
+        // 白名单内的正常资产
+        std::fs::write(temp.path().join("index.html"), "<h1>ok</h1>").unwrap();
+        std::fs::write(temp.path().join("app.js"), "console.log(1)").unwrap();
+        std::fs::write(temp.path().join("logo.svg"), "<svg/>").unwrap();
+        // 白名单外的敏感/源码文件：即便语法合法路径合法也绝不投递
+        std::fs::write(temp.path().join("secret.txt"), "top-secret").unwrap();
+        std::fs::write(temp.path().join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(temp.path().join("backup.http"), "GET http://x").unwrap();
+
+        let provider = LocalDirAssetProvider::new(temp.path());
+
+        assert!(provider.get_asset("/index.html").is_some());
+        assert!(provider.get_asset("/app.js").is_some());
+        assert!(provider.get_asset("/logo.svg").is_some());
+
+        assert!(
+            provider.get_asset("/secret.txt").is_none(),
+            "non-whitelisted extension must never be served"
+        );
+        assert!(provider.get_asset("/main.rs").is_none());
+        assert!(provider.get_asset("/backup.http").is_none());
     }
 }

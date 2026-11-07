@@ -1,6 +1,14 @@
 # RuPost 质量加固战役 Checkpoint 归档（2026-10 ~ 2026-11）
 
-## 最新里程碑进展 (2026-11-06)
+## 最新里程碑进展 (2026-11-08)
+- **Web 工作台样式升级与纯 ASCII 架构重塑 (`feature/web-ui-redesign`)**：
+  1. **Studio Pro 纯 ASCII 视觉体系**：全面清除页面中所有 Emoji 图标，以专业工程符号（如 `[R]`, `[DOC]`, `[PASS]`, `[FAIL]`）替代；基于深空碳黑与精细刻线重构三栏网格。
+  2. **代码编辑器增强**：自研轻量级行号槽（Gutter）滚动同步、光标行列度量、`Ctrl+S` 快捷保存、`Shift+Enter` 单块快捷执行、`Ctrl+I` 快速导入。
+  3. **Runtime Inspector 控制台重构**：右侧调试面板升级为 Tab 分页架构（Overview / Body / Headers / Assertions / Waterfall / Raw），支持响应体一键复制、JSON 缩进格式化与毫秒级时延瀑布图渲染。
+  4. **双主题架构落地 (Dark & Light Theme)**：基于 CSS Custom Properties 实现深色 (Deep Obsidian) 与浅色 (Studio Paper) 动态热切换，支持系统深浅偏好自适应检测与 `localStorage` 持久化，顶部状态栏提供 `[THEME: DARK/LIGHT]` 切换动作。
+  5. **零破坏与质量达标**：全量 14 项 Web 集成测试 `tests/web_api_integration_test.rs` 100% PASS，`cargo clippy --tests -- -D warnings` 零告警。
+
+## 历史里程碑进展 (2026-11-06)
 - **全文档体系重构、内容汇总与分类规整 (Clean Docs & Features Dossiers)**：
   1. **7 大核心领域三段式技术档案落地 (`doc/architecture/features/`)**：围绕“① 需求是什么、② 演进决策与核心算法、③ 当前落地代码与测试映射、④ 后续演进规划”四大维度，深度整合并提炼了 `cookie_and_session`、`batch_and_workflow`、`ai_engine_system`、`debug_and_diagnostics`、`protocols_and_mock`、`tui_architecture`、`plugin_and_extensibility`，彻底消解早期草案碎片。
   2. **`doc/plans/` 演进规划大熔炉规整**：100% 物理保留历史 50+ 篇 PRD 原文，按 `2026-q2/`、`2026-q3/`、`2026-q4/` 季度里程碑归档；在 `doc/plans/README.md` 中构建了 5 大业务演进主线（AI 智能线、TUI 终端交互线、执行调度线、排障重放线、质量战役线）的交叉引用矩阵。

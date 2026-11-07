@@ -8,87 +8,153 @@
 </head>
 <body>
   <div class="workbench-layout">
-    <!-- 顶部状态导航 -->
+    <!-- Top Navigation Bar -->
     <header class="navbar">
       <div class="brand">
+        <span class="brand-badge">[R]</span>
         <span class="logo">rupost</span>
         <span class="sub">workbench</span>
-        <span id="readonly-badge" class="readonly-badge" style="display: none;">🔒 Read-Only</span>
+        <span id="readonly-badge" class="readonly-badge" style="display: none;">[LOCKED: READ-ONLY]</span>
       </div>
       <div class="nav-controls">
-        <span id="active-file-label" class="file-label">未选择文件</span>
-        <button id="btn-import-modal" class="btn btn-primary" onclick="openImportModal()">+ 装入外部请求</button>
-        <button id="btn-save" class="btn btn-success" onclick="saveActiveFile()">💾 保存文档</button>
+        <span id="active-file-label" class="file-label">[NO FILE SELECTED]</span>
+        <button id="btn-theme-toggle" class="btn btn-secondary" onclick="toggleTheme()" title="Toggle Theme (Dark / Light)">
+          [THEME: DARK]
+        </button>
+        <button id="btn-import-modal" class="btn btn-secondary" onclick="openImportModal()" title="Import external request (Ctrl+I)">
+          + Import <span class="kbd-hint">Ctrl+I</span>
+        </button>
+        <button id="btn-run-all" class="btn btn-secondary" onclick="runSuite()" title="Run entire test suite in file">
+          &gt; Run All
+        </button>
+        <button id="btn-run-selection" class="btn btn-accent" onclick="runCurrentBlock()" title="Execute block at cursor (Shift+Enter)">
+          &gt; Run Block <span class="kbd-hint">Shift+Enter</span>
+        </button>
+        <button id="btn-save" class="btn btn-success" onclick="saveActiveFile()" title="Save document (Ctrl+S)">
+          [SAVE] Save <span class="kbd-hint">Ctrl+S</span>
+        </button>
       </div>
     </header>
 
-    <!-- 工作台三栏布局 -->
+    <!-- Workspace Main Body -->
     <div class="workspace-body">
-      <!-- 1. 左侧文件树导航 -->
-      <aside class="sidebar">
+      <!-- 1. Left Sidebar: Workspace Files -->
+      <aside class="sidebar" id="sidebar-pane">
         <div class="sidebar-header">
-          <span>工作区规范文档</span>
-          <button class="btn-icon" onclick="loadFiles()" title="刷新">🔄</button>
+          <span class="sidebar-title">WORKSPACE</span>
+          <button class="btn-icon" onclick="loadFiles()" title="Refresh file list">[R]</button>
+        </div>
+        <div class="sidebar-filter">
+          <input type="text" id="file-filter-input" class="filter-input" placeholder="Filter files..." oninput="filterFiles()" />
         </div>
         <ul id="file-list" class="file-tree"></ul>
       </aside>
 
-      <!-- 2. 中间文档编辑器 -->
+      <!-- 2. Center: Document Editor -->
       <main class="editor-pane">
         <div class="editor-toolbar">
-          <span class="pane-title">文档源码 (Markdown / HTTP DSL)</span>
+          <div class="toolbar-left">
+            <span class="pane-tag">[DOC]</span>
+            <span id="editor-file-title" class="pane-title">Untitled</span>
+          </div>
           <div class="editor-actions">
+            <span id="editor-meta" class="editor-meta">0 lines | UTF-8</span>
             <span id="save-status" class="save-status"></span>
           </div>
         </div>
-        <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="选择左侧文件或直接在此处编写 .md 规范..."></textarea>
+        <div class="editor-wrapper">
+          <div id="editor-gutter" class="editor-gutter"></div>
+          <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="Select a document on the left or type Markdown / HTTP DSL here..."></textarea>
+        </div>
       </main>
 
-      <!-- 3. 右侧原位调试面板 -->
+      <!-- 3. Right: Runtime Inspector -->
       <aside class="debug-pane">
         <div class="debug-toolbar">
-          <span class="pane-title">原位调试响应与时延</span>
-          <button id="btn-run-selection" class="btn btn-accent" onclick="runCurrentBlock()">⚡ 执行当前块</button>
+          <div class="toolbar-left">
+            <span class="pane-tag">[INSPECTOR]</span>
+            <span class="pane-title">RUNTIME RESULT</span>
+          </div>
+          <div id="inspector-summary-pill" class="summary-pill" style="display: none;">
+            <span id="pill-status" class="pill-code">200 OK</span>
+            <span id="pill-duration" class="pill-metric">0 ms</span>
+          </div>
         </div>
+
+        <!-- Inspector Tabs -->
+        <nav class="inspector-tabs">
+          <button class="tab-btn active" data-tab="overview" onclick="switchInspectorTab('overview')">[Overview]</button>
+          <button class="tab-btn" data-tab="body" onclick="switchInspectorTab('body')">[Body]</button>
+          <button class="tab-btn" data-tab="headers" onclick="switchInspectorTab('headers')">[Headers]</button>
+          <button class="tab-btn" data-tab="assertions" onclick="switchInspectorTab('assertions')">[Assertions]</button>
+          <button class="tab-btn" data-tab="waterfall" onclick="switchInspectorTab('waterfall')">[Waterfall]</button>
+          <button class="tab-btn" data-tab="raw" onclick="switchInspectorTab('raw')">[Raw]</button>
+        </nav>
+
         <div id="debug-output" class="debug-content">
-          <div class="empty-hint">点击“执行当前块”即可发起单块调试，毫秒级呈现时延瀑布条与断言比对证据。</div>
+          <div class="empty-hint">
+            <div class="empty-icon">[NO RUN DATA]</div>
+            <div class="empty-text">Select an HTTP request block in editor and press [Run Block] (Shift+Enter) to evaluate in real-time.</div>
+          </div>
         </div>
       </aside>
     </div>
+
+    <!-- Bottom Status Bar -->
+    <footer class="statusbar">
+      <div class="status-segment">
+        <span id="status-indicator" class="status-indicator">[STATUS] Ready</span>
+      </div>
+      <div class="status-segment">
+        <span id="cursor-pos-indicator" class="status-item">Ln 1, Col 1</span>
+      </div>
+      <div class="status-segment right">
+        <span id="syntax-status" class="status-item">[OK] Syntax Checked</span>
+        <span class="status-separator">|</span>
+        <span class="status-item">Sandbox: Active</span>
+      </div>
+    </footer>
   </div>
 
-  <!-- 多格式装入模态弹窗 -->
+  <!-- Multi-Format Importer Modal -->
   <div id="import-modal" class="modal-backdrop" style="display: none;">
     <div class="modal-box">
       <div class="modal-header">
-        <h3>多格式向导装入器</h3>
-        <button class="close-btn" onclick="closeImportModal()">×</button>
+        <div class="modal-title-wrap">
+          <span class="modal-badge">[IMPORT WIZARD]</span>
+          <span class="modal-title">Multi-Format Request Importer</span>
+        </div>
+        <button class="close-btn" onclick="closeImportModal()" title="Close (Esc)">[X]</button>
       </div>
       <div class="modal-body">
         <div class="form-row">
-          <label>源数据格式：</label>
-          <select id="import-format-select">
-            <option value="auto" selected>✨ 智能嗅探 (Auto-detect)</option>
-            <option value="curl">cURL 命令行</option>
-            <option value="httpie">HTTPie 命令行</option>
-            <option value="rawhttp">Raw HTTP 1.1 原始报文</option>
-            <option value="har">HAR 抓包归档</option>
-            <option value="openapi">OpenAPI 3.x / Swagger 片段</option>
+          <label class="form-label">Source Format:</label>
+          <select id="import-format-select" class="form-select">
+            <option value="auto" selected>[v] Auto-detect (Smart Sniff)</option>
+            <option value="curl">cURL Command</option>
+            <option value="httpie">HTTPie CLI</option>
+            <option value="rawhttp">Raw HTTP 1.1 Wire Text</option>
+            <option value="har">HAR Network Archive</option>
+            <option value="openapi">OpenAPI 3.x / Swagger Snippet</option>
           </select>
         </div>
-        <div class="form-row">
+        <div class="form-row checkbox-row">
           <label class="checkbox-label">
-            <input type="checkbox" id="import-opt-baseurl" checked> 自动将域名转换为 <code>{{base_url}}</code> 变量
+            <input type="checkbox" id="import-opt-baseurl" checked /> Extract host as {{base_url}}
           </label>
           <label class="checkbox-label">
-            <input type="checkbox" id="import-opt-mock" checked> 自动补齐标准 <code>@mock-default</code> 响应变体
+            <input type="checkbox" id="import-opt-mock" checked /> Generate standard @mock variant
           </label>
         </div>
-        <textarea id="import-textarea" class="import-textarea" placeholder="在此粘贴 cURL (curl -X POST ...)、HTTPie 命令或原始 HTTP 报文..."></textarea>
+        <div class="form-row">
+          <label class="form-label">Payload / CLI Command:</label>
+          <textarea id="import-textarea" class="import-textarea" spellcheck="false" placeholder="Paste cURL (curl -X POST ...), HTTPie command, or raw HTTP payload here..."></textarea>
+        </div>
+        <div id="import-hint" class="import-hint">Supports auto-detection for cURL, HTTPie, raw HTTP and OpenAPI.</div>
       </div>
       <div class="modal-footer">
-        <button class="btn" onclick="closeImportModal()">取消</button>
-        <button class="btn btn-primary" onclick="submitImport()">✨ 转换并插入文档</button>
+        <button class="btn btn-secondary" onclick="closeImportModal()">Cancel (Esc)</button>
+        <button class="btn btn-primary" onclick="submitImport()">[+] Convert &amp; Insert</button>
       </div>
     </div>
   </div>

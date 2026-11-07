@@ -194,6 +194,36 @@ async fn test_web_readonly_mode_blocks_request_execution() {
 }
 
 #[tokio::test]
+async fn test_web_run_block_native_http_file_parse() {
+    // .http 文件单块执行走原生解析路径（ARCH-02）：裸 HTTP 块不再经 Markdown 栅栏包裹
+    let config = WebServerConfig::default();
+    let app = create_web_router(config);
+
+    let payload = RunBlockRequest {
+        file_path: "case.http".to_string(),
+        raw_block: "# @name health-check\nGET http://127.0.0.1:59999/health\n".to_string(),
+        env: None,
+        extra_variables: None,
+    };
+    let req = Request::builder()
+        .uri("/api/v1/run/block")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let run_res: ApiResponse<RunBlockResponse> = serde_json::from_slice(&body).unwrap();
+    assert!(run_res.success, "execution envelope must succeed");
+    let data = run_res.data.unwrap();
+    // 不可达端口 -> 执行引擎结构化返回错误（而非 HTTP 层报错）
+    assert!(!data.success);
+    assert!(data.error.is_some());
+}
+
+#[tokio::test]
 async fn test_web_run_block_and_mock_simulate() {
     let config = WebServerConfig::default();
     let app = create_web_router(config);

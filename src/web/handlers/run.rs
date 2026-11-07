@@ -1,4 +1,4 @@
-use crate::parser::MarkdownFileParser;
+use crate::parser::parse_document_by_path;
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use crate::runner::TestExecutor;
 use crate::variable::ConfigLoader;
@@ -24,15 +24,22 @@ pub async fn run_block_handler(
         );
     }
 
-    // 1. 规范化代码块：如果传入裸 HTTP 请求，自动包裹为 ```http ... ```
-    let markdown_payload = if req.raw_block.contains("```") {
-        req.raw_block.clone()
+    // 1. 依据文档类型统一解析（复用 parser 门面分发）：
+    //    纯 .http 文件原生解析，消除硬编码 Markdown 栅栏包裹的迂回逻辑；
+    //    Markdown 块保留裸请求自动包裹 ```http 围栏的兼容行为
+    let parse_result = if req.file_path.to_ascii_lowercase().ends_with(".http") {
+        parse_document_by_path(&req.file_path, &req.raw_block)
     } else {
-        format!("```http\n{}\n```", req.raw_block.trim())
+        let markdown_payload = if req.raw_block.contains("```") {
+            req.raw_block.clone()
+        } else {
+            format!("```http\n{}\n```", req.raw_block.trim())
+        };
+        parse_document_by_path(&req.file_path, &markdown_payload)
     };
 
     // 2. 解析代码块
-    let parsed_file = match MarkdownFileParser::parse_content(&markdown_payload) {
+    let parsed_file = match parse_result {
         Ok(f) => f,
         Err(e) => {
             return (

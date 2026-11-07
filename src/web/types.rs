@@ -70,43 +70,8 @@ pub struct RunBlockResponse {
     pub warnings: Vec<String>,
 }
 
-/// 多格式导入类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ImportFormat {
-    Auto,
-    Curl,
-    Httpie,
-    RawHttp,
-    Har,
-    OpenApi,
-    Postman,
-}
-
-fn default_import_format() -> ImportFormat {
-    ImportFormat::Auto
-}
-
-/// 统一导入请求
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportRequest {
-    #[serde(default = "default_import_format")]
-    pub format: ImportFormat,
-    pub content: String,
-    #[serde(default)]
-    pub templatize_host: bool,
-    #[serde(default)]
-    pub generate_mock: bool,
-}
-
-/// 统一导入响应
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportResponse {
-    pub detected_format: ImportFormat,
-    pub markdown_blocks: Vec<String>,
-    pub total_imported: usize,
-    pub warnings: Vec<String>,
-}
+/// 多格式导入类型（下沉至通用领域层 `crate::importer`，此处保持重导出兼容）
+pub use crate::importer::{ImportFormat, ImportRequest, ImportResponse, default_import_format};
 
 /// Mock 规则仿真探针入参
 #[derive(Debug, Clone, Serialize, Deserialize)]

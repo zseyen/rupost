@@ -53,7 +53,7 @@ impl PathSandbox {
 
         // 1. 拒绝空输入、反斜杠与空字节
         if clean.is_empty() || clean.contains('\\') || clean.contains('\0') {
-            return Err(RupostError::Other(format!(
+            return Err(RupostError::SecurityViolation(format!(
                 "Invalid path format: {:?}",
                 requested
             )));
@@ -67,7 +67,7 @@ impl PathSandbox {
                 if let Component::Normal(c) = comp {
                     let s = c.to_string_lossy();
                     if s.starts_with('.') {
-                        return Err(RupostError::Other(format!(
+                        return Err(RupostError::SecurityViolation(format!(
                             "Access to hidden file or directory is denied: {}",
                             requested
                         )));
@@ -84,7 +84,7 @@ impl PathSandbox {
                 .map(|s| s.to_lowercase())
                 .unwrap_or_default();
             if !allowed.contains(&ext) {
-                return Err(RupostError::Other(format!(
+                return Err(RupostError::SecurityViolation(format!(
                     "Invalid extension '{}' for {}. Permitted extensions: {:?}",
                     ext, requested, allowed
                 )));
@@ -101,7 +101,7 @@ impl PathSandbox {
                 Ok(c) => c,
                 // 悬空软链接（目标不存在）或存在性竞态：规范化失败一律拒绝
                 Err(_) => {
-                    return Err(RupostError::Other(format!(
+                    return Err(RupostError::SecurityViolation(format!(
                         "Dangling symlink escape rejected: {}",
                         requested
                     )));
@@ -110,7 +110,7 @@ impl PathSandbox {
             if canon.starts_with(&self.root) {
                 Ok(canon)
             } else {
-                Err(RupostError::Other(format!(
+                Err(RupostError::SecurityViolation(format!(
                     "Path traversal attempt rejected: {}",
                     requested
                 )))
@@ -127,7 +127,7 @@ impl PathSandbox {
 
             let canon_ancestor = ancestor.canonicalize().map_err(RupostError::IoError)?;
             if !canon_ancestor.starts_with(&self.root) {
-                return Err(RupostError::Other(format!(
+                return Err(RupostError::SecurityViolation(format!(
                     "Symlink directory traversal rejected: {}",
                     requested
                 )));
@@ -139,7 +139,7 @@ impl PathSandbox {
                     component,
                     Component::ParentDir | Component::RootDir | Component::Prefix(_)
                 ) {
-                    return Err(RupostError::Other(format!(
+                    return Err(RupostError::SecurityViolation(format!(
                         "Path traversal attempt rejected: {}",
                         requested
                     )));
@@ -226,5 +226,21 @@ mod tests {
         let link2 = root.join("link2.md");
         std::os::unix::fs::symlink(&real_outside_file, &link2).unwrap();
         assert!(sandbox.resolve_safe_path("link2.md").is_err());
+    }
+
+    #[test]
+    fn test_sandbox_errors_are_strongly_typed() {
+        let temp = tempdir().unwrap();
+        let sandbox = PathSandbox::new(temp.path()).with_extensions(&["md"]);
+
+        // 各类拦截（穿越/隐藏文件/扩展名白名单）统一映射 SecurityViolation 强类型
+        for attempt in ["../escape.md", ".env.http", "hack.sh"] {
+            match sandbox.resolve_safe_path(attempt) {
+                Err(crate::error::RupostError::SecurityViolation(msg)) => {
+                    assert!(!msg.is_empty(), "violation message must be present");
+                }
+                other => panic!("expected SecurityViolation for {attempt}, got {other:?}"),
+            }
+        }
     }
 }

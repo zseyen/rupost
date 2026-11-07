@@ -45,9 +45,17 @@ pub async fn save_file_handler(
                 verified_blocks,
             })),
         ),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::err(format!("Failed to save document: {}", e))),
-        ),
+        // 安全拦截（目录穿越/隐藏文件/扩展名白名单）精准映射 403，其余存储错误保持 400
+        Err(e) => {
+            let status = if matches!(e, crate::error::RupostError::SecurityViolation(_)) {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (
+                status,
+                Json(ApiResponse::err(format!("Failed to save document: {}", e))),
+            )
+        }
     }
 }

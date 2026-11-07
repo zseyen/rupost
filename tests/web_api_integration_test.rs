@@ -500,7 +500,8 @@ async fn test_web_security_path_sandbox_guards() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
-    // 3. 尝试越权保存敏感路径或非文档类型（例如隐藏目录中的合法语法文件）-> 被 PathSandbox 拦截返回 400 Bad Request
+    // 3. 尝试越权保存敏感路径或非文档类型（例如隐藏目录中的合法语法文件）
+    //    -> 被 PathSandbox 拦截，SecurityViolation 强类型精准映射为 403 Forbidden
     let evil_save_payload = SaveFileRequest {
         path: ".git/hooks/pre-commit.http".to_string(),
         content: "GET http://localhost/test\n".to_string(),
@@ -515,7 +516,11 @@ async fn test_web_security_path_sandbox_guards() {
         ))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "sandbox violation must map to 403 via SecurityViolation"
+    );
 }
 
 #[tokio::test]

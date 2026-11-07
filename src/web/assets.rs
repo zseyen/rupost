@@ -10,8 +10,7 @@ pub trait AssetProvider: Send + Sync + 'static {
 
 /// 允许投递的静态资产扩展名白名单（防误挂载导致源码/敏感文件外泄）
 const ASSET_EXTENSIONS: &[&str] = &[
-    "html", "htm", "css", "js", "mjs", "json", "svg", "png", "jpg", "jpeg", "ico", "woff",
-    "woff2",
+    "html", "htm", "css", "js", "mjs", "json", "svg", "png", "jpg", "jpeg", "ico", "woff", "woff2",
 ];
 
 /// 外部物理目录托管实现（用于 --static-dir 自定义前端接入，内置统一沙箱）

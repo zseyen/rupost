@@ -58,16 +58,19 @@ fn is_allowed_host(host_str: &str, custom_allowed: &[String]) -> bool {
         host_str.split(':').next().unwrap_or("")
     };
 
-    if host_only == "localhost"
+    // 遵循 RFC 9110 §7.2: Host 标头大小写无关 (Case-Insensitive)
+    if host_only.eq_ignore_ascii_case("localhost")
         || host_only == "127.0.0.1"
         || host_only == "::1"
         || host_only == "0.0.0.0"
-        || host_only.ends_with(".localhost")
+        || host_only.to_ascii_lowercase().ends_with(".localhost")
     {
         return true;
     }
 
-    custom_allowed.iter().any(|allowed| allowed == host_only)
+    custom_allowed
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(host_only))
 }
 
 /// 防御 DNS Rebinding 的 Host 校验守卫中间件（RFC 9112 Default-Deny）：

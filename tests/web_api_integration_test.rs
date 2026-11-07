@@ -527,12 +527,28 @@ async fn test_web_security_host_guard_default_deny_and_allowed_hosts() {
         .header("host", "other.example.com")
         .body(Body::empty())
         .unwrap();
-    let res = app.oneshot(req).await.unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(
         res.status(),
         StatusCode::FORBIDDEN,
         "Host outside custom allowlist must still be rejected"
     );
+
+    // 5. 大小写无关测试 (RFC 9110 §7.2: Case-Insensitive)
+    for case_host in ["Localhost:3000", "LOCALHOST", "127.0.0.1:8080"] {
+        let req = Request::builder()
+            .uri("/")
+            .method("GET")
+            .header("host", case_host)
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "Host {case_host} must match case-insensitively"
+        );
+    }
 }
 
 #[tokio::test]
@@ -801,7 +817,7 @@ async fn test_web_run_suite_error_shapes() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
-    // 3. 无任何可执行请求的文档 -> 422（语法门禁）
+    // 3. 无任何可执行请求的文档 -> 422（语法门禁：统一 .http 与 .md 空请求语义）
     std::fs::write(tmp.path().join("empty.http"), "# only comments\n").unwrap();
     let no_req_payload = RunSuiteRequest {
         path: "empty.http".to_string(),
@@ -813,6 +829,28 @@ async fn test_web_run_suite_error_shapes() {
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
         .body(Body::from(serde_json::to_string(&no_req_payload).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 4. Markdown 中无任何 ```http 代码块 -> 422
+    std::fs::write(
+        tmp.path().join("empty.md"),
+        "# Title\n\nOnly markdown prose, no executable http blocks.\n",
+    )
+    .unwrap();
+    let empty_md_payload = RunSuiteRequest {
+        path: "empty.md".to_string(),
+        env: None,
+    };
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&empty_md_payload).unwrap(),
+        ))
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);

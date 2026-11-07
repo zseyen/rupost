@@ -94,8 +94,19 @@ impl PathSandbox {
         let candidate = self.root.join(clean);
 
         // 4. 符号链接与目录穿越深层校验
-        if candidate.exists() {
-            let canon = candidate.canonicalize().map_err(RupostError::IoError)?;
+        // 存在性判定使用 symlink_metadata 而非 exists()：悬空软链接（指向沙箱外不存在目标）
+        // 的 exists() 为 false，会被误判为"新建文件"而放行，写入时跟随链接造成逃逸外写
+        if candidate.symlink_metadata().is_ok() {
+            let canon = match candidate.canonicalize() {
+                Ok(c) => c,
+                // 悬空软链接（目标不存在）或存在性竞态：规范化失败一律拒绝
+                Err(_) => {
+                    return Err(RupostError::Other(format!(
+                        "Dangling symlink escape rejected: {}",
+                        requested
+                    )));
+                }
+            };
             if canon.starts_with(&self.root) {
                 Ok(canon)
             } else {
@@ -187,5 +198,33 @@ mod tests {
         let sandbox = PathSandbox::new(root).with_extensions(&["md"]);
         let safe = sandbox.resolve_safe_path("valid.md").unwrap();
         assert_eq!(safe, real_file.canonicalize().unwrap());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_path_sandbox_dangling_symlink_escape_blocked() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let outside = tempdir().unwrap();
+
+        // 悬空软链接：指向沙箱外"尚不存在"的目标文件
+        // 旧实现 exists() 判 false → 走"新建文件"分支放行 → 写入时跟随链接逃逸到沙箱外
+        let link = root.join("link.md");
+        std::os::unix::fs::symlink(outside.path().join("evil.md"), &link).unwrap();
+
+        let sandbox = PathSandbox::new(root).with_extensions(&["md"]);
+        let resolved = sandbox.resolve_safe_path("link.md");
+        assert!(
+            resolved.is_err(),
+            "dangling symlink pointing outside sandbox must be rejected, got {:?}",
+            resolved
+        );
+
+        // 沙箱外目标目录真实存在时（经典软链接穿越）依旧拒绝
+        let real_outside_file = outside.path().join("target.md");
+        std::fs::write(&real_outside_file, "secret").unwrap();
+        let link2 = root.join("link2.md");
+        std::os::unix::fs::symlink(&real_outside_file, &link2).unwrap();
+        assert!(sandbox.resolve_safe_path("link2.md").is_err());
     }
 }

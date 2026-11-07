@@ -17,10 +17,16 @@ pub struct MockVariantParser;
 
 impl MockVariantParser {
     /// 切分测试请求部分与 Mock 变体部分
+    ///
+    /// Body 边界上下文感知：请求体开始后（首个空行之后），仅当指令行紧跟在空行之后
+    /// （即变体区与请求体按约定以空行分隔）才认定为变体区起点；正文内部以
+    /// `@mock-when` 开头的普通内容行（如多行 JSON/Prompt 文本）不会被误判截断。
     pub fn split_mock_variants(content: &str) -> Option<(String, String)> {
         let mut req_lines = Vec::new();
         let mut var_lines = Vec::new();
         let mut in_variants = false;
+        let mut body_started = false;
+        let mut prev_line_blank = false;
 
         for line in content.lines() {
             let trimmed = line.trim();
@@ -38,10 +44,18 @@ impl MockVariantParser {
                     || directive == "@mock-default"
                     || directive.starts_with("@mock-default ");
 
-                if is_mock_directive {
+                // 请求体内部（空行之后）的指令样文本行，若未按约定以空行与正文分隔，
+                // 一律视为正文内容，防止 Body 中的 @mock-when 字符串破坏切分
+                let starts_variants = is_mock_directive && (!body_started || prev_line_blank);
+
+                if starts_variants {
                     in_variants = true;
                     var_lines.push(line);
                 } else {
+                    if trimmed.is_empty() && !req_lines.is_empty() {
+                        body_started = true;
+                    }
+                    prev_line_blank = trimmed.is_empty();
                     req_lines.push(line);
                 }
             } else {
@@ -181,5 +195,44 @@ Content-Type: application/json
         );
         assert_eq!(variants[1].status, 403);
         assert!(variants[1].condition_expr.is_none());
+    }
+
+    #[test]
+    fn test_split_mock_variants_body_context_awareness() {
+        // POST 请求体的多行 JSON 中包含以 @mock-when 开头的字符串行：
+        // 旧实现会被误判为变体区起点，正文自此被截断进 variants
+        let block = r#"POST /api/v1/prompts
+Content-Type: application/json
+
+{
+  "prompt": "multi
+@mock-when text appearing inside a JSON string",
+  "count": 1
+}
+
+@mock-when header.X-Role == admin
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"ok": true}
+"#;
+
+        let (req_part, var_part) = MockVariantParser::split_mock_variants(block).unwrap();
+
+        // 正文内部的 @mock-when 字符串必须原样保留在请求部分
+        assert!(
+            req_part.contains("@mock-when text appearing inside a JSON string"),
+            "body content starting with @mock-when must not be hijacked"
+        );
+        assert!(req_part.contains("\"count\": 1"));
+
+        // 真实变体区（按约定以空行与正文分隔）仍被正确识别
+        assert!(var_part.starts_with("@mock-when header.X-Role == admin"));
+        let variants = MockVariantParser::parse_mock_variants_part(&var_part);
+        assert_eq!(variants.len(), 1);
+        assert_eq!(
+            variants[0].condition_expr.as_deref(),
+            Some("header.X-Role == admin")
+        );
     }
 }

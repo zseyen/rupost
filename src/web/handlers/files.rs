@@ -1,5 +1,5 @@
 use crate::web::server::AppState;
-use crate::web::types::ApiResponse;
+use crate::web::types::{ApiResponse, WorkbenchMeta};
 use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -43,4 +43,14 @@ pub async fn get_file_handler(
             ))),
         ),
     }
+}
+
+/// 工作台元信息：前端据此渲染只读徽章并置灰写路径按钮（UX-01）
+pub async fn meta_handler(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(ApiResponse::ok(WorkbenchMeta {
+            readonly: state.readonly,
+        })),
+    )
 }

@@ -4,7 +4,31 @@ let currentFilePath = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadFiles();
+  applyReadonlyState();
 });
+
+// 0. 只读态感知：展示徽章并置灰全部写路径按钮
+async function applyReadonlyState() {
+  try {
+    const res = await fetch('/api/v1/meta');
+    const json = await res.json();
+    if (json.success && json.data && json.data.readonly) {
+      const badge = document.getElementById('readonly-badge');
+      if (badge) badge.style.display = '';
+      ['btn-save', 'btn-run-selection', 'btn-import-modal'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) {
+          btn.disabled = true;
+          btn.style.opacity = '0.45';
+          btn.style.cursor = 'not-allowed';
+          btn.title = '只读模式下不可用';
+        }
+      });
+    }
+  } catch (e) {
+    console.error('读取工作台元信息失败:', e);
+  }
+}
 
 // 1. 加载文件列表
 async function loadFiles() {

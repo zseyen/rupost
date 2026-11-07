@@ -5,6 +5,7 @@ use rupost::web::store::LocalFsDocumentStore;
 use rupost::web::types::{
     ApiResponse, ImportFormat, ImportRequest, ImportResponse, MockSimulateRequest,
     MockSimulateResponse, RunBlockRequest, RunBlockResponse, SaveFileRequest, SaveFileResponse,
+    WorkbenchMeta,
 };
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -159,6 +160,42 @@ async fn test_web_document_store_and_save_guards() {
         .unwrap();
     let res = readonly_app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_web_meta_endpoint_reports_readonly_state() {
+    // 1. 默认模式：readonly = false
+    let app = create_web_router(WebServerConfig::default());
+    let req = Request::builder()
+        .uri("/api/v1/meta")
+        .method("GET")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let meta: ApiResponse<WorkbenchMeta> = serde_json::from_slice(&body).unwrap();
+    assert!(meta.success);
+    assert!(!meta.data.unwrap().readonly);
+
+    // 2. 只读模式：readonly = true（前端据此渲染徽章并置灰写路径按钮）
+    let config = WebServerConfig {
+        readonly: true,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let req = Request::builder()
+        .uri("/api/v1/meta")
+        .method("GET")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let meta: ApiResponse<WorkbenchMeta> = serde_json::from_slice(&body).unwrap();
+    assert!(meta.data.unwrap().readonly);
 }
 
 #[tokio::test]

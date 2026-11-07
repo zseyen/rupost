@@ -123,6 +123,12 @@ pub struct MockSimulateRequest {
     pub raw_block: String,
 }
 
+/// 工作台元信息（前端只读态感知）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkbenchMeta {
+    pub readonly: bool,
+}
+
 /// 单条规则匹配诊断
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConditionEvaluation {

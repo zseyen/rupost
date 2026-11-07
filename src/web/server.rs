@@ -111,6 +111,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         .route("/meta", get(handlers::files::meta_handler))
         .route("/save", post(handlers::save::save_file_handler))
         .route("/run/block", post(handlers::run::run_block_handler))
+        .route("/run/suite", post(handlers::run::run_suite_handler))
         .route(
             "/mock/simulate",
             post(handlers::mock::simulate_mock_handler),

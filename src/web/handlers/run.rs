@@ -3,7 +3,10 @@ use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use crate::runner::TestExecutor;
 use crate::variable::ConfigLoader;
 use crate::web::server::AppState;
-use crate::web::types::{ApiResponse, RunBlockRequest, RunBlockResponse};
+use crate::web::types::{
+    ApiResponse, RunBlockRequest, RunBlockResponse, RunSuiteRequest, RunSuiteResponse,
+    SuiteItemResult,
+};
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -117,6 +120,100 @@ pub async fn run_block_handler(
         response_body,
         error: result.error,
         warnings: Vec::new(),
+    };
+
+    (StatusCode::OK, Json(ApiResponse::ok(response)))
+}
+
+/// 整篇活文档套件批量执行：一键跑通全部请求与链路断言，返回聚合汇总指标
+pub async fn run_suite_handler(
+    State(state): State<AppState>,
+    Json(req): Json<RunSuiteRequest>,
+) -> impl IntoResponse {
+    // 0. 只读模式网络发包阻断（防 SSRF）
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "Suite execution is disabled in read-only mode",
+            )),
+        );
+    }
+
+    // 1. 读取整篇活文档内容
+    let content = match state.store.read_document(&req.path).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::err(format!("File not found: {}", e))),
+            );
+        }
+    };
+
+    // 2. 统一门面解析整篇活文档（.md / .http 按扩展名分发）
+    let parsed_file = match parse_document_by_path(&req.path, &content) {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ApiResponse::err(format!("Failed to parse document: {}", e))),
+            );
+        }
+    };
+
+    // 3. 准备变量上下文（CLI 变量列表为空：环境级联与 .env 同 CLI 语义）
+    let config = ConfigLoader::find_and_load().unwrap_or_default();
+    let target_env = req.env.as_deref().or(state.default_env.as_deref());
+    let mut var_context = ConfigLoader::build_context(&config, target_env, &[], Some(".env"));
+    var_context.insert("__default_scheme", "http");
+
+    // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话）
+    let start_time = std::time::Instant::now();
+    let executor = TestExecutor::with_ephemeral_cookies();
+    let results = match executor.execute_all(parsed_file, &mut var_context).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::err(format!("Execution failed: {}", e))),
+            );
+        }
+    };
+
+    // 5. 聚合统计（skipped 语义与 CLI 报告对齐：不计入通过率分母）
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut skipped = 0;
+    let mut items = Vec::new();
+    for r in results {
+        if r.skipped {
+            skipped += 1;
+        } else if r.success {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
+        items.push(SuiteItemResult {
+            name: r.name.clone(),
+            method: r.method.clone(),
+            url: r.url.clone(),
+            status: r.status,
+            duration_ms: r.duration.as_millis() as u64,
+            success: r.success,
+            skipped: r.skipped,
+            error: r.error.clone(),
+        });
+    }
+
+    let response = RunSuiteResponse {
+        path: req.path,
+        total: items.len(),
+        passed,
+        failed,
+        skipped,
+        duration_ms: start_time.elapsed().as_millis() as u64,
+        items,
     };
 
     (StatusCode::OK, Json(ApiResponse::ok(response)))

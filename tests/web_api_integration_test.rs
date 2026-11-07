@@ -1,15 +1,19 @@
+mod common;
+
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderValue, Request, StatusCode};
 use rupost::web::server::{WebServerConfig, create_web_router};
 use rupost::web::store::LocalFsDocumentStore;
 use rupost::web::types::{
     ApiResponse, ImportFormat, ImportRequest, ImportResponse, MockSimulateRequest,
-    MockSimulateResponse, RunBlockRequest, RunBlockResponse, SaveFileRequest, SaveFileResponse,
-    WorkbenchMeta,
+    MockSimulateResponse, RunBlockRequest, RunBlockResponse, RunSuiteRequest, RunSuiteResponse,
+    SaveFileRequest, SaveFileResponse, WorkbenchMeta,
 };
 use std::sync::Arc;
 use tempfile::tempdir;
 use tower::ServiceExt;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_web_static_assets_serving() {
@@ -678,4 +682,138 @@ async fn test_web_import_idn_chinese_domain() {
     assert!(resp.success);
     let data = resp.data.unwrap();
     assert!(data.markdown_blocks[0].contains("GET {{base_url}}/v1/users"));
+}
+
+#[tokio::test]
+async fn test_web_run_suite_batch_execution() {
+    // 1. wiremock 提供真实端点：/ok -> 200，/boom -> 500
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("fine"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/boom"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    // 2. 工作区写入三块套件：通过 / 失败 / 跳过
+    let tmp = tempdir().unwrap();
+    let base = server.uri();
+    let suite = format!(
+        r#"
+### 1
+# @name ok-case
+# @assert status == 200
+GET {base}/ok
+
+### 2
+# @name boom-case
+# @assert status == 200
+GET {base}/boom
+
+### 3
+# @name skipped-case
+# @skip
+GET {base}/never
+"#
+    );
+    std::fs::write(tmp.path().join("suite.http"), &suite).unwrap();
+
+    let store = Arc::new(LocalFsDocumentStore::new(tmp.path()));
+    let config = WebServerConfig {
+        store,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = RunSuiteRequest {
+        path: "suite.http".to_string(),
+        env: None,
+    };
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let suite_res: ApiResponse<RunSuiteResponse> = serde_json::from_slice(&body).unwrap();
+    assert!(suite_res.success);
+    let data = suite_res.data.unwrap();
+
+    // 3. 聚合统计与 CLI 报告语义对齐：skipped 独立计数
+    assert_eq!(data.total, 3);
+    assert_eq!(data.passed, 1);
+    assert_eq!(data.failed, 1);
+    assert_eq!(data.skipped, 1);
+    assert_eq!(data.items.len(), 3);
+    assert!(data.items[0].success, "ok-case must pass");
+    assert_eq!(data.items[0].name.as_deref(), Some("ok-case"));
+    assert!(!data.items[1].success, "boom-case must fail on 500");
+    assert!(data.items[1].error.is_none() || data.items[1].status == Some(500));
+    assert!(data.items[2].skipped, "skipped case must be skipped");
+}
+
+#[tokio::test]
+async fn test_web_run_suite_error_shapes() {
+    let payload = RunSuiteRequest {
+        path: "whatever.http".to_string(),
+        env: None,
+    };
+
+    // 1. 只读模式 -> 403（SSRF 防线与 run/block 一致）
+    let config = WebServerConfig {
+        readonly: true,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // 2. 文档不存在 -> 404
+    let tmp = tempdir().unwrap();
+    let store = Arc::new(LocalFsDocumentStore::new(tmp.path()));
+    let config = WebServerConfig {
+        store,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&payload).unwrap()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // 3. 无任何可执行请求的文档 -> 422（语法门禁）
+    std::fs::write(tmp.path().join("empty.http"), "# only comments\n").unwrap();
+    let no_req_payload = RunSuiteRequest {
+        path: "empty.http".to_string(),
+        env: None,
+    };
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&no_req_payload).unwrap()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

@@ -129,6 +129,39 @@ pub struct WorkbenchMeta {
     pub readonly: bool,
 }
 
+/// 整篇文档套件批量执行入参
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSuiteRequest {
+    pub path: String,
+    #[serde(default)]
+    pub env: Option<String>,
+}
+
+/// 套件单条请求执行摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuiteItemResult {
+    pub name: Option<String>,
+    pub method: String,
+    pub url: String,
+    pub status: Option<u16>,
+    pub duration_ms: u64,
+    pub success: bool,
+    pub skipped: bool,
+    pub error: Option<String>,
+}
+
+/// 整篇文档套件批量执行响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSuiteResponse {
+    pub path: String,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub duration_ms: u64,
+    pub items: Vec<SuiteItemResult>,
+}
+
 /// 单条规则匹配诊断
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConditionEvaluation {

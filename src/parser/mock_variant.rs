@@ -3,7 +3,7 @@
 //! 负责从 HTTP 代码块中提取 `@mock-when` 与 `@mock-default` 变体规则，
 //! 供 Markdown 与纯 HTTP 解析器 100% 复用，彻底消除解析逻辑重复并打通双角色支持。
 
-use crate::parser::http_file::HttpFileParser;
+use crate::parser::parse_http_header;
 use crate::parser::types::ParsedMockVariant;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -120,7 +120,7 @@ impl MockVariantParser {
                         {
                             var.status = code;
                         }
-                    } else if let Some((k, v)) = HttpFileParser::parse_header(trimmed)
+                    } else if let Some((k, v)) = parse_http_header(trimmed)
                         && let Some(var) = current_variant.as_mut()
                     {
                         var.headers.push((k.to_string(), v.to_string()));

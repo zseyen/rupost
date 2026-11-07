@@ -369,16 +369,9 @@ impl HttpFileParser {
         Ok(())
     }
 
-    /// 解析 header 行
+    /// 解析 header 行（委托通用词法函数，保持单一实现）
     pub(crate) fn parse_header(line: &str) -> Option<(&str, &str)> {
-        if let Some(colon_pos) = line.find(':') {
-            let key = line[..colon_pos].trim();
-            let value = line[colon_pos + 1..].trim();
-            if !key.is_empty() {
-                return Some((key, value));
-            }
-        }
-        None
+        super::parse_http_header(line)
     }
 
     /// 判断是否为注释行

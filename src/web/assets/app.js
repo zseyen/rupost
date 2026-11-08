@@ -9,7 +9,6 @@ let lastDebugData = null;
 initTheme();
 
 document.addEventListener('DOMContentLoaded', () => {
-  initTheme();
   loadFiles();
   applyReadonlyState();
   initEditorEvents();
@@ -26,9 +25,12 @@ function initTheme() {
   applyTheme(theme);
 }
 
-function applyTheme(theme) {
+function applyTheme(theme, persist = false) {
   document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('rupost-theme', theme);
+  // 持久化仅限用户显式切换：自动探测结果不写入，OS 偏好变化保持生效（审查 P2）
+  if (persist) {
+    localStorage.setItem('rupost-theme', theme);
+  }
   const btn = document.getElementById('btn-theme-toggle');
   if (btn) {
     btn.textContent = theme === 'dark' ? '[THEME: DARK]' : '[THEME: LIGHT]';
@@ -39,7 +41,7 @@ function applyTheme(theme) {
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   const next = current === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
+  applyTheme(next, true);
 }
 
 // 0. Readonly state perception & control disabling
@@ -57,7 +59,7 @@ async function applyReadonlyState() {
           btn.disabled = true;
           btn.style.opacity = '0.45';
           btn.style.cursor = 'not-allowed';
-          btn.title = 'Disabled in read-only mode';
+          btn.title = '只读模式下不可用';
         }
       });
       const statusInd = document.getElementById('status-indicator');

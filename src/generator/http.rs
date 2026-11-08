@@ -164,8 +164,8 @@ impl HttpGenerator {
                 }
             } else {
                 // T1：非敏感 Header 值命中动态形状 → 反向模板化（凭据模板化优先已由分支保证）
-                let rendered = super::dynamic::template_value(&val_str)
-                    .unwrap_or_else(|| val_str.clone());
+                let rendered =
+                    super::dynamic::template_value(&val_str).unwrap_or_else(|| val_str.clone());
                 block.push_str(&format!("{}: {}\n", key_str, rendered));
             }
         }

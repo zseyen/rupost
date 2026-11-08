@@ -158,6 +158,12 @@ fn test_non_ascii_header_value_round_trip() {
         String::from_utf8_lossy(&output.stderr)
     );
     let content = std::fs::read_to_string(&out).unwrap();
-    assert!(content.contains("x-note: 中文备注"), "Chinese value must survive (name normalized lowercase): {content}");
-    assert!(content.contains("x-mixed: v1-日本語"), "mixed value must survive: {content}");
+    assert!(
+        content.contains("x-note: 中文备注"),
+        "Chinese value must survive (name normalized lowercase): {content}"
+    );
+    assert!(
+        content.contains("x-mixed: v1-日本語"),
+        "mixed value must survive: {content}"
+    );
 }

@@ -1,9 +1,18 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rupost Living Workbench</title>
+  <script>
+    // 首帧预着色：CSS 加载前按 localStorage / OS 偏好设置主题，杜绝浅色用户闪暗（审查 P2）
+    // 自动探测不写 localStorage（持久化仅限用户显式切换）
+    (function () {
+      var saved = localStorage.getItem('rupost-theme');
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.setAttribute('data-theme', saved || (prefersDark ? 'dark' : 'light'));
+    })();
+  </script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>

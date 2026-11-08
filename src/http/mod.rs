@@ -28,7 +28,7 @@ use crate::Result;
 pub async fn run_diagnose(url: &str, report: &str) -> Result<()> {
     match diagnose_url(url).await {
         Ok(report_data) => {
-            if report == "json" {
+            if report.eq_ignore_ascii_case("json") {
                 println!("{}", serde_json::to_string_pretty(&report_data).unwrap());
             } else {
                 print_diagnose_report(&report_data);

@@ -25,7 +25,8 @@ pub struct WebArgs {
     pub allowed_hosts: Vec<String>,
 
     /// 开发者跨域模式：挂载宽松 CORS 供独立前端（Vite/Webpack）跨域联调。
-    /// 仅允许绑定本地回环地址（127.0.0.1/localhost/::1），非回环 --host 直接拒绝
+    /// 仅允许绑定本地回环地址（非回环 --host 直接拒绝）；注意宽松 CORS 下浏览器中
+    /// 任意网页可跨域读写本地文档，仅限临时本地调试
     #[arg(long)]
     pub dev: bool,
 

@@ -236,10 +236,6 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             .await?;
         }
         Some(Commands::Web(args)) => {
-            if args.dev {
-                // --dev 安全姿态提示（stderr，一次性）
-                eprintln!("[!] --dev：宽松 CORS 已启用，仅供本地独立前端联调，请勿用于共享环境");
-            }
             let store: std::sync::Arc<dyn rupost::web::DocumentStore> =
                 std::sync::Arc::new(rupost::web::LocalFsDocumentStore::new(&args.dir));
 

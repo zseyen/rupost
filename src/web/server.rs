@@ -181,6 +181,12 @@ pub async fn run_web_server(config: WebServerConfig, host: &str, port: u16) -> R
             "--dev 仅允许绑定本地回环地址（127.0.0.1/localhost/::1），当前 host: {host}。如需局域网访问请去掉 --dev 并改用 --allowed-hosts 白名单。"
         )));
     }
+    if config.dev {
+        // 校验通过后才打印横幅（避免非回环拒绝时"先宣称已启用后报错"的误导）
+        eprintln!(
+            "[!] --dev：宽松 CORS 已启用——浏览器中任意网页可跨域读写本地工作台文档，仅限临时本地调试，勿在联网环境长时间运行"
+        );
+    }
     let app = create_web_router(config);
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

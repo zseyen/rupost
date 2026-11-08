@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- `rupost web --dev`：**开发者跨域模式**——挂载宽松 CORS 供独立前端（Vite/Webpack）跨域联调；安全姿态三层：非回环 `--host` fail-fast 拒绝（bind 之前）、启动横幅明示浏览器侧威胁（任意网页可跨域读写本地文档）、Host 守卫与回环绑定叠加；非 dev 模式零 CORS 头（默认拒）。
 - **快照脱敏（opt-in）**：`rupost t --save-snapshot` 与 `rupost history export` 新增 `--mask-secrets`——headers 走凭据掩码（Bearer 前缀保留）、body 走敏感键 `[REDACTED]` + PII 三正则（手机号/银行卡/邮箱，无截断）；schema 不变，掩码产物仍可 `replay` 加载；默认关（重放 body 比对保真度优先）。
 - **Breaking 候选**：`replay` 升级为状态码+body（默认 14 键动态排除后）双比对——body 失败计 failed 并 exit 1（逃生舱 `--status-only`；`--ignore-fields` 追加排除键）；同批解冻 AI 接线：`replay --explain` 失败条目就地归因（规则版基线 + AI 增强，无 Key 降级）。生成语义线：T1 动态值反向模板化（`{{""}}`/`{{"$timestamp"}}`/`{{"$timestamp_iso"}}`/`{{"$timestamp_ms"}}`，敏感键凭据模板化优先）；T2 链式值溯源（上游 `` + 下游 `Bearer {{"{{token}}"}}`，Cookie 链删头靠罐，生成文件直接重跑跑通）。
 - `rupost replay` 失败定位到条（DX-Debug R6）：重放结果升级为结构化 `ReplayEntryResult`（1-based 序号/期望与实际状态码/耗时/传输层错误首行，serde 双向），终端汇总后输出 `Failed entries` 失败清单块（0 失败零噪音）；任一条目失败进程 exit 1（CI 门禁语义，与 `test` 同款）。聚合 Total/Passed/Failed 语义不变。AI 预留桥 `context_from_replay_entry`（URL/错误文本防御性脱敏）使 replay 失败可直接流入既有 `--explain`/`ai triage` 归因管线（v1 建桥未接 CLI，fast-follow 解冻）。

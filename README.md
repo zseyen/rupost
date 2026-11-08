@@ -47,6 +47,8 @@ RuPost 提供了直观且高效的命令行接口：
   rupost web --port 8080 --static-dir ./custom_web_dist
   # 开启只读保护模式 (禁止在线保存覆盖文档)
   rupost web --readonly
+  # 开发者跨域模式 (宽松 CORS 供独立前端联调；仅允许本地回环绑定，浏览器侧任意网页可读写本地文档，仅限临时调试)
+  rupost web --dev
   ```
 * **初始化环境模板与契约规格脚手架**:
   ```bash

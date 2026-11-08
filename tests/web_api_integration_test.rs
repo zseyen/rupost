@@ -880,6 +880,22 @@ async fn test_dev_mode_cors_headers_and_preflight() {
         "preflight must carry allow-origin"
     );
 
+    // 1.5 层序性质锁定：预检先于 Host 守卫——白名单外 Host 的预检仍被 CorsLayer 放行（200）
+    let req = Request::builder()
+        .uri("/api/v1/meta")
+        .method("OPTIONS")
+        .header("host", "evil.example.com")
+        .header("Origin", "http://localhost:5173")
+        .header("Access-Control-Request-Method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "preflight short-circuits host guard"
+    );
+
     // 2. 实际跨域 GET：响应带 allow-origin（独立前端可读响应）
     let req = Request::builder()
         .uri("/api/v1/meta")
@@ -924,7 +940,13 @@ async fn test_dev_mode_rejects_non_loopback_host() {
         dev: true,
         ..Default::default()
     };
-    let result = rupost::web::run_web_server(config, "0.0.0.0", 0).await;
+    // timeout 包裹：若强制被移除，bind 会成功并永驻 serve——失败必须确定性而非挂死
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        rupost::web::run_web_server(config, "0.0.0.0", 0),
+    )
+    .await
+    .expect("must fail fast, not bind and serve forever");
     let err = result.expect_err("non-loopback host must be rejected in dev mode");
     assert!(
         err.to_string().contains("回环") || err.to_string().contains("127.0.0.1"),

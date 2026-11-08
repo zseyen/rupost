@@ -3,14 +3,13 @@ mod common;
 
 use rupost::mock::compiler::MockCompiler;
 use rupost::mock::matcher::TrieRouteMatcher;
-use rupost::mock::server::{AxumMockServer, MockServer};
+use rupost::mock::server::axum_adapter::serve_matcher;
 use rupost::parser::MarkdownFileParser;
 use rupost::report::generate_html_report_from_json;
 use rupost::report::{JsonAssertionReport, JsonFileReport, JsonTestReport};
 use rupost::runner::{TestSuiteOptions, run_test_suite};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -107,13 +106,15 @@ async fn test_e2e_html_report_with_mock_and_waterfall() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let port = 19198;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(Duration::from_millis(80)).await;
 
     // 编写带诊断和断言的测试套件
     let http_file = temp_dir.path().join("ai_chat.http");

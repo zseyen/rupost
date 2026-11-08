@@ -4,7 +4,7 @@ mod common;
 use futures_util::{SinkExt, StreamExt};
 use rupost::mock::compiler::MockCompiler;
 use rupost::mock::matcher::TrieRouteMatcher;
-use rupost::mock::server::{AxumMockServer, MockServer};
+use rupost::mock::server::axum_adapter::serve_matcher;
 use rupost::parser::{HttpFileParser, MarkdownFileParser};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -161,13 +161,15 @@ async fn test_scenario_order_fulfillment_mock_server_flow() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let port = 19188;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let client = reqwest::Client::new();
 
@@ -210,13 +212,15 @@ async fn test_scenario_iam_tenant_mock_server_flow() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let port = 19189;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let client = reqwest::Client::new();
 
@@ -284,13 +288,15 @@ async fn test_scenario_order_fulfillment_dual_role_mock_dispatch() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let port = 19190;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let client = reqwest::Client::new();
     let base_url = format!("http://127.0.0.1:{}", port);
@@ -364,13 +370,15 @@ async fn test_scenario_order_spec_as_executable_test() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let port = 19191;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 模拟 rupost test order_spec.md：使用 TestExecutor 运行文档
     let executor = rupost::runner::TestExecutor::new();
@@ -415,13 +423,15 @@ async fn test_scenario_order_suite_runs_against_mock_server() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let port = 19192;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 解析测试套件 order_test_suite.http
     let suite_path = PathBuf::from("examples/scenario_order_fulfillment/order_test_suite.http");
@@ -583,13 +593,15 @@ async fn test_scenario_c_suite_full_execution_against_mock_servers() {
         matcher.add_route(&r.method, &r.path, r.variants);
     }
     let matcher = Arc::new(matcher);
-    let http_port = 19194;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let http_port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(http_port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-    tokio::time::sleep(Duration::from_millis(80)).await;
 
     // 2. 启动本地 WS 协同 Mock 服务
     let (ws_url, _ws_handle) = start_scenario_c_ws_server().await;

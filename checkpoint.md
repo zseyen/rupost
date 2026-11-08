@@ -333,7 +333,7 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 - **离屏测试加固**：新增 4 组离屏 `TestBackend` 组件级单元测试，全量 52 个冒烟测试 + 8 个特性保障测试全部 PASS，clippy 零告警。
 
 ### 下一步计划 (Next Steps)
-- 探索 `src/tui/ui/response.rs`（870+ 行）的 5-Tab（Timing / Diagnose / Headers / Body / Stream）子面板组件化拆分。
+- 探索 `src/tui/ui/response.rs`（854 行）的 Tab 子面板组件化拆分。**【2026-11-08 勘误】**：原表述"5-Tab（Timing/Diagnose/Headers/Body/Stream）"已过时——实际 `DetailTab` 枚举为 Response/Headers/Request/Results/Diagnose，Timing 内联于 Response 臂；权威口径见 [解耦提案 §3 靶点三](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md)。
 - 完善 Web 界面 / 跨平台终端自适应交互细节。
 
 ---
@@ -576,3 +576,15 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 4. **scenario 测试基建去 flake**（提交 4）：7 处固定端口（19188-19194/19198）+ 吞 bind 错误 + sleep 竞态 → `bind(":0")` + `serve_matcher` 直传已绑定 listener，bind expect 在 spawn 外；mock_integration_test 存量登记不顺手修。
 5. **MockCompiler 死代码删除**（提交 5）：guard 后不可达兜底分支 + 注释修正（双角色语义 CHANGELOG 登记）。
 6. **文档联动**（提交 6）：directory_structure.md 登记 `src/report/` 五文件 + `BatchResult` 幽灵类型修正 + reporter 条目更新；progress_summary Sprint 6 状态与 main.rs 行数勘误；CHANGELOG Changed/Fixed。
+
+---
+
+## 解耦提案双子代理审查与 v2 修订（2026-11-08）
+
+[2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md) 经架构审查 + 事实核查双子代理对抗审查（无 P0 架构错误，1 项 P0 执行卡壳点 + 6 项 P1 全部吸收），文档重写为 v2：
+
+1. **P0 勘误**：靶点三组件树按真实 `DetailTab`（Response/Headers/Request/Results/Diagnose）重画——原"Overview/Timing/Body"清单系沿用本文件旧条目过时表述（已随批勘误），Timing 实内联于 Response 臂。
+2. **设计缺口补齐**：渲染期副作用（预折行缓存惰性重建）归属显式化——门面 `&mut` 前置重建、子组件 `&AppState` 只读；editor.rs 552 行测试块与 219 行 `trigger_file_execution` 最大块归属声明（迁 `actions/execution.rs` + 测试随迁）；靶点四改写为"内联字段提取 Args 结构体"（原"平铺结构体拆分"失实——实为 enum 内联字段），12 变体全覆盖 + dispatch/runner 归位。
+3. **验证纪律补 bin 防线**：cli 属 bin crate，12 个单测（含位置契约表）`cargo test --lib` 跑不到——§5 补 `cargo test --bin rupost`，迁移前先扩契约表（别名/value_delimiter/trailing_var_arg 保真清单）。
+4. **指标校准**：AppState 69 字段（非 46）；state/mod.rs 目标 670→~290（降 57%，非 75%）；editor 四块实测 57/44/44/80 行；高亮 3 函数 6 测子串匹配（非 4 组 11 测正则）。
+5. **路线图改 1 → (4 ∥ 2) → 3**（cli/tui 零依赖可并行，response 殿后）；范围外五巨石（html.rs 897 等）登记 future_backlog。

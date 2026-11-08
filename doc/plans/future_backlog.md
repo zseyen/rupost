@@ -79,3 +79,19 @@
 *   **审计结论**：`format_request_snapshot_to_http`（`src/tui/state/history.rs`）原样写入全部 Header/URL/Body，调用点仅 `sync.rs`/`confirm.rs` 两处、产物只进**内存编辑器**（`editor_file_path = None`、`is_dirty = false`），TUI 全目录无剪贴板/文件导出路径——**无新暴露面**（凭据的持久化明文本就是 history 本身，属本机存储）。
 *   **显式裁决**：TUI 还原**有意保留凭据真值**——供未来内联编辑重发（模板化会破坏重发语义）；对外分享走 `export --redact`（脱敏）或 `generate`（模板化），三者分工明确互不越界。
 *   **契约锁定**：`test_history_restore_keeps_credentials_verbatim_by_design`（`src/tui/state/history.rs`）——若未来有人给还原路径加模板化/脱敏，此测试先行失败提醒重新裁决。
+
+---
+
+## 📌 2026-11-08 解耦提案审查登记（来源：[解耦提案 §6 范围外清单](active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md)）
+
+### 同体量巨石文件（本期解耦四靶点之外，按需立项）
+
+| 文件 | 行数 | 潜在拆分方向 |
+| :--- | :--- | :--- |
+| `src/report/html.rs` | 897 | 内嵌 CSS/JS 拆独立模板文件，渲染管线分段 |
+| `src/runner/engine/replayer.rs` | 773 | 重放执行器：条目比较（Smart Diff）/ 终端渲染 / 编排分离 |
+| `src/parser/http_file.rs` | 729 | 词法扫描 / 请求块解析 / 元数据关联分层 |
+| `src/ai/rules.rs` | 726 | 签名分桶 / 规则推导 / 测试样例构造分离 |
+| `src/runner/protocol/ws_runner.rs` | 709 | 剧本执行 / 帧匹配 / 会话编排分离 |
+
+*触发条件：任一文件因新功能开发需要结构性改动时，顺手按解耦提案的四法则（§2）立项，不单独排期。*

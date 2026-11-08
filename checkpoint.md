@@ -610,3 +610,10 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 3. **Phase 4（`39356194`）**：cli.rs 1359 行拆为 cli/mod.rs + commands/（12 变体全覆盖）+ dispatch.rs + runner.rs；表面契约测试先行锁定，零漂移实证。
 4. **三轮审查**：一轮（16 提交，1 P1 空扫描落盘 + P2 兼容 shim/大小写/措辞）、二轮（Phase 2/4 逐字保真验证，1 P1 app.rs:140 残留）、三轮（Phase 3 等价性验证，1 P1 提交信息声明）——全部修复落地；bug 修复三提交（非 ASCII header 三层+第四层、diagnose 大小写、Web FOUC）一并经审。
 5. 全量基线 890 passed / 0 failed（会话起点 883），clippy/fmt 双零。Phase 3 为解耦提案最后阶段——**提案四阶段全部交付**。
+
+---
+
+## Web 工作台收尾两功能交付（2026-11-09）
+
+1. **--dev CORS（加固计划战役 A-5）**：`rupost web --dev` 挂载宽松 CORS（tower-http 0.6 cors，与传递版本一致）供独立前端跨域联调；安全姿态三层——非回环 --host fail-fast 拒绝（错误含可执行指引）+ 启动横幅 + Host 守卫叠加；非 dev 模式零 CORS 头（默认拒）。测试：预检/实际跨域 allow-origin、非 dev 反向断言、非回环拒绝、CLI 解析（bin 14 测）。
+2. **前端 Run All 面板核实**：主题/UI 会话已完整交付（runSuite 消费 POST /api/v1/run/suite，RunSuiteResponse/SuiteItemResult 字段契约逐一吻合，btn-run-all 已入只读置灰清单）——本批零改动，契约核对记录于此。

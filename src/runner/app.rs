@@ -137,7 +137,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
             .map(|n| format!("（@{n}）"))
             .unwrap_or_default();
         // [i] 提示仅在 terminal 模式输出，保持 --report json 的 stdout 纯净可解析
-        if options.report != "json" {
+        if !options.report.eq_ignore_ascii_case("json") {
             println!(
                 "[i] 单请求模式：执行第 {} 条{}，其余 {} 条已跳过",
                 applied.selected_number, name_part, applied.skipped_count

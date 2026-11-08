@@ -51,15 +51,18 @@ pub struct ReportWriteOutcome {
 }
 
 /// 依据显式 `--report` 值与文件扩展名决定报告格式（纯函数，表驱动测试锁定）。
-/// 显式值永远优先（html/json 忽略大小写）；其余值（含默认 terminal）按扩展名推断。
+/// 显式值永远优先（html/json 忽略大小写）；其余值（含默认 terminal）按扩展名推断
+/// （大小写不敏感：OUT.HTML 与 out.html 同语义，审查 P2-4b）。
 pub fn determine_report_format(report: &str, report_file: &str) -> ReportFileFormat {
+    let ext_is_html = {
+        let lower = report_file.to_ascii_lowercase();
+        lower.ends_with(".html") || lower.ends_with(".htm")
+    };
     if report.eq_ignore_ascii_case("html") {
         ReportFileFormat::Html
     } else if report.eq_ignore_ascii_case("json") {
         ReportFileFormat::Json
-    } else if report_file.to_ascii_lowercase().ends_with(".html")
-        || report_file.to_ascii_lowercase().ends_with(".htm")
-    {
+    } else if ext_is_html {
         ReportFileFormat::Html
     } else {
         ReportFileFormat::Json

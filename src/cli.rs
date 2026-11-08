@@ -1356,4 +1356,68 @@ mod tests {
         assert!(allowed_hosts.is_empty());
         assert_eq!(dir, "./docs");
     }
+
+    /// 表面契约（解耦提案 Phase 4 前置锁定）：别名解析、Web value_delimiter 与
+    /// 自定义 -d 短参、根命令 trailing_var_arg 捕获。迁移期间这些维度不得漂移。
+    #[test]
+    fn test_cli_surface_contract_aliases_and_delimiters() {
+        use clap::Parser as _;
+
+        // 1. 全部子命令别名解析到正确变体（各附最小合法参数）
+        let cases: Vec<(&str, Vec<&str>)> = vec![
+            ("t", vec!["x.http"]),
+            ("h", vec!["l"]),
+            ("g", vec!["out.http"]),
+            ("d", vec!["https://example.com"]),
+            ("m", vec!["snap.json"]),
+            ("i", vec![]),
+            ("r", vec!["snap.json"]),
+            ("exp", vec!["curl", "x.http"]),
+        ];
+        for (alias, tail) in cases {
+            let mut input = vec!["rupost", alias];
+            input.extend(tail);
+            let cli = Cli::try_parse_from(&input)
+                .unwrap_or_else(|e| panic!("alias {alias} must parse: {e}"));
+            assert!(
+                cli.command.is_some(),
+                "alias {alias} must yield a subcommand"
+            );
+        }
+
+        // 2. Init 双别名 i / template
+        assert!(Cli::try_parse_from(["rupost", "i"]).is_ok());
+        assert!(Cli::try_parse_from(["rupost", "template"]).is_ok());
+
+        // 3. Web --allowed-hosts 逗号分隔多值（value_delimiter = ','）
+        let cli = Cli::try_parse_from([
+            "rupost",
+            "web",
+            "--allowed-hosts",
+            "a.example.com,b.example.com",
+        ])
+        .expect("web delimiter must parse");
+        let Some(Commands::Web { allowed_hosts, .. }) = cli.command else {
+            panic!("expected Web subcommand");
+        };
+        assert_eq!(
+            allowed_hosts,
+            vec!["a.example.com".to_string(), "b.example.com".to_string()],
+            "comma-separated hosts must split via value_delimiter"
+        );
+
+        // 4. Web 自定义短参 -d（与全局 --debug 无短参语义不冲突）
+        let cli =
+            Cli::try_parse_from(["rupost", "web", "-d", "./docs"]).expect("web -d must parse");
+        let Some(Commands::Web { dir, .. }) = cli.command else {
+            panic!("expected Web subcommand");
+        };
+        assert_eq!(dir, "./docs");
+
+        // 5. 根命令 trailing_var_arg + allow_hyphen_values：内联请求整体入 args
+        let cli = Cli::try_parse_from(["rupost", "GET", "http://example.com", "-H", "X: 1"])
+            .expect("inline request must parse via trailing var arg");
+        assert!(cli.command.is_none());
+        assert_eq!(cli.args, vec!["GET", "http://example.com", "-H", "X: 1"]);
+    }
 }

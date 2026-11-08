@@ -19,7 +19,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Theme Management (Light / Dark)
 function initTheme() {
-  const saved = localStorage.getItem('rupost-theme');
+  let saved = null;
+  try {
+    saved = localStorage.getItem('rupost-theme');
+  } catch (e) {
+    // 受限存储环境：裸访问会杀死整个 app.js（审查 P2-4）
+  }
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const theme = saved || (prefersDark ? 'dark' : 'light');
   applyTheme(theme);

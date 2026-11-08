@@ -498,4 +498,33 @@ mod tests {
         assert!(variables.contains(&"authorization".to_string()));
         assert!(!text.contains("eyJhbGciOi"), "凭据不得明文落盘");
     }
+
+    #[test]
+    fn test_parse_non_ascii_header_obs_text_allowed() {
+        // obs-text 非 ASCII 值经 from_bytes 放行且读回 lossy 无损
+        let entry =
+            parse_curl_to_entry(r#"curl -H "X-Note: 中文备注" https://api.example.com"#).unwrap();
+        let v = entry.request.headers.get("x-note").unwrap();
+        assert_eq!(String::from_utf8_lossy(v.as_bytes()), "中文备注");
+    }
+
+    #[test]
+    fn test_parse_header_control_chars_still_rejected() {
+        // 注入防线不变：控制字符（\n）在 from_bytes 口径下仍拒绝
+        let result = parse_curl_to_entry("curl -H \"X-Bad: a\nb\" https://api.example.com");
+        assert!(result.is_err(), "control chars must be rejected");
+    }
+
+    #[test]
+    fn test_curl_importer_parse_lossy_readback() {
+        // 层②（RequestImporter::parse，web MultiFormatImporter 路径）：lossy 读回无损
+        let importer = CurlImporter;
+        let reqs = importer
+            .parse(
+                r#"curl -H "X-Note: 中文备注" https://api.example.com"#,
+                false,
+            )
+            .unwrap();
+        assert_eq!(reqs[0].headers[0].1, "中文备注");
+    }
 }

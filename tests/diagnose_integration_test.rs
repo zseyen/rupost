@@ -20,6 +20,17 @@ async fn test_run_diagnose_cli_json_report_stdout() {
         .expect("run rupost diagnose --report json");
 
     assert!(out.status.success(), "diagnose success must exit 0");
+
+    // 大小写统一守护（backlog 收尾）：--report JSON 大写同语义
+    let out_upper = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["d", mock_server.uri().as_str(), "--report", "JSON"])
+        .output()
+        .expect("run rupost diagnose --report JSON");
+    assert!(out_upper.status.success(), "diagnose success must exit 0");
+    let stdout_upper = String::from_utf8_lossy(&out_upper.stdout);
+    let value_upper: serde_json::Value =
+        serde_json::from_str(stdout_upper.trim()).expect("uppercase JSON must be machine-readable");
+    assert!(value_upper.is_object());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let value: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("json report stdout must be valid JSON");

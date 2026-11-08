@@ -30,6 +30,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Changed
 
+- **报告文件输出上移表现层 + 格式判定显式优先**（分支收尾批次）：`run_test_suite` 返回 `TestSuiteOutcome { has_failure, batch_results }`（**破坏性 API 变更**：不再返回 bool，UseCase 不再隐式写报告文件）；渲染+落盘收敛为 `rupost::report::write_report_files` 门面。格式判定改为**显式 `--report` 永远优先**（忽略大小写，统一此前 stdout 精确匹配与文件判定忽略大小写的口径不一致）：`--report json --report-file x.html` 现在写 JSON（旧行为：扩展名压过显式格式静默写 HTML）；默认 terminal 按扩展名推断不变。报告文件已存在时 stderr 提示 `[!] 报告文件已存在，将覆盖`（允许覆盖不阻断，CI 友好；CLI 安全评估 P1-1 闭环）。空扫描提示 `No test files found.` 改 stderr（`--report json` stdout 纯净）。
+- **双角色 mock 语义登记**（既有行为，随批次正式入档）：`rupost mock` / `build_mock_matcher` 按**含 `@mock-when`/`@mock-default` 变体的契约块**编译路由，与 `@test` 标记无关——纯契约块（无 @test 有变体）会被服务，纯 `@test` 无变体块不再注册 mock 路由；`MockCompiler` 不可达兜底分支删除。
 - `rupost g` (history → .http generation) now **templates credentials as
   variables** instead of writing them verbatim: `Authorization: Bearer eyJ...`
   becomes `Authorization: Bearer {{authorization}}` (scheme prefix preserved,
@@ -49,6 +51,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Fixed
 
+- scenario/html_report 集成测试基建去 flake：7 处固定端口（19188-19194/19198）+ `let _ =` 吞 bind 错误 + sleep 启动竞态，统一改为 `bind("127.0.0.1:0")` + `serve_matcher`（已绑定 listener 直传，无 re-bind TOCTOU），端口占用从静默误导失败变为确定性 panic。
+- `rupost t` 失败判定语义新增子进程 e2e 锁定（失败 exit 1 / 全绿 exit 0）。
 - **Security**: `rupost g` no longer writes `Authorization` / `Cookie` /
   `X-Api-Key` header values or sensitive URL query values (e.g. `?api_key=`)
   verbatim into generated `.http` files. Redaction semantics are shared with

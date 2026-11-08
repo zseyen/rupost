@@ -534,3 +534,16 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 
 ### 4. 导入功能：PRD 归档（不实施，用户裁决后移 + CLI 结合）
 - [doc/plans/active/2026-11-07-importer-unification-prd.md](doc/plans/active/2026-11-07-importer-unification-prd.md)：HAR/Postman/OpenAPI 真实解析落位 `src/importer/` 领域层，CLI `import --format` + Web `/api/v1/import` 双端同源；R1-R6 需求 + 6 提交切分 + 勘误 `:376` 失实宣称的联动登记。
+
+---
+
+## 分支收尾批次（branch-cleanup bookmark，6 原子提交，2026-11-08）
+
+今晨审查 + 双子代理对抗审查（设计 0 P0 / 测试策略 3 P0）修订后的方案全部交付：
+
+1. **Json\* 报告契约迁入 `src/report/json.rs`**（提交 1）：reporter.rs 收敛为纯终端渲染器，report→reporter 反向依赖消除；瀑布换算唯一化——`from_diagnostics`（残差 clamp）/ timing 分支保全 / `from_total_ms(f64)` 三分支各守其形，双份 ~40 行重复删除；新增 serde(default) 旧版最小报告反向兼容负向测试。
+2. **`run_test_suite` 返回 `TestSuiteOutcome`**（提交 2，破坏性 API）：失败判定口径单点维护；4 调用点全适配（编译器当检查器，不加 From<bool> 兼容）；新增子进程 e2e 锁定失败 exit 1 / 全绿 exit 0（RUPOST_HISTORY_DIR 隔离）。
+3. **报告文件输出上移表现层**（提交 3）：`write_report_files` 门面返回 `ReportWriteOutcome` 消息结构（打印决策留派发层，stdout 纯净可测）；格式判定决策表 11 行表驱动——显式 `--report` 永远优先 + 大小写统一（`--report json --report-file x.html` 行为变更入 CHANGELOG）；覆盖提示 stderr 数据化（评估 P1-1 闭环：允许覆盖 + 提示 + symlink 行为文档测试）；默认路径子进程测试（禁 set_current_dir）。
+4. **scenario 测试基建去 flake**（提交 4）：7 处固定端口（19188-19194/19198）+ 吞 bind 错误 + sleep 竞态 → `bind(":0")` + `serve_matcher` 直传已绑定 listener，bind expect 在 spawn 外；mock_integration_test 存量登记不顺手修。
+5. **MockCompiler 死代码删除**（提交 5）：guard 后不可达兜底分支 + 注释修正（双角色语义 CHANGELOG 登记）。
+6. **文档联动**（提交 6）：directory_structure.md 登记 `src/report/` 五文件 + `BatchResult` 幽灵类型修正 + reporter 条目更新；progress_summary Sprint 6 状态与 main.rs 行数勘误；CHANGELOG Changed/Fixed。

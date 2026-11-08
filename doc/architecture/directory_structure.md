@@ -154,9 +154,16 @@ graph TD
     *   [replayer.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/replayer.rs)：快照重放执行器。按录制的 HTTP 交互原样重放（`--target` 自动改写 Host/Port），透传快照中记录的 `@timeout` 语义。
     *   [on_failure.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/on_failure.rs)：失败钩子与 trace 锚点协议（DX-Debug R7，B0 确定性零 AI）。按 `Traceparent > X-Request-Id > X-Trace-Id` 优先级提取 trace-id，经 `RUPOST_FAILED_URL/STATUS/TRACE_ID` 环境变量交给 `--on-failure` 用户命令（`tokio::process` + 10s kill_on_drop 超时，stderr/stdout 透传）；钩子任何失败只产生提示，不改写测试退出码。
     *   二级子目录划分：`src/runner/engine/`（批量/并行/拓扑/依赖解析/重放）、`src/runner/protocol/`（http/sse/ws 三个协议执行器）、`src/runner/utils/`（file_sync/path 等），由 `src/runner/mod.rs` 桥接重导出。
-    *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)：将运行结果整理成 CLI 终端彩色摘要报告或输出标准的 JSON 结构化报告。
+    *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)：终端渲染器——测试结果/摘要/批量汇总的彩色打印（JSON 报告契约已迁出至 `src/report/json.rs`）。
     *   [file_sync.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/utils/file_sync.rs)：为大模型流数据提供非阻塞的文件物理增量追加写入器 (`@stream_to`)。
-    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs)：执行结果相关的数据结构（`TestResult`、`BatchResult`）。
+    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs)：执行结果相关的数据结构（`TestResult`、`StreamEvent`、`TestSummary`）。
+
+*   #### [src/report/](file:///Users/zsyzzx/project/rust/rupost/src/report)（统一报告层：JSON 契约 + 视图模型 + 多格式渲染）
+    *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/mod.rs)：模块门面——`generate_html_report` / `write_report_files`（报告文件落盘唯一出口，返回 `ReportWriteOutcome` 消息结构由派发层渲染）与格式判定决策表 `determine_report_format`（显式 `--report` 优先 + 扩展名推断）。
+    *   [json.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/json.rs)：JSON 报告契约唯一来源（`JsonFileReport`/`JsonTestReport`/`JsonAssertionReport`）+ 脱敏转换 `build_json_reports` + 序列化输出 `report_json`（writer 注入形态），供 `ai triage`、`--report json` 与离线 HTML 二次渲染消费。
+    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/types.rs)：领域视图契约（`ReportContext`/`ReportSummary`/`TimingWaterfall` 等）——瀑布换算唯一实现（`from_diagnostics` 残差法 / timing 分支 / `from_total_ms` fallback）与防 XSS `escape_html`。
+    *   [html.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/html.rs)：`HtmlReportGenerator`——自包含单文件暗色 Dashboard（KPI 卡片、失败优先树形卡片、CSS 时延瀑布图），XSS 全字段转义。
+    *   [generator.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/generator.rs)：`ReportGenerator` 开闭接口（HTML/JSON/未来多格式渲染器）。
 
 *   #### [src/http/](file:///Users/zsyzzx/project/rust/rupost/src/http)（底层网络适配与大模型网关层）
     *   [client.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/client.rs)：底层的 HTTP 客户端，基于 `reqwest` 的二次封装，支持中间件链。

@@ -276,30 +276,6 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         }
     }
 
-    // 保存报告到指定文件（支持 JSON 与 HTML，不干扰终端输出）
-    if let Some(report_path) = &options.report_file {
-        if options.report.eq_ignore_ascii_case("html")
-            || report_path.ends_with(".html")
-            || report_path.ends_with(".htm")
-        {
-            let html =
-                crate::report::generate_html_report(&batch_results, None, options.env.as_deref())?;
-            std::fs::write(report_path, html)?;
-            if options.verbose || options.report.eq_ignore_ascii_case("html") {
-                println!("  HTML 报告已生成至: {}", report_path);
-            }
-        } else {
-            let mut file = std::fs::File::create(report_path)?;
-            crate::report::json::report_json(&batch_results, &mut file)?;
-        }
-    } else if options.report.eq_ignore_ascii_case("html") {
-        let default_path = "rupost-report.html";
-        let html =
-            crate::report::generate_html_report(&batch_results, None, options.env.as_deref())?;
-        std::fs::write(default_path, html)?;
-        println!("  HTML 报告已生成至: {}", default_path);
-    }
-
     // 保存快照
     if let Some(snapshot_path) = &options.save_snapshot {
         save_batch_snapshot(&batch_results, &paths, snapshot_path, options.mask_snapshot)?;

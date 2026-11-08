@@ -84,3 +84,37 @@ async fn test_suite_all_pass_exits_zero() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// `--report html` 缺省 --report-file：默认写 CWD 下 rupost-report.html，
+/// 且无条件打印"已生成至"提示（进程级 CWD 隔离必须走子进程，禁止 set_current_dir）
+#[tokio::test]
+async fn test_report_html_default_path_written_in_cwd() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let dir = tempdir().unwrap();
+    write_suite(dir.path(), &server.uri());
+    let history = tempdir().unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .env("RUPOST_HISTORY_DIR", history.path())
+        .current_dir(dir.path())
+        .args(["t", "suite.http", "--report", "html"])
+        .output()
+        .expect("spawn rupost test subprocess");
+
+    assert!(out.status.success(), "all-pass suite must exit 0");
+    let default_report = dir.path().join("rupost-report.html");
+    assert!(
+        default_report.exists(),
+        "default html report must be written to CWD"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("报告已生成至"),
+        "html default path must print generation notice: {stdout}"
+    );
+}

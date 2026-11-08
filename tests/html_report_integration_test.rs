@@ -55,8 +55,20 @@ GET http://example.com/api/test
         on_failure: None,
     };
 
-    // 执行套件
-    let _ = run_test_suite(options).await;
+    // 执行套件并显式写出报告（报告落盘已上移至表现层门面）
+    let suite_outcome = run_test_suite(options).await.unwrap();
+    let write_outcome = rupost::report::write_report_files(
+        &suite_outcome.batch_results,
+        "html",
+        Some(html_report_file.to_string_lossy().as_ref()),
+        Some("production"),
+    )
+    .unwrap()
+    .expect("report_file specified must produce a write outcome");
+    assert!(
+        !write_outcome.overwritten,
+        "tempdir fresh path must not be flagged as overwritten"
+    );
 
     // 验证 HTML 文件已生成
     assert!(
@@ -155,6 +167,17 @@ Accept: text/event-stream
 
     let outcome = run_test_suite(options).await.unwrap();
     assert!(!outcome.has_failure, "测试套件应当全部 PASS");
+
+    // 报告落盘已上移至表现层门面：显式写出（review 假守护点 :59/:156 的真适配）
+    let html_output_path = html_output.to_string_lossy().to_string();
+    rupost::report::write_report_files(
+        &outcome.batch_results,
+        "html",
+        Some(html_output_path.as_str()),
+        None,
+    )
+    .unwrap()
+    .expect("report_file specified must produce a write outcome");
 
     assert!(html_output.exists(), "HTML 报告应写入文件");
     let html = std::fs::read_to_string(&html_output).unwrap();

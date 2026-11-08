@@ -748,12 +748,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 || std::env::var("RUPOST_AI_EXPLAIN").is_ok_and(|v| {
                     matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
                 });
+            let env_label = env.clone();
             let options = rupost::runner::TestSuiteOptions {
                 paths,
                 mode,
                 concurrency,
-                report,
-                report_file,
+                report: report.clone(),
+                report_file: report_file.clone(),
                 explain: explain_enabled,
                 triage,
                 fail_fast,
@@ -772,6 +773,25 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 on_failure,
             };
             let outcome = rupost::runner::run_test_suite(options).await?;
+
+            // 报告文件输出（表现层职责，UseCase 不再隐式落盘）：
+            // 覆盖提示走 stderr；"已生成"提示仅在 HTML 格式或 verbose 时走 stdout
+            if let Some(written) = rupost::report::write_report_files(
+                &outcome.batch_results,
+                &report,
+                report_file.as_deref(),
+                env_label.as_deref(),
+            )? {
+                if written.overwritten {
+                    eprintln!("[!] 报告文件已存在，将覆盖: {}", written.path.display());
+                }
+                if matches!(written.format, rupost::report::ReportFileFormat::Html)
+                    && (verbose || report.eq_ignore_ascii_case("html"))
+                {
+                    println!("  报告已生成至: {}", written.path.display());
+                }
+            }
+
             if outcome.has_failure {
                 std::process::exit(1);
             }

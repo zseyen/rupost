@@ -598,3 +598,15 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 1. **审查轮一**（branch-cleanup 批次 + 工作区合并 + Phase 1 等 16 提交）：无 P0；P1 一项——空扫描路径下报告落盘语义漂移（迁移期短暂改为写空报告文件，未登记无测试）。P2：reporter 兼容 shim 零调用死代码、`--report JSON`/扩展名大小写两处不对称（CHANGELOG"统一"表述过强）、"清零"措辞过强（ai_assert_test 子进程固定端口豁免）、提案两处数字失实（WS 53 行非 80、509/579 非 537/552）、FOUC 与 curl 非 ASCII header 登记。
 2. **修复轮**：空扫描恢复不落盘旧语义 + 子进程 e2e 锁定；stdout JSON 与扩展名推断补齐大小写不敏感（CHANGELOG 表述兑现）；shim 删除独立提交；CHANGELOG/提案数字校准；P2 两项登记 future_backlog。
 3. **历史结构修复**：4a 提交曾因 jj 工作副本快照吸收 Phase 2 变更而混杂——jj split 路径拆出 Phase 2 独立提交、废弃空提交、shim 删除独立化。
+
+---
+
+## 解耦提案 Phase 2/3/4 交付与三轮代码审查（2026-11-08/09）
+
+[解耦提案 v2](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md) 四阶段中的三阶段交付（Phase 1 见前批）：
+
+1. **Phase 2（`026ac23c`）**：editor.rs 1088 → 97 行（纯键位路由），业务动作归位 `handlers/actions/`（execution/export/snapshot/generator/ws_session 五文件），552 行测试随迁；`V`/`M` 委托 integrations 的既有先例推广成体系。双子代理审查：零语义偏差。
+2. **Phase 3（`53437bde`）**：response.rs 854 行拆为 response/ 七文件（门面 171 + 六子组件）；**副作用显式前置**——滑窗装载/SSE 惰性重构/HTTP 缓存重建收敛到门面前置段（按臂序逐臂复制条件），子组件 `&AppState` 只读；Headers/Request 经缓存管线的真实结构修正了 v1 概念错位；headers lossy 读回为唯一行为变更（backlog 同口径，提交信息如实声明）。第三轮审查机械 diff 验证渲染等价性全成立。
+3. **Phase 4（`39356194`）**：cli.rs 1359 行拆为 cli/mod.rs + commands/（12 变体全覆盖）+ dispatch.rs + runner.rs；表面契约测试先行锁定，零漂移实证。
+4. **三轮审查**：一轮（16 提交，1 P1 空扫描落盘 + P2 兼容 shim/大小写/措辞）、二轮（Phase 2/4 逐字保真验证，1 P1 app.rs:140 残留）、三轮（Phase 3 等价性验证，1 P1 提交信息声明）——全部修复落地；bug 修复三提交（非 ASCII header 三层+第四层、diagnose 大小写、Web FOUC）一并经审。
+5. 全量基线 890 passed / 0 failed（会话起点 883），clippy/fmt 双零。Phase 3 为解耦提案最后阶段——**提案四阶段全部交付**。

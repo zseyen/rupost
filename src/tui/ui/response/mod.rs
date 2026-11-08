@@ -17,7 +17,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Tabs},
+    widgets::{Block, Borders, Paragraph, Tabs},
 };
 
 pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
@@ -167,5 +167,3 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         );
     }
 }
-
-use ratatui::widgets::Paragraph;

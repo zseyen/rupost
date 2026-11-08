@@ -1,4 +1,4 @@
-use crate::reporter::{JsonFileReport, JsonTestReport};
+use crate::report::{JsonFileReport, JsonTestReport};
 use crate::runner::ReplayEntryResult;
 use rupost_ai::{FailedAssertionInfo, FailureCategory, FailureContext, SignatureBucket};
 use std::collections::BTreeMap;
@@ -412,7 +412,7 @@ pub fn build_signature_buckets(reports: &[JsonFileReport]) -> Vec<SignatureBucke
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reporter::JsonAssertionReport;
+    use crate::report::JsonAssertionReport;
 
     fn make_fail(num: usize, url: &str) -> JsonTestReport {
         JsonTestReport {

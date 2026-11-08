@@ -5,6 +5,9 @@ let allFiles = [];
 let activeInspectorTab = 'overview';
 let lastDebugData = null;
 
+// Initialize theme immediately to prevent FOUC
+initTheme();
+
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   loadFiles();

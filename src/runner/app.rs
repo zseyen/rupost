@@ -230,7 +230,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
                 "⚠".yellow()
             );
         }
-        TestReporter::report_json(&batch_results, &mut std::io::stdout())?;
+        crate::report::json::report_json(&batch_results, &mut std::io::stdout())?;
     } else {
         let reporter = TestReporter::new(options.verbose);
         let mut explain_session = crate::ai::explain::ExplainSession::new();
@@ -277,7 +277,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
             }
         } else {
             let mut file = std::fs::File::create(report_path)?;
-            TestReporter::report_json(&batch_results, &mut file)?;
+            crate::report::json::report_json(&batch_results, &mut file)?;
         }
     } else if options.report.eq_ignore_ascii_case("html") {
         let default_path = "rupost-report.html";

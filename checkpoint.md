@@ -6,7 +6,12 @@
   2. **代码编辑器增强**：自研轻量级行号槽（Gutter）滚动同步、光标行列度量、`Ctrl+S` 快捷保存、`Shift+Enter` 单块快捷执行、`Ctrl+I` 快速导入。
   3. **Runtime Inspector 控制台重构**：右侧调试面板升级为 Tab 分页架构（Overview / Body / Headers / Assertions / Waterfall / Raw），支持响应体一键复制、JSON 缩进格式化与毫秒级时延瀑布图渲染。
   4. **双主题架构落地 (Dark & Light Theme)**：基于 CSS Custom Properties 实现深色 (Deep Obsidian) 与浅色 (Studio Paper) 动态热切换，支持系统深浅偏好自适应检测与 `localStorage` 持久化，顶部状态栏提供 `[THEME: DARK/LIGHT]` 切换动作。
-  5. **零破坏与质量达标**：全量 14 项 Web 集成测试 `tests/web_api_integration_test.rs` 100% PASS，`cargo clippy --tests -- -D warnings` 零告警。
+  5. **四层测试金字塔与全功能验证 (100% PASS)**：
+     - **单元与集成测试**：534 个 `src/lib.rs` 单测 + 14 个 `tests/web_api_integration_test.rs` 全部通过。
+     - **全特性冒烟测试**：`tests/verify_features.sh` 涵盖 Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等 100% 通过。
+     - **全量内置示例回归**：`examples/run_all.sh` 15 套真实复杂用例（SSE 流式断言、变量级联、状态传递）全部通过。
+     - **浏览器 CDP 自动化端到端测试**：通过真实 Headless Chrome 执行 `test_web_all_features.py`，覆盖主题切换、文件树过滤、行号槽双向滚动、原位单块调试、套件执行、Tab 控制台切换、向导装入、AST 语法守卫与无 Emoji 规则等 **22 项功能全部 PASS (22/22)**。
+     - **静态代码质量**：`cargo clippy --tests -- -D warnings` 零告警通过。
 
 ## 历史里程碑进展 (2026-11-06)
 - **全文档体系重构、内容汇总与分类规整 (Clean Docs & Features Dossiers)**：

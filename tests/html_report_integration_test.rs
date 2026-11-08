@@ -6,7 +6,7 @@ use rupost::mock::matcher::TrieRouteMatcher;
 use rupost::mock::server::{AxumMockServer, MockServer};
 use rupost::parser::MarkdownFileParser;
 use rupost::report::generate_html_report_from_json;
-use rupost::reporter::{JsonAssertionReport, JsonFileReport, JsonTestReport};
+use rupost::report::{JsonAssertionReport, JsonFileReport, JsonTestReport};
 use rupost::runner::{TestSuiteOptions, run_test_suite};
 use std::path::PathBuf;
 use std::sync::Arc;

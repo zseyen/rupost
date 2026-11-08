@@ -1,9 +1,11 @@
 pub mod generator;
 pub mod html;
+pub mod json;
 pub mod types;
 
 pub use generator::ReportGenerator;
 pub use html::HtmlReportGenerator;
+pub use json::{JsonAssertionReport, JsonFileReport, JsonTestReport};
 pub use types::{
     ReportAssertionItem, ReportContext, ReportFileEntry, ReportRequestItem, ReportSummary,
     TimingWaterfall, escape_html,
@@ -22,7 +24,7 @@ pub fn generate_html_report(
 
 /// 门面函数：从已反序列化的 JsonFileReport 列表离线生成静态自包含 HTML 报告
 pub fn generate_html_report_from_json(
-    reports: &[crate::reporter::JsonFileReport],
+    reports: &[crate::report::json::JsonFileReport],
     title: Option<&str>,
     environment: Option<&str>,
 ) -> crate::Result<String> {

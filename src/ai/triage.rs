@@ -2,7 +2,7 @@ use crate::Result;
 use crate::ai::redactor::truncate_utf8_safe;
 use crate::ai::rules::build_signature_buckets;
 use crate::error::RupostError;
-use crate::reporter::{JsonFileReport, TestReporter};
+use crate::report::json::{JsonFileReport, build_json_reports};
 use crate::runner::TestResult;
 use colored::Colorize;
 use rupost_ai::{AiClient, FailureClassifier, TriageReport, bucket_to_deterministic_cluster};
@@ -146,7 +146,7 @@ pub fn format_triage_markdown(report: &TriageReport) -> String {
 
 /// 供 `rupost test --triage` 在内存批量结果上直接调用并打印（GAP-11：全绿时也输出单行结论）
 pub async fn run_inline_triage(batch_results: &[(PathBuf, Vec<TestResult>)]) {
-    let json_reports = TestReporter::build_json_reports(batch_results);
+    let json_reports = build_json_reports(batch_results);
     let triage = build_triage_report(&json_reports).await;
     println!("{}", format_triage_markdown(&triage));
 }

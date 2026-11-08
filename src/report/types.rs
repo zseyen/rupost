@@ -1,4 +1,4 @@
-use crate::reporter::JsonFileReport;
+use crate::report::json::JsonFileReport;
 use crate::runner::types::TestResult;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -118,27 +118,51 @@ pub struct TimingWaterfall {
 }
 
 impl TimingWaterfall {
-    /// 从可能存在的 DiagnosticsReport 或 RequestTiming 中提取归一化瀑布图
+    /// 从 DiagnosticsReport 归一化瀑布图（唯一实现，在线/离线两路径共用）。
+    /// transfer 采用残差法：total 减去已计入各段，负值钳为 0。
+    pub fn from_diagnostics(diag: &crate::http::DiagnosticsReport) -> Self {
+        let dns_ms = diag.dns_lookup_duration.as_secs_f64() * 1000.0;
+        let tcp_ms = diag.tcp_connect_duration.as_secs_f64() * 1000.0;
+        let tls_ms = diag
+            .tls_handshake_duration
+            .map(|d| d.as_secs_f64() * 1000.0);
+        let ttfb_ms = diag.ttfb.map(|d| d.as_secs_f64() * 1000.0);
+        let total_ms = diag.total_duration.as_secs_f64() * 1000.0;
+        let accounted = dns_ms + tcp_ms + tls_ms.unwrap_or(0.0) + ttfb_ms.unwrap_or(0.0);
+        let transfer_ms = (total_ms - accounted).max(0.0);
+
+        Self {
+            dns_ms,
+            tcp_ms,
+            tls_ms,
+            ttfb_ms,
+            transfer_ms,
+            total_ms,
+        }
+    }
+
+    /// 纯总耗时 fallback（唯一实现，在线 duration / 离线 duration_ms 两路径共用）。
+    /// f64 保亚毫秒精度；total <= 0（skipped/零耗时）返回 None。
+    pub fn from_total_ms(total_ms: f64) -> Option<Self> {
+        if total_ms <= 0.0 {
+            return None;
+        }
+        Some(Self {
+            dns_ms: 0.0,
+            tcp_ms: 0.0,
+            tls_ms: None,
+            ttfb_ms: Some(total_ms),
+            transfer_ms: 0.0,
+            total_ms,
+        })
+    }
+
+    /// 从可能存在的 DiagnosticsReport 或 RequestTiming 中提取归一化瀑布图。
+    /// 三个分支形态互不可替代：diag（残差 transfer + 可选 TLS）、
+    /// timing（total=四段和、transfer=实测）、duration fallback（ttfb=total）。
     pub fn from_test_result(result: &TestResult) -> Option<Self> {
         if let Some(ref diag) = result.diagnose_report {
-            let dns_ms = diag.dns_lookup_duration.as_secs_f64() * 1000.0;
-            let tcp_ms = diag.tcp_connect_duration.as_secs_f64() * 1000.0;
-            let tls_ms = diag
-                .tls_handshake_duration
-                .map(|d| d.as_secs_f64() * 1000.0);
-            let ttfb_ms = diag.ttfb.map(|d| d.as_secs_f64() * 1000.0);
-            let total_ms = diag.total_duration.as_secs_f64() * 1000.0;
-            let accounted = dns_ms + tcp_ms + tls_ms.unwrap_or(0.0) + ttfb_ms.unwrap_or(0.0);
-            let transfer_ms = (total_ms - accounted).max(0.0);
-
-            Some(Self {
-                dns_ms,
-                tcp_ms,
-                tls_ms,
-                ttfb_ms,
-                transfer_ms,
-                total_ms,
-            })
+            Some(Self::from_diagnostics(diag))
         } else if let Some(ref timing) = result.timing {
             let dns_ms = timing.dns_lookup.as_secs_f64() * 1000.0;
             let tcp_ms = timing.tcp_connect.as_secs_f64() * 1000.0;
@@ -154,19 +178,8 @@ impl TimingWaterfall {
                 transfer_ms,
                 total_ms,
             })
-        } else if result.duration.as_millis() > 0 {
-            // 普通请求 fallback：只有总耗时
-            let total_ms = result.duration.as_secs_f64() * 1000.0;
-            Some(Self {
-                dns_ms: 0.0,
-                tcp_ms: 0.0,
-                tls_ms: None,
-                ttfb_ms: Some(total_ms),
-                transfer_ms: 0.0,
-                total_ms,
-            })
         } else {
-            None
+            Self::from_total_ms(result.duration.as_secs_f64() * 1000.0)
         }
     }
 }
@@ -336,42 +349,10 @@ impl ReportContext {
                 let timing_waterfall = res
                     .diagnose_report
                     .as_ref()
-                    .map(|diag| {
-                        let dns_ms = diag.dns_lookup_duration.as_secs_f64() * 1000.0;
-                        let tcp_ms = diag.tcp_connect_duration.as_secs_f64() * 1000.0;
-                        let tls_ms = diag
-                            .tls_handshake_duration
-                            .map(|d| d.as_secs_f64() * 1000.0);
-                        let ttfb_ms = diag.ttfb.map(|d| d.as_secs_f64() * 1000.0);
-                        let total_ms = diag.total_duration.as_secs_f64() * 1000.0;
-                        let accounted =
-                            dns_ms + tcp_ms + tls_ms.unwrap_or(0.0) + ttfb_ms.unwrap_or(0.0);
-                        let transfer_ms = (total_ms - accounted).max(0.0);
-
-                        TimingWaterfall {
-                            dns_ms,
-                            tcp_ms,
-                            tls_ms,
-                            ttfb_ms,
-                            transfer_ms,
-                            total_ms,
-                        }
-                    })
+                    .map(TimingWaterfall::from_diagnostics)
                     .or_else(|| {
                         // 普通请求 fallback：对齐在线模式，提供基于 duration_ms 的简单瀑布
-                        if res.duration_ms > 0 {
-                            let total_ms = res.duration_ms as f64;
-                            Some(TimingWaterfall {
-                                dns_ms: 0.0,
-                                tcp_ms: 0.0,
-                                tls_ms: None,
-                                ttfb_ms: Some(total_ms),
-                                transfer_ms: 0.0,
-                                total_ms,
-                            })
-                        } else {
-                            None
-                        }
+                        TimingWaterfall::from_total_ms(res.duration_ms as f64)
                     });
 
                 request_items.push(ReportRequestItem {
@@ -496,5 +477,75 @@ mod tests {
         assert_eq!(ctx.summary.skipped_requests, 1);
         assert!((ctx.summary.pass_rate - 50.0).abs() < f64::EPSILON);
         assert_eq!(ctx.summary.total_duration_ms, 250);
+    }
+
+    #[test]
+    fn test_timing_branch_waterfall_shape() {
+        // timing 分支（普通请求，无 diagnose）：total = 四段和、transfer = 实测、tls = None。
+        // 与 from_total_ms 的 ttfb=total 形态完全不同，唯一化时不可吞掉（审查 P1-3）。
+        use crate::http::timing::RequestTiming;
+        let timing = RequestTiming {
+            dns_lookup: Duration::from_millis(2),
+            tcp_connect: Duration::from_millis(3),
+            ttfb: Duration::from_millis(5),
+            transfer: Duration::from_millis(7),
+        };
+        let result = TestResult {
+            duration: Duration::from_millis(99),
+            timing: Some(timing),
+            diagnose_report: None,
+            ..TestResult::error(
+                1,
+                None,
+                "GET".to_string(),
+                "http://example.com".to_string(),
+                "e".to_string(),
+                Duration::from_millis(99),
+            )
+        };
+        let wf = TimingWaterfall::from_test_result(&result).unwrap();
+        assert_eq!(wf.dns_ms, 2.0);
+        assert_eq!(wf.tcp_ms, 3.0);
+        assert_eq!(wf.tls_ms, None);
+        assert_eq!(wf.ttfb_ms, Some(5.0));
+        assert_eq!(wf.transfer_ms, 7.0);
+        assert_eq!(wf.total_ms, 17.0);
+    }
+
+    #[test]
+    fn test_diagnostics_residual_transfer_clamped() {
+        // diagnose 分支残差法：total < 已计入各段时 transfer 钳为 0（审查 P1-3）
+        use crate::http::DiagnosticsReport;
+        let diag = DiagnosticsReport {
+            url: "https://example.com".to_string(),
+            is_https: true,
+            is_websocket: false,
+            ws_upgrade_success: Some(false),
+            resolved_ips: Vec::new(),
+            dns_lookup_duration: Duration::from_millis(4),
+            tcp_connect_duration: Duration::from_millis(6),
+            tls_handshake_duration: Some(Duration::from_millis(8)),
+            cert_info: None,
+            http_status: Some(200),
+            http_version: None,
+            ttfb: Some(Duration::from_millis(10)),
+            total_duration: Duration::from_millis(20), // accounted = 28 > 20
+        };
+        let wf = TimingWaterfall::from_diagnostics(&diag);
+        assert_eq!(wf.dns_ms, 4.0);
+        assert_eq!(wf.tls_ms, Some(8.0));
+        assert_eq!(wf.ttfb_ms, Some(10.0));
+        assert_eq!(wf.total_ms, 20.0);
+        assert_eq!(wf.transfer_ms, 0.0, "residual must clamp to zero");
+    }
+
+    #[test]
+    fn test_from_total_ms_zero_is_none() {
+        assert!(TimingWaterfall::from_total_ms(0.0).is_none());
+        assert!(TimingWaterfall::from_total_ms(-1.0).is_none());
+        let wf = TimingWaterfall::from_total_ms(1.5).unwrap();
+        assert_eq!(wf.total_ms, 1.5, "f64 preserves sub-millisecond precision");
+        assert_eq!(wf.ttfb_ms, Some(1.5));
+        assert_eq!(wf.dns_ms, 0.0);
     }
 }

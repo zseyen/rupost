@@ -9,7 +9,7 @@ mod common;
 
 use rupost::http::diagnose_url;
 use rupost::parser::HttpFileParser;
-use rupost::reporter::TestReporter;
+
 use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest, TestExecutor};
 use rupost::variable::VariableContext;
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ async fn test_batch_json_report_schema_exact_fields() {
         .unwrap();
 
     let mut buf: Vec<u8> = Vec::new();
-    TestReporter::report_json(&results, &mut buf).unwrap();
+    rupost::report::json::report_json(&results, &mut buf).unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
 
     // 顶层：文件数组
@@ -251,7 +251,7 @@ async fn test_batch_json_report_schema_failed_result_shape() {
         .unwrap();
 
     let mut buf: Vec<u8> = Vec::new();
-    TestReporter::report_json(&results, &mut buf).unwrap();
+    rupost::report::json::report_json(&results, &mut buf).unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
 
     let reqs = parsed[0]["results"].as_array().unwrap();

@@ -53,11 +53,11 @@ fn run_rupost_clean_env(args: &[&str]) -> (i32, String) {
 }
 
 /// 内存构造的最小失败报告（两个同签名 401 失败）
-fn sample_failed_reports() -> Vec<rupost::reporter::JsonFileReport> {
-    vec![rupost::reporter::JsonFileReport {
+fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
+    vec![rupost::report::JsonFileReport {
         file_path: "auth_suite.http".to_string(),
         results: vec![
-            rupost::reporter::JsonTestReport {
+            rupost::report::JsonTestReport {
                 request_number: 1,
                 name: Some("GetProfile".to_string()),
                 method: "GET".to_string(),
@@ -67,7 +67,7 @@ fn sample_failed_reports() -> Vec<rupost::reporter::JsonFileReport> {
                 success: false,
                 error: None,
                 skipped: false,
-                assertions: vec![rupost::reporter::JsonAssertionReport {
+                assertions: vec![rupost::report::JsonAssertionReport {
                     raw: "status == 200".to_string(),
                     passed: false,
                     message: Some("Status mismatch".to_string()),
@@ -79,7 +79,7 @@ fn sample_failed_reports() -> Vec<rupost::reporter::JsonFileReport> {
                 diagnose_report: None,
                 response_body_snippet: Some(r#"{"error":"unauthorized"}"#.to_string()),
             },
-            rupost::reporter::JsonTestReport {
+            rupost::report::JsonTestReport {
                 request_number: 2,
                 name: Some("UpdateProfile".to_string()),
                 method: "POST".to_string(),
@@ -89,7 +89,7 @@ fn sample_failed_reports() -> Vec<rupost::reporter::JsonFileReport> {
                 success: false,
                 error: None,
                 skipped: false,
-                assertions: vec![rupost::reporter::JsonAssertionReport {
+                assertions: vec![rupost::report::JsonAssertionReport {
                     raw: "status == 200".to_string(),
                     passed: false,
                     message: Some("Status mismatch".to_string()),

@@ -1,6 +1,7 @@
 //! 交互组件编排：模态 > 确认弹窗 > 全局键 > 面板组件的优先级分发链。
 //! 各组件（modal/confirm/sidebar/editor/response/mouse）只依赖 AppState 与 nav 纯函数。
 
+pub mod actions;
 pub mod confirm;
 pub mod editor;
 pub mod modal;
@@ -10,7 +11,7 @@ pub mod response;
 pub mod sidebar;
 pub mod sync;
 
-pub use editor::trigger_request_execution;
+pub use actions::execution::trigger_request_execution;
 pub use mouse::handle_mouse;
 
 use crate::tui::event::{Action, TuiEvent};

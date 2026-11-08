@@ -273,7 +273,7 @@ fn test_r8_export_current_request_redact_decision() {
     state.editor_text = "### Secured\nGET http://api.example.com/secure\nAuthorization: Bearer super-secret-token\n".to_string();
 
     // X（默认脱敏）：命令含 [REDACTED]，不含明文 token
-    rupost::tui::handlers::editor::export_current_request(&mut state, true);
+    rupost::tui::handlers::actions::export::export_current_request(&mut state, true);
     eprintln!("DEBUG-R8: last_error={:?}", state.last_error);
     let cmd = state
         .show_export
@@ -290,7 +290,7 @@ fn test_r8_export_current_request_redact_decision() {
     );
 
     // Shift+X（原样）：明文保留
-    rupost::tui::handlers::editor::export_current_request(&mut state, false);
+    rupost::tui::handlers::actions::export::export_current_request(&mut state, false);
     let cmd = state
         .show_export
         .as_deref()
@@ -331,7 +331,7 @@ fn test_r9_snapshot_saved_masked_and_parseable() {
     });
     state.last_response = Some(resp);
 
-    rupost::tui::handlers::editor::save_current_snapshot(&mut state);
+    rupost::tui::handlers::actions::snapshot::save_current_snapshot(&mut state);
     assert_eq!(
         state.last_error, None,
         "snapshot success must clear last_error"
@@ -382,7 +382,7 @@ async fn test_r9_generate_history_entry_to_workspace_file() {
     }];
     state.history_state.selected_index = 0;
 
-    rupost::tui::handlers::editor::generate_history_to_file(&mut state).await;
+    rupost::tui::handlers::actions::generator::generate_history_to_file(&mut state).await;
     eprintln!("DEBUG-GEN: last_error={:?}", state.last_error);
 
     let generated = temp.path().join("generated_gen-1234.http");

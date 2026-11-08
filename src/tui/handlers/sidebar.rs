@@ -1,6 +1,6 @@
 //! 侧边栏组件（Files / History 双 Tab）的按键处理。
 
-use super::editor::trigger_request_execution;
+use super::actions::execution::trigger_request_execution;
 use super::sync::sync_preview_to_editor;
 use crate::tui::event::TuiEvent;
 use crate::tui::state::{AppState, InputMode, Panel, SidebarTab};
@@ -152,7 +152,7 @@ pub(super) async fn handle_sidebar_key(
         KeyCode::Char('G')
             // R9：History 侧栏 G 一键生成 .http 文件入工作区
             if state.active_sidebar_tab == SidebarTab::History => {
-                crate::tui::handlers::editor::generate_history_to_file(state).await;
+                crate::tui::handlers::actions::generator::generate_history_to_file(state).await;
             }
         _ => {}
     }

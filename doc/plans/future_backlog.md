@@ -95,3 +95,8 @@
 | `src/runner/protocol/ws_runner.rs` | 709 | 剧本执行 / 帧匹配 / 会话编排分离 |
 
 *触发条件：任一文件因新功能开发需要结构性改动时，顺手按解耦提案的四法则（§2）立项，不单独排期。*
+
+### 首轮主干审查 P2 登记（2026-11-09）
+
+*   **Web 前端 FOUC 三小项**（Studio Paper 主题批次遗留）：①`applyTheme` 将自动探测结果也写入 localStorage，首次访问即固化主题、OS 偏好变化失效——若"持久化"仅指显式切换，自动分支应跳过 setItem；②`app.js` body 末尾加载且无 defer + `data-theme="dark"` 硬编码，浅色用户首帧闪暗——head 内联脚本提前设置；③部分中文 UI 文案被英化（如"只读模式下不可用"→"Disabled in read-only mode"），超出主题支持范围，宜回译或登记。
+*   **importer curl 非 ASCII header 值静默空串**：`src/importer/curl.rs` header 值 `v.to_str().unwrap_or("")` 使非 ASCII 头值静默丢失（领域提取迁移前即如此）。修复方向：非 UTF-8 安全解码（String::from_utf8_lossy）或告警。

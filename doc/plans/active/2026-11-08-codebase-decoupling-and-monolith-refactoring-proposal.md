@@ -19,7 +19,7 @@
 | 模块文件 | 实测行数 | 当前承担的核心职责 | 架构坏味道 (Code Smells) | 目标 |
 | :--- | :--- | :--- | :--- | :--- |
 | **`src/tui/state/mod.rs`** | **670 行** | 69 字段 `AppState`（:97-197）、基础构造、`update()` 动作归约、文档创建/重载、请求结果归约、165 行单测 | **God Struct & Fat Mod**：模块根沦为大平铺收容所 | **~290 行**（降 ~57%） |
-| **`src/tui/handlers/editor.rs`** | **1088 行** | 生产代码 537 行（键位路由 223 行起、执行编排 `trigger_file_execution` 219 行、curl 导出 57 行、快照 44 行、历史生成 44 行、WS 会话 80 行）+ **552 行测试**（占 51%） | **Feature Envy & Fat Handler**：从编辑器事件处理器退化为全系统动作中心 | 生产代码 **~310 行**（552 行测试随迁） |
+| **`src/tui/handlers/editor.rs`** | **1088 行** | 生产代码 509 行（键位路由 223 行起、执行编排 `trigger_file_execution` 219 行、curl 导出 57 行、快照 44 行、历史生成 44 行、WS 会话 53 行）+ **579 行测试**（占 53%） | **Feature Envy & Fat Handler**：从编辑器事件处理器退化为全系统动作中心 | 生产代码 **~310 行**（552 行测试随迁） |
 | **`src/tui/ui/response.rs`** | **854 行** | `render` 429 行（:104-533）内联 5 个 Tab 臂（**真实 DetailTab：Response / Headers / Request / Results / Diagnose**）+ 渲染期缓存重建 + 搜索高亮（3 组函数 6 个单测，大小写不敏感**子串**匹配，非正则） | **Violation of OCP**：扩充新 Tab 需直接修改巨石函数 | 门面 **~200 行**（缓存前置重建） |
 | **`src/cli.rs`** | **1359 行** | `Commands` 枚举 12 变体（**多数为内联字段而非 Args 结构体**）+ 4 个独立结构体（`ImportCurlArgs`/`GenerateArgs`/`ExportArgs`/`RunParams`）+ `dispatch()` ~270 行 + `CliRunner`/`RunParams` | **Monolithic CLI Definition**：内联字段、校验、派发、运行器混杂 | 根入口 **~200 行**（其余下沉） |
 
@@ -103,7 +103,7 @@ editor.rs 1088 行 = **生产代码 537 行 + 测试 552 行（4 个测试模块
 - 导出 cURL `export_current_request`（:312-369，**57 行**）；
 - 快照持久化 `save_current_snapshot`（:369-413，**44 行**）；
 - 历史生成 `generate_history_to_file`（:413-457，**44 行**——注意：其唯一调用方是 **sidebar.rs:155 的 History Tab `G` 键**，不在 editor 按键分发内）；
-- WS 会话 `start_ws_session`（:457-537，**80 行**）。
+- WS 会话 `start_ws_session`（:457-509，**53 行**）。
 
 #### 重构设计方案
 将跨界业务剥离到专用动作子模块 `src/tui/handlers/actions/`，`editor.rs` 重新聚焦纯粹的键盘导航。既有先例：`V`/`M` 键委托 `integrations.rs`（editor.rs:263/267）——本靶点即把该模式推广成体系：

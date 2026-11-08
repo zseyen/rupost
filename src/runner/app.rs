@@ -235,7 +235,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         .iter()
         .any(|(_, res_list)| res_list.iter().any(|r| !r.success));
 
-    if options.report == "json" {
+    if options.report.eq_ignore_ascii_case("json") {
         // Gap Review P3-4：JSON 模式下 explain/triage 无法渲染，显式提示而非静默忽略
         if options.explain || options.triage {
             eprintln!(

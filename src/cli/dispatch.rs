@@ -65,13 +65,16 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let outcome = rupost::runner::run_test_suite(options).await?;
 
             // 报告文件输出（表现层职责，UseCase 不再隐式落盘）：
-            // 覆盖提示走 stderr；"已生成"提示仅在 HTML 格式或 verbose 时走 stdout
-            if let Some(written) = rupost::report::write_report_files(
-                &outcome.batch_results,
-                &report,
-                report_file.as_deref(),
-                env_label.as_deref(),
-            )? {
+            // 覆盖提示走 stderr；"已生成"提示仅在 HTML 格式或 verbose 时走 stdout。
+            // 空扫描（无 .http/.md）恢复旧语义：不产生报告文件（审查 P1）
+            if !outcome.batch_results.is_empty()
+                && let Some(written) = rupost::report::write_report_files(
+                    &outcome.batch_results,
+                    &report,
+                    report_file.as_deref(),
+                    env_label.as_deref(),
+                )?
+            {
                 if written.overwritten {
                     eprintln!("[!] 报告文件已存在，将覆盖: {}", written.path.display());
                 }

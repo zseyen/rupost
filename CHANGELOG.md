@@ -51,8 +51,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Fixed
 
-- scenario/html_report 集成测试基建去 flake：7 处固定端口（19188-19194/19198）+ `let _ =` 吞 bind 错误 + sleep 启动竞态，统一改为 `bind("127.0.0.1:0")` + `serve_matcher`（已绑定 listener 直传，无 re-bind TOCTOU），端口占用从静默误导失败变为确定性 panic；同批清偿 `mock_integration_test.rs` 存量 6 处同款（19090-19095，含单测试三实例并存场景）——全仓测试面"固定端口 + 吞错 + sleep"坏模式清零（实测占用端口时旧代码报误导性 `Failed to connect`，新代码 bind 处立即 `AddrInUse` 精准 panic）。
+- scenario/html_report 集成测试基建去 flake：7 处固定端口（19188-19194/19198）+ `let _ =` 吞 bind 错误 + sleep 启动竞态，统一改为 `bind("127.0.0.1:0")` + `serve_matcher`（已绑定 listener 直传，无 re-bind TOCTOU），端口占用从静默误导失败变为确定性 panic；同批清偿 `mock_integration_test.rs` 存量 6 处同款（19090-19095，含单测试三实例并存场景）——in-process 测试面"固定端口 + 吞错 + sleep"坏模式清零（`ai_assert_test` 子进程形态的固定端口 + `wait_for_port` 轮询豁免；实测占用端口时旧代码报误导性 `Failed to connect`，新代码 bind 处立即 `AddrInUse` 精准 panic）。
 - `rupost t` 失败判定语义新增子进程 e2e 锁定（失败 exit 1 / 全绿 exit 0）。
+- 空扫描（目录内无 .http/.md）恢复旧语义：不产生任何报告文件（迁移期曾短暂改为写空报告，经首轮代码审查捕获）；`--report json` 的 stdout 判定与 `--report-file` 扩展名推断补齐大小写不敏感（`--report JSON`、`OUT.HTML` 不再静默走错分支）。
 - **Security**: `rupost g` no longer writes `Authorization` / `Cookie` /
   `X-Api-Key` header values or sensitive URL query values (e.g. `?api_key=`)
   verbatim into generated `.http` files. Redaction semantics are shared with

@@ -57,7 +57,9 @@ pub fn determine_report_format(report: &str, report_file: &str) -> ReportFileFor
         ReportFileFormat::Html
     } else if report.eq_ignore_ascii_case("json") {
         ReportFileFormat::Json
-    } else if report_file.ends_with(".html") || report_file.ends_with(".htm") {
+    } else if report_file.to_ascii_lowercase().ends_with(".html")
+        || report_file.to_ascii_lowercase().ends_with(".htm")
+    {
         ReportFileFormat::Html
     } else {
         ReportFileFormat::Json

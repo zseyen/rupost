@@ -588,3 +588,13 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 3. **验证纪律补 bin 防线**：cli 属 bin crate，12 个单测（含位置契约表）`cargo test --lib` 跑不到——§5 补 `cargo test --bin rupost`，迁移前先扩契约表（别名/value_delimiter/trailing_var_arg 保真清单）。
 4. **指标校准**：AppState 69 字段（非 46）；state/mod.rs 目标 670→~290（降 57%，非 75%）；editor 四块实测 57/44/44/80 行；高亮 3 函数 6 测子串匹配（非 4 组 11 测正则）。
 5. **路线图改 1 → (4 ∥ 2) → 3**（cli/tui 零依赖可并行，response 殿后）；范围外五巨石（html.rs 897 等）登记 future_backlog。
+
+---
+
+## 首轮主干代码审查与修复（2026-11-09）
+
+双子代理对 0d243f35.. 主干区间的审查与修复闭环：
+
+1. **审查轮一**（branch-cleanup 批次 + 工作区合并 + Phase 1 等 16 提交）：无 P0；P1 一项——空扫描路径下报告落盘语义漂移（迁移期短暂改为写空报告文件，未登记无测试）。P2：reporter 兼容 shim 零调用死代码、`--report JSON`/扩展名大小写两处不对称（CHANGELOG"统一"表述过强）、"清零"措辞过强（ai_assert_test 子进程固定端口豁免）、提案两处数字失实（WS 53 行非 80、509/579 非 537/552）、FOUC 与 curl 非 ASCII header 登记。
+2. **修复轮**：空扫描恢复不落盘旧语义 + 子进程 e2e 锁定；stdout JSON 与扩展名推断补齐大小写不敏感（CHANGELOG 表述兑现）；shim 删除独立提交；CHANGELOG/提案数字校准；P2 两项登记 future_backlog。
+3. **历史结构修复**：4a 提交曾因 jj 工作副本快照吸收 Phase 2 变更而混杂——jj split 路径拆出 Phase 2 独立提交、废弃空提交、shim 删除独立化。

@@ -118,3 +118,28 @@ async fn test_report_html_default_path_written_in_cwd() {
         "html default path must print generation notice: {stdout}"
     );
 }
+
+/// 空扫描（目录内无 .http/.md）不产生任何报告文件——恢复迁移前语义并锁定（审查 P1）
+#[tokio::test]
+async fn test_empty_scan_writes_no_report_file() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("readme.txt"), "not a test file").unwrap();
+    let history = tempdir().unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .env("RUPOST_HISTORY_DIR", history.path())
+        .current_dir(dir.path())
+        .args(["t", ".", "--report-file", "report.json"])
+        .output()
+        .expect("spawn rupost test subprocess");
+
+    assert!(
+        out.status.success(),
+        "empty scan must exit 0, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !dir.path().join("report.json").exists(),
+        "empty scan must not write a report file"
+    );
+}

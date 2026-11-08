@@ -11,7 +11,8 @@ impl MockCompiler {
     pub fn compile(parsed_file: &ParsedFile) -> Vec<MockRouteConfig> {
         let mut routes = Vec::new();
 
-        // 过滤非测试块，只编译契约块
+        // 双角色语义：是否编译进 mock 服务器由「是否声明 Mock 变体」决定，与 @test 无关。
+        // 无变体的纯契约/测试块不注册路由（守护测试：markdown_integration_test 双角色断言）
         for req in &parsed_file.requests {
             if req.metadata.mock_variants.is_empty() {
                 continue;
@@ -37,20 +38,6 @@ impl MockCompiler {
                     status: var.status,
                     headers,
                     response_body: var.body.clone().unwrap_or_default(),
-                });
-            }
-
-            // 如果 mock_variants 为空，则把请求的默认 Body 提取为兜底 Variant
-            if variants.is_empty() {
-                let mut headers = HashMap::new();
-                for (key, val) in &req.headers {
-                    headers.insert(key.clone(), val.clone());
-                }
-                variants.push(MockVariant {
-                    condition: None,
-                    status: 200,
-                    headers,
-                    response_body: req.body.clone().unwrap_or_default(),
                 });
             }
 

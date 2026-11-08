@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::RupostError;
 use crate::web::assets::{AssetProvider, EmbeddedAssetProvider};
 use crate::web::handlers;
 use crate::web::store::{DocumentStore, LocalFsDocumentStore};
@@ -21,6 +22,8 @@ pub struct WebServerConfig {
     pub working_dir: PathBuf,
     pub default_env: Option<String>,
     pub allowed_hosts: Vec<String>,
+    /// 开发者跨域模式（--dev）：挂载宽松 CORS 供独立前端联调；仅允许回环绑定
+    pub dev: bool,
 }
 
 impl Default for WebServerConfig {
@@ -32,6 +35,7 @@ impl Default for WebServerConfig {
             working_dir: PathBuf::from("."),
             default_env: None,
             allowed_hosts: Vec::new(),
+            dev: false,
         }
     }
 }
@@ -100,6 +104,7 @@ async fn host_guard_middleware(
 
 /// 构造统一的 Web Router
 pub fn create_web_router(config: WebServerConfig) -> Router {
+    let cors = config.dev.then(tower_http::cors::CorsLayer::permissive);
     let state = AppState {
         store: config.store,
         assets: config.assets,
@@ -122,7 +127,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         .route("/import", post(handlers::import::import_handler))
         .route("/import/curl", post(handlers::import::import_curl_handler));
 
-    Router::new()
+    let router = Router::new()
         .nest("/api/v1", api_router)
         .route("/", get(serve_index))
         .route("/{*path}", get(serve_asset))
@@ -131,7 +136,14 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
             state.clone(),
             host_guard_middleware,
         ))
-        .with_state(state)
+        .with_state(state);
+
+    // --dev CORS：挂在最外层（Host 守卫与路由之后），OPTIONS 预检由 CorsLayer 直接应答
+    if let Some(cors) = cors {
+        router.layer(cors)
+    } else {
+        router
+    }
 }
 
 /// 首页根路径直接投递 index.html
@@ -156,8 +168,19 @@ fn serve_asset_internal(state: &AppState, path: &str) -> Response {
     }
 }
 
+/// --dev 模式的合法绑定地址（回环 ONLY：宽松 CORS 不暴露给非回环接口）
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
 /// 启动活文档工作台 Web 服务器
 pub async fn run_web_server(config: WebServerConfig, host: &str, port: u16) -> Result<()> {
+    // --dev 安全姿态：宽松 CORS 仅限本地回环绑定，非回环 --host 直接拒绝（fail-fast）
+    if config.dev && !is_loopback_host(host) {
+        return Err(RupostError::Other(format!(
+            "--dev 仅允许绑定本地回环地址（127.0.0.1/localhost/::1），当前 host: {host}。如需局域网访问请去掉 --dev 并改用 --allowed-hosts 白名单。"
+        )));
+    }
     let app = create_web_router(config);
     let addr = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

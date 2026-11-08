@@ -436,11 +436,13 @@ mod tests {
             readonly,
             allowed_hosts,
             dir,
+            dev,
         } = args;
         assert_eq!(port, 3000);
         assert_eq!(host, "127.0.0.1");
         assert!(static_dir.is_none());
         assert!(!readonly);
+        assert!(!dev);
         assert!(allowed_hosts.is_empty());
         assert_eq!(dir, ".");
 
@@ -473,6 +475,7 @@ mod tests {
             readonly,
             allowed_hosts,
             dir,
+            ..
         } = args;
         assert_eq!(port, 8080);
         assert_eq!(host, "0.0.0.0");
@@ -480,5 +483,22 @@ mod tests {
         assert!(readonly);
         assert!(allowed_hosts.is_empty());
         assert_eq!(dir, "./docs");
+    }
+
+    /// --dev 旗标解析（执行层的回环强制在 run_web_server，集成测试覆盖）
+    #[test]
+    fn test_web_dev_flag_parse() {
+        let cli = Cli::try_parse_from(["rupost", "web", "--dev"]).expect("bare --dev must parse");
+        let Some(Commands::Web(args)) = cli.command else {
+            panic!("expected Web subcommand");
+        };
+        assert!(args.dev);
+
+        // 非 dev 缺省
+        let cli = Cli::try_parse_from(["rupost", "web"]).expect("bare web must parse");
+        let Some(Commands::Web(args)) = cli.command else {
+            panic!("expected Web subcommand");
+        };
+        assert!(!args.dev);
     }
 }

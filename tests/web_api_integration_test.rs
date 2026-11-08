@@ -855,3 +855,79 @@ async fn test_web_run_suite_error_shapes() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn test_dev_mode_cors_headers_and_preflight() {
+    let config = WebServerConfig {
+        dev: true,
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+
+    // 1. 预检 OPTIONS：CorsLayer 直接应答，带 allow-origin/allow-methods
+    let req = Request::builder()
+        .uri("/api/v1/meta")
+        .method("OPTIONS")
+        .header("host", "127.0.0.1")
+        .header("Origin", "http://localhost:5173")
+        .header("Access-Control-Request-Method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "preflight must succeed");
+    assert!(
+        res.headers().get("access-control-allow-origin").is_some(),
+        "preflight must carry allow-origin"
+    );
+
+    // 2. 实际跨域 GET：响应带 allow-origin（独立前端可读响应）
+    let req = Request::builder()
+        .uri("/api/v1/meta")
+        .method("GET")
+        .header("host", "127.0.0.1")
+        .header("Origin", "http://localhost:5173")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers().get("access-control-allow-origin").is_some(),
+        "actual cross-origin response must carry allow-origin"
+    );
+}
+
+#[tokio::test]
+async fn test_non_dev_mode_has_no_cors_headers() {
+    let app = create_web_router(WebServerConfig::default());
+    let req = Request::builder()
+        .uri("/api/v1/meta")
+        .method("GET")
+        .header("host", "127.0.0.1")
+        .header("Origin", "http://localhost:5173")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers().get("access-control-allow-origin").is_none(),
+        "non-dev mode must not emit CORS headers (default-deny posture)"
+    );
+}
+
+/// --dev 安全姿态：非回环 --host 直接拒绝（fail-fast 于 bind 之前）
+#[tokio::test]
+async fn test_dev_mode_rejects_non_loopback_host() {
+    let dir = tempdir().unwrap();
+    let store = Arc::new(LocalFsDocumentStore::new(dir.path()));
+    let config = WebServerConfig {
+        store,
+        dev: true,
+        ..Default::default()
+    };
+    let result = rupost::web::run_web_server(config, "0.0.0.0", 0).await;
+    let err = result.expect_err("non-loopback host must be rejected in dev mode");
+    assert!(
+        err.to_string().contains("回环") || err.to_string().contains("127.0.0.1"),
+        "error must explain loopback-only posture: {err}"
+    );
+}

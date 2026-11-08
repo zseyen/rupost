@@ -24,6 +24,11 @@ pub struct WebArgs {
     #[arg(long, value_name = "HOST", value_delimiter = ',')]
     pub allowed_hosts: Vec<String>,
 
+    /// 开发者跨域模式：挂载宽松 CORS 供独立前端（Vite/Webpack）跨域联调。
+    /// 仅允许绑定本地回环地址（127.0.0.1/localhost/::1），非回环 --host 直接拒绝
+    #[arg(long)]
+    pub dev: bool,
+
     /// 活文档根目录
     #[arg(short = 'd', long = "dir", default_value = ".")]
     pub dir: String,

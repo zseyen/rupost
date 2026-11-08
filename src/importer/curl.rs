@@ -27,7 +27,12 @@ impl RequestImporter for CurlImporter {
         };
         let mut headers = Vec::new();
         for (k, v) in &entry.request.headers {
-            headers.push((k.as_str().to_string(), v.to_str().unwrap_or("").to_string()));
+            // lossy 读回：UTF-8 值无损还原（旧 to_str() 使非 ASCII 值静默变空串），
+            // 真损坏字节显式可见而非静默丢弃
+            headers.push((
+                k.as_str().to_string(),
+                String::from_utf8_lossy(v.as_bytes()).into_owned(),
+            ));
         }
         let parsed = ParsedRequest {
             method: Some(entry.request.method),
@@ -256,7 +261,9 @@ pub fn parse_curl_to_entry(raw: &str) -> Result<HistoryEntry> {
         header_map.append(
             HeaderName::from_bytes(name.as_bytes())
                 .map_err(|e| RupostError::ParseError(format!("非法 Header 名 {name}: {e}")))?,
-            HeaderValue::from_str(value)
+            // from_bytes 允许 obs-text（非 ASCII UTF-8 值，如中文备注），
+            // 控制字符（\r\n 注入等）仍被拒绝——既有防线不变
+            HeaderValue::from_bytes(value.as_bytes())
                 .map_err(|e| RupostError::ParseError(format!("非法 Header 值: {e}")))?,
         );
     }

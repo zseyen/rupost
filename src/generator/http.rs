@@ -121,52 +121,52 @@ impl HttpGenerator {
             if Self::should_skip_header(key_str) {
                 continue;
             }
-            if let Ok(val_str) = value.to_str() {
-                // T2 Cookie 链删头：Cookie 头命中上游 Set-Cookie 名 → 省略（AutoPersist 靠罐接续）
-                if key_str.eq_ignore_ascii_case("cookie")
-                    && let Some(plan) = traced
-                    && plan
-                        .upstream_cookie_names
-                        .iter()
-                        .any(|n| val_str.contains(n.as_str()))
-                {
-                    continue;
-                }
-                // T2 最高优先（PRD 管线序）：溯源命中值豁免凭据模板化——
-                // `Bearer <token>` 还原为 `Bearer {{token}}`（保留 scheme 前缀）
-                let traced_hit = traced.and_then(|plan| {
-                    let (prefix, core) = match val_str.split_once(' ') {
-                        Some((p, r)) => (Some(p), r.trim()),
-                        None => (None, val_str),
-                    };
-                    plan.links
-                        .iter()
-                        .find(|l| l.value == core)
-                        .map(|l| match prefix {
-                            Some(p) => format!("{p} {{{{{}}}}}", l.capture_name),
-                            None => format!("{{{{{}}}}}", l.capture_name),
-                        })
-                });
-                if let Some(rendered) = traced_hit {
-                    block.push_str(&format!("{key_str}: {rendered}\n"));
-                    continue;
-                }
-                // 凭据模板化：生成的测试文件严禁落盘明文凭证
-                if is_sensitive_key(key_str) {
-                    let var = Self::var_name_from_key(key_str);
-                    variables.insert(var.clone());
-                    match Self::split_auth_scheme(val_str) {
-                        Some(scheme) => {
-                            block.push_str(&format!("{key_str}: {scheme} {{{{{var}}}}}\n"));
-                        }
-                        None => block.push_str(&format!("{key_str}: {{{{{var}}}}}\n")),
+            // lossy 读回：非 ASCII（obs-text）值无损渲染——旧 to_str() 使其被静默跳过不渲染
+            let val_str = String::from_utf8_lossy(value.as_bytes()).into_owned();
+            // T2 Cookie 链删头：Cookie 头命中上游 Set-Cookie 名 → 省略（AutoPersist 靠罐接续）
+            if key_str.eq_ignore_ascii_case("cookie")
+                && let Some(plan) = traced
+                && plan
+                    .upstream_cookie_names
+                    .iter()
+                    .any(|n| val_str.contains(n.as_str()))
+            {
+                continue;
+            }
+            // T2 最高优先（PRD 管线序）：溯源命中值豁免凭据模板化——
+            // `Bearer <token>` 还原为 `Bearer {{token}}`（保留 scheme 前缀）
+            let traced_hit = traced.and_then(|plan| {
+                let (prefix, core) = match val_str.as_str().split_once(' ') {
+                    Some((p, r)) => (Some(p), r.trim()),
+                    None => (None, val_str.as_str()),
+                };
+                plan.links
+                    .iter()
+                    .find(|l| l.value == core)
+                    .map(|l| match prefix {
+                        Some(p) => format!("{p} {{{{{}}}}}", l.capture_name),
+                        None => format!("{{{{{}}}}}", l.capture_name),
+                    })
+            });
+            if let Some(rendered) = traced_hit {
+                block.push_str(&format!("{key_str}: {rendered}\n"));
+                continue;
+            }
+            // 凭据模板化：生成的测试文件严禁落盘明文凭证
+            if is_sensitive_key(key_str) {
+                let var = Self::var_name_from_key(key_str);
+                variables.insert(var.clone());
+                match Self::split_auth_scheme(&val_str) {
+                    Some(scheme) => {
+                        block.push_str(&format!("{key_str}: {scheme} {{{{{var}}}}}\n"));
                     }
-                } else {
-                    // T1：非敏感 Header 值命中动态形状 → 反向模板化（凭据模板化优先已由分支保证）
-                    let rendered = super::dynamic::template_value(val_str)
-                        .unwrap_or_else(|| val_str.to_string());
-                    block.push_str(&format!("{}: {}\n", key_str, rendered));
+                    None => block.push_str(&format!("{key_str}: {{{{{var}}}}}\n")),
                 }
+            } else {
+                // T1：非敏感 Header 值命中动态形状 → 反向模板化（凭据模板化优先已由分支保证）
+                let rendered = super::dynamic::template_value(&val_str)
+                    .unwrap_or_else(|| val_str.clone());
+                block.push_str(&format!("{}: {}\n", key_str, rendered));
             }
         }
 

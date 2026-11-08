@@ -2,10 +2,6 @@ use crate::runner::types::{TestResult, TestSummary};
 use crate::utils::{ResponseFormat, ResponseFormatter};
 use colored::Colorize;
 
-pub use crate::report::json::{
-    JsonAssertionReport, JsonFileReport, JsonTestReport, build_json_reports,
-};
-
 /// 终端渲染器：测试结果/摘要/批量汇总的彩色打印（JSON 契约见 `crate::report::json`）
 pub struct TestReporter {
     verbose: bool,
@@ -24,24 +20,6 @@ impl TestReporter {
             verbose,
             formatter: ResponseFormatter::new(format),
         }
-    }
-
-    /// 委托至 report::json::build_json_reports
-    pub fn build_json_reports(
-        results: &[(std::path::PathBuf, Vec<TestResult>)],
-    ) -> Vec<JsonFileReport> {
-        crate::report::json::build_json_reports(results)
-    }
-
-    /// 委托至 report::json 输出序列化
-    pub fn report_json(
-        results: &[(std::path::PathBuf, Vec<TestResult>)],
-        writer: &mut impl std::io::Write,
-    ) -> crate::Result<()> {
-        let json_list = Self::build_json_reports(results);
-        let json_str = serde_json::to_string_pretty(&json_list)?;
-        writer.write_all(json_str.as_bytes())?;
-        Ok(())
     }
 
     /// 打印单个测试结果

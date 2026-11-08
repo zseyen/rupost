@@ -1,14 +1,16 @@
 #![allow(clippy::collapsible_if)]
-use super::event::Action;
-use super::files;
 use super::ports::Repo;
 use super::theme::{Theme, ThemeKind, palette};
 
+mod creation;
 mod history;
 mod layout;
+mod lifecycle;
 mod retention;
 pub mod search;
 mod stream;
+#[cfg(test)]
+mod tests;
 mod tree;
 mod wrap;
 
@@ -19,7 +21,7 @@ use crate::variable::VariableContext;
 pub use history::{format_request_snapshot_to_http, format_url_host_and_path};
 pub use layout::LayoutMode;
 pub use retention::{cleanup_old_logs_dir, write_log_with_limit};
-use std::collections::HashMap;
+use std::path::PathBuf;
 pub use tree::{SidebarTabState, TuiFileNode};
 pub use wrap::VisualLineProcessor;
 
@@ -42,7 +44,6 @@ pub enum DetailTab {
 }
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
 
 /// 树状文件夹节点表示，用于可见行的树状渲染
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,365 +307,16 @@ impl AppState {
         palette(self.theme)
     }
 
-    /// CLI 能力接入（R2/R6/R7）：消费单个请求结果——
-    /// 复用既有 finished 语义（last_response/assertions/warnings/cookie 状态机），
-    /// 叠加多请求簿记（run_results/run_index）与 timing/diagnose 暂存。
-    /// is_loading 在最后一个结果到达时才落 false（多请求运行期保持互斥）。
-    pub fn handle_request_result(
-        &mut self,
-        result: crate::runner::types::TestResult,
-        captured_vars: std::collections::HashMap<String, String>,
-        run_total: usize,
-    ) {
-        self.run_total = run_total;
-        // skipped 结果短路：不产生响应/不登记文件执行状态/不触发 finished 副作用
-        // （success=true 且 response=None 的 skip 结果若走 conv 会被误转为伪造错误）
-        if result.skipped {
-            self.run_results.push(result);
-            self.run_index = self.run_results.len();
-            self.is_loading = self.run_index < self.run_total;
-            return;
-        }
-        let conv: Result<Response, String> =
-            if result.success {
-                result.response.clone().map(Ok).unwrap_or_else(|| {
-                    Err("request succeeded but no response returned".to_string())
-                })
-            } else {
-                Err(result
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "Unknown execution error".to_string()))
-            };
-        self.handle_request_finished(
-            conv,
-            captured_vars,
-            result.assertions.clone(),
-            result.warnings.clone(),
-        );
-        self.last_timing = result.timing.clone();
-        self.last_diagnose = result.diagnose_report.clone();
-        let failed = !result.success;
-        self.run_results.push(result);
-        self.run_index = self.run_results.len();
-        self.is_loading = self.run_index < self.run_total;
-        // 失败自动切 Diagnose tab（R7：对齐 CLI --debug-on-failure 的失败即诊语义）
-        if failed && self.last_diagnose.is_some() {
-            self.active_detail_tab = DetailTab::Diagnose;
-            self.response_visual_lines.clear();
-        }
-    }
-
     /// 注入文件端口（单测用 InMemoryRepository 隔离真实磁盘）
     pub fn with_ports(repo: Repo) -> Self {
         let mut state = Self::new();
         state.repo = repo;
         state
     }
-
-    pub fn create_test_from_input(&mut self, raw_input: &str) {
-        let input = raw_input.trim().to_string();
-        if input.is_empty() {
-            return;
-        }
-
-        let derived = files::derive_test_file(&input);
-
-        // 落盘目录：选中的目录取自身，选中的文件取父目录，无选中回退 workspace_root
-        let mut target_dir = self.workspace_root.clone();
-        if !self.visible_file_nodes.is_empty()
-            && self.files_state.selected_index < self.visible_file_nodes.len()
-        {
-            let selected_node = &self.visible_file_nodes[self.files_state.selected_index];
-            let selected_path = PathBuf::from(&selected_node.abs_path);
-            if selected_node.is_dir {
-                target_dir = selected_path;
-            } else if let Some(parent) = selected_path.parent() {
-                target_dir = parent.to_path_buf();
-            }
-        }
-
-        match files::create_test_in_workspace(
-            self.repo.file_repo(),
-            &target_dir,
-            &self.workspace_root,
-            &derived,
-        ) {
-            Ok(files::CreateOutcome::Created(path)) => {
-                self.last_error = None;
-                self.locate_created_file(&path, Some(&derived.content));
-            }
-            Ok(files::CreateOutcome::AlreadyExists(path)) => {
-                self.last_error = None;
-                self.locate_created_file(&path, None);
-            }
-            Err(msg) => self.last_error = Some(msg),
-        }
-    }
-
-    /// 重建树视图并把光标定位到新建/已存在的文件行，加载内容并切焦 Editor
-    fn locate_created_file(&mut self, canon_path: &Path, content: Option<&str>) {
-        let path_str = canon_path.to_string_lossy().into_owned();
-        if !self.raw_file_list.contains(&path_str) {
-            self.raw_file_list.push(path_str.clone());
-        }
-        self.rebuild_visible_tree_nodes();
-
-        if let Some(pos) = self
-            .visible_file_nodes
-            .iter()
-            .position(|n| n.abs_path == path_str)
-        {
-            self.files_state.selected_index = pos;
-            self.selected_file_index = pos;
-
-            // 刚写入的内容直接复用；已存在文件须回读磁盘
-            let new_content = match content {
-                Some(c) => Some(c.to_string()),
-                None => std::fs::read_to_string(canon_path).ok(),
-            };
-            if let Some(new_content) = new_content {
-                self.editor_text = new_content;
-                self.editor_file_path = Some(path_str);
-                self.editor_file_mtime = std::fs::metadata(canon_path)
-                    .ok()
-                    .and_then(|m| m.modified().ok());
-                self.is_dirty = false;
-                self.loaded_file_index = pos;
-                self.active_panel = Panel::Editor;
-            }
-        }
-    }
-
-    /// 单向状态机更新
-    pub fn update(&mut self, action: Action) {
-        match action {
-            Action::Quit => {
-                self.is_quitting = true;
-            }
-            Action::ToggleHelp => {
-                self.show_help = !self.show_help;
-            }
-            Action::SwitchPanel(panel) => {
-                self.active_panel = panel;
-            }
-            Action::SendRequest(req) => {
-                self.current_request = Some(*req);
-                self.is_loading = true;
-                self.loading_tick = 0;
-                self.sse_stream_body.clear();
-                self.ws_frames.clear();
-                self.warnings.clear();
-                self.response_scroll = 0;
-                self.response_visual_lines.clear();
-                self.sse_visual_lines.clear();
-                self.sse_last_processed_pos = 0;
-                self.ws_visual_lines.clear();
-                // 滑窗域随新请求复位：旧日志路径/行数/视口缓存不得串入本次运行
-                // （log_file_path 由本次运行的 InitLogPath 事件重新挂载）
-                self.log_file_path = None;
-                self.total_log_lines = 0;
-                self.viewport_cache.clear();
-                self.cache_start_line = 0;
-                self.cache_end_line = 0;
-
-                if let Some(ref path) = self.editor_file_path {
-                    if self.active_sidebar_tab == SidebarTab::Files {
-                        self.file_execution_states
-                            .insert(path.clone(), FileExecState::Running);
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl AppState {
-    pub fn check_and_reload_editor_file(&mut self) {
-        if let Some(ref path_str) = self.editor_file_path {
-            if let Ok(metadata) = std::fs::metadata(path_str) {
-                if let Ok(new_mtime) = metadata.modified() {
-                    if Some(new_mtime) != self.editor_file_mtime {
-                        if let Ok(content) = std::fs::read_to_string(path_str) {
-                            self.editor_text = content;
-                            self.editor_file_mtime = Some(new_mtime);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_sidebar_scroll_bounds_clamp() {
-        let mut state = SidebarTabState::new();
-        let viewport_height = 5;
-
-        state.clamp_scroll_offset(0, viewport_height);
-        assert_eq!(state.selected_index, 0);
-        assert_eq!(state.scroll_offset, 0);
-
-        state.selected_index = 2;
-        state.clamp_scroll_offset(10, viewport_height);
-        assert_eq!(state.scroll_offset, 0);
-
-        state.selected_index = 6;
-        state.clamp_scroll_offset(10, viewport_height);
-        assert_eq!(state.scroll_offset, 2);
-
-        state.selected_index = 1;
-        state.clamp_scroll_offset(10, viewport_height);
-        assert_eq!(state.scroll_offset, 1);
-    }
-    fn state_in_workspace(root: &Path) -> AppState {
-        let mut state = AppState::new();
-        state.workspace_root = root.to_path_buf();
-        state
-    }
-
-    #[test]
-    fn test_quick_create_success_lock_behavior() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut state = state_in_workspace(dir.path());
-        state.create_test_from_input("google.com");
-
-        assert_eq!(state.last_error, None);
-        let created = dir.path().join("google_com.http");
-        assert!(created.exists());
-        assert_eq!(
-            std::fs::read_to_string(&created).unwrap(),
-            "GET https://google.com\n"
-        );
-        assert!(
-            state
-                .editor_file_path
-                .as_deref()
-                .unwrap()
-                .ends_with("google_com.http")
-        );
-        assert_eq!(state.active_panel, Panel::Editor);
-    }
-
-    #[test]
-    fn test_quick_create_path_traversal_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut state = state_in_workspace(dir.path());
-        // 唯一文件名保证测试密闭：工作区外绝无同名残留（红阶段曾实证旧代码会写出该文件）
-        let escape_name = format!("escape_{}.http", std::process::id());
-        state.create_test_from_input(&format!("../../{escape_name}"));
-
-        assert!(
-            state.last_error.is_some(),
-            "traversal must surface an error"
-        );
-        // 显式拼出逃逸落点（相对 tempdir 两级之上）：文件绝不能被写出工作区
-        let escape_target = dir.path().join(format!("../../{escape_name}"));
-        assert!(
-            !escape_target.exists(),
-            "escape file must not exist: {escape_target:?}"
-        );
-    }
-
-    #[test]
-    fn test_quick_create_write_error_surfaced() {
-        // FailingRepository 注入（替代 chmod：root 下 0o555 不拦截写，权限测试会假失败）
-        let dir = tempfile::tempdir().unwrap();
-        let mut state = AppState::with_ports(Repo::new(crate::tui::ports::FailingRepository));
-        state.workspace_root = dir.path().to_path_buf();
-        state.create_test_from_input("google.com");
-
-        assert!(
-            state.last_error.is_some(),
-            "write failure must surface, not be swallowed"
-        );
-
-        // 错误在下次成功操作时清除（不变量锁定）
-        state.repo = Repo::default();
-        state.create_test_from_input("example.org");
-        assert_eq!(state.last_error, None);
-        assert!(dir.path().join("example_org.http").exists());
-    }
-
-    #[test]
-    fn test_quick_create_empty_input_is_noop() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut state = state_in_workspace(dir.path());
-        state.create_test_from_input("   ");
-
-        assert_eq!(state.last_error, None);
-        assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
-        assert!(state.editor_file_path.is_none());
-    }
-
-    #[test]
-    fn test_quick_create_lands_in_selected_files_parent_dir() {
-        // 锁定改动前行为：选中文件 → 新文件落在其父目录
-        let dir = tempfile::tempdir().unwrap();
-        let sub = dir.path().join("tests");
-        std::fs::create_dir(&sub).unwrap();
-        std::fs::write(sub.join("auth.http"), "GET http://x").unwrap();
-
-        let mut state = state_in_workspace(dir.path());
-        state.raw_file_list = vec![sub.join("auth.http").to_string_lossy().into_owned()];
-        state.expanded_dirs.insert("tests".to_string());
-        state.rebuild_visible_tree_nodes();
-        let pos = state
-            .visible_file_nodes
-            .iter()
-            .position(|n| n.rel_path == "tests/auth.http")
-            .unwrap();
-        state.files_state.selected_index = pos;
-
-        state.create_test_from_input("google.com");
-        assert_eq!(state.last_error, None);
-        assert!(sub.join("google_com.http").exists());
-        assert!(!dir.path().join("google_com.http").exists());
-    }
-
-    #[test]
-    fn test_quick_create_existing_file_not_overwritten() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("google_com.http");
-        std::fs::write(&target, "SENTINEL").unwrap();
-
-        let mut state = state_in_workspace(dir.path());
-        state.create_test_from_input("google.com");
-
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "SENTINEL");
-        assert_eq!(state.editor_text, "SENTINEL"); // 仍定位并加载已有文件
-    }
-
-    #[test]
-    fn test_quick_create_filename_truncated() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut state = state_in_workspace(dir.path());
-        let long_path = "a".repeat(300);
-        state.create_test_from_input(&format!("https://example.com/{long_path}"));
-
-        assert_eq!(state.last_error, None);
-        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
-        assert_eq!(entries.len(), 1);
-        let name = entries[0]
-            .as_ref()
-            .unwrap()
-            .file_name()
-            .into_string()
-            .unwrap();
-        // base(≤80) + '_' + 8 hex + ".http"
-        assert!(
-            name.len() <= 80 + 1 + 8 + 5,
-            "sanitized name must be bounded: {name}"
-        );
     }
 }

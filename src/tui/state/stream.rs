@@ -1,6 +1,7 @@
 //! 流式事件域：spinner、SSE/WS 流入帧、请求完成事件的 AppState 归约。
 
 use super::*;
+use std::collections::HashMap;
 
 impl AppState {
     pub fn get_spinner_char(&self) -> &'static str {

@@ -534,6 +534,35 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 
 ### 4. 导入功能：PRD 归档（不实施，用户裁决后移 + CLI 结合）
 - [doc/plans/active/2026-11-07-importer-unification-prd.md](doc/plans/active/2026-11-07-importer-unification-prd.md)：HAR/Postman/OpenAPI 真实解析落位 `src/importer/` 领域层，CLI `import --format` + Web `/api/v1/import` 双端同源；R1-R6 需求 + 6 提交切分 + 勘误 `:376` 失实宣称的联动登记。
+---
+
+## 阶段执行进度：第一步收口微调与第二步 1（通用 Importer 领域模块提取）已达成（2026-11-07 深夜）
+
+依据最新合并路线图与用户指令“先完成第一步，和第二步的 1”，完成以下两大原子演进与提交：
+
+### 1. 第一步收口微调 (Commit `kzlvpxwu` a10e65ed)
+- **RFC 9110 §7.2 Host 标头大小写无关**：`src/web/server.rs` 中的 `is_allowed_host` 改用 `eq_ignore_ascii_case` 匹配 `localhost` 与 `state.allowed_hosts` 动态白名单，兼容 `Host: Localhost:3000`、`LOCALHOST` 等合规大小写混合请求。
+- **空文档 422 语法门禁统一**：`src/web/handlers/run.rs` 在解析文档后校验 `parsed_file.requests.is_empty()`，若为空（包含空 `.http` 或无 ```` ```http ```` 块的纯文本 Markdown）统一返回 422 `UNPROCESSABLE_ENTITY`（`"Document contains no executable HTTP request blocks"`）。
+- **TDD 校验**：`tests/web_api_integration_test.rs` 新增混合大小写 Host 访问（200 OK）与无请求 Markdown 套件执行（422）断言。
+
+### 2. 第二步 Item 1：通用 Importer 领域模块提取 (Commit `spwmoszx` 608c4a47)
+- **Clean Architecture 领域下沉**：
+  - 新建/扩展独立领域模块 `src/importer/`，将原混杂在 `src/web/` 中的请求解析与协议转换逻辑彻底移入核心领域层，解除 Web / Axum 依赖。
+  - `src/importer/mod.rs`：定义 `RequestImporter` 契约 Trait、`ImportFormat`、`ImportRequest`、`ImportResponse` 与 `MultiFormatImporter` 门面调度器。
+  - `src/importer/curl.rs`：实现 `CurlImporter: RequestImporter`，复用既有 POSIX 分词与请求合成能力。
+  - `src/importer/httpie.rs`：实现 `HttpieImporter: RequestImporter`，支持简写 URL、参数展开、JSON 合成与 Host 模板化。
+  - `src/importer/raw.rs`：实现 `RawHttpImporter: RequestImporter`，遵循 RFC 7230 解析标准 Raw HTTP 报文。
+- **Web 适配层向后兼容**：
+  - `src/web/importer.rs` 与 `src/web/types.rs` 透明重导出 `crate::importer::*`，上层路由适配器零破坏。
+- **全量回归验证**：
+  - `cargo test --lib importer`：28 个单元测试全绿；
+  - `cargo test --test import_curl_test`：5 个端到端集成测试全绿；
+  - `cargo test --test web_api_integration_test`：14 个 Web API 集成测试全绿；
+  - `cargo test --lib`：全量 540 个单元测试 100% 通过；
+  - `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 保持双零告警。
+
+
+---
 
 ---
 

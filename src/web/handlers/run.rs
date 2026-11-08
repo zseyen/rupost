@@ -162,6 +162,16 @@ pub async fn run_suite_handler(
         }
     };
 
+    // 统一空文档语义：若文档内无任何可执行请求（如空文档或无 HTTP 块的 Markdown），统一返回 422
+    if parsed_file.requests.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiResponse::err(
+                "Document contains no executable HTTP request blocks",
+            )),
+        );
+    }
+
     // 3. 准备变量上下文（CLI 变量列表为空：环境级联与 .env 同 CLI 语义）
     let config = ConfigLoader::find_and_load().unwrap_or_default();
     let target_env = req.env.as_deref().or(state.default_env.as_deref());

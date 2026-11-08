@@ -6,10 +6,41 @@
 
 use crate::generator::HttpGenerator;
 use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
+use crate::http::url::UrlTemplatizer;
+use crate::importer::RequestImporter;
+use crate::parser::types::ParsedRequest;
 use crate::{Result, RupostError};
 use chrono::Utc;
 use colored::Colorize;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+/// cURL 命令行导入器
+pub struct CurlImporter;
+
+impl RequestImporter for CurlImporter {
+    fn parse(&self, content: &str, templatize_host: bool) -> Result<Vec<ParsedRequest>> {
+        let entry = parse_curl_to_entry(content)?;
+        let url = if templatize_host {
+            UrlTemplatizer::templatize_origin(&entry.request.url, "{{base_url}}")
+        } else {
+            entry.request.url
+        };
+        let mut headers = Vec::new();
+        for (k, v) in &entry.request.headers {
+            headers.push((k.as_str().to_string(), v.to_str().unwrap_or("").to_string()));
+        }
+        let parsed = ParsedRequest {
+            method: Some(entry.request.method),
+            url,
+            headers,
+            body: entry.request.body,
+            metadata: Default::default(),
+            line_number: 1,
+            base_path: None,
+        };
+        Ok(vec![parsed])
+    }
+}
 
 /// curl 导入请求参数
 #[derive(Debug, Clone, Default)]

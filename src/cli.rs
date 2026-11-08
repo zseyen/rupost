@@ -771,8 +771,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 only,
                 on_failure,
             };
-            let has_failure = rupost::runner::run_test_suite(options).await?;
-            if has_failure {
+            let outcome = rupost::runner::run_test_suite(options).await?;
+            if outcome.has_failure {
                 std::process::exit(1);
             }
         }

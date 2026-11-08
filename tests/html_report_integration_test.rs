@@ -153,8 +153,8 @@ Accept: text/event-stream
         on_failure: None,
     };
 
-    let has_failure = run_test_suite(options).await.unwrap();
-    assert!(!has_failure, "测试套件应当全部 PASS");
+    let outcome = run_test_suite(options).await.unwrap();
+    assert!(!outcome.has_failure, "测试套件应当全部 PASS");
 
     assert!(html_output.exists(), "HTML 报告应写入文件");
     let html = std::fs::read_to_string(&html_output).unwrap();

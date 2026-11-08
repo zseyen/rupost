@@ -6,7 +6,7 @@ use crate::runner::on_failure;
 use crate::runner::selector;
 use crate::runner::{
     BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
-    TestReporter, WorkflowGraph,
+    TestReporter, TestResult, WorkflowGraph,
 };
 use crate::variable::ConfigLoader;
 use colored::Colorize;
@@ -74,8 +74,17 @@ impl Default for TestSuiteOptions {
     }
 }
 
-/// 执行批处理测试流程，如果发现有测试失败，则返回 Ok(true)，否则返回 Ok(false)
-pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
+/// 测试套件执行产出：失败判定 + 完整批量结果（报告文件输出的数据载体）。
+/// `has_failure` 与 `batch_results` 的推导口径（skipped 视为成功、fail-fast 截断的
+/// 未执行文件不进入结果）由 run_test_suite 单点维护，派发层不做重复判定。
+#[derive(Debug)]
+pub struct TestSuiteOutcome {
+    pub has_failure: bool,
+    pub batch_results: Vec<(PathBuf, Vec<TestResult>)>,
+}
+
+/// 执行批处理测试流程，返回执行产出（失败判定与完整批量结果）
+pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcome> {
     // 0. 单请求选择器（DX-Debug R1）：--only 与 path#n 片段，二者互斥且仅支持单一文件路径
     let plan = selector::build_selector_plan(&options.paths, options.only.as_deref())?;
     let selector = plan.selector;
@@ -89,8 +98,12 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
     // 1. 递归扫描文件
     let scanned_files = DirectoryScanner::scan(&paths)?;
     if scanned_files.is_empty() {
-        println!("No test files found.");
-        return Ok(false);
+        // 机器可读输出纪律：该提示走 stderr，避免污染 --report json 的 stdout
+        eprintln!("No test files found.");
+        return Ok(TestSuiteOutcome {
+            has_failure: false,
+            batch_results: Vec::new(),
+        });
     }
 
     // 2. 递归自动补全加载所有依赖。显式传入的路径完全信任，
@@ -292,7 +305,10 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<bool> {
         save_batch_snapshot(&batch_results, &paths, snapshot_path, options.mask_snapshot)?;
     }
 
-    Ok(has_failure)
+    Ok(TestSuiteOutcome {
+        has_failure,
+        batch_results,
+    })
 }
 
 #[cfg(test)]
@@ -326,7 +342,9 @@ mod tests {
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());
-        // 空路径应直接返回 false (没有发生失败)
-        assert!(!res.unwrap());
+        // 空路径应直接返回无失败、无结果的产出
+        let outcome = res.unwrap();
+        assert!(!outcome.has_failure);
+        assert!(outcome.batch_results.is_empty());
     }
 }

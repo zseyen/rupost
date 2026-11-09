@@ -32,6 +32,7 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@websocket" => parse_websocket(content).map(Some),
         "@decoder" => parse_decoder(content).map(Some),
         "@diagnose" => parse_diagnose(content).map(Some),
+        "@teardown" => Ok(Some(Metadata::Teardown)),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -85,6 +86,9 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         }
         Metadata::Diagnose(diagnose) => {
             target.diagnose = *diagnose;
+        }
+        Metadata::Teardown => {
+            target.is_teardown = true;
         }
     }
 }
@@ -447,5 +451,24 @@ mod tests {
 
         let result = parse_metadata("@decoder messagepack").unwrap().unwrap();
         assert!(matches!(result, Metadata::Decoder(ref s) if s == "messagepack"));
+    }
+    /// M3：@teardown 解析与应用（无参数指令）
+    #[test]
+    fn test_teardown_metadata_parse_and_apply() {
+        let result = parse_metadata("@teardown").unwrap();
+        assert!(matches!(result, Some(Metadata::Teardown)));
+
+        let mut target = RequestMetadata::default();
+        apply_metadata(&Metadata::Teardown, &mut target);
+        assert!(target.is_teardown);
+
+        // 带尾部空白的形态
+        let result = parse_metadata("  @teardown  ").unwrap();
+        assert!(matches!(result, Some(Metadata::Teardown)));
+
+        // 非 teardown 请求不受影响
+        let mut plain = RequestMetadata::default();
+        apply_metadata(&Metadata::Test, &mut plain);
+        assert!(!plain.is_teardown);
     }
 }

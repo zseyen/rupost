@@ -232,7 +232,10 @@ impl TestExecutor {
             let request_number = index + 1;
 
             // 检查是否跳过
+            // M3：@teardown 请求不在常规阶段执行（占位 skipped 保持原序号；
+            // 真实执行在 batch 层 Finally 阶段按逆拓扑序进行）
             let should_skip = parsed_request.should_skip()
+                || parsed_request.metadata.is_teardown
                 || (has_explicit_tests && !parsed_request.metadata.is_test);
 
             let result = if should_skip {

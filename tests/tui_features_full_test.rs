@@ -243,6 +243,7 @@ async fn test_r7_failure_switches_to_diagnose_tab() {
         diagnose_report: Some(report),
         request: None,
         warnings: vec![],
+        is_teardown: false,
     };
     state.handle_request_result(failed, std::collections::HashMap::new(), 1);
 

@@ -166,6 +166,9 @@ pub struct RequestMetadata {
 
     /// 是否开启网络诊断（@diagnose）
     pub diagnose: bool,
+
+    /// 是否为清理请求（@teardown，M3：常规阶段跳过，Finally 阶段逆拓扑执行）
+    pub is_teardown: bool,
 }
 
 /// 解析出的元数据指令（中间状态）
@@ -175,17 +178,25 @@ pub enum Metadata {
     Skip(bool),
     Timeout(Duration),
     Assert(String),
-    Capture { var_name: String, source: String },
+    Capture {
+        var_name: String,
+        source: String,
+    },
     Test,
     Sse(bool),
     SseTimeout(Duration),
     SseMaxEvents(usize),
-    StreamTo { path: String, append: bool },
+    StreamTo {
+        path: String,
+        append: bool,
+    },
     ForwardTo(String),
     BasePath(String),
     Websocket(bool),
     Decoder(String),
     Diagnose(bool),
+    /// M3：清理请求标记（无参数）
+    Teardown,
 }
 
 /// 整个文件的解析结果

@@ -292,6 +292,10 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     let mut entries = Vec::new();
     for (_, file_results) in batch_results {
         for r in file_results {
+            // P1-11：@teardown 清理请求默认排除出快照（防 replay 重放 DELETE）
+            if r.is_teardown {
+                continue;
+            }
             if let Some(req) = &r.request
                 && let Some(resp) = &r.response
             {

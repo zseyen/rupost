@@ -199,6 +199,13 @@ impl<'a> ParallelScheduler<'a> {
                     results.push((path, run_results));
                 }
                 Err(e) => {
+                    // M3（评审 P0-1）：fail_fast 的 abort_all 会取消未启动 worker，
+                    // 产生 cancelled JoinError——这是预期中断路径，容忍并继续排空
+                    // join 队列（否则提前 return Err 跳过变量合并与 Finally teardown）。
+                    // 真实 panic 仍然上抛。
+                    if e.is_cancelled() {
+                        continue;
+                    }
                     return Err(crate::error::RupostError::Other(format!(
                         "任务执行 Join 失败: {}",
                         e

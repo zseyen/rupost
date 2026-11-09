@@ -318,6 +318,7 @@ impl WsRunner {
                 capture_warnings.dedup();
                 capture_warnings
             },
+            is_teardown: false,
         };
 
         // 保存历史记录 (WebSocket 专用)

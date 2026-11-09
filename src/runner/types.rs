@@ -66,6 +66,9 @@ pub struct TestResult {
     /// 非致命告警（如 @capture 失败、未定义变量占位符、畸形 JSON 降级发送）。
     /// 不影响 success 判定，但必须对用户可见，避免静默假通过。
     pub warnings: Vec<String>,
+
+    /// M3：是否为 @teardown 清理请求（快照导出默认排除；报告/终端可区分）
+    pub is_teardown: bool,
 }
 
 impl TestResult {
@@ -96,6 +99,7 @@ impl TestResult {
             diagnose_report: None,
             request: None,
             warnings: Vec::new(),
+            is_teardown: false,
         }
     }
 
@@ -123,6 +127,7 @@ impl TestResult {
             diagnose_report: None,
             request: None,
             warnings: Vec::new(),
+            is_teardown: false,
         }
     }
 
@@ -148,6 +153,7 @@ impl TestResult {
             diagnose_report: None,
             request: None,
             warnings: Vec::new(),
+            is_teardown: false,
         }
     }
 }

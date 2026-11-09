@@ -28,11 +28,7 @@ pub fn try_from_parsed_with_warnings(parsed: ParsedRequest) -> Result<(Request, 
     // 5. @timeout：仅对非流式请求生效。SSE（@sse 或 Accept: text/event-stream）
     //    与 WebSocket 是长连接，reqwest 的 per-request timeout 是总时长语义，
     //    套上去会把本应长连的流在中途切断；SSE 有专属 @sse_timeout。
-    let accepts_event_stream = parsed
-        .headers
-        .iter()
-        .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
-    let is_streaming = parsed.metadata.sse || parsed.metadata.websocket || accepts_event_stream;
+    let is_streaming = parsed.is_sse_stream() || parsed.metadata.websocket;
     if !is_streaming {
         request = request.with_timeout(parsed.metadata.timeout);
     }

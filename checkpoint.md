@@ -1,6 +1,17 @@
 # RuPost 质量加固战役 Checkpoint 归档（2026-10 ~ 2026-11）
 
 ## 最新里程碑进展 (2026-11-09)
+- **Agent 规则与技能体系单一事实来源 (SSOT) 收敛与无用文档清理 (`feature/decoupling-and-workbench-hardening`)**：
+  1. **Agent Skills 统一收敛**：
+     - 将原本孤立在 `.agents/skills/tui_design_guidelines/` 的技能规范化迁入 `.agent/skills/tui-design-guidelines/`，实现全仓 8 大核心技能（`ai-integration-guidelines`, `brainstorming`, `cli-aesthetic-ux`, `frontend-design`, `rupost-architecture`, `rust-async-patterns`, `superpower`, `tui-design-guidelines`）在 `.agent/skills/` 的单一事实来源聚合；
+     - 在 `.agents/skills/` 设立符号链接向下兼容，杜绝任何历史引用断裂。
+  2. **Agent 根规则双镜像 100% 字节级对齐**：
+     - 整合根目录 `AGENTS.md`，完整覆盖通用 LLM 4 大守则、4 大智能体角色与 8 大技能矩阵映射、§5~§9（CLAP 传参契约、CLI 入口解耦、三层测试回归、TUI 开发规范、离散逻辑治理与 TDD 重构法则）；
+     - 将权威 `AGENTS.md` 物理同步覆盖至 `.agents/AGENTS.md`，两份文件实现零 diff，消除了多智能体运行时的规则漂移与覆盖风险。
+  3. **强化常驻规则引擎 (`.agent/rules/rust-dev.md`)**：
+     - 固化 Checkpoint 会话归档纪律、Clean Architecture 与领域模型充血、DRY SSOT 业务知识单一性、TDD 行为契约锁定、跨平台 POSIX 路径纪律与 JJ 原子化提交纪律。
+  4. **清理历史临时会话与无用文档**：
+     - 清除 `.agents/` 下残留的历史孤儿交付物与工作目录（`BRIEFING.md`, `ORIGINAL_REQUEST.md`, `handoff.md`, `implementer/`, `orchestrator/`, `orchestrator_gen1/`, `victory_auditor/`），新增 `.agents/README.md` 声明兼容镜像定位，彻底杜绝 Agent 上下文检索的历史状态污染。
 - **跨平台路径归一化、转义规范与代码库离散逻辑收敛 (`feature/decoupling-and-workbench-hardening`)**：
   1. **跨平台路径归一化体系落地 (POSIX Path Normalization)**：
      - 在 `src/utils/path_guard.rs` 提炼 `normalize_posix_path` 纯函数作为单一事实来源（SSOT），彻底消除全库手写 `.replace('\\', "/")`；

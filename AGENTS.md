@@ -92,10 +92,10 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 *   **原则**: 遵循开闭原则，确保核心逻辑易于扩展而不必修改已有代码。
 
 ### 3. UI/UX 专家 (Frontend Specialist)
-*   **关联技能**: `frontend-design`, `cli-aesthetic-ux`
+*   **关联技能**: `frontend-design`, `cli-aesthetic-ux`, `tui-design-guidelines`
 *   **职责**:
-    *   设计并实现 `rupost` 的用户界面（如 Dashboard 或示例页面）。
-    *   确保界面美观、具有高级感，避免“AI 同质化”审美。
+    *   设计并实现 `rupost` 的用户界面（如 Dashboard、Web 工作台、TUI 终端交互）。
+    *   确保界面美观、具有高级感，严格遵守无 Emoji 与纯 ASCII/ANSI 工程美学。
 *   **原则**: 极简主义与极致细节，通过优秀的排版、色彩与微交互提升用户体验。
 
 ### 4. 协作编排者 (Orchestrator)
@@ -104,6 +104,17 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
     *   管理不同智能体之间的协作流程。
     *   确保在每次任务开始前调用正确的技能（Skills）。
     *   维护项目的工作流、文档一致性。
+
+### 5. 核心技能单一事实来源矩阵 (Skills SSOT)
+所有 Agent 技能均统一存放于 `.agent/skills/` 目录下（`.agents/skills/` 保持符号链接兼容）：
+- [`ai-integration-guidelines`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/ai-integration-guidelines/SKILL.md)：AI 分阶段集成、MCP 与 Prompt 工程。
+- [`brainstorming`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/brainstorming/SKILL.md)：创意孵化、PRD 设计、架构预审。
+- [`cli-aesthetic-ux`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/cli-aesthetic-ux/SKILL.md)：终端高级美学、HSL 配色、响应式终端规范。
+- [`frontend-design`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/frontend-design/SKILL.md)：Web 前端纯 ASCII 视觉与高质感交互。
+- [`rupost-architecture`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/rupost-architecture/SKILL.md)：Clean Architecture 微内核与中间件设计。
+- [`rust-async-patterns`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/rust-async-patterns/SKILL.md)：Tokio 异步模型、并发与内存安全。
+- [`superpower`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/superpower/SKILL.md)：工作流编排与技能加载中枢。
+- [`tui-design-guidelines`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/tui-design-guidelines/SKILL.md)：TUI M-V-VM 架构、Ratatui 离屏验证与无 Emoji 约束。
 
 ## 协作流程与规则
 
@@ -124,6 +135,32 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
   clap v4 的 `global = true` 参数具备向下继承能力。无论是置于主程序之后（`rupost --debug test suite.http`）还是置于子命令之后（`rupost test suite.http --debug`），全局标志与值选项（如 `--env staging`）均可被正确解析与透传。
 - **内联请求模式 (Inline Mode, 如直接运行 `rupost GET http://...`)**：
   由于根命令的 `args` 配置了 `trailing_var_arg = true` 以捕获任意 HTTP 请求参数与 Header，一旦将全局参数放置在 URL 之后（例如：`rupost GET http://example.com --debug`），该参数会被贪婪吸入 `cli.args` 数组中，导致 `cli.debug` 保持为 `false`。**因此，在内联请求模式下，所有全局参数必须紧跟在主程序名之后**（例如：`rupost --debug GET http://example.com`）。
+
+---
+
+## 6. CLI 入口层解耦规范 (Clean Architecture)
+
+- **职责界限**：`main.rs` 和 `cli.rs` 属于外层接口适配器 (Interface Adapters)。其唯一职责是：解析命令行选项 (CLAP)、初始化全局基础设施 (如 Ring Cryptography Provider、Logger)、以及将命令分派给具体的领域用例 (Usecases)。
+- **禁止内嵌业务**：禁止在命令行解析匹配的分支（如 `Commands::Mock`、`Commands::Test` 等）中直接包含路由读取、网络监听、依赖解析及大段转换逻辑。
+- **高阶控制器下沉**：所有核心的批处理测试流、Mock 服务拉起过程必须封装在库内（例如 `rupost::runner::run_test_suite`、`rupost::mock::run_server_from_file`），主入口应当做到“即调即走”，主入口行数必须控制在 150 行以内。
+
+## 7. 重构与测试回归保障规范 (Multi-Tiered Testing Strategy)
+
+在对 CLI 层、Runner 核心层等关键路径进行重构或新特性注入时，必须在代码提交前执行以下三层自动化校验，不可忽略任何一层：
+
+1. **单元测试 (Unit Tests)**：
+   - 必须针对提炼出的高层服务函数编写对应的边缘用例（例如传入空路径数组、不存在的配置文件等场景），验证并阻断可能的 Panic。
+2. **集成冒烟测试 (Smoke Tests)**：
+   - 重构后必须在本地顺利执行 `tests/verify_features.sh` 脚本，验证包含 `init` 模板保护、`mock` 变体、`diagnose` 诊断等在内的全特性集成链路完好无损。
+3. **示例与全量回归 (Regression Tests)**：
+   - 执行 `cargo test` 以验证现有的集成测试和单元测试套件全部 PASS。
+   - 执行 `examples/run_all.sh`，确保 examples 中内置的所有复杂场景（包括变量级联覆盖、WebSocket 握手、SSE 流式落盘等）100% 成功通过，不引入任何功能倒退。
+
+---
+
+## 8. TUI 开发与体验打磨规范 (TUI Architecture)
+
+*   **TUI Architecture**: 关于 TUI 组件的设计思想（M-V-VM）、自适应布局比例划分、无状态 Widget 封装、ASCII 经典化 aesthetics 约束、Left/Right 键树与 Tab 快捷冲突路由、流式 Word-Wrap 预折行性能优化、向心回弹光标重定位算法以及离屏 `TestBackend` 功能验证，请参考专门的 [TUI Design & Component Guidelines](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/tui-design-guidelines/SKILL.md) 规则文档。
 
 ---
 

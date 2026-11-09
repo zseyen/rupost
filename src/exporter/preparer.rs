@@ -2,6 +2,7 @@ use crate::exporter::redact::{redact_header_value, redact_url};
 use crate::exporter::types::{ExportableRequest, SkippedItem};
 use crate::http::url::resolve_final_url;
 use crate::parser::{ParsedFile, ParsedRequest};
+use crate::utils::path_guard::normalize_posix_path;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
 use cookie_store::CookieStore;
@@ -29,10 +30,7 @@ impl RequestPreparer {
         let mut requests = Vec::new();
         let mut skipped = Vec::new();
 
-        let source_label = parsed_file
-            .source_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string());
+        let source_label = parsed_file.source_path.as_ref().map(normalize_posix_path);
 
         let has_explicit_tests = parsed_file.requests.iter().any(|r| r.metadata.is_test);
 

@@ -8,6 +8,11 @@ pub fn is_within_roots(path: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|root| path.starts_with(root))
 }
 
+/// 将文件路径或相对路径统一规范化为跨平台标准的 POSIX 正斜杠字符串（彻底抹平 Windows 反斜杠差异）。
+pub fn normalize_posix_path(path: impl AsRef<Path>) -> String {
+    path.as_ref().to_string_lossy().replace('\\', "/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19,5 +24,25 @@ mod tests {
         assert!(is_within_roots(Path::new("/w/b/sub/y.http"), &roots));
         assert!(!is_within_roots(Path::new("/w/c/z.http"), &roots));
         assert!(!is_within_roots(Path::new("/w"), &roots)); // 根自身不算
+    }
+
+    #[test]
+    fn test_normalize_posix_path_table() {
+        let cases = [
+            ("api/spec.md", "api/spec.md"),
+            ("api\\spec.md", "api/spec.md"),
+            ("a\\b/c\\d.http", "a/b/c/d.http"),
+            ("C:\\project\\test.http", "C:/project/test.http"),
+            ("", ""),
+            ("simple.md", "simple.md"),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(
+                normalize_posix_path(Path::new(input)),
+                expected,
+                "input: {input}"
+            );
+        }
     }
 }

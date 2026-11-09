@@ -1,6 +1,7 @@
 //! 文件树领域：Trie 构建、可见投影与侧边栏选中态（自 state/mod.rs 拆出）。
 
 use super::AppState;
+use crate::utils::path_guard::normalize_posix_path;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -104,7 +105,7 @@ impl TrieNode {
         is_last: bool,
         parent_lasts: Vec<bool>,
     ) {
-        let rel_str = self.rel_path.to_string_lossy().replace('\\', "/");
+        let rel_str = normalize_posix_path(&self.rel_path);
         if !rel_str.is_empty() {
             visible_nodes.push(TuiFileNode {
                 abs_path: self.abs_path.to_string_lossy().into_owned(),
@@ -213,8 +214,9 @@ impl AppState {
             let path_canon = std::fs::canonicalize(&path_buf).unwrap_or(path_buf);
 
             if let Ok(rel_path) = path_canon.strip_prefix(&root_canon) {
+                let posix_rel = normalize_posix_path(rel_path);
                 // 过滤在 Trie 插入前做：命中文件的祖先目录由投影自动保留
-                if !filter_matches(&rel_path.to_string_lossy(), &query) {
+                if !filter_matches(&posix_rel, &query) {
                     continue;
                 }
                 if unique_paths.insert(rel_path.to_path_buf()) {
@@ -262,7 +264,7 @@ fn relocate_selection(prev_rel_path: &str, visible: &[TuiFileNode]) -> Option<us
             .map(std::path::Path::to_path_buf)
     })
     .filter_map(|ancestor| {
-        let key = ancestor.to_string_lossy().replace('\\', "/");
+        let key = normalize_posix_path(&ancestor);
         visible.iter().position(|node| node.rel_path == key)
     })
     .next()
@@ -394,6 +396,15 @@ mod tests {
         assert!(!rels.contains(&"readme.http"), "{rels:?}");
         assert_eq!(state.files_state.selected_index, 0); // 过滤变化重置选中
         assert_eq!(state.filter_query, "auth");
+
+        // 正斜杠路径过滤测试：即使带斜杠也能跨平台匹配
+        state.set_filter("tests/");
+        let rels_slash: Vec<&str> = state
+            .visible_file_nodes
+            .iter()
+            .map(|n| n.rel_path.as_str())
+            .collect();
+        assert!(rels_slash.contains(&"tests/auth.http"), "{rels_slash:?}");
 
         // 清空恢复全量（展开状态保留）
         state.set_filter("");

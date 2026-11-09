@@ -1,6 +1,7 @@
 use super::event::TuiEvent;
 use super::state::AppState;
 use crate::Result;
+use crate::utils::path_guard::normalize_posix_path;
 use crossterm::{
     event::{self, Event as CrosstermEvent},
     execute,
@@ -277,9 +278,7 @@ pub fn load_initial_file(state: &mut AppState, initial_file: Option<&str>) {
                     let step = current.join(name);
                     let step_abs = root_canon.join(&step);
                     if step_abs.is_dir() {
-                        state
-                            .expanded_dirs
-                            .insert(step.to_string_lossy().replace('\\', "/"));
+                        state.expanded_dirs.insert(normalize_posix_path(&step));
                     }
                     current = step;
                 }

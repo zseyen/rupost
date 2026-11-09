@@ -6,6 +6,7 @@
 //! HTML 报告离线二次渲染（`ReportContext::from_json_file_reports`）。
 
 use crate::runner::types::TestResult;
+use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 
 /// 单个文件的 JSON 测试报告（强类型序列化与反序列化契约，供 `ai triage` 消费）
@@ -58,7 +59,7 @@ pub fn build_json_reports(
     results
         .iter()
         .map(|(path, file_results)| JsonFileReport {
-            file_path: path.to_string_lossy().to_string(),
+            file_path: normalize_posix_path(path),
             results: file_results
                 .iter()
                 .map(|r| {
@@ -267,5 +268,16 @@ mod tests {
         assert!(req.response_body_snippet.is_none());
         assert!(req.assertions[0].expected.is_none());
         assert!(req.assertions[0].stream_event_index.is_none());
+    }
+
+    #[test]
+    fn test_build_json_reports_normalizes_windows_path_to_posix() {
+        let windows_path = std::path::PathBuf::from("tests\\sub\\test.http");
+        let result =
+            TestResult::skipped(1, None, "GET".to_string(), "http://example.com".to_string());
+        let results = vec![(windows_path, vec![result])];
+        let reports = build_json_reports(&results);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].file_path, "tests/sub/test.http");
     }
 }

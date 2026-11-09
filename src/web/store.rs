@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::security::PathSandbox;
+use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -93,7 +94,7 @@ impl DocumentStore for LocalFsDocumentStore {
 
             let rel_path = path
                 .strip_prefix(&self.root_dir)
-                .map(|p| p.to_string_lossy().to_string())
+                .map(normalize_posix_path)
                 .unwrap_or_else(|_| file_name.clone());
 
             let modified_at = meta.modified().ok().map(|t| {
@@ -162,6 +163,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "spec.md");
         assert_eq!(files[0].path, "api/spec.md");
+        assert!(
+            !files[0].path.contains('\\'),
+            "跨平台返回路径必须规范化为正斜杠，严禁反斜杠"
+        );
 
         // 验证目录穿越拦截
         let attack = store.read_document("../../../etc/passwd").await;

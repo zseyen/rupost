@@ -1,5 +1,6 @@
 use crate::report::json::JsonFileReport;
 use crate::runner::types::TestResult;
+use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -273,7 +274,7 @@ impl ReportContext {
             total_duration_ms += file_duration_ms;
 
             file_entries.push(ReportFileEntry {
-                file_path: path.to_string_lossy().to_string(),
+                file_path: normalize_posix_path(path),
                 total_requests: results.len(),
                 passed_requests: file_passed,
                 failed_requests: file_failed,

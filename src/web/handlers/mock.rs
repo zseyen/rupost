@@ -69,10 +69,9 @@ pub async fn simulate_mock_handler(
                         .headers
                         .get(&cond.key)
                         .or_else(|| {
-                            let lk = cond.key.to_lowercase();
                             req.headers
                                 .iter()
-                                .find(|(k, _)| k.to_lowercase() == lk)
+                                .find(|(k, _)| k.eq_ignore_ascii_case(&cond.key))
                                 .map(|(_, v)| v)
                         })
                         .cloned();

@@ -50,10 +50,9 @@ impl VariantCondition {
         match self.source {
             ConditionSource::Header => {
                 let val_opt = headers.get(&self.key).or_else(|| {
-                    let lower_key = self.key.to_lowercase();
                     headers
                         .iter()
-                        .find(|(k, _)| k.to_lowercase() == lower_key)
+                        .find(|(k, _)| k.eq_ignore_ascii_case(&self.key))
                         .map(|(_, v)| v)
                 });
 

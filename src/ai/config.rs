@@ -68,10 +68,7 @@ pub struct ResolvedAiConfig {
 
 /// B4 零 Key 边界：本地回环地址允许占位密钥（Ollama 不校验鉴权），远程端点必须显式 Key
 fn is_local_base(base_url: &str) -> bool {
-    url::Url::parse(base_url)
-        .ok()
-        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
-        .is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "[::1]")
+    crate::http::url::is_loopback_host(base_url)
 }
 
 /// 用户级配置文件定位：`$HOME/.rupost/ai.toml`（home 缺失 → None）

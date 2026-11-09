@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::RupostError;
+use crate::http::url::is_loopback_host;
 use crate::web::assets::{AssetProvider, EmbeddedAssetProvider};
 use crate::web::handlers;
 use crate::web::store::{DocumentStore, LocalFsDocumentStore};
@@ -62,13 +63,8 @@ fn is_allowed_host(host_str: &str, custom_allowed: &[String]) -> bool {
         host_str.split(':').next().unwrap_or("")
     };
 
-    // 遵循 RFC 9110 §7.2: Host 标头大小写无关 (Case-Insensitive)
-    if host_only.eq_ignore_ascii_case("localhost")
-        || host_only == "127.0.0.1"
-        || host_only == "::1"
-        || host_only == "0.0.0.0"
-        || host_only.to_ascii_lowercase().ends_with(".localhost")
-    {
+    // 遵循 RFC 9110 §7.2: Host 标头大小写无关 (Case-Insensitive)；0.0.0.0 与本地回环放行
+    if host_only == "0.0.0.0" || is_loopback_host(host_only) {
         return true;
     }
 
@@ -166,11 +162,6 @@ fn serve_asset_internal(state: &AppState, path: &str) -> Response {
     } else {
         (StatusCode::NOT_FOUND, "Asset not found").into_response()
     }
-}
-
-/// --dev 模式的合法绑定地址（回环 ONLY：宽松 CORS 不暴露给非回环接口）
-fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
 /// 启动活文档工作台 Web 服务器

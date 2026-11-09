@@ -1,4 +1,5 @@
 #![allow(clippy::manual_strip)]
+use crate::utils::path_guard::is_live_doc;
 use crate::variable::VariableContext;
 use crate::{Result, RupostError};
 
@@ -130,7 +131,7 @@ pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput
                 !after.is_empty() && after.chars().all(|c| c.is_ascii_digit())
             })
             .unwrap_or(false);
-    let file_like = input.contains(' ') || input.ends_with(".http") || input.ends_with(".md");
+    let file_like = input.contains(' ') || is_live_doc(input);
     if is_independent && !file_like {
         // 本地主机没有 TLS，强行补默认 scheme 会制造必败请求
         let scheme = if first.starts_with("localhost") || first.starts_with("127.") {
@@ -202,10 +203,66 @@ pub fn join_paths(parts: &[&str]) -> String {
     result
 }
 
+/// 判断主机名或 URL 目标是否为本地回环机器（RFC 6761 / RFC 9110）。
+/// 支持 localhost、127.0.0.1、::1、[::1] 以及 *.localhost 子域（大小写不敏感，支持包含端口与 scheme）。
+pub fn is_loopback_host(host_or_url: &str) -> bool {
+    let host_only = if let Ok(parsed) = url::Url::parse(host_or_url) {
+        parsed.host_str().unwrap_or("").to_string()
+    } else {
+        let trimmed = host_or_url.trim();
+        let without_scheme = trimmed
+            .strip_prefix("http://")
+            .or_else(|| trimmed.strip_prefix("https://"))
+            .or_else(|| trimmed.strip_prefix("ws://"))
+            .or_else(|| trimmed.strip_prefix("wss://"))
+            .unwrap_or(trimmed);
+        let host_port = without_scheme.split('/').next().unwrap_or("");
+        if host_port.starts_with('[') {
+            if let Some(bracket) = host_port.find(']') {
+                host_port[1..bracket].to_string()
+            } else {
+                host_port.to_string()
+            }
+        } else if let Some(colon) = host_port.find(':') {
+            host_port[..colon].to_string()
+        } else {
+            host_port.to_string()
+        }
+    };
+
+    let host_clean = host_only.trim_matches('[').trim_matches(']');
+    host_clean.eq_ignore_ascii_case("localhost")
+        || host_clean == "127.0.0.1"
+        || host_clean == "::1"
+        || host_clean.to_ascii_lowercase().ends_with(".localhost")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    #[test]
+    fn test_is_loopback_host_table() {
+        let cases = [
+            ("localhost", true),
+            ("LocalHost", true),
+            ("127.0.0.1", true),
+            ("::1", true),
+            ("[::1]", true),
+            ("sub.localhost", true),
+            ("http://localhost:8080/api", true),
+            ("http://127.0.0.1:3000", true),
+            ("http://[::1]:8080", true),
+            ("example.com", false),
+            ("http://192.168.1.1:8080", false),
+            ("10.0.0.1", false),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(is_loopback_host(input), expected, "case: {input}");
+        }
+    }
 
     #[test]
     fn test_normalize_input_url_decision_table() {

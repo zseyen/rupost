@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::security::PathSandbox;
-use crate::utils::path_guard::{is_live_doc, normalize_posix_path};
+use crate::utils::path_guard::{LIVE_DOC_EXTENSIONS, is_live_doc, normalize_posix_path};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -42,10 +42,10 @@ impl LocalFsDocumentStore {
         Self { root_dir: abs_root }
     }
 
-    /// 获取活文档安全沙箱（限制 .md / .http 扩展名，拒绝隐藏文件）
+    /// 获取活文档安全沙箱（限制活文档白名单扩展名，拒绝隐藏文件）
     fn document_sandbox(&self) -> PathSandbox {
         PathSandbox::new(&self.root_dir)
-            .with_extensions(&["md", "http"])
+            .with_extensions(LIVE_DOC_EXTENSIONS)
             .allow_hidden(false)
     }
 

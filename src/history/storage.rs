@@ -311,9 +311,14 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             }
         }
     }
+    let normalized_source = source_paths
+        .iter()
+        .map(crate::utils::path_guard::normalize_posix_path)
+        .collect::<Vec<_>>()
+        .join(", ");
     let suite = SnapshotSuite {
         timestamp: chrono::Utc::now(),
-        source_file: Some(source_paths.join(", ")),
+        source_file: Some(normalized_source),
         entries,
     };
     write_snapshot_suite(&suite, snapshot_path)

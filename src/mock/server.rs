@@ -58,7 +58,7 @@ fn extract_path(url_str: &str) -> String {
 
 /// 解析 mock 配置文件/文档，并启动 Mock 服务器
 pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> {
-    let is_doc = is_live_doc(file_path) || file_path.to_ascii_lowercase().ends_with(".markdown");
+    let is_doc = is_live_doc(file_path);
 
     let file_config = if is_doc {
         let inputs = [file_path.to_string()];

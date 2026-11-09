@@ -237,7 +237,10 @@ pub fn is_loopback_host(host_or_url: &str) -> bool {
         }
     };
 
-    let host_clean = host_only.trim_matches('[').trim_matches(']');
+    let host_clean = host_only
+        .trim_matches('[')
+        .trim_matches(']')
+        .trim_end_matches('.');
 
     // 1. IP 地址解析（支持 IPv4 127.0.0.0/8 全段及 IPv6 ::1）
     if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
@@ -246,7 +249,7 @@ pub fn is_loopback_host(host_or_url: &str) -> bool {
 
     // 2. 域名解析（RFC 6761: localhost 及 *.localhost）
     host_clean.eq_ignore_ascii_case("localhost")
-        || host_clean.to_ascii_lowercase().ends_with(".localhost")
+        || (host_clean.to_ascii_lowercase().ends_with(".localhost") && host_clean != ".localhost")
 }
 
 #[cfg(test)]
@@ -263,6 +266,9 @@ mod tests {
             ("::1", true),
             ("[::1]", true),
             ("sub.localhost", true),
+            ("localhost.", true),
+            ("api.localhost.", true),
+            (".localhost", false),
             ("http://localhost:8080/api", true),
             ("http://127.0.0.1:3000", true),
             ("http://[::1]:8080", true),

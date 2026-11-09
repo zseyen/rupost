@@ -14,7 +14,7 @@ pub fn normalize_posix_path(path: impl AsRef<Path>) -> String {
 }
 
 /// 支持的活文档扩展名白名单（大小写不敏感）
-pub const LIVE_DOC_EXTENSIONS: &[&str] = &["http", "md"];
+pub const LIVE_DOC_EXTENSIONS: &[&str] = &["http", "md", "markdown"];
 
 /// 判定给定路径或文件名是否为受支持的活文档（.http / .md，大小写不敏感）。
 pub fn is_live_doc(path: impl AsRef<Path>) -> bool {
@@ -79,6 +79,8 @@ mod tests {
             ("test.md", true),
             ("test.Md", true),
             ("spec.MD", true),
+            ("doc.markdown", true),
+            ("DOC.MARKDOWN", true),
             ("sub/dir/api.http", true),
             ("test.json", false),
             ("test.txt", false),

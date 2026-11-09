@@ -585,6 +585,21 @@ fi
 rm -rf "$EXPLAIN_OUT" "$EXPLAIN_ERR"
 rm -rf "$HIST_DIR" "$HIST_SNAP" "$HIST_OUT"
 
+# 14. 验证 JUnit XML 报告（M1：CI 消费场景）
+echo -e "${BLUE}[*] 验证 JUnit XML 报告 (--report junit)...${NC}"
+JUNIT_CASE=$(mktemp /tmp/rupost_junit_case_XXXXXX.http)
+printf '%s\n' "### health" "# @name health" "GET http://127.0.0.1:9004/ok" "" "# @assert status == 200" "" "### fail" "# @name fail" "GET http://127.0.0.1:9004/bad" "" "# @assert status == 200" > "$JUNIT_CASE"
+JUNIT_XML=$(mktemp /tmp/rupost_junit_XXXXXX.xml)
+JUNIT_EXIT=0
+$RUPOST_BIN t "$JUNIT_CASE" --report junit --report-file "$JUNIT_XML" > /dev/null 2>&1 || JUNIT_EXIT=$?
+if [ "$JUNIT_EXIT" -eq 1 ] && grep -q "<testsuites" "$JUNIT_XML" && grep -q "failures=\"1\"" "$JUNIT_XML" && grep -q "<failure" "$JUNIT_XML" && ! grep -q $'\x1b' "$JUNIT_XML"; then
+    echo -e "${GREEN}[✓] JUnit XML 报告验证成功（exit 1 与失败数一致 + ANSI 剥离）！${NC}"
+else
+    echo -e "${RED}[ERROR] JUnit XML 报告验证失败（exit=$JUNIT_EXIT）！${NC}"
+    exit 1
+fi
+rm -rf "$JUNIT_CASE" "$JUNIT_XML"
+
 kill $REPLAY_MOCK_PID 2>/dev/null
 rm -rf "$REPLAY_MOCK" "$REPLAY_SNAP" "$REPLAY_STDOUT"
 

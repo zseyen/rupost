@@ -369,6 +369,7 @@ $ rupost t suite/ --on-failure 'stern deploy/api --since 5m --grep $RUPOST_FAILE
 | 重放就地归因 | `rupost replay snap.json --explain` |
 | 历史导出快照 | `rupost history export --last N -o snap.json` |
 | 报告落盘 | `rupost t ... --report-file report.json` |
+| JUnit CI 报告 | `rupost t ... --report junit --report-file report.xml` |
 | 成果沉淀 | `rupost ai bootstrap --from history -o regression.http` |
 
 ---

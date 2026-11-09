@@ -16,7 +16,7 @@ pub struct TestArgs {
     #[arg(long, default_value = "4")]
     pub concurrency: usize,
 
-    /// 报告输出格式 (terminal, json 或 html)
+    /// 报告输出格式 (terminal, json, html 或 junit/xml)
     #[arg(long, default_value = "terminal")]
     pub report: String,
 

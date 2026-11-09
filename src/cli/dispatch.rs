@@ -78,8 +78,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 if written.overwritten {
                     eprintln!("[!] 报告文件已存在，将覆盖: {}", written.path.display());
                 }
-                if matches!(written.format, rupost::report::ReportFileFormat::Html)
-                    && (verbose || report.eq_ignore_ascii_case("html"))
+                let is_html = matches!(written.format, rupost::report::ReportFileFormat::Html);
+                let is_junit = matches!(written.format, rupost::report::ReportFileFormat::Junit);
+                // M1（评审 P1-4）：junit 落盘纳入"已生成"提示（此前静默写文件）
+                if (is_html && (verbose || report.eq_ignore_ascii_case("html")))
+                    || (is_junit
+                        && (verbose
+                            || report.eq_ignore_ascii_case("junit")
+                            || report.eq_ignore_ascii_case("xml")))
                 {
                     println!("  报告已生成至: {}", written.path.display());
                 }

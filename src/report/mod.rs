@@ -1,11 +1,13 @@
 pub mod generator;
 pub mod html;
 pub mod json;
+pub mod junit;
 pub mod types;
 
 pub use generator::ReportGenerator;
 pub use html::HtmlReportGenerator;
 pub use json::{JsonAssertionReport, JsonFileReport, JsonTestReport};
+pub use junit::JUnitTestSuites;
 pub use types::{
     ReportAssertionItem, ReportContext, ReportFileEntry, ReportRequestItem, ReportSummary,
     TimingWaterfall, escape_html,
@@ -38,6 +40,7 @@ pub fn generate_html_report_from_json(
 pub enum ReportFileFormat {
     Html,
     Json,
+    Junit,
 }
 
 /// 报告文件写出产出（消息结构体：打印决策留给派发层，保证 `--report json` 的
@@ -54,16 +57,18 @@ pub struct ReportWriteOutcome {
 /// 显式值永远优先（html/json 忽略大小写）；其余值（含默认 terminal）按扩展名推断
 /// （大小写不敏感：OUT.HTML 与 out.html 同语义，审查 P2-4b）。
 pub fn determine_report_format(report: &str, report_file: &str) -> ReportFileFormat {
-    let ext_is_html = {
-        let lower = report_file.to_ascii_lowercase();
-        lower.ends_with(".html") || lower.ends_with(".htm")
-    };
+    let ext_lower = report_file.to_ascii_lowercase();
+    let ext_is_html = ext_lower.ends_with(".html") || ext_lower.ends_with(".htm");
     if report.eq_ignore_ascii_case("html") {
         ReportFileFormat::Html
     } else if report.eq_ignore_ascii_case("json") {
         ReportFileFormat::Json
+    } else if report.eq_ignore_ascii_case("junit") || report.eq_ignore_ascii_case("xml") {
+        ReportFileFormat::Junit
     } else if ext_is_html {
         ReportFileFormat::Html
+    } else if ext_lower.ends_with(".xml") {
+        ReportFileFormat::Junit
     } else {
         ReportFileFormat::Json
     }
@@ -93,6 +98,12 @@ pub fn write_report_files(
                     std::path::PathBuf::from("rupost-report.html"),
                     ReportFileFormat::Html,
                 )
+            } else if report.eq_ignore_ascii_case("junit") || report.eq_ignore_ascii_case("xml") {
+                // M1：`--report junit` 无 report_file → 默认落盘 rupost-junit.xml
+                (
+                    std::path::PathBuf::from("rupost-junit.xml"),
+                    ReportFileFormat::Junit,
+                )
             } else {
                 return Ok(None);
             }
@@ -108,6 +119,12 @@ pub fn write_report_files(
         ReportFileFormat::Json => {
             let mut file = std::fs::File::create(&path)?;
             json::report_json(batch_results, &mut file)?;
+        }
+        ReportFileFormat::Junit => {
+            let json_reports = json::build_json_reports(batch_results);
+            let suites = junit::JUnitTestSuites::from_json_file_reports(&json_reports);
+            let xml_content = suites.to_xml_string()?;
+            std::fs::write(&path, xml_content)?;
         }
     }
 
@@ -137,6 +154,10 @@ mod tests {
             ("terminal", "a.htm", ReportFileFormat::Html),
             ("terminal", "a.json", ReportFileFormat::Json),
             ("terminal", "a", ReportFileFormat::Json), // 无扩展名兜底 JSON
+            ("junit", "out.json", ReportFileFormat::Junit), // 显式 junit 赢过扩展名
+            ("terminal", "test.xml", ReportFileFormat::Junit), // .xml 扩展名推断
+            ("terminal", "TEST.XML", ReportFileFormat::Junit), // 大小写不敏感
+            ("xml", "out", ReportFileFormat::Junit),   // "xml" 别名
             ("foo", "a.txt", ReportFileFormat::Json),  // 未知 report 值 + 未知扩展名
             ("", "a.html", ReportFileFormat::Html),
         ];

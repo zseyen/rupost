@@ -76,6 +76,10 @@ crossterm = "0.29"
 ratatui-textarea = "0.9"
 unicode-width = "0.1.13"
 
+# M1：JUnit XML 报告（纯 Rust 序列化，工业级转义）+ 终端 ANSI 控制符剥离（防 XML 解析器 SAX 异常）
+quick-xml = { version = "0.42", features = ["serialize"] }
+strip-ansi-escapes = "0.2"
+
 # unix 侧 --on-failure 钩子进程组终结（killpg）；已是 tokio/nix 传递依赖，零新增编译面。
 # 注意：target 表必须置于 [dependencies] 全部键之后——TOML 表头会吞掉其后所有键
 [target.'cfg(unix)'.dependencies]

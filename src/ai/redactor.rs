@@ -39,24 +39,12 @@ pub fn redact_assertion_value(raw: &str, value: Option<&str>) -> Option<String> 
 /// 在 UTF-8 字符边界安全截断文本（按字节上限），超出时追加 `...[truncated]`。
 /// 禁止裸切片（`&s[..n]` 会在多字节字符中间 panic），必须经 `is_char_boundary` 回退。
 pub fn truncate_utf8_safe(text: &str, max_bytes: usize) -> String {
-    if text.len() <= max_bytes {
-        return text.to_string();
-    }
-    let mut end = max_bytes.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...[truncated]", &text[..end])
+    crate::utils::text::truncate_utf8_bytes(text, max_bytes, "...[truncated]")
 }
 
 /// 按字符数截断错误消息，防止 AI 后端返回的超长错误体刷屏
 pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
-    if msg.chars().count() <= max_chars {
-        msg.to_string()
-    } else {
-        let truncated: String = msg.chars().take(max_chars).collect();
-        format!("{truncated}...[truncated]")
-    }
+    crate::utils::text::truncate_chars(msg, max_chars, "...[truncated]")
 }
 
 /// 递归遍历 JSON Value，将命中 `is_sensitive_key` 的对象字段值替换为 `"[REDACTED]"`（结构保留）

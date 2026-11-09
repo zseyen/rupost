@@ -240,12 +240,7 @@ impl ReportContext {
                 let body_snippet = if !res.success {
                     res.response.as_ref().and_then(|resp| {
                         resp.text().ok().map(|text| {
-                            if text.chars().count() > 512 {
-                                let truncated: String = text.chars().take(512).collect();
-                                format!("{}... (truncated)", truncated)
-                            } else {
-                                text.to_string()
-                            }
+                            crate::utils::text::truncate_chars(text, 512, "... (truncated)")
                         })
                     })
                 } else {

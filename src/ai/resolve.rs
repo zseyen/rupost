@@ -113,8 +113,11 @@ pub async fn resolve_file(path: &Path, dry_run: bool) -> Result<ResolveReport> {
                 consecutive_errors += 1;
                 // AI 错误文本自带完整原始 URL（密钥外泄主通道，见 redactor.rs），
                 // 落盘与行内警告前必须脱敏——与其余 ai 出站路径同口径
-                let safe_err =
-                    truncate(&crate::ai::redactor::redact_free_text(&e.to_string()), 120);
+                let safe_err = crate::utils::text::truncate_chars(
+                    &crate::ai::redactor::redact_free_text(&e.to_string()),
+                    120,
+                    "…",
+                );
                 report.failed.push((lineno + 1, safe_err.clone()));
                 out.push_str(line);
                 out.push_str(&format!("  # ⚠ 展开失败: {safe_err}\n"));
@@ -155,14 +158,6 @@ pub async fn resolve_file(path: &Path, dry_run: bool) -> Result<ResolveReport> {
 
     atomic_write(path, &out)?;
     Ok(report)
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max).collect::<String>())
-    }
 }
 
 /// 原子写：同目录临时文件 + rename（防半文件/防覆盖语义由调用方界定）

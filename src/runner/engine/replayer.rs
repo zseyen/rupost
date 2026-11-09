@@ -550,13 +550,7 @@ fn push_diff(
 
 /// 标量差异的单侧展示截断（40 字符，防超长字符串撑爆摘要）
 fn short_value(v: &serde_json::Value) -> String {
-    let s = v.to_string();
-    if s.chars().count() > 40 {
-        let truncated: String = s.chars().take(40).collect();
-        format!("{truncated}…")
-    } else {
-        s
-    }
+    crate::utils::text::truncate_chars(&v.to_string(), 40, "…")
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::security::PathSandbox;
-use crate::utils::path_guard::normalize_posix_path;
+use crate::utils::path_guard::{is_live_doc, normalize_posix_path};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -88,7 +88,7 @@ impl DocumentStore for LocalFsDocumentStore {
             let is_dir = meta.is_dir();
 
             // 如果是文件，仅纳入 .md 与 .http
-            if !is_dir && !file_name.ends_with(".md") && !file_name.ends_with(".http") {
+            if !is_dir && !is_live_doc(&file_name) {
                 continue;
             }
 

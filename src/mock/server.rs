@@ -25,6 +25,7 @@ use crate::mock::MockCompiler;
 use crate::mock::matcher::{MockRouteConfig, TrieRouteMatcher};
 use crate::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
 use crate::runner::{DependencyResolver, DirectoryScanner, WorkflowGraph};
+use crate::utils::path_guard::is_live_doc;
 use colored::Colorize;
 use std::collections::HashMap;
 use std::fs;
@@ -57,9 +58,7 @@ fn extract_path(url_str: &str) -> String {
 
 /// 解析 mock 配置文件/文档，并启动 Mock 服务器
 pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> {
-    let is_doc = file_path.ends_with(".md")
-        || file_path.ends_with(".markdown")
-        || file_path.ends_with(".http");
+    let is_doc = is_live_doc(file_path) || file_path.to_ascii_lowercase().ends_with(".markdown");
 
     let file_config = if is_doc {
         let inputs = [file_path.to_string()];

@@ -13,6 +13,31 @@ pub fn normalize_posix_path(path: impl AsRef<Path>) -> String {
     path.as_ref().to_string_lossy().replace('\\', "/")
 }
 
+/// 支持的活文档扩展名白名单（大小写不敏感）
+pub const LIVE_DOC_EXTENSIONS: &[&str] = &["http", "md"];
+
+/// 判定给定路径或文件名是否为受支持的活文档（.http / .md，大小写不敏感）。
+pub fn is_live_doc(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            LIVE_DOC_EXTENSIONS
+                .iter()
+                .any(|&e| e.eq_ignore_ascii_case(ext))
+        })
+        .unwrap_or(false)
+}
+
+/// 判定给定路径是否为 .http 文件（大小写不敏感）。
+pub fn is_http_doc(path: impl AsRef<Path>) -> bool {
+    path.as_ref()
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("http"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,6 +68,26 @@ mod tests {
                 expected,
                 "input: {input}"
             );
+        }
+    }
+
+    #[test]
+    fn test_is_live_doc_table() {
+        let cases = [
+            ("test.http", true),
+            ("test.HTTP", true),
+            ("test.md", true),
+            ("test.Md", true),
+            ("spec.MD", true),
+            ("sub/dir/api.http", true),
+            ("test.json", false),
+            ("test.txt", false),
+            ("test", false),
+            ("", false),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(is_live_doc(Path::new(input)), expected, "case: {input}");
         }
     }
 }

@@ -203,7 +203,7 @@ pub fn join_paths(parts: &[&str]) -> String {
     result
 }
 
-/// 判断主机名或 URL 目标是否为本地回环机器（RFC 6761 / RFC 9110）。
+/// 判断主机名或 URL 目标是否为本地回环机器（RFC 6761 / RFC 9110 / RFC 1122）。
 /// 支持 localhost、127.0.0.1、::1、[::1] 以及 *.localhost 子域（大小写不敏感，支持包含端口与 scheme）。
 pub fn is_loopback_host(host_or_url: &str) -> bool {
     let host_only = if let Ok(parsed) = url::Url::parse(host_or_url) {
@@ -223,17 +223,29 @@ pub fn is_loopback_host(host_or_url: &str) -> bool {
             } else {
                 host_port.to_string()
             }
-        } else if let Some(colon) = host_port.find(':') {
-            host_port[..colon].to_string()
+        } else if let Some(last_colon) = host_port.rfind(':')
+            && host_port.matches(':').count() == 1
+            && host_port[last_colon + 1..]
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        {
+            // 单个冒号且其后全为数字，判定为 host:port
+            host_port[..last_colon].to_string()
         } else {
+            // 裸 IPv6 (如 ::1) 或不带端口的普通域名/IP
             host_port.to_string()
         }
     };
 
     let host_clean = host_only.trim_matches('[').trim_matches(']');
+
+    // 1. IP 地址解析（支持 IPv4 127.0.0.0/8 全段及 IPv6 ::1）
+    if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    // 2. 域名解析（RFC 6761: localhost 及 *.localhost）
     host_clean.eq_ignore_ascii_case("localhost")
-        || host_clean == "127.0.0.1"
-        || host_clean == "::1"
         || host_clean.to_ascii_lowercase().ends_with(".localhost")
 }
 

@@ -3,6 +3,7 @@ use crate::history::model::RequestSnapshot;
 use crate::http::{Response, SseEvent, SseParser};
 use crate::middleware::Middleware;
 use crate::runner::types::TestResult;
+use crate::runner::utils::file_sync::write_log_with_limit;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -57,7 +58,7 @@ impl SseEventContext<'_> {
         self.accumulated_body.push('\n');
 
         let log_line = format!("data: {}\n\n", event.data);
-        let _ = write_sse_log_with_limit(self.log_path, &log_line, self.max_bytes).await;
+        let _ = write_log_with_limit(self.log_path, &log_line, self.max_bytes).await;
 
         if let Some(ref sender) = self.options.stream_sender {
             let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(
@@ -376,42 +377,4 @@ impl SseRunner {
 
         test_result
     }
-}
-
-async fn write_sse_log_with_limit(
-    log_path: &std::path::Path,
-    data: &str,
-    max_bytes: usize,
-) -> Result<(), std::io::Error> {
-    use tokio::fs::OpenOptions;
-    use tokio::io::AsyncWriteExt;
-
-    if let Some(parent) = log_path.parent() {
-        if !parent.exists() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-    }
-
-    let file_len = log_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
-    if file_len >= max_bytes {
-        return Ok(());
-    }
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(log_path)
-        .await?;
-
-    let new_len = file_len + data.len();
-    if new_len > max_bytes {
-        let _ = file
-            .write_all(b"\n[SYSTEM] Log truncated due to size limit (5MB).\n")
-            .await;
-    } else {
-        let _ = file.write_all(data.as_bytes()).await;
-    }
-    let _ = file.flush().await;
-    Ok(())
 }

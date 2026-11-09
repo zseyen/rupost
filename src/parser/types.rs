@@ -291,11 +291,21 @@ mod tests {
     #[test]
     fn test_parsed_request_header_and_sse_helpers() {
         let mut req = ParsedRequest::new(1);
-        req.headers.push(("Content-Type".into(), "application/json; charset=utf-8".into()));
-        req.headers.push(("Accept".into(), "text/event-stream".into()));
+        req.headers.push((
+            "Content-Type".into(),
+            "application/json; charset=utf-8".into(),
+        ));
+        req.headers
+            .push(("Accept".into(), "text/event-stream".into()));
 
-        assert_eq!(req.header("content-type"), Some("application/json; charset=utf-8"));
-        assert_eq!(req.header("CONTENT-TYPE"), Some("application/json; charset=utf-8"));
+        assert_eq!(
+            req.header("content-type"),
+            Some("application/json; charset=utf-8")
+        );
+        assert_eq!(
+            req.header("CONTENT-TYPE"),
+            Some("application/json; charset=utf-8")
+        );
         assert!(req.has_header("accept"));
         assert!(!req.has_header("authorization"));
         assert_eq!(req.content_type(), Some("application/json; charset=utf-8"));

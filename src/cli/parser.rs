@@ -220,10 +220,10 @@ fn parse_httpie(args: Vec<String>) -> Result<ParsedRequest> {
     let mut args_iter = args.into_iter().peekable();
 
     // Step 1: 检查第一个参数是否为 HTTP Method
-    if let Some(first) = args_iter.peek() {
-        if Method::is_standard(first) {
-            method = args_iter.next().unwrap().to_uppercase();
-        }
+    if let Some(first) = args_iter.peek()
+        && Method::is_standard(first)
+    {
+        method = args_iter.next().unwrap().to_uppercase();
     }
 
     // Step 2: 下一个非键值对参数即为 URL

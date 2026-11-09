@@ -606,8 +606,8 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 [解耦提案 v2](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md) 四阶段中的三阶段交付（Phase 1 见前批）：
 
 1. **Phase 2（`026ac23c`）**：editor.rs 1088 → 97 行（纯键位路由），业务动作归位 `handlers/actions/`（execution/export/snapshot/generator/ws_session 五文件），552 行测试随迁；`V`/`M` 委托 integrations 的既有先例推广成体系。双子代理审查：零语义偏差。
-2. **Phase 3（`53437bde`）**：response.rs 854 行拆为 response/ 七文件（门面 171 + 六子组件）；**副作用显式前置**——滑窗装载/SSE 惰性重构/HTTP 缓存重建收敛到门面前置段（按臂序逐臂复制条件），子组件 `&AppState` 只读；Headers/Request 经缓存管线的真实结构修正了 v1 概念错位；headers lossy 读回为唯一行为变更（backlog 同口径，提交信息如实声明）。第三轮审查机械 diff 验证渲染等价性全成立。
-3. **Phase 4（`39356194`）**：cli.rs 1359 行拆为 cli/mod.rs + commands/（12 变体全覆盖）+ dispatch.rs + runner.rs；表面契约测试先行锁定，零漂移实证。
+2. **Phase 3（trunk 血统 `72f902f0`）**：response.rs 854 行拆为 response/ 八文件（门面 171 + 七子组件）；**副作用显式前置**——滑窗装载/SSE 惰性重构/HTTP 缓存重建收敛到门面前置段（按臂序逐臂复制条件），子组件 `&AppState` 只读；Headers/Request 经缓存管线的真实结构修正了 v1 概念错位；headers lossy 读回为唯一行为变更（backlog 同口径，提交信息如实声明）。第三轮审查机械 diff 验证渲染等价性全成立。
+3. **Phase 4（`963f9f80`；前置表面契约测试为 `39356194`）**：cli.rs（迁移提交实际删除 1423 行）拆为 cli/mod.rs + commands/（12 变体全覆盖）+ dispatch.rs + runner.rs；表面契约测试先行锁定，零漂移实证。
 4. **三轮审查**：一轮（16 提交，1 P1 空扫描落盘 + P2 兼容 shim/大小写/措辞）、二轮（Phase 2/4 逐字保真验证，1 P1 app.rs:140 残留）、三轮（Phase 3 等价性验证，1 P1 提交信息声明）——全部修复落地；bug 修复三提交（非 ASCII header 三层+第四层、diagnose 大小写、Web FOUC）一并经审。
 5. 全量基线 890 passed / 0 failed（会话起点 883），clippy/fmt 双零。Phase 3 为解耦提案最后阶段——**提案四阶段全部交付**。
 

@@ -102,3 +102,5 @@
 *   **importer curl 非 ASCII header 值静默空串**：`src/importer/curl.rs` header 值 `v.to_str().unwrap_or("")` 使非 ASCII 头值静默丢失（领域提取迁移前即如此）。修复方向：非 UTF-8 安全解码（String::from_utf8_lossy）或告警。
 
 *   **同类 `to_str()` 丢值点盘点**（2026-11-09 非 ASCII header 修复批次遗留，按需顺手修）：`src/generator/trace.rs:51,172`（T2 溯源对非 ASCII 值失效，组合新发射语义将以明文落盘）、`src/runner/engine/replayer.rs:389`（快照 replay 还原请求整行静默丢弃）、`src/mock/server.rs:131` 与 `src/mock/server/axum_adapter.rs:66`（mock 匹配跳过非 ASCII）、TUI 展示层 `src/tui/state/history.rs:70`、`src/tui/handlers/actions/ws_session.rs:339`（~~`src/tui/ui/response.rs:694`~~ 已随 Phase 3 组件化修复：headers.rs lossy 读回）。
+
+*   **header_map 序列化同名多值覆盖**（2026-11-09 审查登记，既有行为）：`src/history/serialization.rs` 以 `HashMap<String,_>` 收集，`HeaderMap` 同名多值（如多条 Set-Cookie）仅存末值；deserialize 侧 `HeaderMap::insert` 亦为替换语义。修复方向：`append` + `Vec<(String,String)>` 中间表示（需同步 JSON schema 消费方 ai triage/history show）。

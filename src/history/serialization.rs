@@ -67,4 +67,33 @@ mod tests {
             "中文备注"
         );
     }
+
+    /// 损坏字节分支锁定（审查 P2①）：0xFF（合法 obs-text 但非 UTF-8）序列化为
+    /// U+FFFD（数据改写、非静默丢失），回读 from_str 对 U+FFFD 成功——不丢头
+    #[test]
+    fn test_damaged_bytes_serialize_to_replacement_char() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct W {
+            #[serde(with = "super::header_map")]
+            headers: HeaderMap,
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-bin",
+            HeaderValue::from_bytes(&[0x48, 0xFF, 0x49]).unwrap(),
+        );
+        let w = W { headers };
+
+        let json = serde_json::to_string(&w).unwrap();
+        assert!(
+            json.contains("\u{fffd}") || json.contains("�"),
+            "damaged bytes must serialize visibly as U+FFFD: {json}"
+        );
+
+        let back: W = serde_json::from_str(&json).unwrap();
+        assert!(
+            back.headers.contains_key("x-bin"),
+            "header must survive round trip (no silent drop)"
+        );
+    }
 }

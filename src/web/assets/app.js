@@ -34,7 +34,11 @@ function applyTheme(theme, persist = false) {
   document.documentElement.setAttribute('data-theme', theme);
   // 持久化仅限用户显式切换：自动探测结果不写入，OS 偏好变化保持生效（审查 P2）
   if (persist) {
-    localStorage.setItem('rupost-theme', theme);
+    try {
+      localStorage.setItem('rupost-theme', theme);
+    } catch (e) {
+      // 受限存储环境：toggle 点击不再抛未捕获异常（审查 P2④）
+    }
   }
   const btn = document.getElementById('btn-theme-toggle');
   if (btn) {

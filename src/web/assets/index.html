@@ -12,7 +12,7 @@
       try {
         saved = localStorage.getItem('rupost-theme');
       } catch (e) {
-        // 受限存储环境：回落 OS 偏好/默认暗色（等同旧行为）
+        // 受限存储环境：回落 OS 偏好，否则 'light'（JS 恒设属性，CSS :root 暗色兜底在此路径不可达）
       }
       var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
       document.documentElement.setAttribute('data-theme', saved || (prefersDark ? 'dark' : 'light'));

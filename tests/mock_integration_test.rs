@@ -400,7 +400,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 #[tokio::test]
 async fn test_abstract_base_url_scenario() {
     use rupost::mock::MockCompiler;
-    use rupost::mock::matcher::{MockMatcher, TrieRouteMatcher};
+    use rupost::mock::matcher::TrieRouteMatcher;
     use rupost::mock::server::axum_adapter::serve_matcher;
     use rupost::parser::MarkdownFileParser;
     use rupost::runner::TestExecutor;

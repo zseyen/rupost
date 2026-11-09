@@ -162,13 +162,11 @@ impl BatchExecutor {
                     // 替换常规阶段占位结果（保持原序号定位）
                     if let Some((_, file_results)) =
                         results.iter_mut().find(|(p, _)| p == file_path)
-                    {
-                        if let Some(slot) = file_results
+                        && let Some(slot) = file_results
                             .iter_mut()
                             .find(|r| r.request_number == orig_number)
-                        {
-                            *slot = result;
-                        }
+                    {
+                        *slot = result;
                     }
                 }
             }

@@ -635,7 +635,7 @@ async fn test_teardown_skipped_when_variable_unresolved() {
 
     // 批量层 Finally：防呆 → skipped + warning（非外发）——通过 batch 层验证
     use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest};
-    let mut parsed2 = HttpFileParser::parse_file(file.clone()).expect("parse");
+    let parsed2 = HttpFileParser::parse_file(file.clone()).expect("parse");
     let mut files_map = std::collections::HashMap::new();
     files_map.insert(file.clone(), parsed2.clone());
     let order = vec![file.clone()];

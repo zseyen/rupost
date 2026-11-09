@@ -617,3 +617,9 @@ PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执�
 
 1. **--dev CORS（加固计划战役 A-5）**：`rupost web --dev` 挂载宽松 CORS（tower-http 0.6 cors，与传递版本一致）供独立前端跨域联调；安全姿态三层——非回环 --host fail-fast 拒绝（错误含可执行指引）+ 启动横幅 + Host 守卫叠加；非 dev 模式零 CORS 头（默认拒）。测试：预检/实际跨域 allow-origin、非 dev 反向断言、非回环拒绝、CLI 解析（bin 14 测）。
 2. **前端 Run All 面板核实**：主题/UI 会话已完整交付（runSuite 消费 POST /api/v1/run/suite，RunSuiteResponse/SuiteItemResult 字段契约逐一吻合，btn-run-all 已入只读置灰清单）——本批零改动，契约核对记录于此。
+
+---
+
+## 开发规范生成（2026-11-09）
+
+基于本会话集群全部实战教训（工作副本快照吸收、glob 隐性依赖、大小写残留、no-op 修复误判、计划数字失实、假守护测试、横幅时序等约 20 起真实事故），提炼为 [doc/dev/development_standards.md](doc/dev/development_standards.md)：八章节（提交/迁移/测试/字符串编码/行为变更/安全姿态/审查协作/门禁清单），每条规则锚定 ⚓ 真实事故；AGENTS.md 挂指针。后续新事故按"附：维护纪律"增补。

@@ -107,7 +107,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## 协作流程与规则
 
-在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_workflow.md)。该流程规范由以下核心环节构成：
+在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_workflow.md) 与 [开发规范（实战教训提炼版）](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_standards.md)（提交纪律/迁移纪律/测试守护/编码/安全姿态——每条锚定真实事故）。该流程规范由以下核心环节构成：
 
 1. **功能分析与架构设计 (Stage 0 & 1)**：所有新功能或重大变更必须先由 **架构师** 通过 `brainstorming` 流程输出 PRD 与设计文档（存放在 `doc/plans/`），并确保设计符合 **Clean Architecture** 规范。
 2. **关键代码与单元测试 (Stage 2 & 3)**：在动工前先设计核心 Trait 与数据模型，单元测试必须在 `mod tests` 编写，并通过 Mock 隔离外部网络与文件 IO。

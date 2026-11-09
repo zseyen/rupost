@@ -122,7 +122,7 @@ impl BatchExecutor {
         let mut teardown_failure = false;
         for file_path in started.iter().rev() {
             if let Some(teardowns) = teardowns_map.remove(file_path) {
-                for (orig_number, mut req) in teardowns {
+                for (orig_number, req) in teardowns {
                     // P1-9 变量防呆（单次渲染判定）：先渲染副本检残留，
                     // 命中则 skipped（杜绝脏请求外发）；宏双求值限制已在 PRD 声明
                     let mut rendered = req.clone();

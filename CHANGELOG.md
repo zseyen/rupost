@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- `@teardown` 确定性生命周期（M3）：请求块标记为清理步骤——常规阶段占位跳过（原序号保留），批处理 Finally 阶段按已执行文件逆拓扑序执行；变量防呆（渲染副本检残留，未解析 → skipped + 警告，杜绝脏请求外发）；`TestResult.is_teardown` 标记 + 快照导出默认排除（防 replay 重放 DELETE）；失败继续全部清理、最终聚合失败；parallel + fail_fast 中断路径修复（JoinError::is_cancelled 容忍，变量合并与 Finally 不再被跳过）。
+- `rupost mock` 智能 CORS（M3，默认开启）：预检 OPTIONS 秒回 204 + 动态回显 Origin + Credentials: true + Allow-Headers 回显预检请求头（非 `*`——credentialed 请求合规）；`--no-cors` 停用；无 Origin 时 `*` 形态；`Vary: Origin`。
 - `rupost t --report junit / --report-file <PATH>.xml`（M1/T8）：**工业级 JUnit XML 测试报告**——100% 符合 Jenkins/GitLab/GitHub Actions 消费规格；基于 build_json_reports 统一脱敏结果生成（SSOT 复用，敏感值不外泄）；终端 ANSI 控制符构造期彻底剥离（防 XML 解析异常）；`<failure>`（断言失败）与 `<error>`（请求异常）节点区分（Jenkins 红绿语义）；`--report junit` 无文件默认落盘 rupost-junit.xml；junit_schema_test E2E + verify_features 步骤 14。
 - `rupost web --dev`：**开发者跨域模式**——挂载宽松 CORS 供独立前端（Vite/Webpack）跨域联调；安全姿态三层：非回环 `--host` fail-fast 拒绝（bind 之前）、启动横幅明示浏览器侧威胁（任意网页可跨域读写本地文档）、Host 守卫与回环绑定叠加；非 dev 模式零 CORS 头（默认拒）。
 - **快照脱敏（opt-in）**：`rupost t --save-snapshot` 与 `rupost history export` 新增 `--mask-secrets`——headers 走凭据掩码（Bearer 前缀保留）、body 走敏感键 `[REDACTED]` + PII 三正则（手机号/银行卡/邮箱，无截断）；schema 不变，掩码产物仍可 `replay` 加载；默认关（重放 body 比对保真度优先）。

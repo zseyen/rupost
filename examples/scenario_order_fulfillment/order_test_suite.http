@@ -1,0 +1,106 @@
+# =========================================================================
+# 电商订单与履约集成测试套件 (order_test_suite.http)
+# =========================================================================
+# 运行方式：
+# 1. 终端 A 启动 Mock 服务:
+#    rupost mock examples/scenario_order_fulfillment/order_spec.md --port 9000
+# 2. 终端 B 运行测试套件:
+#    rupost test examples/scenario_order_fulfillment/order_test_suite.http \
+#      --var base_url=http://127.0.0.1:9000 \
+#      --var auth_token=dev_order_admin_token_2026
+# =========================================================================
+
+### 1. 正常下单流程：标准金额与商品创建 (验证 201 Created)
+POST {{base_url}}/api/v1/orders
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "item_count": 2,
+  "amount": 29900,
+  "currency": "CNY"
+}
+
+@assert status == 201
+@assert body.id exists
+@assert body.amount == 29900
+@assert body.duplicated == false
+
+
+### 2. 幂等防重测试：携带相同 Idempotency-Key 重复提交 (触发 Header 条件分支)
+POST {{base_url}}/api/v1/orders
+Authorization: Bearer {{auth_token}}
+Idempotency-Key: repeat_tx_001
+Content-Type: application/json
+
+{
+  "item_count": 2,
+  "amount": 29900,
+  "currency": "CNY"
+}
+
+@assert status == 200
+@assert body.duplicated == true
+@assert body.id == "ord_existing_8888"
+
+
+### 3. VIP 专属渠道打折：Query 参数注入 (触发 Query 条件分支)
+POST {{base_url}}/api/v1/orders?channel=vip
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "item_count": 2,
+  "amount": 26910,
+  "currency": "CNY"
+}
+
+@assert status == 201
+@assert body.channel == "vip"
+@assert body.discount_applied == true
+
+
+### 4. 鉴权防御测试：不带 Authorization 凭据发起请求 (触发未鉴权 401 分支)
+POST {{base_url}}/api/v1/orders
+Content-Type: application/json
+
+{
+  "item_count": 1,
+  "amount": 10000
+}
+
+@assert status == 401
+@assert body.error == "Unauthorized"
+
+
+### 5. 详情查询测试：查询存在的订单履约详情 (验证 200 OK)
+GET {{base_url}}/api/v1/orders/detail?id=ord_std_10001
+Authorization: Bearer {{auth_token}}
+
+@assert status == 200
+@assert body.id == "ord_std_10001"
+@assert body.status == "paid"
+@assert body.tracking_number exists
+
+
+### 6. 边界异常测试：查询不存在的订单 (验证 404 Not Found)
+GET {{base_url}}/api/v1/orders/detail?id=ord_non_exist
+Authorization: Bearer {{auth_token}}
+
+@assert status == 404
+@assert body.error == "NotFound"
+
+
+### 7. 第三方支付网关沙箱调用 (验证 Host 逃逸机制与外网解耦)
+# 运行时判定：域名 httpbin.org 不属于本地契约 Host，自动逃逸绕过本地路由拦截
+# @skip 若离线无外网连接可跳过
+POST https://httpbin.org/post
+Content-Type: application/json
+
+{
+  "order_id": "ord_std_10001",
+  "channel": "wechat_pay_sandbox",
+  "nonce_str": "random_nonce_9988"
+}
+
+@assert status == 200

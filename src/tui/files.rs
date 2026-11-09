@@ -1,7 +1,7 @@
 //! 快速新建用例的领域逻辑：输入推导（纯函数）+ 工作区围栏内创建（经端口落盘）。
 
 use super::ports::FileRepository;
-use crate::utils::path_guard::is_within_roots;
+use crate::utils::path_guard::{is_live_doc, is_within_roots};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_FILE_BASE: usize = 80;
@@ -52,7 +52,7 @@ fn derive_url_test_file(normalized_url: &str) -> DerivedTest {
 
 fn derive_filename_test_file(name: &str) -> DerivedTest {
     let mut file_base = bound_filename(name);
-    if !file_base.ends_with(".http") && !file_base.ends_with(".md") {
+    if !is_live_doc(&file_base) {
         file_base.push_str(".http");
     }
     DerivedTest {
@@ -73,11 +73,6 @@ fn short_hash(raw: &str) -> String {
     format!("{:08x}", hasher.finish() as u32)
 }
 
-/// 按 UTF-8 字符边界截断到 max_chars 个字符
-fn truncate_chars(s: &str, max_chars: usize) -> String {
-    s.chars().take(max_chars).collect()
-}
-
 /// URL 片段 → 合法文件名：非字母数字转 '_'；超过 80 字符截断并追加 8 位短哈希，
 /// 保证总长远离各文件系统 255 字节上限。输入经 url::Url 解析，实际恒为 ASCII。
 fn sanitize(raw: &str) -> String {
@@ -90,7 +85,7 @@ fn sanitize(raw: &str) -> String {
     }
     format!(
         "{}_{short_hash}",
-        truncate_chars(&mapped, MAX_FILE_BASE),
+        crate::utils::text::truncate_chars(&mapped, MAX_FILE_BASE, ""),
         short_hash = short_hash(raw)
     )
 }

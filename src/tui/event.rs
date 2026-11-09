@@ -1,5 +1,3 @@
-use crate::assertion::AssertionResult;
-use crate::http::Response;
 use crate::parser::ParsedRequest;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -10,13 +8,14 @@ pub enum TuiEvent {
     Tick,
     Resize(u16, u16),
     RequestStarted(Uuid),
-    RequestFinished {
-        id: Uuid,
-        result: Box<Result<Response, String>>,
+    ReplayDone(Box<crate::runner::ReplayReport>, String),
+    ReplayFailed(String),
+    AiAssertDone(Result<Vec<String>, String>),
+    RequestResult {
+        result: Box<crate::runner::types::TestResult>,
         captured_vars: HashMap<String, String>,
-        assertions: Vec<AssertionResult>,
-        /// 非致命告警（@capture 失败、未定义变量、畸形 JSON 降级等），不影响 success 但必须可见
-        warnings: Vec<String>,
+        /// 本次批运行的请求总数（多请求执行的进度语义）
+        run_total: usize,
     },
     StreamChunk {
         id: Uuid,

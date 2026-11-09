@@ -265,7 +265,7 @@ async fn test_batch_report_json() {
     // 这里我们可以自己实现或升级 TestReporter::report_json。
     // 在这里我们主要测试 reporter 的 JSON 输出。
     let mut out = Vec::new();
-    rupost::reporter::TestReporter::report_json(&results, &mut out).unwrap();
+    rupost::report::json::report_json(&results, &mut out).unwrap();
     let json_str = String::from_utf8(out).unwrap();
     let parsed_json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
@@ -274,7 +274,7 @@ async fn test_batch_report_json() {
     assert_eq!(arr.len(), 1);
     assert_eq!(
         arr[0]["file_path"].as_str().unwrap(),
-        file_a.to_str().unwrap()
+        rupost::utils::path_guard::normalize_posix_path(&file_a)
     );
 }
 

@@ -17,21 +17,29 @@ pub struct AxumMockServer;
 
 impl MockServer for AxumMockServer {
     async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()> {
-        let app = Router::new()
-            .fallback(any(handle_mock_request))
-            .with_state(matcher);
-
         let addr = format!("127.0.0.1:{}", port);
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(RupostError::IoError)?;
 
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| RupostError::RequestExecutionFailed(e.to_string()))?;
-
-        Ok(())
+        serve_matcher(listener, matcher).await
     }
+}
+
+/// 以已绑定的 listener 服务 mock 路由（TUI/编程接入：调用方持有端口信息）
+pub async fn serve_matcher(
+    listener: tokio::net::TcpListener,
+    matcher: std::sync::Arc<dyn MockMatcher>,
+) -> Result<()> {
+    let app = Router::new()
+        .fallback(any(handle_mock_request))
+        .with_state(matcher);
+
+    axum::serve(listener, app)
+        .await
+        .map_err(|e| RupostError::RequestExecutionFailed(e.to_string()))?;
+
+    Ok(())
 }
 
 async fn handle_mock_request(

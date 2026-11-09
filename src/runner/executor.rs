@@ -208,11 +208,13 @@ impl TestExecutor {
         }
     }
 
-    /// 批量执行所有请求
-    pub async fn execute_all(
+    /// 批量执行所有请求（TUI 流式版）：逐请求完成即回调 `on_result`
+    /// （回调附带走完级联后的变量快照），返回全量结果。
+    pub async fn execute_all_streaming(
         &self,
         parsed_file: ParsedFile,
         context: &mut VariableContext,
+        mut on_result: impl FnMut(TestResult, std::collections::HashMap<String, String>),
     ) -> Result<Vec<TestResult>> {
         let mut results = Vec::new();
 
@@ -233,28 +235,39 @@ impl TestExecutor {
             let should_skip = parsed_request.should_skip()
                 || (has_explicit_tests && !parsed_request.metadata.is_test);
 
-            if should_skip {
-                results.push(TestResult::skipped(
+            let result = if should_skip {
+                TestResult::skipped(
                     request_number,
                     parsed_request.name().map(|s| s.to_string()),
                     parsed_request.method_or_default().to_string(),
                     parsed_request.url.clone(),
-                ));
-                continue;
-            }
-
-            let result = self
-                .execute_one(
+                )
+            } else {
+                self.execute_one(
                     parsed_request,
                     request_number,
                     context,
                     Some(source.clone()),
                 )
-                .await;
+                .await
+            };
+
+            let captured = context.variables().clone();
+            on_result(result.clone(), captured);
             results.push(result);
         }
 
         Ok(results)
+    }
+
+    /// 批量执行所有请求
+    pub async fn execute_all(
+        &self,
+        parsed_file: ParsedFile,
+        context: &mut VariableContext,
+    ) -> Result<Vec<TestResult>> {
+        self.execute_all_streaming(parsed_file, context, |_, _| {})
+            .await
     }
 
     /// 执行单个请求

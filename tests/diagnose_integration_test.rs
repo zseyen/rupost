@@ -20,6 +20,17 @@ async fn test_run_diagnose_cli_json_report_stdout() {
         .expect("run rupost diagnose --report json");
 
     assert!(out.status.success(), "diagnose success must exit 0");
+
+    // 大小写统一守护（backlog 收尾）：--report JSON 大写同语义
+    let out_upper = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["d", mock_server.uri().as_str(), "--report", "JSON"])
+        .output()
+        .expect("run rupost diagnose --report JSON");
+    assert!(out_upper.status.success(), "diagnose success must exit 0");
+    let stdout_upper = String::from_utf8_lossy(&out_upper.stdout);
+    let value_upper: serde_json::Value =
+        serde_json::from_str(stdout_upper.trim()).expect("uppercase JSON must be machine-readable");
+    assert!(value_upper.is_object());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let value: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("json report stdout must be valid JSON");
@@ -27,18 +38,28 @@ async fn test_run_diagnose_cli_json_report_stdout() {
     assert_eq!(value["http_status"], serde_json::json!(200));
 }
 
-/// R3 壳层：诊断失败（DNS 不可解析）→ stderr 错误 + `process::exit(1)` 路径
+/// R3 壳层：诊断失败（TCP 连接拒绝，回环确定性触发）→ stderr 错误 + `process::exit(1)` 路径。
+/// 弃用 .invalid 域名：挟持网络（VPN fake-IP 通配解析）下会假绿（对抗审查预告的风险成真）。
+///
+/// 环境哨兵（2026-11-05 勘误）：透明代理/增强模式代理可截胡**任意端口**的出站
+/// 连接——包括回环——使 127.0.0.1:1 "可连"，诊断以代理错误响应正常完成
+/// （exit 0），契约断言在该环境下不再确定性成立。测试前先裸 connect 探测：
+/// 可连则跳过（环境敌意，非产品缺陷）；拒绝则按原契约锁定。
 #[test]
 fn test_run_diagnose_cli_error_exit_one() {
+    if std::net::TcpStream::connect("127.0.0.1:1").is_ok() {
+        eprintln!(
+            "SKIP: 127.0.0.1:1 is connectable in this environment \
+             (transparent proxy interception) — exit-code contract is not \
+             deterministically testable here; re-run on a clean network"
+        );
+        return;
+    }
+
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
-        .args([
-            "d",
-            "http://rupost-diagnostics-nonexistent.invalid",
-            "--report",
-            "json",
-        ])
+        .args(["d", "http://127.0.0.1:1", "--report", "json"])
         .output()
-        .expect("run rupost diagnose against unresolvable host");
+        .expect("run rupost diagnose against closed loopback port");
 
     assert_eq!(out.status.code(), Some(1), "diagnose failure must exit 1");
     let stderr = String::from_utf8_lossy(&out.stderr);

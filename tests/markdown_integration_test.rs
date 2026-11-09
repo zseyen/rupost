@@ -168,3 +168,95 @@ fn test_mixed_http_rest_blocks() {
     let parsed2 = MarkdownFileParser::parse_file(&path2).unwrap();
     assert!(!parsed2.requests.is_empty());
 }
+
+#[test]
+fn test_mock_block_preserves_json_request_body_and_clean_headers() {
+    let content = r#"# API Spec
+```http
+POST /api/v1/orders
+Authorization: Bearer my_token
+Content-Type: application/json
+
+{
+  "item_count": 2,
+  "sku": "SKU-9988"
+}
+
+@mock-when query.mode == test
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"status": "ok"}
+```
+"#;
+    let parsed =
+        MarkdownFileParser::parse_content(content).expect("Failed to parse markdown content");
+    assert_eq!(parsed.requests.len(), 1);
+    let req = &parsed.requests[0];
+
+    // 1. 请求体必须存在，且内容正确
+    let body = req
+        .body
+        .as_deref()
+        .expect("Request body should be parsed, but was None");
+    assert!(
+        body.contains("\"item_count\": 2"),
+        "Body should contain json content, got: {}",
+        body
+    );
+
+    // 2. Headers 中绝不能把 JSON 行当成 Header 吞掉
+    for (k, v) in &req.headers {
+        assert!(
+            !k.contains('"'),
+            "Header key must not contain quotes from JSON body: ({}: {})",
+            k,
+            v
+        );
+    }
+
+    // 3. 正常 Header 依然被保留
+    assert_eq!(
+        req.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            .map(|(_, v)| v.as_str()),
+        Some("Bearer my_token")
+    );
+}
+
+#[test]
+fn test_dual_role_mock_compilation_not_skipped() {
+    let content = r#"# API Spec
+```http
+# @test
+POST /api/v1/orders
+Content-Type: application/json
+
+{"item_count": 1}
+
+@mock-when query.mode == test
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"status": "ok"}
+```
+"#;
+    let parsed =
+        MarkdownFileParser::parse_content(content).expect("Failed to parse markdown content");
+    assert_eq!(parsed.requests.len(), 1);
+    assert!(
+        parsed.requests[0].metadata.is_test,
+        "Should be recognized as a test request"
+    );
+    assert_eq!(parsed.requests[0].metadata.mock_variants.len(), 1);
+
+    // 编译 Mock 路由：双角色请求绝不能因为带有 @test 就被跳过
+    let routes = rupost::mock::compiler::MockCompiler::compile(&parsed);
+    assert_eq!(
+        routes.len(),
+        1,
+        "Dual-role block with @test and @mock-when should be compiled into mock routes, but got 0"
+    );
+    assert_eq!(routes[0].path, "/api/v1/orders");
+}

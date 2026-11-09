@@ -1,0 +1,160 @@
+# RuPost TUI 模式使用与测试指南 (Usage & Testing Guide)
+
+本指南详细介绍了交互式终端 UI 模式 (TUI) 的运行启动、交互操作快捷键、以及三级测试防御系统的回归验证方法。
+
+---
+
+## 🚀 一、 使用说明 (Usage Guide)
+
+### 1. 编译与启动
+要启动 RuPost 的 TUI 模式，只需在项目根目录下通过 Cargo 运行：
+```bash
+cargo run -- tui
+```
+或直接构建 Release 二进制文件并在任意工作目录拉起：
+```bash
+cargo build --release
+./target/release/rupost tui
+```
+
+### 2. 界面与自适应布局
+TUI 会自动根据当前的终端窗口大小调整显示布局：
+* **宽屏 (横向宽度 >= 120 字符)**：渲染 **Files (左侧文件树)**、**Editor (中部编辑器)** 和 **Response (右侧响应看板)** 三栏视图。
+* **窄屏 (80 <= 宽度 < 120 字符)**：渲染 **Editor** 和 **Response** 两栏视图，Files 默认收起。
+* **堆叠屏 (宽度 < 80 字符)**：只满屏渲染单个活动视图，顶部以 Tab 指示，支持通过 Tab 键在 `[Files]`、`[Request]`、`[Response]` 三个页签之间切换。
+* **极小屏防御 (宽度 < 40 或高度 < 10)**：显示红色 `Terminal too small.` 警告屏，强力防止布局溢出崩溃。
+
+### 3. 面板焦点与高亮 (Focus Control)
+* 按 **`Tab`** 键以顺时针方向循环轮换焦点。
+* 按 **`Shift+Tab`** 键以逆时针方向循环轮换焦点。
+* 当前获得焦点的活动面板将高亮为 **亮青色 (Cyan) 边框**，非活动面板显示为 **深灰色 (DarkGray) 边框**。
+
+### 4. 真正可用的核心快捷键 (Core Keybindings)
+为保持简洁和极低的键盘切换开销，TUI 模式的键绑定如下：
+
+| 按键 / 快捷键 | 作用面板 | 功能说明 |
+| :--- | :--- | :--- |
+| **`q`** | 全局 | 退出 TUI 模式并返回原控制终端。 |
+| **`Tab`** | 全局 | 顺时针切换焦点面板（或者在堆叠单栏下切换标签页）。 |
+| **`Shift+Tab`** | 全局 | 逆时针切换焦点面板（或者在堆叠单栏下切换标签页）。 |
+| **`j` / `k` / `↑` / `↓`** | Files 面板 | 在左侧文件树列表中上下移动高亮指示光标。 |
+| **`Enter`** | Files 面板 | 加载高亮选中的测试文件至编辑器预览（Read-Only）。 |
+| **Editor 面板** | Editor 面板 | **只读预览**（标题注明 Read-Only），不接收文本输入；修改测试内容走 `E` 外部编辑器闭环（见 [keybindings.md](keybindings.md)）。 |
+| **`Ctrl+R` / `Ctrl+Enter`** | Editor 面板 | 异步执行当前请求（不阻塞界面渲染）。 |
+| **`j` / `k` / `↑` / `↓`** | Response 面板 | 对右侧响应面板的数据进行垂直滚动，方便浏览长报文 Body。 |
+
+### 5. 编辑器与修改路径
+* Editor 面板为**只读预览**（标题注明 Read-Only），不存在脏状态与未保存拦截机制。
+* 修改测试内容的正式路径：按 `E` 挂起 TUI 进入外部编辑器编辑，保存退出后自动重载预览（详见 [keybindings.md](keybindings.md)）。
+* 新建用例：Files 侧栏按 `n`，在快速输入框输入 URL 自动推导文件名创建（基于 `ratatui-textarea` 的互斥输入模态）。
+
+### 6. 长连接默认自动落盘与清理 (Log Rotation & Auto Cleanup)
+为保证大规模或长时间 WebSocket 帧与 SSE 流数据的完整可追溯性，且不卡顿终端渲染，RuPost 采取了双轨方案：
+* **默认落盘**：所有 SSE 与 WebSocket 连接启动后，无需显示声明，底层均会默认在本地工作区的 `.rupost/logs/` 目录下生成时间戳命名的物理文件（如 `ws_20260705_1.log`），全量写入所有出站与入站数据帧。
+* **文件限额**：为防止磁盘空间耗尽，单个连接的日志物理文件上限为 **5MB**（大约可存储数万帧）。文件超限后会自动截断写入并追加 `[SYSTEM] Log truncated due to size limit` 警告。
+* **周期自愈与概率懒清理 (Lazy GC)**：每次 TUI/CLI 启动或发起常规请求时，**完全不进行任何文件遍历与清理**以保证 0 延时启动。只有当长连接成功建立，后台任务开始运行时，才会触发清理调用，且清理具有 **1%** 的概率（即每 100 次连接大概率只有 1 次实际执行），在 `tokio::task::spawn_blocking` 异步后台线程池中静默扫描清理 7 天前过期的日志，并对目录进行修剪（LRU 算法把超过 100MB 的旧文件删掉，降低到 80MB 以下）。
+
+### 7. 手动垃圾清理与修剪 (Manual CLI Cleanup & Pruning)
+您可以使用以下新增的 CLI 命令，显式管理和删除长连接日志以及整个历史数据库：
+* **强制修剪**：运行 `rupost history prune [--days <D>] [--max-size <MB>]`
+  * `--days`：指定删除多少天之前的日志文件（默认 7 天）。
+  - `--max-size`：指定最大日志文件夹容量（默认 100MB），超出限制将按照文件修改时间从旧到新依次删除（LRU 算法）。
+* **物理清空**：运行 `rupost history clear [-y/--yes] [--all]`
+  * 默认会有红色醒目的 WARNING 确认框防止误删，提示用户输入 `y/n` 进行二次确认。
+  * **`-y` / `--yes`**：自动跳过确认询问，适用于 CI/CD 或 Shell 自动化清理脚本。
+  * **`--all`**：不仅清空 `logs/` 目录，还一并清空 `.rupost/history.jsonl` 主历史大纲数据库。
+
+### 8. 历史交互回溯 (Viewing Long-Connection History)
+要检索并完整阅读过往长连接或常规 HTTP 通信的详细帧日志，您可以使用 `rupost history show <target>` 交互命令：
+* **列表查询**：先运行 `rupost history list` 列出历史记录的大纲，第一列为条目的 **Short ID**（例如 `8cb08160`）。
+* **指定查看**：运行 `rupost history show <target>` 查看详细响应及历史长交互。其检索规则如下：
+  * **按最近序号查看 (新手推荐)**：传入正整数 `N`（如 `rupost history show 1` 查看上一次刚执行完的最新日志；`show 2` 查看倒数第二条）。
+  * **按 Short ID 查看**：传入短 ID 前缀（如 `rupost history show 8cb081`）。
+* **彩色回显**：对 WebSocket 历史帧会采用专属的箭头标识（`[→]` 青色代表发送，`[←]` 黄色代表接收）彩色表格美化打印，SSE 推送采用绿色输出，常规 HTTP 自动格式化回显，方便用户进行离线调试。
+
+---
+
+## 🧪 二、 测试说明 (Testing Guide)
+
+RuPost 的 TUI 模式建立了三级防御测试体系，用于在对 CLI、内核或依赖包进行修改后进行回归验证。
+
+### 1. 单元与冒烟测试 (TUI Smoke Tests)
+这套测试不涉及真实的终端 I/O 绑定，而是在虚拟 `TestBackend` 的内存上模拟运行，用于验证 TUI 的状态机转换和自适应计算：
+* **核心覆盖**：
+  * `test_app_state_initialization`：验证 App 初始的焦点、弹窗和布局状态。
+  * `test_adaptive_layout_calculations`：验证在极小视口、宽屏、单栏屏下的布局自适应。
+  * `test_state_transitions_via_actions`：验证 Action 状态跃迁与 Tab 焦点切换。
+  * `test_unsaved_changes_confirm_modal`：验证脏文件退出阻断及弹窗转移状态机。
+  * `test_request_finished_variable_extension`：验证异步数据捕获全局变量的克隆合并。
+  * `test_sliding_window_viewport_loading`：验证 TUI 滚动时从物理日志文件增量滑动加载前后 N 条帧记录的算法偏移与定位精度。
+  * `test_log_rotation_and_size_limit`：验证 5MB 日志硬限额在超标后截断并追加系统 SYSTEM 提示的拦截机制。
+  * `test_old_logs_auto_cleanup`：验证后台异步扫描清理 7 天过期临时日志的自愈能力。
+* **执行命令**：
+  ```bash
+  cargo test --test tui_smoke_test
+  ```
+
+### 2. 全量单元/集成测试回归 (Full Cargo Suite)
+升级依赖库或做底层网络层改动后，需一键运行全量测试套件（包括 WebSocket 长连接和快照重放等）：
+* **执行命令**：
+  ```bash
+  cargo test
+  ```
+
+### 3. 特性端到端集成测试 (E2E Feature Script)
+通过自动编译 release 版本的二进制并拉起闭环环境下的网络诊断、诊断断言、Mock 并发等特性的自动化冒烟测试：
+* **执行命令**：
+  ```bash
+  bash tests/verify_features.sh
+  ```
+
+### 4. 实例闭环测试 (Examples Regression)
+运行本地内置的 15 种用例集，覆盖 Token 拓扑级联、流式 SSE 协议本地 Mock 大模型、WebSocket 等闭环校验：
+* **执行命令**：
+  ```bash
+  bash examples/run_all.sh
+  ```
+
+## 快速新建用例（n 键）
+
+Files 侧栏按 `n` 打开快速输入框（模态输入，期间所有全局键被输入框吞掉）：
+
+- 输入 URL（`api.github.com/users`、`:3000/x`、`https://…`）→ 在当前选中目录生成
+  自动命名的 `.http` 文件（host_port_path 规则，超 80 字符截断 + 短哈希），内容为
+  `GET <归一化 URL>`；URL 判定与 CLI 共用 `http::url::normalize_input_url` 同一语义。
+- 输入文件名（`auth`、`tests/auth.http`、含空格名）→ 按文件名创建，默认模板 GET。
+- `Enter` 创建并跳转编辑器；`Esc` 丢弃不落盘；同名文件不覆盖，仍定位加载。
+- 失败可见：路径穿越、权限、超长名等错误在底部状态栏红字显示，下次成功操作清除。
+
+## 真机冒烟清单（5 分钟，TestBackend 覆盖不到的部分）
+
+`cargo test` 全部跑在 TestBackend 上，以下需在真实终端手动过一遍（重点：IME 与真实光标）：
+
+1. `cargo run -- tui` 进入；按 `n`，观察**真实光标**（非 `█` 伪块）在输入框内闪烁。
+2. 切中文输入法输入"登录"，回车上屏——验证 textarea 的 IME 组合键路径不丢字。
+3. 输入 `../../escape.http` 回车 → 底部状态栏出现红色错误，工作区无文件产生。
+4. 输入 `example.org` 回车 → 生成 `example_org.http` 并跳转编辑器，光标在 Editor。
+5. 再按 `n` 输入同名 `example.org` 回车 → 不覆盖，编辑器显示原内容。
+6. `Esc` 丢弃、`E` 拉起 `$EDITOR` 保存退出 → TUI 热重载内容。
+7. 窗口缩放穿越 Wide/Narrow/Stacked 三档，快速输入弹窗均居中且光标位置正确。
+
+## 流式调试真机冒烟清单（2026-10-31 增补，SSE/WS 接入 + 授权 + 消息搜索）
+
+TestBackend 已覆盖渲染与状态机（见 `tests/tui_smoke_test.rs`、`tests/tui_ws_session_test.rs`），以下需真实终端 / 真实服务端手动过一遍：
+
+1. **变量上下文**：工作区放 `rupost.toml`（`[environments.dev]` 含 `token`）与 `.env`（同名不同值），`cargo run -- tui --env dev` 进入；运行带 `Authorization: Bearer {{token}}` 的请求（wiremock/echo 亦可），服务端应收到 toml 值。`--var token=cli-x` 覆盖后应收到 cli-x。
+2. **快速授权**：按 `A` 输入 `Bearer manual-1` 回车 → 底栏出现 `AUTH✓`；运行无 Authorization 的请求，服务端应收到 `Bearer manual-1`；编辑器中显式写 `Authorization: Bearer file-1` 再运行 → 服务端应收到 `file-1`（显式优先）。`A` 清空回车 → `AUTH✓` 消失。
+3. **消息搜索**：运行一个返回多行 JSON 的请求，`/` 输入子串 → 命中片段高亮（主题 accent 背景）；`n`/`N` 在命中间环绕；`Esc` 后 `n` 仍可续跳；流式运行 SSE 期间搜索 → 新帧到达时视口不再自动跳底（搜索优先）。
+4. **WS 交互会话**：编辑器为 `@websocket` 请求，按 `W` → 状态无错误、收到的帧实时出现；按 `S` 输入文本回车 → 视口出现 `[→]` 发送帧、服务端收到；`n`/`N` 可在帧间搜索；`D` 关闭后服务端断连；对断开的服务端保持会话 → 观察指数退避重连日志。
+5. **互斥**：会话活跃时按 `r`/`Ctrl+Enter` → 状态栏提示需先 `D`；关闭后恢复执行。
+
+## CLI 能力接入真机冒烟清单（2026-11-05 增补）
+
+1. **多请求执行**：编辑器放 3+ 请求文件（含 @skip 一条），触发运行 → Results tab 逐条显示（SKIP 正确标记）、响应面板跟随最新请求；变量级联（第一个请求 @capture 后续 `{{var}}`）应生效。
+2. **选择器**：`#` 输入 `#2` 回车 → 触发仅第 2 请求收流量；`#99` → 状态栏"越界"错误；空提交清除选择器恢复全量。
+3. **cookie 延续**：首个请求 Set-Cookie，同会话再次触发任意请求 → 服务端应收到 Cookie 头（旧实现每次重置）。
+4. **timing 行**：运行外网请求 → 响应面板第二行出现 DNS/TCP/TTFB/Transfer 四段。
+5. **Diagnose tab**：对不存在端口发请求 → 失败后自动切第 5 tab，显示 DNS/TCP 瀑布与错误上下文。
+6. **导出**：`X` 弹出 curl 命令且凭据为 [REDACTED]；`Shift+X` 显示真实凭据（注意截屏）；Esc 关闭。
+7. **快照**：`Ctrl+S` → `./snapshots/snapshot_*.json` 生成且无明文 Authorization。
+8. **历史生成**：History 侧栏 `G` → `generated_*.http` 出现于文件树并载入编辑器。

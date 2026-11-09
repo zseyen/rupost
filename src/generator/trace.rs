@@ -173,6 +173,17 @@ pub fn build_trace_plan(entries: &[HistoryEntry]) -> TracePlan {
                 candidates.push(v.to_string());
             }
         }
+        // URL query 值也进候选（评审 F1：token 在 query 的 API 形态）；
+        // 敏感键值跳过——凭据模板化管线负责（管线序：敏感键凭据 > T2）
+        if let Some((_, query)) = entry.request.url.split_once('?') {
+            for pair in query.split('&') {
+                if let Some((k, v)) = pair.split_once('=')
+                    && !crate::exporter::redact::is_sensitive_key(k)
+                {
+                    candidates.push(v.to_string());
+                }
+            }
+        }
         if let Some(body) = &entry.request.body
             && let Ok(json) = serde_json::from_str::<Value>(body)
         {
@@ -322,7 +333,8 @@ mod tests {
         ];
         let plan = plan_of(&entries);
         assert_eq!(plan.links.len(), 1);
-        // 反序就近：命中 index 1（new），capture 源指向同路径但链标记上游为其自身 idx
+        // 反序就近：命中 index 1（new）——tie 行锁定遍历方向（变异⑤守护）
+        assert_eq!(plan.links[0].upstream_idx, 1, "nearest upstream must win");
         assert_eq!(plan.links[0].capture_source, "body.token");
     }
 

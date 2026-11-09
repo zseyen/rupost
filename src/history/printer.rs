@@ -23,8 +23,9 @@ pub fn list_history(limit: usize, reverse: bool) -> Result<()> {
             Color::Red
         };
 
+        let short_id = crate::utils::text::truncate_chars(&entry.id, 8, "");
         table.add_row(vec![
-            Cell::new(&entry.id[..8]), // Short ID
+            Cell::new(&short_id), // Short ID (边界安全截断)
             Cell::new(entry.timestamp.format("%H:%M:%S")),
             Cell::new(&entry.request.method),
             Cell::new(&entry.request.url).add_attribute(Attribute::Dim),
@@ -206,4 +207,18 @@ pub fn clear_history(yes: bool, all: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_print_history_short_id_safety() {
+        let short_id = "123";
+        let formatted = crate::utils::text::truncate_chars(short_id, 8, "");
+        assert_eq!(formatted, "123");
+
+        let long_id = "1234567890abcdef";
+        let formatted_long = crate::utils::text::truncate_chars(long_id, 8, "");
+        assert_eq!(formatted_long, "12345678");
+    }
 }

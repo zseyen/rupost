@@ -11,7 +11,14 @@ RuPost 项目的根目录由以下核心文件夹和配置文件组成：
 *   [crates/](file:///Users/zsyzzx/project/rust/rupost/crates)：用于存放独立拆分的子 Crate。目前包含 AI 创作辅助模块 `rupost-ai`（已接线 `rupost ai assert`、`rupost ai triage` 命令）。
 *   [src/](file:///Users/zsyzzx/project/rust/rupost/src)：主程序核心代码区，承载绝大部分的核心算法、执行流程与适配层。
 *   [tests/](file:///Users/zsyzzx/project/rust/rupost/tests)：集成测试和端到端 (E2E) 测试目录，验证完整的命令行或网络交互。
-*   [doc/](file:///Users/zsyzzx/project/rust/rupost/doc)：项目文档库（包括架构设计、开发流程规范、未来规划与进度汇总）。
+*   [doc/](file:///Users/zsyzzx/project/rust/rupost/doc)：项目文档库。遵循 Clean Docs 与 Diátaxis 架构原则进行分类与分层：
+    *   `README.md`：全局知识导航地图与文档检索中枢。
+    *   `guides/`：用户指南与操作手册（各功能实战教程，对齐 README 链接）。
+    *   `architecture/`：核心系统架构与各特性领域三段式档案 (`features/`)。
+    *   `dev/`：研发流程规范（如 `development_workflow.md`）与工程标准。
+    *   `competition/`：行业竞争格局与终端工具差异化深度调研。
+    *   `plans/`：演进规划总纲、唯一进度事实来源 (`progress_summary.md`)、待办池与历史归档。
+    *   `templates/`：PRD 与设计规范模版。
 *   [examples/](file:///Users/zsyzzx/project/rust/rupost/examples)：演示用例，包含 `.http` 与 `.md` 文件，用于展示功能并作为 CI 冒烟测试的输入。
 *   [templates/](file:///Users/zsyzzx/project/rust/rupost/templates)：编译期通过 `include_str!` 内置的初始配置与用例模板。
 *   [benches/](file:///Users/zsyzzx/project/rust/rupost/benches)：基准性能测试模块。
@@ -147,9 +154,16 @@ graph TD
     *   [replayer.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/engine/replayer.rs)：快照重放执行器。按录制的 HTTP 交互原样重放（`--target` 自动改写 Host/Port），透传快照中记录的 `@timeout` 语义。
     *   [on_failure.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/on_failure.rs)：失败钩子与 trace 锚点协议（DX-Debug R7，B0 确定性零 AI）。按 `Traceparent > X-Request-Id > X-Trace-Id` 优先级提取 trace-id，经 `RUPOST_FAILED_URL/STATUS/TRACE_ID` 环境变量交给 `--on-failure` 用户命令（`tokio::process` + 10s kill_on_drop 超时，stderr/stdout 透传）；钩子任何失败只产生提示，不改写测试退出码。
     *   二级子目录划分：`src/runner/engine/`（批量/并行/拓扑/依赖解析/重放）、`src/runner/protocol/`（http/sse/ws 三个协议执行器）、`src/runner/utils/`（file_sync/path 等），由 `src/runner/mod.rs` 桥接重导出。
-    *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)：将运行结果整理成 CLI 终端彩色摘要报告或输出标准的 JSON 结构化报告。
+    *   [reporter.rs](file:///Users/zsyzzx/project/rust/rupost/src/reporter.rs)：终端渲染器——测试结果/摘要/批量汇总的彩色打印（JSON 报告契约已迁出至 `src/report/json.rs`）。
     *   [file_sync.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/utils/file_sync.rs)：为大模型流数据提供非阻塞的文件物理增量追加写入器 (`@stream_to`)。
-    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs)：执行结果相关的数据结构（`TestResult`、`BatchResult`）。
+    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/runner/types.rs)：执行结果相关的数据结构（`TestResult`、`StreamEvent`、`TestSummary`）。
+
+*   #### [src/report/](file:///Users/zsyzzx/project/rust/rupost/src/report)（统一报告层：JSON 契约 + 视图模型 + 多格式渲染）
+    *   [mod.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/mod.rs)：模块门面——`generate_html_report` / `write_report_files`（报告文件落盘唯一出口，返回 `ReportWriteOutcome` 消息结构由派发层渲染）与格式判定决策表 `determine_report_format`（显式 `--report` 优先 + 扩展名推断）。
+    *   [json.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/json.rs)：JSON 报告契约唯一来源（`JsonFileReport`/`JsonTestReport`/`JsonAssertionReport`）+ 脱敏转换 `build_json_reports` + 序列化输出 `report_json`（writer 注入形态），供 `ai triage`、`--report json` 与离线 HTML 二次渲染消费。
+    *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/types.rs)：领域视图契约（`ReportContext`/`ReportSummary`/`TimingWaterfall` 等）——瀑布换算唯一实现（`from_diagnostics` 残差法 / timing 分支 / `from_total_ms` fallback）与防 XSS `escape_html`。
+    *   [html.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/html.rs)：`HtmlReportGenerator`——自包含单文件暗色 Dashboard（KPI 卡片、失败优先树形卡片、CSS 时延瀑布图），XSS 全字段转义。
+    *   [generator.rs](file:///Users/zsyzzx/project/rust/rupost/src/report/generator.rs)：`ReportGenerator` 开闭接口（HTML/JSON/未来多格式渲染器）。
 
 *   #### [src/http/](file:///Users/zsyzzx/project/rust/rupost/src/http)（底层网络适配与大模型网关层）
     *   [client.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/client.rs)：底层的 HTTP 客户端，基于 `reqwest` 的二次封装，支持中间件链。

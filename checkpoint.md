@@ -1,6 +1,55 @@
-# RuPost 质量加固战役 Checkpoint 归档（2026-10）
+# RuPost 质量加固战役 Checkpoint 归档（2026-10 ~ 2026-11）
 
-## 当前状态总结 (Current Status)
+## 最新里程碑进展 (2026-11-09)
+- **Agent 规则与技能体系单一事实来源 (SSOT) 收敛与无用文档清理 (`feature/decoupling-and-workbench-hardening`)**：
+  1. **Agent Skills 统一收敛**：
+     - 将原本孤立在 `.agents/skills/tui_design_guidelines/` 的技能规范化迁入 `.agent/skills/tui-design-guidelines/`，实现全仓 8 大核心技能（`ai-integration-guidelines`, `brainstorming`, `cli-aesthetic-ux`, `frontend-design`, `rupost-architecture`, `rust-async-patterns`, `superpower`, `tui-design-guidelines`）在 `.agent/skills/` 的单一事实来源聚合；
+     - 在 `.agents/skills/` 设立符号链接向下兼容，杜绝任何历史引用断裂。
+  2. **Agent 根规则双镜像 100% 字节级对齐**：
+     - 整合根目录 `AGENTS.md`，完整覆盖通用 LLM 4 大守则、4 大智能体角色与 8 大技能矩阵映射、§5~§9（CLAP 传参契约、CLI 入口解耦、三层测试回归、TUI 开发规范、离散逻辑治理与 TDD 重构法则）；
+     - 将权威 `AGENTS.md` 物理同步覆盖至 `.agents/AGENTS.md`，两份文件实现零 diff，消除了多智能体运行时的规则漂移与覆盖风险。
+  3. **强化常驻规则引擎 (`.agent/rules/rust-dev.md`)**：
+     - 固化 Checkpoint 会话归档纪律、Clean Architecture 与领域模型充血、DRY SSOT 业务知识单一性、TDD 行为契约锁定、跨平台 POSIX 路径纪律与 JJ 原子化提交纪律。
+  4. **清理历史临时会话与无用文档**：
+     - 清除 `.agents/` 下残留的历史孤儿交付物与工作目录（`BRIEFING.md`, `ORIGINAL_REQUEST.md`, `handoff.md`, `implementer/`, `orchestrator/`, `orchestrator_gen1/`, `victory_auditor/`），新增 `.agents/README.md` 声明兼容镜像定位，彻底杜绝 Agent 上下文检索的历史状态污染。
+- **跨平台路径归一化、转义规范与代码库离散逻辑收敛 (`feature/decoupling-and-workbench-hardening`)**：
+  1. **跨平台路径归一化体系落地 (POSIX Path Normalization)**：
+     - 在 `src/utils/path_guard.rs` 提炼 `normalize_posix_path` 纯函数作为单一事实来源（SSOT），彻底消除全库手写 `.replace('\\', "/")`；
+     - 彻底修复 Windows 环境下 `web::store::tests::test_local_fs_document_store_basic_and_sandbox` 以及 `tests/batch_testing_test.rs:test_batch_report_json` 的反斜杠与正斜杠断言断裂；
+     - `PathSandbox::resolve_safe_path` 拒绝包含 `\` 的输入以防御逃逸，确保暴露到外部（Web API、TUI 视图、Report、快照）的所有相对路径严格保持 POSIX 规范。
+  2. **转义与离散逻辑统一规整 (全面整合方案 A/B/C/D)**：
+     - **方案 A (流式日志写入去重)**：在 `src/runner/utils/file_sync.rs` 沉淀 `write_log_with_limit`，统一 WebSocket 与 SSE 流式事件的限额写盘与截断提示，消解 70+ 行冗余代码。
+     - **方案 B (请求头查询与流式谓词内聚)**：为领域实体 `ParsedRequest` 注入 `header`, `has_header`, `content_type`, `is_sse_stream`, `is_json_content` 等语义方法，消除外层遍历闭包。
+     - **方案 C (HTTP 方法 SSOT 与零分配)**：在 `src/http/types.rs` 确立 `Method::STANDARD_METHODS` 与 `Method::is_standard`，优化 `FromStr` 为纯 ASCII 比较（0 堆内存分配），消解 CLI 与 Importer 的字面量数组。
+     - **方案 D (RFC 3986 URL 协议前缀 SSOT)**：将 `has_scheme_prefix` 与 `has_http_scheme` 提升为公共基础设施，统一全库 URL 协议头嗅探。
+     - **实时文档扩展名 SSOT**：统一由 `src/utils/path_guard::is_live_doc` 与 `LIVE_DOC_EXTENSIONS` 判定（收敛 `.http`、`.md`、`.markdown`），消解散落的局部 match。
+     - **Mock 请求头匹配性能优化**：以 `eq_ignore_ascii_case` 替代全量 `to_ascii_lowercase()`，消除堆内存分配。
+     - **RFC 6761 本地环回地址解析统一**：统一通过 `src/http/url::is_loopback_host` 判定，支持 FQDN 尾随点（如 `localhost.`）、裸 IPv4/IPv6（`::1`）以及各种 localhost 变体。
+     - **安全 UTF-8 与字符截断统一**：在 `src/utils/text.rs` 沉淀 `truncate_chars` 与 `truncate_utf8_bytes`，消解裸切片导致的多字节或短字符串越界 panic（修复 `src/history/printer.rs` 裸截断）。
+  3. **质量守护与原子化提交**：
+     - 全量通过 560 个单测（100% PASS）、`cargo clippy --all-targets -- -D warnings` 零警告、`cargo fmt --all -- --check` 格式化校验通过。
+     - 借助 `jj` 进行原子化分步提交，无缝推送到远程分支 `feature/decoupling-and-workbench-hardening`。
+- **Web 工作台样式升级与纯 ASCII 架构重塑 (`feature/web-ui-redesign`)**：
+  1. **Studio Pro 纯 ASCII 视觉体系**：全面清除页面中所有 Emoji 图标，以专业工程符号（如 `[R]`, `[DOC]`, `[PASS]`, `[FAIL]`）替代；基于深空碳黑与精细刻线重构三栏网格。
+  2. **代码编辑器增强**：自研轻量级行号槽（Gutter）滚动同步、光标行列度量、`Ctrl+S` 快捷保存、`Shift+Enter` 单块快捷执行、`Ctrl+I` 快速导入。
+  3. **Runtime Inspector 控制台重构**：右侧调试面板升级为 Tab 分页架构（Overview / Body / Headers / Assertions / Waterfall / Raw），支持响应体一键复制、JSON 缩进格式化与毫秒级时延瀑布图渲染。
+  4. **双主题架构落地 (Dark & Light Theme)**：基于 CSS Custom Properties 实现深色 (Deep Obsidian) 与浅色 (Studio Paper) 动态热切换，支持系统深浅偏好自适应检测与 `localStorage` 持久化，顶部状态栏提供 `[THEME: DARK/LIGHT]` 切换动作。
+  5. **四层测试金字塔与全功能验证 (100% PASS)**：
+     - **单元与集成测试**：534 个 `src/lib.rs` 单测 + 14 个 `tests/web_api_integration_test.rs` 全部通过。
+     - **全特性冒烟测试**：`tests/verify_features.sh` 涵盖 Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等 100% 通过。
+     - **全量内置示例回归**：`examples/run_all.sh` 15 套真实复杂用例（SSE 流式断言、变量级联、状态传递）全部通过。
+     - **浏览器 CDP 自动化端到端测试**：通过真实 Headless Chrome 执行 `test_web_all_features.py`，覆盖主题切换、文件树过滤、行号槽双向滚动、原位单块调试、套件执行、Tab 控制台切换、向导装入、AST 语法守卫与无 Emoji 规则等 **22 项功能全部 PASS (22/22)**。
+     - **静态代码质量**：`cargo clippy --tests -- -D warnings` 零告警通过。
+
+## 历史里程碑进展 (2026-11-06)
+- **全文档体系重构、内容汇总与分类规整 (Clean Docs & Features Dossiers)**：
+  1. **7 大核心领域三段式技术档案落地 (`doc/architecture/features/`)**：围绕“① 需求是什么、② 演进决策与核心算法、③ 当前落地代码与测试映射、④ 后续演进规划”四大维度，深度整合并提炼了 `cookie_and_session`、`batch_and_workflow`、`ai_engine_system`、`debug_and_diagnostics`、`protocols_and_mock`、`tui_architecture`、`plugin_and_extensibility`，彻底消解早期草案碎片。
+  2. **`doc/plans/` 演进规划大熔炉规整**：100% 物理保留历史 50+ 篇 PRD 原文，按 `2026-q2/`、`2026-q3/`、`2026-q4/` 季度里程碑归档；在 `doc/plans/README.md` 中构建了 5 大业务演进主线（AI 智能线、TUI 终端交互线、执行调度线、排障重放线、质量战役线）的交叉引用矩阵。
+  3. **全局知识中枢 `doc/README.md` 建立**：确立 Diátaxis 与 Clean Architecture 文档组织标准，保持 Makefile、AGENTS.md、README.md 外部契约 100% 兼容无损，全量 512 个单测与端到端 `verify_features.sh` 持续高标准 PASS。
+
+---
+
+## 历史状态总结 (Historical Status)
 
 依据 [质量加固执行方案](doc/plans/2026-10-18-quality-hardening-execution-plan.md)（v3），Phase 0–4 全部完成，**里程碑 C 达成**：方案内全部 25 项审查发现闭环。全程 `jj` 原子提交（修复与对抗性回归测试同提交）。
 
@@ -274,3 +323,331 @@ PRD（双子代理评审 6 P0 吸收）后五原子提交：S1 replay body 深�
 ### Secrets Masker body 残余（2026-11-04，随 P1 批次后同日交付）
 
 路线图条目 1 勘误后残余（header/query 已由 generate 凭据模板化与 export 脱敏覆盖）：`t --save-snapshot` 与 `history export` 新增 `--mask-secrets`（opt-in）——headers 走 `redact_header_value`（Bearer 前缀保留）、body 走 `mask_body_secrets`（敏感键 `[REDACTED]` + PII 三正则手机/银行卡/邮箱，无截断）；掩码产物 schema 不变、仍可 replay 加载。**D1 翻案**：默认关（T4 body 比对上线后默认掩码毒化重放保真度）。掩码原语 `redact_free_text`/`mask_inline_secrets` 自 ai/redactor 下沉 exporter/redact（B0 统一归位）。PII 决策表 + 双命令集成（掩码 vs 无旗标保真对照）+ 掩码快照 schema 可加载，全量门禁绿。
+
+---
+
+## TUI 接入 CLI 能力（2026-11-05，tui-cli-bridge workspace）
+
+PRD 驱动（`doc/plans/2026-11-05-tui-cli-parity-prd.md`）三域九项：执行模型对齐（多请求 streaming、选择器、cookie bridge）、调试增强（timing 行、Diagnose tab、X 导出）、快照与生成（Ctrl+S、G 键）。executor 新增 `execute_all_streaming` 委托重构（行为零变化）。附带诊断 flake 修复（透明代理环境哨兵）。
+
+---
+
+## TUI 接入剩余 CLI 功能（2026-11-05/06，tui-cli-bridge workspace）
+
+"接入所有新增功能"目标收尾：诊断 flake 修复（环境哨兵）→ CLI-parity 三域九项（前批）→ 剩余四项（V 快照重放 / M mock 开关 / I AI 断言 / --cookie-file 持久化）。mock/server.rs 拆分 build/serve 供编程接入。基线 45 套件 807 测试绿；clippy 零警告。
+
+
+---
+
+## TUI 组件化重构与冲突清理战役（2026-11-06，tui-tests-full 分支）
+
+完成 TUI 历史冲突整理、全量回归验证、Code Review 修复及 UI 模块组件化重构：
+
+### 1. 提交树整理与冲突根除 (Conflict Cleansing)
+- **基线对齐**：以稳定的 `sntzqrmv (tui-cli-bridge)` 为基准，将包含 3 个历史冲突提交的旧链原子化重构为 3 个标准清晰提交（`feat(tui)`、`test(tui)`、`docs(tui)`）。
+- **废弃脏提交**：彻底 `abandon` 旧冲突链（`wvwymprs::lowvxnxu`）及历史悬空冲突 `mpyyoknn`，同步更新辅助工作区 `.workspace/tui-tests-full`。
+- **冲突清零**：`jj log -r 'conflicts()'` 当前全仓库 0 冲突。
+
+### 2. Code Review 缺陷手术式修复 (Surgical Fixes)
+- **UX 语义纠正**：修复 `save_current_snapshot` 成功时误写 `last_error` 导致状态栏飘红的缺陷，成功时置 `state.last_error = None`。
+- **渲染零复制优化**：消除 `src/tui/ui/mod.rs` 中 `show_export.clone()` 在每帧渲染循环中的深层堆内存分配，改为借用零拷贝渲染。
+- **代码卫生治理**：清理 `src/tui/handlers/editor.rs` 中重复与错位的注释。
+
+### 3. 第一性原理组件化解耦 (UI Componentization)
+- **布局抽象**：新增 `src/tui/ui/popups.rs`，提取 `centered_rect` 与 `centered_rect_exact` 无状态居中算法，消除 4 处重复布局数学运算。
+- **弹窗组件化**：将 Help、Unsaved Confirm、Export、Modal Input 弹窗统一收敛至 `popups` 模块，遵循纯函数只读入参契约。
+- **状态栏解耦**：新增 `src/tui/ui/status_bar.rs`，独立承载错误提示、认证与 Mock 会话指示、上下文敏捷按键映射。
+- **主入口极简**：`src/tui/ui/mod.rs` 从 589 行压缩至 ~180 行（净减 400+ 行），蜕变为纯粹的布局分发 Orchestrator。
+- **离屏测试加固**：新增 4 组离屏 `TestBackend` 组件级单元测试，全量 52 个冒烟测试 + 8 个特性保障测试全部 PASS，clippy 零告警。
+
+### 下一步计划 (Next Steps)
+- 探索 `src/tui/ui/response.rs`（854 行）的 Tab 子面板组件化拆分。**【2026-11-08 勘误】**：原表述"5-Tab（Timing/Diagnose/Headers/Body/Stream）"已过时——实际 `DetailTab` 枚举为 Response/Headers/Request/Results/Diagnose，Timing 内联于 Response 臂；权威口径见 [解耦提案 §3 靶点三](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md)。
+- 完善 Web 界面 / 跨平台终端自适应交互细节。
+
+---
+
+## 场景 C（AI/SSE + WebSocket 协同）规划与测试落地（2026-11-07，role-alignment-scenario 工作区）
+
+依据四大调试模式（CLI 深度诊断、TUI 交互面板、双角色本地 Mock、网络瀑布诊断）完成场景 C 的全套规划、规范契约与离线端到端测试用例：
+
+### 1. 计划与规范归档
+- **规划文档**：保存至 [2026-11-06-scenario-c-ai-collaboration-testing-plan.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/doc/plans/active/2026-11-06-scenario-c-ai-collaboration-testing-plan.md)。
+- **契约定义**：新增 [ai_spec.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/examples/scenarios/scenario_c_ai_collaboration/ai_spec.md)，定义 `@sse` 流式打字机（包含 200 流式分块与 429 限流降级分支）以及 `@websocket` 协同白板剧本。
+- **回归套件**：新增 [ai_test_suite.http](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/examples/scenarios/scenario_c_ai_collaboration/ai_test_suite.http)，声明式断言 Token 流、429 错误体与 WebSocket 双向握手/收发/关闭。
+
+### 2. 自动化集成测试闭环
+- 在 [tests/scenarios_integration_test.rs](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/tests/scenarios_integration_test.rs) 中实现场景 C 专属用例：
+  1. `test_scenario_c_spec_structure_and_mock_compilation`：验证 `@sse`、`@stream_to`、`@websocket` 等元数据与 Mock 变体编译。
+  2. `test_scenario_c_suite_full_execution_against_mock_servers`：拉起本地 AxumMockServer 与内存级 WS 协同虚拟服务（带高频心跳软过滤），完整验证 SSE 逐行推流、增量 LLM 合成文本断言、429 降级断言、WebSocket 动作序列匹配与 `@stream_to` 实时落盘。
+- **全量回归保障**：513 单元测试 + 全量集成测试 100% 绿灯，clippy 零告警，fmt 格式合规。
+
+---
+
+## Stage 2（Web Phase 0 静态 HTML 报告与时延瀑布图）落地完成（2026-11-07）
+
+依据 Clean Architecture 原则与第一性原理，完成零外部网络依赖、单文件自包含、高审美现代化 Dashboard 静态 HTML 报告生成管线：
+
+### 1. 领域模型与开闭接口
+- 新增 `src/report/` 模块：
+  - `src/report/types.rs`：定义归一化领域视图 `ReportContext`、`ReportSummary`、`ReportRequestItem`、`TimingWaterfall`，实现从执行结果到视图上下文的解耦转换，内置防 XSS 的安全转义函数 `escape_html`。
+  - `src/report/generator.rs`：抽象开闭接口 `ReportGenerator`，统一支持 HTML、JSON 及未来多目标渲染。
+  - `src/report/html.rs`：实现高审美 `HtmlReportGenerator`（极简暗色 HSL 调色、Summary KPI 卡片、进度条、Failed-first 树形卡片、断言对比证据链、以及原生 CSS 时延瀑布图）。
+
+### 2. 执行流与 CLI 接入
+- 在 `src/runner/app.rs` 中集成 HTML 报告输出，当传入 `--report html` 或 `--report-file <path.html>` 时，自动渲染并生成自包含单文件。
+- 在 `src/cli.rs` 中扩展文档说明。
+
+### 3. 测试与验证闭环
+- 新增集成测试 [tests/html_report_integration_test.rs](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/tests/html_report_integration_test.rs)：
+  - `test_e2e_run_test_suite_generates_html_report`：真实命令行套件端到端导出自包含 HTML，断言内联样式与极简控制脚本。
+  - `test_e2e_html_report_with_mock_and_waterfall`：本地 Mock 真实发包并生成时延瀑布图（`wf-dns`、`wf-tcp`、`wf-ttfb`）及断言证据。
+  - `test_offline_json_report_to_html_generation`：验证脱机从 JSON 报告二次渲染 HTML。
+- 全量回归：516 单元测试 + 全量集成测试 100% 绿灯，clippy 零告警，代码格式合规。
+
+---
+
+## Stage 3 & 4（Web Phase 1 活文档工作台、自定义扩展架构与 Spec 脚手架）落地完成（2026-11-07）
+
+依据 [2026-11-07-web-workbench-and-customization-architecture.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/doc/plans/active/2026-11-07-web-workbench-and-customization-architecture.md)，完成了 Web 活文档工作台的核心后端 API、内嵌高质感交互界面、多格式智能装入器、CLI `rupost web` 指令及 `rupost init spec` 脚手架生成：
+
+### 1. Web 领域抽象与插件化架构 (`src/web/`)
+- **开闭接口抽象**：
+  - `DocumentStore`：解耦文档文件系统操作，内置 `LocalFsDocumentStore` 并提供严格的 canonical 路径穿越沙箱拦截保护。
+  - `AssetProvider`：解耦静态资产托管，同时内置 `EmbeddedAssetProvider`（零外部依赖直接内嵌高审美前端）与 `LocalDirAssetProvider`（支持 `--static-dir` 用户接入自主实现的第三方前端应用，彻底解除 UI 绑定）。
+  - `MultiFormatImporter`：支持多格式（cURL, HTTPie, Raw HTTP, HAR, OpenAPI, Postman）智能格式嗅探与转换为规范的 Markdown/HTTP 块，支持 origin 模板化为 `{{base_url}}` 并可选生成 `@mock-default` 兜底变体。
+- **核心 RESTful API 契约与防线**：
+  - `GET /api/v1/files` & `GET /api/v1/file`：列出及读取工作区活文档。
+  - `POST /api/v1/save`：文档落盘保存，严格内嵌**只读保护防线**（403 Forbidden）与 **AST 预写入语法校验门禁**（422 Unprocessable Entity）。
+  - `POST /api/v1/run/block`：原位单块调试执行，无缝复用 `TestExecutor` 内存会话与时延瀑布图转换，直接返回细粒度响应与断言结果。
+  - `POST /api/v1/mock/simulate`：Mock 变体规则诊断仿真探针，针对传入的变体条件（Header, Query, Body JSONPath）实时求值并输出命中诊断树。
+  - `POST /api/v1/import` & `POST /api/v1/import/curl`：统一装入与 cURL 别名接口。
+- **现代化内嵌前端**：
+  - 零外部 npm/node 依赖，单文件自包含 HTML/CSS/JS，遵循 HSL 调色规范与三栏响应式活文档编辑/原位调试体验，内置代码智能装入向导 Modal。
+
+### 2. CLI `rupost web` 指令集成
+- 在 `src/cli.rs` 中新增 `Web` 子命令，支持 `--port` (默认 3000)、`--host` (默认 127.0.0.1)、`--static-dir` (外部静态资源覆盖)、`--readonly` (只读保护模式) 与 `-d, --dir`。
+- 严格遵循 Clean Architecture 入口解耦规范与 CLAP Parser Rule，补齐表驱动参数解析单元测试。
+
+### 3. 脚手架生成与全量三层质量验收
+- 新增 `SpecTemplate` 策略与内置模板文件（`templates/spec/template.md`, `template.http`, `env.example`），原生支持 `rupost init spec` 生成标准活文档契约规格与双角色用例。
+- **三层质量全量回归**：
+  1. `cargo test`：522 个单元测试与集成测试（包含新增的 `tests/web_api_integration_test.rs` 与 `tests/template_test.rs`）100% 全部通过。
+  2. `tests/verify_features.sh`：全特性集成冒烟测试脚本 100% PASS。
+  3. `examples/run_all.sh`：15 个复杂示例回归测试脚本 100% 全部 PASS。
+  4. `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 均零告警零错误。
+
+---
+
+## Stage 5（安全基础设施组件化、核心领域解析内聚与 Web 活文档全景加固）落地完成（2026-11-07）
+
+针对架构评审与安全审查提出的解耦复用与防护漏洞，依据 Clean Architecture 与 DRY 原则完成了系统级安全组件化与核心解析内聚升级：
+
+### 1. 统一安全基础设施构建 (`src/security/`)
+- **`PathSandbox` 路径安全沙箱 (`src/security/path.rs`)**：
+  - 彻底收敛散落各处的路径检查逻辑，统一负责相对路径与绝对路径规范化、扩展名白名单校验（忽略大小写）、隐藏文件拦截（防止读取 `.env`、`.git/` 等敏感配置）。
+  - 实现基于祖先追溯的软链接逃逸防御（符号链接穿越阻断）。
+  - `LocalFsDocumentStore` 与 `LocalDirAssetProvider` 100% 委托 `PathSandbox`，彻底根除了静态资产服务中的任意文件读取漏洞（VULN-01）。
+- **`HtmlSanitizer` 安全转义组件 (`src/security/sanitize.rs`)**：
+  - 严格支持 5 种核心 HTML 实体（`& < > " '`）的高性能转义，基于 `Cow<'a, str>` 实现零额外分配。
+  - `ReportContext` HTML 报告转义与 Web 前端错误横幅统一对齐。
+
+### 2. 核心领域内聚重构与对称性打通
+- **`MockVariantParser` 领域解析组件 (`src/parser/mock_variant.rs`)**：
+  - 提炼变体规则切分与解析核心逻辑，`MarkdownFileParser` 删除 120+ 行冗余代码。
+  - 在 `HttpFileParser` 中原生接入变体解析，使纯 `.http` 格式完整获得单块双角色与 Mock 变体支持，彻底消除了两种格式的不对称性。
+- **`parse_document_by_path` 门面解析分发 (`src/parser/mod.rs`)**：
+  - 统一依据扩展名安全分发 Markdown 与 HTTP 文件解析，Web 保存接口 `save.rs` 统一接入作为预写入语法校验门禁。
+- **`UrlTemplatizer` 强类型 URL 模板化组件 (`src/http/url.rs`)**：
+  - 彻底重构 cURL/HTTPie/RawHTTP 中重复的基准 URL 模板化逻辑。
+  - 杜绝基于字节切片的非 ASCII 国际化中文域名（IDN）Panic 风险，妥善保留 Query 与 Fragment。
+- **纯 `.http` 变量定义兼容**：
+  - 识别并跳过内联/文件级 `@var = value` 变量声明，防止误判为非法 HTTP 请求行导致 422 语法报错。
+
+### 3. Web 活文档端到端加固与契约修复
+- **Host Guard 门禁**：
+  - 在 Axum Web 服务器挂载 Host 检查中间件，严格白名单过滤（`localhost`, `127.0.0.1`, `::1`, `*.localhost`），彻底防御 DNS Rebinding 攻击。
+- **请求体积限制**：挂载 `DefaultBodyLimit::max(10 * 1024 * 1024)`（10MB）。
+- **前端客户端修复**：
+  - 修复 `app.js` 中 `openFile` 对 `json.data` 取值兼容性 Bug（解决编辑器显示 `"undefined"` 的 P0 体验问题）。
+  - 修复前端 `escapeHtml` 实体转义漏洞与错误横幅未转义渲染导致的 DOM XSS 隐患。
+
+### 4. 三层全量质量回归与自动化验证
+- **单元与集成测试**：538 项测试（含新增的 Host 守卫、Path 沙箱阻断、`.http` 语法门禁、IDN 中文域名装入等对抗性测试）100% PASS。
+- **全特性冒烟测试**：`tests/verify_features.sh` 脚本端到端验证 100% PASS。
+- **示例场景全量回归**：`examples/run_all.sh` 15 个场景全部 PASS。
+- **代码规范**：`cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 零告警零错误。
+
+---
+
+## 7 轮对话阶段性归档与待执行任务清单 (2026-11-07 19:10)
+
+本阶段完成了核心领域组件化先行方案落地、双子代理对抗式 Code Review（Blue Team 架构专家 + Red Team 安全审计专家）以及网络层 Default-Deny 原理审查。全量自动化测试基线维持在 538 tests 100% PASS。
+
+### 待执行任务全景清单 (按严重性与落地优先级分级)
+
+#### 🚨 第一梯队：高危安全防线加固 (P0/P1)
+1. **【SEC-01】Host 校验缺失拦截与 Default-Deny 闭环 (`src/web/server.rs`)**：
+   - 贯彻 RFC 9112 契约，缺少 `Host` 标头或格式非法时，直接拒绝返回 `400 Bad Request`，杜绝 HTTP/1.0 绕过。
+2. **【SEC-02】`allowed_hosts` 运行时配置接线与 CLI 扩展 (`src/web/server.rs`, `src/cli.rs`)**：
+   - 中间件注入 `State(state)`，使用户的 `--allowed-hosts` 真正参与白名单校验，防止内网合法访问被误杀。
+3. **【SEC-03】`PathSandbox` 悬空软链接逃逸阻断 (`src/security/path.rs`)**：
+   - 使用 `candidate.symlink_metadata().is_ok()` 替代 `candidate.exists()`，严防指向沙箱外不存在目标的软链接穿透写入。
+4. **【SEC-04】只读模式（`--readonly`）单块发包拦截 (`src/web/handlers/run.rs`)**：
+   - 在 `run_block_handler` 增加 `state.readonly` 检查（返回 403），防御内网 SSRF 嗅探探测。
+5. **【SEC-05】外部静态资产目录扩展名白名单 (`src/web/assets.rs`)**：
+   - 为 `LocalDirAssetProvider` 沙箱配置合法 Web 资产白名单（`.html`, `.css`, `.js`, `.svg`, `.png`, `.json` 等），防止误挂载导致源码泄露。
+
+#### ⚠️ 第二梯队：Clean Architecture 解耦与健壮性 (P2)
+6. **【ARCH-01】解除 `MockVariantParser` 与 `HttpFileParser` 的循环依赖 (`src/parser/`)**：
+   - 提取通用的 Header 词法解析工具函数，阻断 `mock_variant` 对 `http_file` 的反向引用。
+7. **【ARCH-02】单块执行自适应复用 `parse_document_by_path` (`src/web/handlers/run.rs`)**：
+   - 消除硬编码包裹 Markdown 栅栏的迂回逻辑，对纯 `.http` 原生解析。
+8. **【ARCH-03】安全领域错误强类型化 (`src/error.rs`, `src/security/path.rs`)**：
+   - 引入 `SecurityViolation` 强类型枚举变体，使安全拦截精准映射为 HTTP 403。
+9. **【ROBUST-01】Mock 变体切分器增加 Body 边界上下文感知 (`src/parser/mock_variant.rs`)**：
+   - 防止 POST 请求体 JSON 内含有 `@mock-when` 字符串时被破坏截断。
+10. **【ROBUST-02】`PathSandbox` 前置纯词法 `..` 判定 (`src/security/path.rs`)**：
+    - 词法阶段拦截目录穿越，减少不必要的物理磁盘探测。
+11. **【UX-01】前端界面对 `--readonly` 状态的感知与置灰 (`src/web/assets/app.js`, `index.html`)**：
+    - 顶部展示 `[Read-Only]` 徽章，置灰保存与执行按钮。
+
+#### 💡 第三梯队：异步性能与代码微调 (P3)
+12. **【PERF-01】`LocalFsDocumentStore` 同步 I/O 异步化 (`src/web/store.rs`)**：逐步由 `std::fs` 迁移为 `tokio::fs`。
+13. **【PERF-02】单块发包热路径配置缓存 (`src/web/handlers/run.rs`)**：缓存 `ConfigLoader` 结果。
+14. **【ROBUST-03】IPv6 独立主机识别增强 (`src/http/url.rs`)**。
+15. **【UX-02】前端调试面板 `data.status` 防御性转义 (`src/web/assets/app.js`)**。
+
+---
+
+## 查漏补缺与加固综合执行方案归档 (2026-11-07 21:35)
+
+已将完整的产品功能查漏补缺（包含 `run/suite`、多格式 HAR/Postman 真实解析、`--dev` 与 CORS 跨域支持、前端一键整套测试交互）与红蓝审查加固方案完整落地保存至本地文件：
+- 活跃规划文档：[doc/plans/active/2026-11-07-web-workbench-missing-features-and-hardening-plan.md](file:///Users/zsyzzx/project/rust/rupost/.workspace/role-alignment-scenario/doc/plans/active/2026-11-07-web-workbench-missing-features-and-hardening-plan.md)
+- 包含详尽的数据模型、架构分层、安全防线加固算法以及 5 组生产级核心示例代码。
+
+
+
+
+
+
+
+---
+
+## Web 安全防线与基础功能批次交付 + CLI 安全评估归档（2026-11-07 深夜）
+
+依据用户裁决执行顺序（安全 → 基础功能 → CLI 评估 → 导入 PRD 归档），7 个原子提交 + 2 份文档交付：
+
+### 1. 批次 1：Web 安全防线（4 提交，TDD 对抗测试同提交）
+- **SEC-01/02**：host_guard 中间件 Default-Deny 闭环——缺失/非法编码 Host 标头返回 400（RFC 9112，杜绝 HTTP/1.0 绕过），`is_allowed_host` 接入 `state.allowed_hosts` 动态白名单；CLI `rupost web` 新增 `--allowed-hosts`（逗号分隔多值）。
+- **SEC-03**：PathSandbox 以 `symlink_metadata` 判存在——悬空软链接（旧实现 exists() 判 false 走"新建文件"分支放行，写入跟随链接逃逸沙箱外）一律拒绝。
+- **SEC-04**：run_block_handler 只读模式 403（与 save 对称，SSRF 内网嗅探防线闭环）。
+- **SEC-05**：LocalDirAssetProvider 扩展名白名单（html/css/js/mjs/json/svg/png/jpg/jpeg/ico/woff/woff2），防 --static-dir 误挂载外泄源码。
+- 回归：批次收尾 `cargo test --workspace` **860 passed / 0 failed**，clippy/fmt 双零。
+
+### 2. 批次 2：基础功能完善（6 提交）
+- **ARCH-03**：`RupostError::SecurityViolation` 强类型变体 + save handler 精准映射 403（原 400 契约随测试更新）。
+- **ARCH-01**：提取 `parser::parse_http_header` 公共函数，解除 mock_variant ↔ http_file 模块内循环引用。
+- **ARCH-02**：run_block 复用 `parse_document_by_path` 门面分发，纯 .http 原生解析（消除硬编码 Markdown 栅栏迂回）。
+- **ROBUST-01**：mock 变体切分器 Body 边界上下文感知——请求体内以 `@mock-when` 开头的内容行不再误判截断（对抗测试锁定）。
+- **ROBUST-02**：PathSandbox 词法 `..` 前置拦截（零磁盘探测，两分支统一）。
+- **UX-01**：`GET /api/v1/meta` 端点 + 前端只读徽章与写路径按钮置灰。
+- **批次 2b**：`POST /api/v1/run/suite` 整文档批量执行端点（readonly 403 防线自带 + wiremock 真实三块套件聚合断言 + 404/422 错误形态）。
+- 回归：**866 passed / 0 failed**，clippy/fmt 双零。
+
+### 3. 批次 3：CLI 安全评估（只读 + 隔离 PoC 实证，报告归档）
+- 报告：[doc/dev/2026-11-07-cli-security-assessment.md](doc/dev/2026-11-07-cli-security-assessment.md)。
+- **P1-1（实证）**：`--report-file` 静默覆盖已存在文件且跟随符号链接写入任意用户可写目标——修复建议与"分支收尾批次"报告覆盖提示同源合并。
+- **P2-1（实证但不可执行注入）**：import/generate 生成物结构污染——body 中 `###`/指令样文本行原样写入；三类走私（header 换行 / 裸元数据 / 谓词拆分）均被既有防线阻断。
+- 其余面板（钩子/沙箱/泄露/Cookie）防线充分；建议 `make audit`（cargo audit）纳入发版仪式。
+
+### 4. 导入功能：PRD 归档（不实施，用户裁决后移 + CLI 结合）
+- [doc/plans/active/2026-11-07-importer-unification-prd.md](doc/plans/active/2026-11-07-importer-unification-prd.md)：HAR/Postman/OpenAPI 真实解析落位 `src/importer/` 领域层，CLI `import --format` + Web `/api/v1/import` 双端同源；R1-R6 需求 + 6 提交切分 + 勘误 `:376` 失实宣称的联动登记。
+---
+
+## 阶段执行进度：第一步收口微调与第二步 1（通用 Importer 领域模块提取）已达成（2026-11-07 深夜）
+
+依据最新合并路线图与用户指令“先完成第一步，和第二步的 1”，完成以下两大原子演进与提交：
+
+### 1. 第一步收口微调 (Commit `kzlvpxwu` a10e65ed)
+- **RFC 9110 §7.2 Host 标头大小写无关**：`src/web/server.rs` 中的 `is_allowed_host` 改用 `eq_ignore_ascii_case` 匹配 `localhost` 与 `state.allowed_hosts` 动态白名单，兼容 `Host: Localhost:3000`、`LOCALHOST` 等合规大小写混合请求。
+- **空文档 422 语法门禁统一**：`src/web/handlers/run.rs` 在解析文档后校验 `parsed_file.requests.is_empty()`，若为空（包含空 `.http` 或无 ```` ```http ```` 块的纯文本 Markdown）统一返回 422 `UNPROCESSABLE_ENTITY`（`"Document contains no executable HTTP request blocks"`）。
+- **TDD 校验**：`tests/web_api_integration_test.rs` 新增混合大小写 Host 访问（200 OK）与无请求 Markdown 套件执行（422）断言。
+
+### 2. 第二步 Item 1：通用 Importer 领域模块提取 (Commit `spwmoszx` 608c4a47)
+- **Clean Architecture 领域下沉**：
+  - 新建/扩展独立领域模块 `src/importer/`，将原混杂在 `src/web/` 中的请求解析与协议转换逻辑彻底移入核心领域层，解除 Web / Axum 依赖。
+  - `src/importer/mod.rs`：定义 `RequestImporter` 契约 Trait、`ImportFormat`、`ImportRequest`、`ImportResponse` 与 `MultiFormatImporter` 门面调度器。
+  - `src/importer/curl.rs`：实现 `CurlImporter: RequestImporter`，复用既有 POSIX 分词与请求合成能力。
+  - `src/importer/httpie.rs`：实现 `HttpieImporter: RequestImporter`，支持简写 URL、参数展开、JSON 合成与 Host 模板化。
+  - `src/importer/raw.rs`：实现 `RawHttpImporter: RequestImporter`，遵循 RFC 7230 解析标准 Raw HTTP 报文。
+- **Web 适配层向后兼容**：
+  - `src/web/importer.rs` 与 `src/web/types.rs` 透明重导出 `crate::importer::*`，上层路由适配器零破坏。
+- **全量回归验证**：
+  - `cargo test --lib importer`：28 个单元测试全绿；
+  - `cargo test --test import_curl_test`：5 个端到端集成测试全绿；
+  - `cargo test --test web_api_integration_test`：14 个 Web API 集成测试全绿；
+  - `cargo test --lib`：全量 540 个单元测试 100% 通过；
+  - `cargo clippy --all-targets --all-features -- -D warnings` 与 `cargo fmt --all -- --check` 保持双零告警。
+
+
+---
+
+---
+
+## 分支收尾批次（branch-cleanup bookmark，6 原子提交，2026-11-08）
+
+今晨审查 + 双子代理对抗审查（设计 0 P0 / 测试策略 3 P0）修订后的方案全部交付：
+
+1. **Json\* 报告契约迁入 `src/report/json.rs`**（提交 1）：reporter.rs 收敛为纯终端渲染器，report→reporter 反向依赖消除；瀑布换算唯一化——`from_diagnostics`（残差 clamp）/ timing 分支保全 / `from_total_ms(f64)` 三分支各守其形，双份 ~40 行重复删除；新增 serde(default) 旧版最小报告反向兼容负向测试。
+2. **`run_test_suite` 返回 `TestSuiteOutcome`**（提交 2，破坏性 API）：失败判定口径单点维护；4 调用点全适配（编译器当检查器，不加 From<bool> 兼容）；新增子进程 e2e 锁定失败 exit 1 / 全绿 exit 0（RUPOST_HISTORY_DIR 隔离）。
+3. **报告文件输出上移表现层**（提交 3）：`write_report_files` 门面返回 `ReportWriteOutcome` 消息结构（打印决策留派发层，stdout 纯净可测）；格式判定决策表 11 行表驱动——显式 `--report` 永远优先 + 大小写统一（`--report json --report-file x.html` 行为变更入 CHANGELOG）；覆盖提示 stderr 数据化（评估 P1-1 闭环：允许覆盖 + 提示 + symlink 行为文档测试）；默认路径子进程测试（禁 set_current_dir）。
+4. **scenario 测试基建去 flake**（提交 4）：7 处固定端口（19188-19194/19198）+ 吞 bind 错误 + sleep 竞态 → `bind(":0")` + `serve_matcher` 直传已绑定 listener，bind expect 在 spawn 外；mock_integration_test 存量登记不顺手修。
+5. **MockCompiler 死代码删除**（提交 5）：guard 后不可达兜底分支 + 注释修正（双角色语义 CHANGELOG 登记）。
+6. **文档联动**（提交 6）：directory_structure.md 登记 `src/report/` 五文件 + `BatchResult` 幽灵类型修正 + reporter 条目更新；progress_summary Sprint 6 状态与 main.rs 行数勘误；CHANGELOG Changed/Fixed。
+
+---
+
+## 解耦提案双子代理审查与 v2 修订（2026-11-08）
+
+[2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md) 经架构审查 + 事实核查双子代理对抗审查（无 P0 架构错误，1 项 P0 执行卡壳点 + 6 项 P1 全部吸收），文档重写为 v2：
+
+1. **P0 勘误**：靶点三组件树按真实 `DetailTab`（Response/Headers/Request/Results/Diagnose）重画——原"Overview/Timing/Body"清单系沿用本文件旧条目过时表述（已随批勘误），Timing 实内联于 Response 臂。
+2. **设计缺口补齐**：渲染期副作用（预折行缓存惰性重建）归属显式化——门面 `&mut` 前置重建、子组件 `&AppState` 只读；editor.rs 552 行测试块与 219 行 `trigger_file_execution` 最大块归属声明（迁 `actions/execution.rs` + 测试随迁）；靶点四改写为"内联字段提取 Args 结构体"（原"平铺结构体拆分"失实——实为 enum 内联字段），12 变体全覆盖 + dispatch/runner 归位。
+3. **验证纪律补 bin 防线**：cli 属 bin crate，12 个单测（含位置契约表）`cargo test --lib` 跑不到——§5 补 `cargo test --bin rupost`，迁移前先扩契约表（别名/value_delimiter/trailing_var_arg 保真清单）。
+4. **指标校准**：AppState 69 字段（非 46）；state/mod.rs 目标 670→~290（降 57%，非 75%）；editor 四块实测 57/44/44/80 行；高亮 3 函数 6 测子串匹配（非 4 组 11 测正则）。
+5. **路线图改 1 → (4 ∥ 2) → 3**（cli/tui 零依赖可并行，response 殿后）；范围外五巨石（html.rs 897 等）登记 future_backlog。
+
+---
+
+## 首轮主干代码审查与修复（2026-11-09）
+
+双子代理对 0d243f35.. 主干区间的审查与修复闭环：
+
+1. **审查轮一**（branch-cleanup 批次 + 工作区合并 + Phase 1 等 16 提交）：无 P0；P1 一项——空扫描路径下报告落盘语义漂移（迁移期短暂改为写空报告文件，未登记无测试）。P2：reporter 兼容 shim 零调用死代码、`--report JSON`/扩展名大小写两处不对称（CHANGELOG"统一"表述过强）、"清零"措辞过强（ai_assert_test 子进程固定端口豁免）、提案两处数字失实（WS 53 行非 80、509/579 非 537/552）、FOUC 与 curl 非 ASCII header 登记。
+2. **修复轮**：空扫描恢复不落盘旧语义 + 子进程 e2e 锁定；stdout JSON 与扩展名推断补齐大小写不敏感（CHANGELOG 表述兑现）；shim 删除独立提交；CHANGELOG/提案数字校准；P2 两项登记 future_backlog。
+3. **历史结构修复**：4a 提交曾因 jj 工作副本快照吸收 Phase 2 变更而混杂——jj split 路径拆出 Phase 2 独立提交、废弃空提交、shim 删除独立化。
+
+---
+
+## 解耦提案 Phase 2/3/4 交付与三轮代码审查（2026-11-08/09）
+
+[解耦提案 v2](doc/plans/active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md) 四阶段中的三阶段交付（Phase 1 见前批）：
+
+1. **Phase 2（`026ac23c`）**：editor.rs 1088 → 97 行（纯键位路由），业务动作归位 `handlers/actions/`（execution/export/snapshot/generator/ws_session 五文件），552 行测试随迁；`V`/`M` 委托 integrations 的既有先例推广成体系。双子代理审查：零语义偏差。
+2. **Phase 3（trunk 血统 `72f902f0`）**：response.rs 854 行拆为 response/ 八文件（门面 171 + 七子组件）；**副作用显式前置**——滑窗装载/SSE 惰性重构/HTTP 缓存重建收敛到门面前置段（按臂序逐臂复制条件），子组件 `&AppState` 只读；Headers/Request 经缓存管线的真实结构修正了 v1 概念错位；headers lossy 读回为唯一行为变更（backlog 同口径，提交信息如实声明）。第三轮审查机械 diff 验证渲染等价性全成立。
+3. **Phase 4（`963f9f80`；前置表面契约测试为 `39356194`）**：cli.rs（迁移提交实际删除 1423 行）拆为 cli/mod.rs + commands/（12 变体全覆盖）+ dispatch.rs + runner.rs；表面契约测试先行锁定，零漂移实证。
+4. **三轮审查**：一轮（16 提交，1 P1 空扫描落盘 + P2 兼容 shim/大小写/措辞）、二轮（Phase 2/4 逐字保真验证，1 P1 app.rs:140 残留）、三轮（Phase 3 等价性验证，1 P1 提交信息声明）——全部修复落地；bug 修复三提交（非 ASCII header 三层+第四层、diagnose 大小写、Web FOUC）一并经审。
+5. 全量基线 890 passed / 0 failed（会话起点 883），clippy/fmt 双零。Phase 3 为解耦提案最后阶段——**提案四阶段全部交付**。
+
+---
+
+## Web 工作台收尾两功能交付（2026-11-09）
+
+1. **--dev CORS（加固计划战役 A-5）**：`rupost web --dev` 挂载宽松 CORS（tower-http 0.6 cors，与传递版本一致）供独立前端跨域联调；安全姿态三层——非回环 --host fail-fast 拒绝（错误含可执行指引）+ 启动横幅 + Host 守卫叠加；非 dev 模式零 CORS 头（默认拒）。测试：预检/实际跨域 allow-origin、非 dev 反向断言、非回环拒绝、CLI 解析（bin 14 测）。
+2. **前端 Run All 面板核实**：主题/UI 会话已完整交付（runSuite 消费 POST /api/v1/run/suite，RunSuiteResponse/SuiteItemResult 字段契约逐一吻合，btn-run-all 已入只读置灰清单）——本批零改动，契约核对记录于此。
+
+---
+
+## 开发规范生成（2026-11-09）
+
+基于本会话集群全部实战教训（工作副本快照吸收、glob 隐性依赖、大小写残留、no-op 修复误判、计划数字失实、假守护测试、横幅时序等约 20 起真实事故），提炼为 [doc/dev/development_standards.md](doc/dev/development_standards.md)：八章节（提交/迁移/测试/字符串编码/行为变更/安全姿态/审查协作/门禁清单），每条规则锚定 ⚓ 真实事故；AGENTS.md 挂指针。后续新事故按"附：维护纪律"增补。

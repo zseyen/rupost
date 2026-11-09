@@ -19,6 +19,7 @@ pub use request_builder::{to_request, try_from_parsed_with_warnings};
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
 pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};
+pub use types::{Method, Status, Url};
 pub mod url;
 pub use url::resolve_final_url;
 
@@ -28,7 +29,7 @@ use crate::Result;
 pub async fn run_diagnose(url: &str, report: &str) -> Result<()> {
     match diagnose_url(url).await {
         Ok(report_data) => {
-            if report == "json" {
+            if report.eq_ignore_ascii_case("json") {
                 println!("{}", serde_json::to_string_pretty(&report_data).unwrap());
             } else {
                 print_diagnose_report(&report_data);

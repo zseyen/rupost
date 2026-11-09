@@ -311,9 +311,14 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             }
         }
     }
+    let normalized_source = source_paths
+        .iter()
+        .map(crate::utils::path_guard::normalize_posix_path)
+        .collect::<Vec<_>>()
+        .join(", ");
     let suite = SnapshotSuite {
         timestamp: chrono::Utc::now(),
-        source_file: Some(source_paths.join(", ")),
+        source_file: Some(normalized_source),
         entries,
     };
     write_snapshot_suite(&suite, snapshot_path)
@@ -324,13 +329,23 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
 /// （敏感键 `[REDACTED]` + PII 三正则，无截断）。schema 不变，产物仍可被 replay 加载。
 pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
     use crate::exporter::redact::{mask_body_secrets, redact_header_value};
+    // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
+    // 非 UTF-8 值原样保留（掩码通道不损伤结构）
     let mask_headers = |map: &mut reqwest::header::HeaderMap| {
-        let keys: Vec<_> = map.keys().cloned().collect();
-        for name in keys {
-            if let Some(val) = map.get(&name).and_then(|v| v.to_str().ok()) {
-                let masked = redact_header_value(name.as_str(), val);
-                if let Ok(hv) = reqwest::header::HeaderValue::from_str(&masked) {
-                    map.insert(&name, hv);
+        let drained: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> = map
+            .drain()
+            .map(|(name, value)| (name.expect("valid header name"), value))
+            .collect();
+        for (name, value) in drained {
+            match value.to_str() {
+                Ok(val) => {
+                    let masked = redact_header_value(name.as_str(), val);
+                    if let Ok(hv) = reqwest::header::HeaderValue::from_str(&masked) {
+                        map.append(name, hv);
+                    }
+                }
+                Err(_) => {
+                    map.append(name, value);
                 }
             }
         }

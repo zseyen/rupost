@@ -1,3 +1,4 @@
+use rupost::http::Method;
 use rupost::parser::types::ParsedRequest;
 use rupost::{Result, RupostError};
 use tracing::debug;
@@ -186,7 +187,7 @@ fn parse_curl(args: Vec<String>) -> Result<ParsedRequest> {
 fn is_key_value_param(arg: &str) -> bool {
     // 先排除 URL 模式
     // 1. http:// 或 https://
-    if arg.starts_with("http://") || arg.starts_with("https://") {
+    if rupost::http::url::has_http_scheme(arg) {
         return false;
     }
     // 2. 所有以 : 开头的参数均判定为冒号本地快捷键（URL），不是键值对参数
@@ -219,12 +220,10 @@ fn parse_httpie(args: Vec<String>) -> Result<ParsedRequest> {
     let mut args_iter = args.into_iter().peekable();
 
     // Step 1: 检查第一个参数是否为 HTTP Method
-    if let Some(first) = args_iter.peek() {
-        let is_method = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
-            .contains(&first.to_uppercase().as_str());
-        if is_method {
-            method = args_iter.next().unwrap().to_uppercase();
-        }
+    if let Some(first) = args_iter.peek()
+        && Method::is_standard(first)
+    {
+        method = args_iter.next().unwrap().to_uppercase();
     }
 
     // Step 2: 下一个非键值对参数即为 URL

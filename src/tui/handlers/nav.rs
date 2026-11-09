@@ -4,20 +4,25 @@ use crate::tui::state::{DetailTab, LayoutMode, Panel, SidebarTab};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub const PANEL_ORDER: [Panel; 3] = [Panel::Files, Panel::Editor, Panel::Response];
-pub const DETAIL_ORDER: [DetailTab; 3] =
-    [DetailTab::Response, DetailTab::Headers, DetailTab::Request];
+pub const DETAIL_ORDER: [DetailTab; 5] = [
+    DetailTab::Response,
+    DetailTab::Headers,
+    DetailTab::Request,
+    DetailTab::Results,
+    DetailTab::Diagnose,
+];
 
 /// Tab / Shift+Tab 面板轮转
 pub fn next_panel(current: Panel, forward: bool) -> Panel {
-    cycle(PANEL_ORDER, current, forward)
+    cycle(&PANEL_ORDER, current, forward)
 }
 
 /// Response 详情子选项卡 h/l 循环
 pub fn next_detail_tab(current: DetailTab, forward: bool) -> DetailTab {
-    cycle(DETAIL_ORDER, current, forward)
+    cycle(&DETAIL_ORDER, current, forward)
 }
 
-fn cycle<T: Copy + PartialEq>(order: [T; 3], current: T, forward: bool) -> T {
+fn cycle<T: Copy + PartialEq>(order: &[T], current: T, forward: bool) -> T {
     let i = order.iter().position(|p| *p == current).unwrap_or(0);
     let step = if forward { 1 } else { order.len() - 1 };
     order[(i + step) % order.len()]
@@ -152,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_next_detail_tab_cycles() {
-        // 顺序 [Response, Headers, Request]：backward 从 Response 回卷到 Request
+        // 顺序 [Response, Headers, Request, Results, Diagnose]：末尾回卷到首
         assert_eq!(
             next_detail_tab(DetailTab::Response, true),
             DetailTab::Headers
@@ -163,11 +168,19 @@ mod tests {
         );
         assert_eq!(
             next_detail_tab(DetailTab::Request, true),
+            DetailTab::Results
+        );
+        assert_eq!(
+            next_detail_tab(DetailTab::Results, true),
+            DetailTab::Diagnose
+        );
+        assert_eq!(
+            next_detail_tab(DetailTab::Diagnose, true),
             DetailTab::Response
         );
         assert_eq!(
             next_detail_tab(DetailTab::Response, false),
-            DetailTab::Request
+            DetailTab::Diagnose
         );
         assert_eq!(
             next_detail_tab(DetailTab::Headers, false),

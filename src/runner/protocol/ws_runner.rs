@@ -14,6 +14,7 @@ use crate::middleware::Middleware;
 use crate::parser::types::ParsedRequest;
 use crate::runner::executor::ExecutorMiddleware;
 use crate::runner::types::TestResult;
+use crate::runner::utils::file_sync::write_log_with_limit;
 use crate::variable::capture::VariableCapture;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::ws::{
@@ -182,7 +183,7 @@ impl WsRunner {
                 let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                 let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
                 accumulated_log.push(log_line.trim_end().to_string());
-                let _ = write_ws_log_with_limit(&log_path, &log_line, max_bytes).await;
+                let _ = write_log_with_limit(&log_path, &log_line, max_bytes).await;
 
                 if let Some(ref sender) = stream_sender {
                     let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
@@ -222,7 +223,7 @@ impl WsRunner {
                                     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                                     let log_line = format!("[←] {} | {}\n", ts, payload_str);
                                     accumulated_log.push(log_line.trim_end().to_string());
-                                    let _ = write_ws_log_with_limit(&log_path, &log_line, max_bytes).await;
+                                    let _ = write_log_with_limit(&log_path, &log_line, max_bytes).await;
 
                                     if let Some(ref sender) = stream_sender {
                                         let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
@@ -374,7 +375,7 @@ impl WsRunner {
                     let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
                     accumulated_log.push(log_line.trim_end().to_string());
                     if let Some(path) = log_path {
-                        let _ = write_ws_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                        let _ = write_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
                     }
 
                     if let Some(sender) = stream_sender {
@@ -447,7 +448,7 @@ impl WsRunner {
                                         let log_line = format!("[←] {} | {}\n", ts, payload_str);
                                         accumulated_log.push(log_line.trim_end().to_string());
                                         if let Some(path) = log_path {
-                                            let _ = write_ws_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                                            let _ = write_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
                                         }
 
                                         if let Some(sender) = stream_sender {
@@ -572,44 +573,6 @@ impl WsRunner {
         }
         resolved
     }
-}
-
-async fn write_ws_log_with_limit(
-    log_path: &std::path::Path,
-    data: &str,
-    max_bytes: usize,
-) -> Result<(), std::io::Error> {
-    use tokio::fs::OpenOptions;
-    use tokio::io::AsyncWriteExt;
-
-    if let Some(parent) = log_path.parent() {
-        if !parent.exists() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-    }
-
-    let file_len = log_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
-    if file_len >= max_bytes {
-        return Ok(());
-    }
-
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(log_path)
-        .await?;
-
-    let new_len = file_len + data.len();
-    if new_len > max_bytes {
-        let _ = file
-            .write_all(b"\n[SYSTEM] Log truncated due to size limit (5MB).\n")
-            .await;
-    } else {
-        let _ = file.write_all(data.as_bytes()).await;
-    }
-    let _ = file.flush().await;
-    Ok(())
 }
 
 impl WsRunner {

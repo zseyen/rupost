@@ -269,7 +269,7 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
                 eprintln!(
                     "{} AI 合成失败（{}），已降级为机械还原基线",
                     "⚠".yellow(),
-                    truncate_msg(&e.to_string(), 120)
+                    crate::utils::text::truncate_chars(&e.to_string(), 120, "…")
                 );
                 emit_blocks(&entries, None, params.templatize_host)
             }
@@ -306,14 +306,6 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn truncate_msg(msg: &str, max: usize) -> String {
-    if msg.chars().count() <= max {
-        msg.to_string()
-    } else {
-        format!("{}…", msg.chars().take(max).collect::<String>())
-    }
 }
 
 #[cfg(test)]

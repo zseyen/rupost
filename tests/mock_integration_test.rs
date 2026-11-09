@@ -2,7 +2,7 @@
 mod common;
 
 use rupost::mock::matcher::TrieRouteMatcher;
-use rupost::mock::server::{AxumMockServer, MockServer};
+use rupost::mock::server::axum_adapter::serve_matcher;
 use rupost::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,17 +55,15 @@ async fn test_mock_server_integration_flow() {
 
     let matcher = Arc::new(matcher);
 
-    // 使用随机可用端口 (在此硬编码一个本地动态端口)
-    let port = 19090;
-
-    // 启动 AxumMockServer
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-
-    // 等待一小会儿让服务器启动
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 发送请求，此处应能成功连上并返回预期的匹配内容
     let client = reqwest::Client::new();
@@ -123,14 +121,15 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     }
 
     let matcher = Arc::new(matcher);
-    let port = 19091;
-
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let client = reqwest::Client::new();
 
@@ -190,14 +189,15 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     }
 
     let matcher_sec = Arc::new(matcher_sec);
-    let port_sec = 19092;
-
-    let server_sec = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port_sec = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server_sec.start(port_sec, matcher_sec).await;
+        if let Err(e) = serve_matcher(listener, matcher_sec).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 冒烟点 4: 不带 Authorization 时匹配 header.Authorization == None 从而返回 401
     let resp_sec_401 = client
@@ -293,14 +293,15 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     }
 
     let matcher_dep = Arc::new(matcher_dep);
-    let port_dep = 19093;
-
-    let server_dep = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port_dep = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server_dep.start(port_dep, matcher_dep).await;
+        if let Err(e) = serve_matcher(listener, matcher_dep).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 冒烟点 6: 从联合加载的依赖路由树中，请求来自于 v1_api.md 的接口
     let resp_dep_v1 = client
@@ -347,14 +348,15 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     }
 
     let matcher_idemp = Arc::new(matcher_idemp);
-    let port_idemp = 19094;
-
-    let server_idemp = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port_idemp = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server_idemp.start(port_idemp, matcher_idemp).await;
+        if let Err(e) = serve_matcher(listener, matcher_idemp).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 冒烟点 8: 不带 Idempotency-Key 时匹配 header.Idempotency-Key == None 从而返回 400
     let resp_idemp_400 = client
@@ -399,7 +401,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 async fn test_abstract_base_url_scenario() {
     use rupost::mock::MockCompiler;
     use rupost::mock::matcher::TrieRouteMatcher;
-    use rupost::mock::server::{AxumMockServer, MockServer};
+    use rupost::mock::server::axum_adapter::serve_matcher;
     use rupost::parser::MarkdownFileParser;
     use rupost::runner::TestExecutor;
     use rupost::variable::VariableContext;
@@ -418,13 +420,15 @@ async fn test_abstract_base_url_scenario() {
     let matcher = Arc::new(matcher);
 
     // 3. 随机端口拉起 Mock 服务器
-    let port = 19095;
-    let server = AxumMockServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server port");
+    let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        let _ = server.start(port, matcher).await;
+        if let Err(e) = serve_matcher(listener, matcher).await {
+            eprintln!("mock server terminated: {e}");
+        }
     });
-
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // 4. 构建包含 base_url 动态参数的变量上下文
     let mut context = VariableContext::new();

@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rupost Living Workbench</title>
+  <script>
+    // 首帧预着色：CSS 加载前按 localStorage / OS 偏好设置主题，杜绝浅色用户闪暗（审查 P2）
+    // 自动探测不写 localStorage（持久化仅限用户显式切换）
+    (function () {
+      var saved = null;
+      try {
+        saved = localStorage.getItem('rupost-theme');
+      } catch (e) {
+        // 受限存储环境：回落 OS 偏好，否则 'light'（JS 恒设属性，CSS :root 暗色兜底在此路径不可达）
+      }
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.setAttribute('data-theme', saved || (prefersDark ? 'dark' : 'light'));
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="workbench-layout">
+    <!-- Top Navigation Bar -->
+    <header class="navbar">
+      <div class="brand">
+        <span class="brand-badge">[R]</span>
+        <span class="logo">rupost</span>
+        <span class="sub">workbench</span>
+        <span id="readonly-badge" class="readonly-badge" style="display: none;">[LOCKED: READ-ONLY]</span>
+      </div>
+      <div class="nav-controls">
+        <span id="active-file-label" class="file-label">[NO FILE SELECTED]</span>
+        <button id="btn-theme-toggle" class="btn btn-secondary" onclick="toggleTheme()" title="Toggle Theme (Dark / Light)">
+          [THEME: DARK]
+        </button>
+        <button id="btn-import-modal" class="btn btn-secondary" onclick="openImportModal()" title="Import external request (Ctrl+I)">
+          + Import <span class="kbd-hint">Ctrl+I</span>
+        </button>
+        <button id="btn-run-all" class="btn btn-secondary" onclick="runSuite()" title="Run entire test suite in file">
+          &gt; Run All
+        </button>
+        <button id="btn-run-selection" class="btn btn-accent" onclick="runCurrentBlock()" title="Execute block at cursor (Shift+Enter)">
+          &gt; Run Block <span class="kbd-hint">Shift+Enter</span>
+        </button>
+        <button id="btn-save" class="btn btn-success" onclick="saveActiveFile()" title="Save document (Ctrl+S)">
+          [SAVE] Save <span class="kbd-hint">Ctrl+S</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Workspace Main Body -->
+    <div class="workspace-body">
+      <!-- 1. Left Sidebar: Workspace Files -->
+      <aside class="sidebar" id="sidebar-pane">
+        <div class="sidebar-header">
+          <span class="sidebar-title">WORKSPACE</span>
+          <button class="btn-icon" onclick="loadFiles()" title="Refresh file list">[R]</button>
+        </div>
+        <div class="sidebar-filter">
+          <input type="text" id="file-filter-input" class="filter-input" placeholder="Filter files..." oninput="filterFiles()" />
+        </div>
+        <ul id="file-list" class="file-tree"></ul>
+      </aside>
+
+      <!-- 2. Center: Document Editor -->
+      <main class="editor-pane">
+        <div class="editor-toolbar">
+          <div class="toolbar-left">
+            <span class="pane-tag">[DOC]</span>
+            <span id="editor-file-title" class="pane-title">Untitled</span>
+          </div>
+          <div class="editor-actions">
+            <span id="editor-meta" class="editor-meta">0 lines | UTF-8</span>
+            <span id="save-status" class="save-status"></span>
+          </div>
+        </div>
+        <div class="editor-wrapper">
+          <div id="editor-gutter" class="editor-gutter"></div>
+          <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="Select a document on the left or type Markdown / HTTP DSL here..."></textarea>
+        </div>
+      </main>
+
+      <!-- 3. Right: Runtime Inspector -->
+      <aside class="debug-pane">
+        <div class="debug-toolbar">
+          <div class="toolbar-left">
+            <span class="pane-tag">[INSPECTOR]</span>
+            <span class="pane-title">RUNTIME RESULT</span>
+          </div>
+          <div id="inspector-summary-pill" class="summary-pill" style="display: none;">
+            <span id="pill-status" class="pill-code">200 OK</span>
+            <span id="pill-duration" class="pill-metric">0 ms</span>
+          </div>
+        </div>
+
+        <!-- Inspector Tabs -->
+        <nav class="inspector-tabs">
+          <button class="tab-btn active" data-tab="overview" onclick="switchInspectorTab('overview')">[Overview]</button>
+          <button class="tab-btn" data-tab="body" onclick="switchInspectorTab('body')">[Body]</button>
+          <button class="tab-btn" data-tab="headers" onclick="switchInspectorTab('headers')">[Headers]</button>
+          <button class="tab-btn" data-tab="assertions" onclick="switchInspectorTab('assertions')">[Assertions]</button>
+          <button class="tab-btn" data-tab="waterfall" onclick="switchInspectorTab('waterfall')">[Waterfall]</button>
+          <button class="tab-btn" data-tab="raw" onclick="switchInspectorTab('raw')">[Raw]</button>
+        </nav>
+
+        <div id="debug-output" class="debug-content">
+          <div class="empty-hint">
+            <div class="empty-icon">[NO RUN DATA]</div>
+            <div class="empty-text">Select an HTTP request block in editor and press [Run Block] (Shift+Enter) to evaluate in real-time.</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Bottom Status Bar -->
+    <footer class="statusbar">
+      <div class="status-segment">
+        <span id="status-indicator" class="status-indicator">[STATUS] Ready</span>
+      </div>
+      <div class="status-segment">
+        <span id="cursor-pos-indicator" class="status-item">Ln 1, Col 1</span>
+      </div>
+      <div class="status-segment right">
+        <span id="syntax-status" class="status-item">[OK] Syntax Checked</span>
+        <span class="status-separator">|</span>
+        <span class="status-item">Sandbox: Active</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Multi-Format Importer Modal -->
+  <div id="import-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-badge">[IMPORT WIZARD]</span>
+          <span class="modal-title">Multi-Format Request Importer</span>
+        </div>
+        <button class="close-btn" onclick="closeImportModal()" title="Close (Esc)">[X]</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label class="form-label">Source Format:</label>
+          <select id="import-format-select" class="form-select">
+            <option value="auto" selected>[v] Auto-detect (Smart Sniff)</option>
+            <option value="curl">cURL Command</option>
+            <option value="httpie">HTTPie CLI</option>
+            <option value="rawhttp">Raw HTTP 1.1 Wire Text</option>
+            <option value="har">HAR Network Archive</option>
+            <option value="openapi">OpenAPI 3.x / Swagger Snippet</option>
+          </select>
+        </div>
+        <div class="form-row checkbox-row">
+          <label class="checkbox-label">
+            <input type="checkbox" id="import-opt-baseurl" checked /> Extract host as {{base_url}}
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="import-opt-mock" checked /> Generate standard @mock variant
+          </label>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Payload / CLI Command:</label>
+          <textarea id="import-textarea" class="import-textarea" spellcheck="false" placeholder="Paste cURL (curl -X POST ...), HTTPie command, or raw HTTP payload here..."></textarea>
+        </div>
+        <div id="import-hint" class="import-hint">Supports auto-detection for cURL, HTTPie, raw HTTP and OpenAPI.</div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeImportModal()">Cancel (Esc)</button>
+        <button class="btn btn-primary" onclick="submitImport()">[+] Convert &amp; Insert</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

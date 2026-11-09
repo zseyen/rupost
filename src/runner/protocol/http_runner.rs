@@ -34,11 +34,7 @@ impl HttpRunner {
         let name = parsed.name().map(|s| s.to_string());
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
-        let is_sse_requested = parsed.metadata.sse
-            || parsed
-                .headers
-                .iter()
-                .any(|(k, v)| k.eq_ignore_ascii_case("accept") && v.contains("text/event-stream"));
+        let is_sse_requested = parsed.is_sse_stream();
         let sse_timeout = parsed.metadata.sse_timeout;
         let sse_max_events = parsed.metadata.sse_max_events;
         let stream_to = parsed.metadata.stream_to.clone();

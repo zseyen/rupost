@@ -1,0 +1,168 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Order Fulfillment Service",
+    "version": "1.0.0",
+    "description": "API Specification for modern order creation and fulfillment."
+  },
+  "servers": [
+    {
+      "url": "http://api.orderservice.local/api/v1",
+      "description": "Local Mock / Contract Server"
+    }
+  ],
+  "paths": {
+    "/orders": {
+      "post": {
+        "operationId": "createOrder",
+        "summary": "Create Order",
+        "description": "Creates an order with idempotency check and VIP discount options.",
+        "parameters": [
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["standard", "vip"]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Order created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Missing Bearer Token"
+          }
+        }
+      }
+    },
+    "/orders/detail": {
+      "get": {
+        "operationId": "getOrderDetail",
+        "summary": "Get Order Detail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order detail found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Order not found"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateOrderRequest": {
+        "type": "object",
+        "required": ["item_count", "amount"],
+        "properties": {
+          "item_count": {
+            "type": "integer",
+            "example": 2
+          },
+          "amount": {
+            "type": "integer",
+            "example": 29900
+          },
+          "currency": {
+            "type": "string",
+            "example": "CNY"
+          }
+        }
+      },
+      "OrderResponse": {
+        "type": "object",
+        "required": ["id", "status", "amount"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "ord_std_10001"
+          },
+          "status": {
+            "type": "string",
+            "example": "pending_payment"
+          },
+          "amount": {
+            "type": "integer",
+            "example": 29900
+          },
+          "duplicated": {
+            "type": "boolean",
+            "example": false
+          }
+        }
+      },
+      "OrderDetailResponse": {
+        "type": "object",
+        "required": ["id", "status", "amount"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "ord_std_10001"
+          },
+          "status": {
+            "type": "string",
+            "example": "paid"
+          },
+          "amount": {
+            "type": "integer",
+            "example": 29900
+          },
+          "item_count": {
+            "type": "integer",
+            "example": 2
+          },
+          "tracking_number": {
+            "type": "string",
+            "example": "SF1002345678"
+          }
+        }
+      }
+    }
+  }
+}

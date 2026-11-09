@@ -76,6 +76,43 @@ impl ParsedRequest {
     pub fn name(&self) -> Option<&str> {
         self.metadata.name.as_deref()
     }
+
+    /// 大小写不敏感查找指定名称的请求头值
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// 判定是否包含指定名称的请求头（大小写不敏感）
+    pub fn has_header(&self, name: &str) -> bool {
+        self.headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case(name))
+    }
+
+    /// 获取 Content-Type 请求头值
+    pub fn content_type(&self) -> Option<&str> {
+        self.header("content-type")
+    }
+
+    /// 判定当前请求是否应视为 SSE 流式请求
+    ///（依据元数据 @sse 或显式 Accept: text/event-stream 标头）
+    pub fn is_sse_stream(&self) -> bool {
+        self.metadata.sse
+            || self
+                .header("accept")
+                .map(|v| v.contains("text/event-stream"))
+                .unwrap_or(false)
+    }
+
+    /// 判定当前请求的 Content-Type 是否为 JSON
+    pub fn is_json_content(&self) -> bool {
+        self.content_type()
+            .map(|ct| ct.contains("application/json"))
+            .unwrap_or(false)
+    }
 }
 
 use crate::variable::capture::VariableCapture;
@@ -249,6 +286,37 @@ mod tests {
         assert_eq!(req.headers.len(), 0);
         assert_eq!(req.body, None);
         assert!(!req.should_skip());
+    }
+
+    #[test]
+    fn test_parsed_request_header_and_sse_helpers() {
+        let mut req = ParsedRequest::new(1);
+        req.headers.push((
+            "Content-Type".into(),
+            "application/json; charset=utf-8".into(),
+        ));
+        req.headers
+            .push(("Accept".into(), "text/event-stream".into()));
+
+        assert_eq!(
+            req.header("content-type"),
+            Some("application/json; charset=utf-8")
+        );
+        assert_eq!(
+            req.header("CONTENT-TYPE"),
+            Some("application/json; charset=utf-8")
+        );
+        assert!(req.has_header("accept"));
+        assert!(!req.has_header("authorization"));
+        assert_eq!(req.content_type(), Some("application/json; charset=utf-8"));
+        assert!(req.is_json_content());
+        assert!(req.is_sse_stream());
+
+        let mut normal_req = ParsedRequest::new(2);
+        assert!(!normal_req.is_sse_stream());
+        assert!(!normal_req.is_json_content());
+        normal_req.metadata.sse = true;
+        assert!(normal_req.is_sse_stream());
     }
 
     #[test]

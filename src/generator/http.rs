@@ -102,14 +102,15 @@ impl HttpGenerator {
             block.push_str(&format!("# @timeout {}ms\n", t.as_millis()));
         }
 
-        // 2. Request Line（可选 origin → {{base_url}}；URL query 敏感键值模板化为变量）
+        // 2. Request Line（可选 origin → {{base_url}}；query 敏感键凭据/T2 溯源/T1 形状）
         let rendered_url = if templatize_host {
-            Self::variablize_url(
+            Self::variabilize_url(
                 &Self::templatize_host_in_url(&entry.request.url, variables),
                 variables,
+                traced,
             )
         } else {
-            Self::variablize_url(&entry.request.url, variables)
+            Self::variabilize_url(&entry.request.url, variables, traced)
         };
         block.push_str(&format!("{} {}\n", entry.request.method, rendered_url));
 
@@ -120,52 +121,52 @@ impl HttpGenerator {
             if Self::should_skip_header(key_str) {
                 continue;
             }
-            if let Ok(val_str) = value.to_str() {
-                // T2 Cookie 链删头：Cookie 头命中上游 Set-Cookie 名 → 省略（AutoPersist 靠罐接续）
-                if key_str.eq_ignore_ascii_case("cookie")
-                    && let Some(plan) = traced
-                    && plan
-                        .upstream_cookie_names
-                        .iter()
-                        .any(|n| val_str.contains(n.as_str()))
-                {
-                    continue;
-                }
-                // T2 最高优先（PRD 管线序）：溯源命中值豁免凭据模板化——
-                // `Bearer <token>` 还原为 `Bearer {{token}}`（保留 scheme 前缀）
-                let traced_hit = traced.and_then(|plan| {
-                    let (prefix, core) = match val_str.split_once(' ') {
-                        Some((p, r)) => (Some(p), r.trim()),
-                        None => (None, val_str),
-                    };
-                    plan.links
-                        .iter()
-                        .find(|l| l.value == core)
-                        .map(|l| match prefix {
-                            Some(p) => format!("{p} {{{{{}}}}}", l.capture_name),
-                            None => format!("{{{{{}}}}}", l.capture_name),
-                        })
-                });
-                if let Some(rendered) = traced_hit {
-                    block.push_str(&format!("{key_str}: {rendered}\n"));
-                    continue;
-                }
-                // 凭据模板化：生成的测试文件严禁落盘明文凭证
-                if is_sensitive_key(key_str) {
-                    let var = Self::var_name_from_key(key_str);
-                    variables.insert(var.clone());
-                    match Self::split_auth_scheme(val_str) {
-                        Some(scheme) => {
-                            block.push_str(&format!("{key_str}: {scheme} {{{{{var}}}}}\n"));
-                        }
-                        None => block.push_str(&format!("{key_str}: {{{{{var}}}}}\n")),
+            // lossy 读回：非 ASCII（obs-text）值无损渲染——旧 to_str() 使其被静默跳过不渲染
+            let val_str = String::from_utf8_lossy(value.as_bytes()).into_owned();
+            // T2 Cookie 链删头：Cookie 头命中上游 Set-Cookie 名 → 省略（AutoPersist 靠罐接续）
+            if key_str.eq_ignore_ascii_case("cookie")
+                && let Some(plan) = traced
+                && plan
+                    .upstream_cookie_names
+                    .iter()
+                    .any(|n| val_str.contains(n.as_str()))
+            {
+                continue;
+            }
+            // T2 最高优先（PRD 管线序）：溯源命中值豁免凭据模板化——
+            // `Bearer <token>` 还原为 `Bearer {{token}}`（保留 scheme 前缀）
+            let traced_hit = traced.and_then(|plan| {
+                let (prefix, core) = match val_str.as_str().split_once(' ') {
+                    Some((p, r)) => (Some(p), r.trim()),
+                    None => (None, val_str.as_str()),
+                };
+                plan.links
+                    .iter()
+                    .find(|l| l.value == core)
+                    .map(|l| match prefix {
+                        Some(p) => format!("{p} {{{{{}}}}}", l.capture_name),
+                        None => format!("{{{{{}}}}}", l.capture_name),
+                    })
+            });
+            if let Some(rendered) = traced_hit {
+                block.push_str(&format!("{key_str}: {rendered}\n"));
+                continue;
+            }
+            // 凭据模板化：生成的测试文件严禁落盘明文凭证
+            if is_sensitive_key(key_str) {
+                let var = Self::var_name_from_key(key_str);
+                variables.insert(var.clone());
+                match Self::split_auth_scheme(&val_str) {
+                    Some(scheme) => {
+                        block.push_str(&format!("{key_str}: {scheme} {{{{{var}}}}}\n"));
                     }
-                } else {
-                    // T1：非敏感 Header 值命中动态形状 → 反向模板化（凭据模板化优先已由分支保证）
-                    let rendered = super::dynamic::template_value(val_str)
-                        .unwrap_or_else(|| val_str.to_string());
-                    block.push_str(&format!("{}: {}\n", key_str, rendered));
+                    None => block.push_str(&format!("{key_str}: {{{{{var}}}}}\n")),
                 }
+            } else {
+                // T1：非敏感 Header 值命中动态形状 → 反向模板化（凭据模板化优先已由分支保证）
+                let rendered =
+                    super::dynamic::template_value(&val_str).unwrap_or_else(|| val_str.clone());
+                block.push_str(&format!("{}: {}\n", key_str, rendered));
             }
         }
 
@@ -318,13 +319,20 @@ impl HttpGenerator {
     }
 
     /// T1：递归模板化 JSON 字符串叶子（动态形状 → `{{$...}}`）；
-    /// 敏感键（password/token 等）下的值跳过——凭据语义由既有警告路径负责
+    /// T2 最高优先（评审 F1③）：溯源命中值即使位于敏感键之下也 → `{{capture}}`
+    /// （字面量明文被替换，严格更安全）；无命中时敏感键早退维持凭据语义
     fn templatize_dynamic_leaves(
         value: &serde_json::Value,
         key: Option<&str>,
         traced: Option<&super::trace::TracePlan>,
     ) -> serde_json::Value {
         use serde_json::Value;
+        if let Value::String(s) = value
+            && let Some(plan) = traced
+            && let Some(l) = plan.links.iter().find(|l| l.value == *s)
+        {
+            return Value::String(format!("{{{{{}}}}}", l.capture_name));
+        }
         if let Some(k) = key
             && crate::exporter::redact::is_sensitive_key(k)
         {
@@ -332,15 +340,8 @@ impl HttpGenerator {
         }
         match value {
             Value::String(s) => {
-                // T2 优先：溯源命中 → {{capture}}；否则 T1 形状
-                let traced_hit = traced.and_then(|plan| {
-                    plan.links
-                        .iter()
-                        .find(|l| l.value == *s)
-                        .map(|l| format!("{{{{{}}}}}", l.capture_name))
-                });
-                traced_hit
-                    .or_else(|| super::dynamic::template_value(s))
+                // T1：非敏感叶子命中动态形状 → 反向模板化
+                super::dynamic::template_value(s)
                     .map(Value::String)
                     .unwrap_or_else(|| value.clone())
             }
@@ -364,8 +365,14 @@ impl HttpGenerator {
         }
     }
 
-    /// URL query 中的敏感键值模板化为 `{{变量}}`；其余部分逐字保留（不做重编码）
-    fn variablize_url(raw: &str, variables: &mut BTreeSet<String>) -> String {
+    /// URL query 中的敏感键值模板化为 `{{变量}}`；溯源命中值（T2，最高优先）→ `{{capture}}`；
+    /// 其余 T1 动态形状反向模板化；其余部分逐字保留（不做重编码）。
+    /// 已知限制：URL 编码形态的值（%3A 等）不参与溯源/形状识别。
+    fn variabilize_url(
+        raw: &str,
+        variables: &mut BTreeSet<String>,
+        traced: Option<&super::trace::TracePlan>,
+    ) -> String {
         let Some((base, query)) = raw.split_once('?') else {
             return raw.to_string();
         };
@@ -373,13 +380,20 @@ impl HttpGenerator {
         let rebuilt: Vec<String> = query
             .split('&')
             .map(|pair| match pair.split_once('=') {
-                Some((k, _)) if is_sensitive_key(k) => {
+                Some((k, _v)) if is_sensitive_key(k) => {
                     templated = true;
                     let var = Self::var_name_from_key(k);
                     variables.insert(var.clone());
                     format!("{k}={{{{{var}}}}}")
                 }
                 Some((k, v)) => {
+                    // T2 最高优先：溯源命中 query 值 → {{capture}}（管线序 T2>T1>凭据豁免）
+                    if let Some(plan) = traced
+                        && let Some(l) = plan.links.iter().find(|l| l.value == *v)
+                    {
+                        templated = true;
+                        return format!("{k}={{{{{}}}}}", l.capture_name);
+                    }
                     // T1：非敏感 query 值命中动态形状 → 反向模板化（不进变量符号表）
                     match super::dynamic::template_value(v) {
                         Some(t) => {

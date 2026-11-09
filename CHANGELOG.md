@@ -8,12 +8,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- `rupost web --dev`：**开发者跨域模式**——挂载宽松 CORS 供独立前端（Vite/Webpack）跨域联调；安全姿态三层：非回环 `--host` fail-fast 拒绝（bind 之前）、启动横幅明示浏览器侧威胁（任意网页可跨域读写本地文档）、Host 守卫与回环绑定叠加；非 dev 模式零 CORS 头（默认拒）。
 - **快照脱敏（opt-in）**：`rupost t --save-snapshot` 与 `rupost history export` 新增 `--mask-secrets`——headers 走凭据掩码（Bearer 前缀保留）、body 走敏感键 `[REDACTED]` + PII 三正则（手机号/银行卡/邮箱，无截断）；schema 不变，掩码产物仍可 `replay` 加载；默认关（重放 body 比对保真度优先）。
 - **Breaking 候选**：`replay` 升级为状态码+body（默认 14 键动态排除后）双比对——body 失败计 failed 并 exit 1（逃生舱 `--status-only`；`--ignore-fields` 追加排除键）；同批解冻 AI 接线：`replay --explain` 失败条目就地归因（规则版基线 + AI 增强，无 Key 降级）。生成语义线：T1 动态值反向模板化（`{{""}}`/`{{"$timestamp"}}`/`{{"$timestamp_iso"}}`/`{{"$timestamp_ms"}}`，敏感键凭据模板化优先）；T2 链式值溯源（上游 `` + 下游 `Bearer {{"{{token}}"}}`，Cookie 链删头靠罐，生成文件直接重跑跑通）。
 - `rupost replay` 失败定位到条（DX-Debug R6）：重放结果升级为结构化 `ReplayEntryResult`（1-based 序号/期望与实际状态码/耗时/传输层错误首行，serde 双向），终端汇总后输出 `Failed entries` 失败清单块（0 失败零噪音）；任一条目失败进程 exit 1（CI 门禁语义，与 `test` 同款）。聚合 Total/Passed/Failed 语义不变。AI 预留桥 `context_from_replay_entry`（URL/错误文本防御性脱敏）使 replay 失败可直接流入既有 `--explain`/`ai triage` 归因管线（v1 建桥未接 CLI，fast-follow 解冻）。
 - `rupost history export --last <N> -o <FILE>`（T5，随 R6 同批）：**历史 → 可重放快照**桩转实——最近 N 条历史条目经既有快照转换导出（`body=None` 旧条目占位导出，条目可追溯）；空历史不写文件 exit 0；产物可直接 `rupost replay`。
 < Breaking 候选：`replay` 升级为状态码+body（排除动态键后）双比对，body 失败计 failed 并 exit 1（逃生舱 `--status-only`）+ `--ignore-fields` 追加排除；`replay --explain` 失败条目就地归因（规则版基线 + AI 增强，B1 降级）。新增 `history export`→重放供给链与生成语义两线：T1 动态值反向模板化（{{$uuid}}/{{$timestamp}}/{{$timestamp_iso}}/{{$timestamp_ms}}，敏感键跳过）；T2 链式值溯源（上游 `@capture` + 下游 `Bearer {{token}}`，Cookie 链删头靠罐，生成文件直接重跑）。
 - `rupost test --on-failure <CMD>`（DX-Debug R7）：**失败钩子与 trace 锚点协议**——每个失败请求触发一次用户 shell 命令（`sh -c`），注入 `RUPOST_FAILED_URL`（脱敏）/`RUPOST_FAILED_STATUS`/`RUPOST_FAILED_TRACE_ID`（按 `Traceparent > X-Request-Id > X-Trace-Id` 优先级提取）锚点环境变量；钩子 stderr/stdout 一律透传至 rupost 的 stderr（保 `--report json` stdout 机器可读纯净）；10s kill-on-drop 超时（如实上报）；钩子超时/非零退出/未检出 trace 头（空串 + warnings 可见）均不改写测试退出码。rupost 只给锚点，服务端日志聚合委托用户管道（stern/k9s）。`FailureContext` 同步携带 `trace_id` 供 `--explain` AI 归因引用。
+- TUI 接入剩余 CLI 功能：`V` 重放最新快照（Results tab 呈现对比报告）、`M` 开关当前文件 mock 服务器（自动空闲端口 + 状态栏指示）、`I` AI 断言翻译（自然语言 → `# @assert` 行追加编辑器）、`--cookie-file` 磁盘持久化（启动加载 + 触发末尾写回）；mock/server.rs 拆分 build/serve 以供编程接入。
+- TUI 接入 CLI 已实现能力（执行模型对齐 + 调试增强 + 快照/生成）：①整文件多请求顺序执行（变量级联、@skip），Results 详情 tab 逐条显示；②单请求选择器（`#` 模态，`#3`/`@name`/裸序号，复用 runner selector 纯函数）；③cookie 会话延续（触发间经 cookie_bridge 保持，不再每次重置）；④响应面板四段耗时行（DNS/TCP/TTFB/Transfer）；⑤失败自动诊断（debug-on-failure 语义）+ Diagnose tab 原生渲染；⑥`X`/`Shift+X` 导出 curl（[REDACTED]/原样）；⑦`Ctrl+S` 快照保存（默认脱敏）；⑧History `G` 一键生成语义化命名 `.http`。executor 新增 `execute_all_streaming`（逐请求回调），`execute_all` 委托之。
 - TUI 流式调试深化：①启动加载变量上下文（rupost.toml 环境 + .env + 系统变量，`--env/--var/--env-file` 透传，与 CLI 同源）——`Authorization: Bearer {{token}}` 等授权变量在 TUI 真正解析；②`A` 快速授权（输入 header 值即注入，显式声明优先）；③Response 面板 `/` 消息搜索（HTTP/SSE/WS 三视图实时高亮 + n/N 环绕跳转，顺带修正滚动总行数与视觉行不一致）；④WS 交互会话（`W` 对 `@websocket` 请求建立常驻会话、`S` 发送消息实时回显、`D` 关闭，断线自动重连沿用 session 逻辑，与剧本执行互斥）。
 - TUI Response 面板现在渲染 `TestResult.warnings`（`Warnings: N` 摘要 + `⚠` 逐条明细，含 SSE/WS 流式完成态视图首行摘要）：`@capture` 失败、未定义变量、畸形 JSON 降级等非致命告警此前在 TUI 中被静默丢弃（`RequestFinished` 事件未携带），存在"断言全过但实际带伤"的假通过盲区（D1 遗留项关闭）。顺带修复 HTTP 缓存渲染管线扁平化导致的样式丢失——未超宽行保留 Span 主题取色。
 - `rupost ai bootstrap --from history --last N -o FILE [--filter] [--no-ai] [--templatize-host]`（F8）：**调试历史 → 语义增强回归文件**——五阶段管线（采集 → `HttpGenerator` 机械基线 → `TestSynthesizer` AI 语义增强〔分块批量 + 连续 2 错熔断〕→ 引擎裁决〔断言 parser lint + capture 语法校验 + 每块 ≤8 条〕→ 防覆盖落盘）；AI 缺失/故障降级为机械基线 + 黄色警告 + exit 0（B1）；素材发送前脱敏 4KB 截断。
@@ -28,6 +31,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Changed
 
+- **报告文件输出上移表现层 + 格式判定显式优先**（分支收尾批次）：`run_test_suite` 返回 `TestSuiteOutcome { has_failure, batch_results }`（**破坏性 API 变更**：不再返回 bool，UseCase 不再隐式写报告文件）；渲染+落盘收敛为 `rupost::report::write_report_files` 门面。格式判定改为**显式 `--report` 永远优先**（忽略大小写，统一此前 stdout 精确匹配与文件判定忽略大小写的口径不一致）：`--report json --report-file x.html` 现在写 JSON（旧行为：扩展名压过显式格式静默写 HTML）；默认 terminal 按扩展名推断不变。报告文件已存在时 stderr 提示 `[!] 报告文件已存在，将覆盖`（允许覆盖不阻断，CI 友好；CLI 安全评估 P1-1 闭环）。空扫描提示 `No test files found.` 改 stderr（`--report json` stdout 纯净）。
+- **双角色 mock 语义登记**（既有行为，随批次正式入档）：`rupost mock` / `build_mock_matcher` 按**含 `@mock-when`/`@mock-default` 变体的契约块**编译路由，与 `@test` 标记无关——纯契约块（无 @test 有变体）会被服务，纯 `@test` 无变体块不再注册 mock 路由；`MockCompiler` 不可达兜底分支删除。
 - `rupost g` (history → .http generation) now **templates credentials as
   variables** instead of writing them verbatim: `Authorization: Bearer eyJ...`
   becomes `Authorization: Bearer {{authorization}}` (scheme prefix preserved,
@@ -47,6 +52,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Fixed
 
+- scenario/html_report 集成测试基建去 flake：7 处固定端口（19188-19194/19198）+ `let _ =` 吞 bind 错误 + sleep 启动竞态，统一改为 `bind("127.0.0.1:0")` + `serve_matcher`（已绑定 listener 直传，无 re-bind TOCTOU），端口占用从静默误导失败变为确定性 panic；同批清偿 `mock_integration_test.rs` 存量 6 处同款（19090-19095，含单测试三实例并存场景）——in-process 测试面"固定端口 + 吞错 + sleep"坏模式清零（`ai_assert_test` 子进程形态的固定端口 + `wait_for_port` 轮询豁免；实测占用端口时旧代码报误导性 `Failed to connect`，新代码 bind 处立即 `AddrInUse` 精准 panic）。
+- `rupost t` 失败判定语义新增子进程 e2e 锁定（失败 exit 1 / 全绿 exit 0）。
+- 空扫描（目录内无 .http/.md）恢复旧语义：不产生任何报告文件（迁移期曾短暂改为写空报告，经首轮代码审查捕获）；`--report json` 的 stdout 判定与 `--report-file` 扩展名推断补齐大小写不敏感（`--report JSON`、`OUT.HTML` 不再静默走错分支）。
 - **Security**: `rupost g` no longer writes `Authorization` / `Cookie` /
   `X-Api-Key` header values or sensitive URL query values (e.g. `?api_key=`)
   verbatim into generated `.http` files. Redaction semantics are shared with

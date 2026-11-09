@@ -41,6 +41,9 @@ pub enum RupostError {
     #[error("Cookie 处理错误: {0}")]
     CookieError(String),
 
+    #[error("安全拦截: {0}")]
+    SecurityViolation(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -54,6 +57,9 @@ impl RupostError {
             ),
             RupostError::DependencyNotFound { .. } => Some(
                 "请检查 @depends-on 指令中声明的依赖文件路径是否正确，并确认执行测试时指定了该依赖文件所在的目录或路径。",
+            ),
+            RupostError::SecurityViolation(_) => Some(
+                "请求路径违反了沙箱安全策略（目录穿越/隐藏文件/扩展名白名单）。请确认目标路径位于工作区内且为允许的文档类型。",
             ),
             _ => None,
         }

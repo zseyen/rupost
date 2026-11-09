@@ -10,11 +10,14 @@ pub mod logger;
 pub mod middleware;
 pub mod mock;
 pub mod parser;
+pub mod report;
 pub mod reporter;
 pub mod runner;
+pub mod security;
 pub mod template;
 pub mod utils;
 pub mod variable;
+pub mod web;
 pub mod ws;
 
 // Re-export commonly used types

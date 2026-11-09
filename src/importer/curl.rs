@@ -6,10 +6,46 @@
 
 use crate::generator::HttpGenerator;
 use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
+use crate::http::url::UrlTemplatizer;
+use crate::importer::RequestImporter;
+use crate::parser::types::ParsedRequest;
 use crate::{Result, RupostError};
 use chrono::Utc;
 use colored::Colorize;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+/// cURL 命令行导入器
+pub struct CurlImporter;
+
+impl RequestImporter for CurlImporter {
+    fn parse(&self, content: &str, templatize_host: bool) -> Result<Vec<ParsedRequest>> {
+        let entry = parse_curl_to_entry(content)?;
+        let url = if templatize_host {
+            UrlTemplatizer::templatize_origin(&entry.request.url, "{{base_url}}")
+        } else {
+            entry.request.url
+        };
+        let mut headers = Vec::new();
+        for (k, v) in &entry.request.headers {
+            // lossy 读回：UTF-8 值无损还原（旧 to_str() 使非 ASCII 值静默变空串），
+            // 真损坏字节显式可见而非静默丢弃
+            headers.push((
+                k.as_str().to_string(),
+                String::from_utf8_lossy(v.as_bytes()).into_owned(),
+            ));
+        }
+        let parsed = ParsedRequest {
+            method: Some(entry.request.method),
+            url,
+            headers,
+            body: entry.request.body,
+            metadata: Default::default(),
+            line_number: 1,
+            base_path: None,
+        };
+        Ok(vec![parsed])
+    }
+}
 
 /// curl 导入请求参数
 #[derive(Debug, Clone, Default)]
@@ -225,7 +261,9 @@ pub fn parse_curl_to_entry(raw: &str) -> Result<HistoryEntry> {
         header_map.append(
             HeaderName::from_bytes(name.as_bytes())
                 .map_err(|e| RupostError::ParseError(format!("非法 Header 名 {name}: {e}")))?,
-            HeaderValue::from_str(value)
+            // from_bytes 允许 obs-text（非 ASCII UTF-8 值，如中文备注），
+            // 控制字符（\r\n 注入等）仍被拒绝——既有防线不变
+            HeaderValue::from_bytes(value.as_bytes())
                 .map_err(|e| RupostError::ParseError(format!("非法 Header 值: {e}")))?,
         );
     }
@@ -459,5 +497,34 @@ mod tests {
         assert!(text.contains("# @assert status == 200"));
         assert!(variables.contains(&"authorization".to_string()));
         assert!(!text.contains("eyJhbGciOi"), "凭据不得明文落盘");
+    }
+
+    #[test]
+    fn test_parse_non_ascii_header_obs_text_allowed() {
+        // obs-text 非 ASCII 值经 from_bytes 放行且读回 lossy 无损
+        let entry =
+            parse_curl_to_entry(r#"curl -H "X-Note: 中文备注" https://api.example.com"#).unwrap();
+        let v = entry.request.headers.get("x-note").unwrap();
+        assert_eq!(String::from_utf8_lossy(v.as_bytes()), "中文备注");
+    }
+
+    #[test]
+    fn test_parse_header_control_chars_still_rejected() {
+        // 注入防线不变：控制字符（\n）在 from_bytes 口径下仍拒绝
+        let result = parse_curl_to_entry("curl -H \"X-Bad: a\nb\" https://api.example.com");
+        assert!(result.is_err(), "control chars must be rejected");
+    }
+
+    #[test]
+    fn test_curl_importer_parse_lossy_readback() {
+        // 层②（RequestImporter::parse，web MultiFormatImporter 路径）：lossy 读回无损
+        let importer = CurlImporter;
+        let reqs = importer
+            .parse(
+                r#"curl -H "X-Note: 中文备注" https://api.example.com"#,
+                false,
+            )
+            .unwrap();
+        assert_eq!(reqs[0].headers[0].1, "中文备注");
     }
 }

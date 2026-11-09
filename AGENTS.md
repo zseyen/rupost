@@ -92,10 +92,10 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 *   **原则**: 遵循开闭原则，确保核心逻辑易于扩展而不必修改已有代码。
 
 ### 3. UI/UX 专家 (Frontend Specialist)
-*   **关联技能**: `frontend-design`, `cli-aesthetic-ux`
+*   **关联技能**: `frontend-design`, `cli-aesthetic-ux`, `tui-design-guidelines`
 *   **职责**:
-    *   设计并实现 `rupost` 的用户界面（如 Dashboard 或示例页面）。
-    *   确保界面美观、具有高级感，避免“AI 同质化”审美。
+    *   设计并实现 `rupost` 的用户界面（如 Dashboard、Web 工作台、TUI 终端交互）。
+    *   确保界面美观、具有高级感，严格遵守无 Emoji 与纯 ASCII/ANSI 工程美学。
 *   **原则**: 极简主义与极致细节，通过优秀的排版、色彩与微交互提升用户体验。
 
 ### 4. 协作编排者 (Orchestrator)
@@ -105,9 +105,20 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
     *   确保在每次任务开始前调用正确的技能（Skills）。
     *   维护项目的工作流、文档一致性。
 
+### 5. 核心技能单一事实来源矩阵 (Skills SSOT)
+所有 Agent 技能均统一存放于 `.agent/skills/` 目录下（`.agents/skills/` 保持符号链接兼容）：
+- [`ai-integration-guidelines`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/ai-integration-guidelines/SKILL.md)：AI 分阶段集成、MCP 与 Prompt 工程。
+- [`brainstorming`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/brainstorming/SKILL.md)：创意孵化、PRD 设计、架构预审。
+- [`cli-aesthetic-ux`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/cli-aesthetic-ux/SKILL.md)：终端高级美学、HSL 配色、响应式终端规范。
+- [`frontend-design`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/frontend-design/SKILL.md)：Web 前端纯 ASCII 视觉与高质感交互。
+- [`rupost-architecture`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/rupost-architecture/SKILL.md)：Clean Architecture 微内核与中间件设计。
+- [`rust-async-patterns`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/rust-async-patterns/SKILL.md)：Tokio 异步模型、并发与内存安全。
+- [`superpower`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/superpower/SKILL.md)：工作流编排与技能加载中枢。
+- [`tui-design-guidelines`](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/tui-design-guidelines/SKILL.md)：TUI M-V-VM 架构、Ratatui 离屏验证与无 Emoji 约束。
+
 ## 协作流程与规则
 
-在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_workflow.md)。该流程规范由以下核心环节构成：
+在 `rupost` 的开发生命周期中，无论是智能体（AI）还是人类开发者，都必须严格遵守并执行 [研发流程规范](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_workflow.md) 与 [开发规范（实战教训提炼版）](file:///Users/zsyzzx/project/rust/rupost/doc/dev/development_standards.md)（提交纪律/迁移纪律/测试守护/编码/安全姿态——每条锚定真实事故）。该流程规范由以下核心环节构成：
 
 1. **功能分析与架构设计 (Stage 0 & 1)**：所有新功能或重大变更必须先由 **架构师** 通过 `brainstorming` 流程输出 PRD 与设计文档（存放在 `doc/plans/`），并确保设计符合 **Clean Architecture** 规范。
 2. **关键代码与单元测试 (Stage 2 & 3)**：在动工前先设计核心 Trait 与数据模型，单元测试必须在 `mod tests` 编写，并通过 Mock 隔离外部网络与文件 IO。
@@ -124,6 +135,47 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
   clap v4 的 `global = true` 参数具备向下继承能力。无论是置于主程序之后（`rupost --debug test suite.http`）还是置于子命令之后（`rupost test suite.http --debug`），全局标志与值选项（如 `--env staging`）均可被正确解析与透传。
 - **内联请求模式 (Inline Mode, 如直接运行 `rupost GET http://...`)**：
   由于根命令的 `args` 配置了 `trailing_var_arg = true` 以捕获任意 HTTP 请求参数与 Header，一旦将全局参数放置在 URL 之后（例如：`rupost GET http://example.com --debug`），该参数会被贪婪吸入 `cli.args` 数组中，导致 `cli.debug` 保持为 `false`。**因此，在内联请求模式下，所有全局参数必须紧跟在主程序名之后**（例如：`rupost --debug GET http://example.com`）。
+
+---
+
+## 6. CLI 入口层解耦规范 (Clean Architecture)
+
+- **职责界限**：`main.rs` 和 `cli.rs` 属于外层接口适配器 (Interface Adapters)。其唯一职责是：解析命令行选项 (CLAP)、初始化全局基础设施 (如 Ring Cryptography Provider、Logger)、以及将命令分派给具体的领域用例 (Usecases)。
+- **禁止内嵌业务**：禁止在命令行解析匹配的分支（如 `Commands::Mock`、`Commands::Test` 等）中直接包含路由读取、网络监听、依赖解析及大段转换逻辑。
+- **高阶控制器下沉**：所有核心的批处理测试流、Mock 服务拉起过程必须封装在库内（例如 `rupost::runner::run_test_suite`、`rupost::mock::run_server_from_file`），主入口应当做到“即调即走”，主入口行数必须控制在 150 行以内。
+
+## 7. 重构与测试回归保障规范 (Multi-Tiered Testing Strategy)
+
+在对 CLI 层、Runner 核心层等关键路径进行重构或新特性注入时，必须在代码提交前执行以下三层自动化校验，不可忽略任何一层：
+
+1. **单元测试 (Unit Tests)**：
+   - 必须针对提炼出的高层服务函数编写对应的边缘用例（例如传入空路径数组、不存在的配置文件等场景），验证并阻断可能的 Panic。
+2. **集成冒烟测试 (Smoke Tests)**：
+   - 重构后必须在本地顺利执行 `tests/verify_features.sh` 脚本，验证包含 `init` 模板保护、`mock` 变体、`diagnose` 诊断等在内的全特性集成链路完好无损。
+3. **示例与全量回归 (Regression Tests)**：
+   - 执行 `cargo test` 以验证现有的集成测试和单元测试套件全部 PASS。
+   - 执行 `examples/run_all.sh`，确保 examples 中内置的所有复杂场景（包括变量级联覆盖、WebSocket 握手、SSE 流式落盘等）100% 成功通过，不引入任何功能倒退。
+
+---
+
+## 8. TUI 开发与体验打磨规范 (TUI Architecture)
+
+*   **TUI Architecture**: 关于 TUI 组件的设计思想（M-V-VM）、自适应布局比例划分、无状态 Widget 封装、ASCII 经典化 aesthetics 约束、Left/Right 键树与 Tab 快捷冲突路由、流式 Word-Wrap 预折行性能优化、向心回弹光标重定位算法以及离屏 `TestBackend` 功能验证，请参考专门的 [TUI Design & Component Guidelines](file:///Users/zsyzzx/project/rust/rupost/.agent/skills/tui-design-guidelines/SKILL.md) 规则文档。
+
+---
+
+## 9. 离散逻辑治理、DRY 与 TDD 重构法则 (SSOT & TDD Refactoring)
+
+- **DRY 与单一事实来源 (Knowledge SSOT)**：
+  DRY 的第一性原理是**系统知识定义的唯一性**。任何关于 HTTP 方法集、文档后缀、协议头嗅探、URL Scheme 规范或跨平台路径转义的知识，在全库必须有且仅有一个权威定义点。
+  - 严禁在两个及以上模块中书写平行的字面量数组或相同的私有 I/O 辅助函数；
+  - 严禁在外部解构核心实体的内部结构做重复遍历（Rich Domain Model 优先）；
+  - 业务层所有暴露到外部的相对路径必须统一经过 `normalize_posix_path`。
+- **TDD 驱动重构三步法 (Red-Green-Refactor)**：
+  1. **Red**：在重构或提取任何离散逻辑前，先写表驱动单元测试锁定输入/输出契约（包含正常、异常、极值、Unicode 与跨平台路径）；
+  2. **Green**：在权威模块中极简实现，让新测试 100% 变绿；
+  3. **Refactor**：批量替换全库离散调用点，并彻底清理孤儿代码（删除被废弃的私有辅助函数与多余 import）。
+- **反假守护检验**：任何新增的守护测试必须经受“反转或删除生产逻辑后必须确定性变红”的验证，禁止假守护。
 
 
 

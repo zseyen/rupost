@@ -135,3 +135,35 @@ fn test_import_curl_data_file_reference_rejected() {
         "must surface the MVP limitation: {combined}"
     );
 }
+
+/// 非 ASCII（中文）header 值往返守护：parse 层 from_bytes 允许 obs-text，
+/// 读回层 lossy 无损——旧实现 parse 直接报"非法 Header 值"、读回静默空串（双层皆断）
+#[test]
+fn test_non_ascii_header_value_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("cn.http");
+    let output = Command::new(rupost_bin())
+        .args([
+            "import",
+            "curl",
+            r#"curl -H "X-Note: 中文备注" -H "X-Mixed: v1-日本語" https://api.example.com"#,
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run import curl");
+    assert!(
+        output.status.success(),
+        "non-ASCII header must import, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        content.contains("x-note: 中文备注"),
+        "Chinese value must survive (name normalized lowercase): {content}"
+    );
+    assert!(
+        content.contains("x-mixed: v1-日本語"),
+        "mixed value must survive: {content}"
+    );
+}

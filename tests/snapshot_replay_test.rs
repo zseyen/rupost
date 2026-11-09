@@ -962,3 +962,57 @@ async fn test_save_snapshot_mask_secrets_flag() {
     assert_eq!(report.total, 1);
     let _ = mock_server;
 }
+
+// ═══════════════ 红队审查修复轮补测 ═══════════════
+
+/// T1 验收闭环（PRD §七）：生成文件重跑两次，录得的动态值必不同（resolver 接线断裂即红）
+#[tokio::test]
+async fn test_t1_generated_file_reruns_with_fresh_values() {
+    use wiremock::matchers::{method, path};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("pong"))
+        .mount(&server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let case = dir.path().join("t1.http");
+    let content = "### ping\n# @name ping\nGET ".to_string()
+        + server.uri().as_str()
+        + "/ping\nX-Request-Id: {{$uuid}}\n\n{\"rid\": \"{{$uuid}}\"}\n";
+    std::fs::write(&case, content).unwrap();
+
+    let run = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+            .args(["t", case.to_str().unwrap()])
+            .output()
+            .unwrap()
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "run1: {}",
+        String::from_utf8_lossy(&first.stdout)
+    );
+    let second = run();
+    assert!(
+        second.status.success(),
+        "run2: {}",
+        String::from_utf8_lossy(&second.stdout)
+    );
+
+    // 两次运行录得的 X-Request-Id 必不同（resolver 接线断裂 → 字面量 → 相等即红）
+    let reqs = server.received_requests().await.expect("received requests");
+    assert!(reqs.len() >= 2, "two runs recorded: {}", reqs.len());
+    let ids: Vec<String> = reqs
+        .iter()
+        .map(|req| {
+            req.headers
+                .get("x-request-id")
+                .map(|v| v.to_str().unwrap().to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_ne!(ids[0], ids[ids.len() - 1], "fresh uuid per run: {ids:?}");
+}

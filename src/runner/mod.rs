@@ -8,7 +8,7 @@ pub mod engine;
 pub mod protocol;
 pub mod utils;
 
-pub use app::{TestSuiteOptions, run_test_suite};
+pub use app::{TestSuiteOptions, TestSuiteOutcome, run_test_suite};
 pub use executor::TestExecutor;
 pub use types::{TestResult, TestSummary};
 

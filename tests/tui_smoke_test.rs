@@ -1815,3 +1815,178 @@ fn test_send_request_resets_sliding_window_fields() {
     assert_eq!(state.cache_start_line, 0);
     assert_eq!(state.cache_end_line, 0);
 }
+
+#[tokio::test]
+async fn test_multi_request_trigger_reaches_all_endpoints() {
+    // R2 端到端：含 3 个请求的文件经 execute_all 全量执行——
+    // 回归锚点：旧实现只跑 requests.first()，2/3 端点收不到流量
+    use rupost::runner::TestExecutor;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    for i in 1..=3 {
+        Mock::given(method("GET"))
+            .and(path(format!("/r{i}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!("resp-{i}")))
+            .mount(&server)
+            .await;
+    }
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let file = temp.path().join("multi.http");
+    std::fs::write(
+        &file,
+        format!(
+            "### One\nGET {}/r1\n\n### Two\nGET {}/r2\n\n### Three\nGET {}/r3\n",
+            server.uri(),
+            server.uri(),
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let parsed = rupost::parser::HttpFileParser::parse_file(&file).unwrap();
+    let executor = TestExecutor::new();
+    let mut ctx = rupost::variable::VariableContext::new();
+
+    let results = executor.execute_all(parsed, &mut ctx).await.unwrap();
+    assert_eq!(results.len(), 3, "all three requests must execute");
+    assert!(results.iter().all(|r| r.success));
+
+    for i in 1..=3 {
+        let received = server
+            .received_requests()
+            .await
+            .expect("requests recorded")
+            .iter()
+            .filter(|r| r.url.path() == format!("/r{i}"))
+            .count();
+        assert_eq!(received, 1, "/r{i} must be hit exactly once");
+    }
+}
+
+#[test]
+fn test_results_tab_render_smoke() {
+    // R3 冒烟：Results tab 渲染 run_results 摘要（含 running 提示与状态色）
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.update_layout(100, 30);
+    state.active_detail_tab = rupost::tui::state::DetailTab::Results;
+    state.run_total = 3;
+    state.run_results = vec![
+        make_result(1, true, false),
+        make_result(2, true, false),
+        make_result(3, false, false),
+    ];
+    state.run_index = 3;
+
+    let res = terminal.draw(|f| rupost::tui::ui::render(f, &mut state));
+    assert!(res.is_ok());
+
+    let buffer = terminal.backend().buffer();
+    let text: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("3/3"), "progress must render");
+    assert!(text.contains("PASS"), "success status must render");
+    assert!(text.contains("FAIL"), "failure status must render");
+}
+
+#[test]
+fn test_diagnose_tab_render_smoke() {
+    // R7 冒烟：Diagnose tab 原生渲染（无数据提示 + 有数据字段）
+    let backend = ratatui::backend::TestBackend::new(100, 30);
+    let mut terminal = ratatui::Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+    state.active_panel = Panel::Response;
+    state.active_detail_tab = rupost::tui::state::DetailTab::Diagnose;
+    state.update_layout(100, 30);
+
+    // 无数据提示
+    terminal
+        .draw(|f| rupost::tui::ui::render(f, &mut state))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let text: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("No diagnose data"));
+
+    // 有数据（构造 report）
+    use rupost::http::diagnose::{CertInfo, DiagnosticsReport};
+    state.last_diagnose = Some(DiagnosticsReport {
+        url: "http://api.example.com".to_string(),
+        is_https: false,
+        is_websocket: false,
+        ws_upgrade_success: None,
+        resolved_ips: vec!["93.184.216.34".to_string()],
+        dns_lookup_duration: std::time::Duration::from_millis(3),
+        tcp_connect_duration: std::time::Duration::from_millis(11),
+        tls_handshake_duration: None,
+        cert_info: None,
+        http_status: Some(200),
+        http_version: Some("HTTP/1.1".to_string()),
+        ttfb: Some(std::time::Duration::from_millis(45)),
+        total_duration: std::time::Duration::from_millis(60),
+    });
+    terminal
+        .draw(|f| rupost::tui::ui::render(f, &mut state))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let text: String = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("api.example.com"));
+    assert!(text.contains("93.184.216.34"));
+    assert!(
+        text.contains("11ms") || text.contains("11µs"),
+        "tcp duration renders"
+    );
+    let _ = CertInfo {
+        subject: String::new(),
+        issuer: String::new(),
+        sans: vec![],
+        validity_not_after: String::new(),
+        days_remaining: 0,
+    };
+}
+
+fn make_result(number: usize, success: bool, skipped: bool) -> rupost::runner::types::TestResult {
+    let response = Response::new(
+        if success { 200 } else { 500 },
+        reqwest::header::HeaderMap::new(),
+        "body".to_string(),
+        std::time::Duration::from_millis(10),
+        std::time::Duration::from_millis(1),
+        std::time::Duration::from_millis(1),
+    )
+    .unwrap();
+    let mut r = rupost::runner::types::TestResult::success(
+        number,
+        Some(format!("req-{number}")),
+        "GET".to_string(),
+        format!("http://x/r{number}"),
+        response,
+    );
+    r.success = success;
+    r.skipped = skipped;
+    r
+}

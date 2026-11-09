@@ -581,24 +581,121 @@ fn test_templated_builtins_produce_fresh_values_per_run() {
     use rupost::variable::types::VariableContext;
 
     let ctx = VariableContext::default();
-    // 高分辨率形状：两次求值必不同
-    for tmpl in ["{{$uuid}}", "{{$timestamp_iso}}"] {
-        let first = VariableResolver::substitute(tmpl, &ctx);
-        let second = VariableResolver::substitute(tmpl, &ctx);
-        assert_ne!(
-            first, second,
-            "{tmpl} must yield fresh value per substitution (rerun semantics)"
-        );
-        assert!(
-            !first.contains("{{"),
-            "{tmpl} must be fully resolved: {first}"
-        );
-    }
-    // 毫秒分辨率：同毫秒内两次求值可能相同——断言形态正确（13 位纯数字，重跑语义由分辨率保证）
+    // $uuid：两次求值必不同（无分辨率限制）
+    let (u1, u2) = (
+        VariableResolver::substitute("{{$uuid}}", &ctx),
+        VariableResolver::substitute("{{$uuid}}", &ctx),
+    );
+    assert_ne!(u1, u2, "uuid fresh per substitution");
+    assert!(!u1.contains("{{"), "fully resolved: {u1}");
+    // $timestamp_iso：P2-1 定案 Z 形态 + 毫秒精度——同毫秒内两次可能相同
+    // （跨进程重跑必异，端到端由 test_t1_generated_file_reruns_with_fresh_values 守护）
+    let iso = VariableResolver::substitute("{{$timestamp_iso}}", &ctx);
+    assert!(iso.ends_with('Z'), "Z suffix (P2-1): {iso}");
+    assert!(iso.contains('T'), "ISO shape: {iso}");
+    // $timestamp_ms：13 位毫秒形态
     let ms = VariableResolver::substitute("{{$timestamp_ms}}", &ctx);
     assert_eq!(ms.len(), 13, "epoch millis shape: {ms}");
     assert!(
         ms.chars().all(|c| c.is_ascii_digit()),
         "numeric millis: {ms}"
+    );
+}
+
+/// 红队清单 4：T2 Cookie 删头集成闭环——上游 Set-Cookie + 下游 Cookie 头 →
+/// 生成内容省略 Cookie 头（罐接续），`rupost t` 仍 2 passed
+#[tokio::test]
+async fn test_generate_cookie_chain_header_omission_closed_loop() {
+    use wiremock::matchers::{method, path};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("{}")
+                .append_header("Set-Cookie", "sid=abc123def456; Path=/"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/profile"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let entries = vec![
+        rupost::history::model::HistoryEntry {
+            id: "l".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 5,
+            request: rupost::history::model::RequestSnapshot {
+                method: "POST".into(),
+                url: format!("{}/login", server.uri()),
+                headers: reqwest::header::HeaderMap::new(),
+                body: None,
+                timeout: None,
+            },
+            source: Some("t".into()),
+            response: rupost::history::model::ResponseMeta {
+                status: 200,
+                headers: {
+                    let mut h = reqwest::header::HeaderMap::new();
+                    h.insert("set-cookie", "sid=abc123def456; Path=/".parse().unwrap());
+                    h
+                },
+                body: Some("{}".into()),
+            },
+        },
+        rupost::history::model::HistoryEntry {
+            id: "p".into(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 5,
+            request: rupost::history::model::RequestSnapshot {
+                method: "GET".into(),
+                url: format!("{}/profile", server.uri()),
+                headers: {
+                    let mut h = reqwest::header::HeaderMap::new();
+                    h.insert("cookie", "sid=abc123def456".parse().unwrap());
+                    h
+                },
+                body: None,
+                timeout: None,
+            },
+            source: Some("t".into()),
+            response: rupost::history::model::ResponseMeta {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: Some("{}".into()),
+            },
+        },
+    ];
+
+    let (content, _) =
+        rupost::generator::HttpGenerator::generate_with_variables(&entries, false).unwrap();
+    assert!(
+        !content.contains("Cookie: sid="),
+        "cookie header omitted via plan: {content}"
+    );
+    assert!(
+        !content.contains("abc123def456"),
+        "cookie value never literal: {content}"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("cookie_chain.http");
+    std::fs::write(&file, &content).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["t", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "cookie chain reruns green: {stdout}"
+    );
+    assert!(
+        stdout.contains("2 passed"),
+        "both pass via jar continuation: {stdout}"
     );
 }

@@ -2,6 +2,7 @@ pub mod app;
 pub mod event;
 pub mod files;
 pub mod handlers;
+pub mod integrations;
 pub mod ports;
 pub mod state;
 pub mod theme;
@@ -17,6 +18,8 @@ pub struct TuiOptions {
     pub vars: Vec<String>,
     /// 局部环境文件路径（--env-file；缺省自动加载 .env）
     pub env_file: Option<String>,
+    /// cookie 持久化文件（--cookie-file；触发间加载/落盘）
+    pub cookie_file: Option<String>,
 }
 
 /// TUI 模式入口点

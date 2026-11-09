@@ -79,3 +79,28 @@
 *   **审计结论**：`format_request_snapshot_to_http`（`src/tui/state/history.rs`）原样写入全部 Header/URL/Body，调用点仅 `sync.rs`/`confirm.rs` 两处、产物只进**内存编辑器**（`editor_file_path = None`、`is_dirty = false`），TUI 全目录无剪贴板/文件导出路径——**无新暴露面**（凭据的持久化明文本就是 history 本身，属本机存储）。
 *   **显式裁决**：TUI 还原**有意保留凭据真值**——供未来内联编辑重发（模板化会破坏重发语义）；对外分享走 `export --redact`（脱敏）或 `generate`（模板化），三者分工明确互不越界。
 *   **契约锁定**：`test_history_restore_keeps_credentials_verbatim_by_design`（`src/tui/state/history.rs`）——若未来有人给还原路径加模板化/脱敏，此测试先行失败提醒重新裁决。
+
+---
+
+## 📌 2026-11-08 解耦提案审查登记（来源：[解耦提案 §6 范围外清单](active/2026-11-08-codebase-decoupling-and-monolith-refactoring-proposal.md)）
+
+### 同体量巨石文件（本期解耦四靶点之外，按需立项）
+
+| 文件 | 行数 | 潜在拆分方向 |
+| :--- | :--- | :--- |
+| `src/report/html.rs` | 897 | 内嵌 CSS/JS 拆独立模板文件，渲染管线分段 |
+| `src/runner/engine/replayer.rs` | 773 | 重放执行器：条目比较（Smart Diff）/ 终端渲染 / 编排分离 |
+| `src/parser/http_file.rs` | 729 | 词法扫描 / 请求块解析 / 元数据关联分层 |
+| `src/ai/rules.rs` | 726 | 签名分桶 / 规则推导 / 测试样例构造分离 |
+| `src/runner/protocol/ws_runner.rs` | 709 | 剧本执行 / 帧匹配 / 会话编排分离 |
+
+*触发条件：任一文件因新功能开发需要结构性改动时，顺手按解耦提案的四法则（§2）立项，不单独排期。*
+
+### 首轮主干审查 P2 登记（2026-11-09）
+
+*   **Web 前端 FOUC 三小项**（Studio Paper 主题批次遗留）：①`applyTheme` 将自动探测结果也写入 localStorage，首次访问即固化主题、OS 偏好变化失效——若"持久化"仅指显式切换，自动分支应跳过 setItem；②`app.js` body 末尾加载且无 defer + `data-theme="dark"` 硬编码，浅色用户首帧闪暗——head 内联脚本提前设置；③部分中文 UI 文案被英化（如"只读模式下不可用"→"Disabled in read-only mode"），超出主题支持范围，宜回译或登记。
+*   **importer curl 非 ASCII header 值静默空串**：`src/importer/curl.rs` header 值 `v.to_str().unwrap_or("")` 使非 ASCII 头值静默丢失（领域提取迁移前即如此）。修复方向：非 UTF-8 安全解码（String::from_utf8_lossy）或告警。
+
+*   **同类 `to_str()` 丢值点盘点**（2026-11-09 非 ASCII header 修复批次遗留，按需顺手修）：`src/generator/trace.rs:51,172`（T2 溯源对非 ASCII 值失效，组合新发射语义将以明文落盘）、`src/runner/engine/replayer.rs:389`（快照 replay 还原请求整行静默丢弃）、`src/mock/server.rs:131` 与 `src/mock/server/axum_adapter.rs:66`（mock 匹配跳过非 ASCII）、TUI 展示层 `src/tui/state/history.rs:70`、`src/tui/handlers/actions/ws_session.rs:339`（~~`src/tui/ui/response.rs:694`~~ 已随 Phase 3 组件化修复：headers.rs lossy 读回）。
+
+*   **header_map 序列化同名多值覆盖**（2026-11-09 审查登记，既有行为）：`src/history/serialization.rs` 以 `HashMap<String,_>` 收集，`HeaderMap` 同名多值（如多条 Set-Cookie）仅存末值；deserialize 侧 `HeaderMap::insert` 亦为替换语义。修复方向：`append` + `Vec<(String,String)>` 中间表示（需同步 JSON schema 消费方 ai triage/history show）。

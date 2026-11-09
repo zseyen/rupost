@@ -6,20 +6,14 @@
 //! - 依赖路径解析（将相对路径 dep 转换为 canonical 绝对路径）
 //! - 展示用路径格式化（去除冗余前缀，美化输出）
 
+use crate::utils::path_guard::is_live_doc;
 use std::path::{Path, PathBuf};
 
 // ─── 支持的文件扩展名 ─────────────────────────────────────────────────────────
 
-const SUPPORTED_EXTENSIONS: &[&str] = &["http", "md"];
-
 /// 判断给定路径是否为受支持的测试文件（.http / .md）。
 pub fn is_supported_file(path: &Path) -> bool {
-    path.extension()
-        .map(|ext| {
-            let ext_lower = ext.to_string_lossy().to_lowercase();
-            SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str())
-        })
-        .unwrap_or(false)
+    is_live_doc(path)
 }
 
 // ─── 依赖路径解析 ─────────────────────────────────────────────────────────────

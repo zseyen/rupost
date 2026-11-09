@@ -16,6 +16,9 @@ impl RouteSegment {
             RouteSegment::MultiWildcard
         } else if s.starts_with(':') && s.len() > 1 {
             RouteSegment::Param(s[1..].to_string())
+        } else if s.starts_with('{') && s.ends_with('}') && s.len() > 2 {
+            // 支持 OpenAPI / Axum 0.8 风格的路径参数，如 {id}
+            RouteSegment::Param(s[1..s.len() - 1].to_string())
         } else {
             RouteSegment::Literal(s.to_string())
         }
@@ -204,5 +207,27 @@ mod tests {
 
         let res4 = root.match_path("/api/static/logo.png");
         assert!(res4.is_none());
+    }
+
+    #[test]
+    fn test_trie_openapi_brace_parameter_and_literal_priority() {
+        let mut root = TrieNode::new(RouteSegment::Wildcard);
+        // 同时注册带 {id} 的动态路由和 /orders/export 静态路由
+        root.insert("/api/v1/orders/{id}", "param_handler");
+        root.insert("/api/v1/orders/export", "literal_handler");
+
+        // 1. 请求静态路由应绝对优先命中 literal_handler，不能被 param 吞掉
+        let (data, params) = root
+            .match_path("/api/v1/orders/export")
+            .expect("Should match export");
+        assert_eq!(*data, "literal_handler");
+        assert!(params.is_empty(), "Literal match should not capture params");
+
+        // 2. 请求普通参数应正确命中 param_handler，并提取 id="ord_123"
+        let (data2, params2) = root
+            .match_path("/api/v1/orders/ord_123")
+            .expect("Should match param");
+        assert_eq!(*data2, "param_handler");
+        assert_eq!(params2.get("id"), Some(&"ord_123".to_string()));
     }
 }

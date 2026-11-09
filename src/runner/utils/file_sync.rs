@@ -66,3 +66,71 @@ impl FileSyncWriter {
         }
     }
 }
+
+/// 针对流式事件日志的安全追加写入函数：
+/// 1. 自动确保父级目录存在；
+/// 2. 检测当前文件大小，达到上限则静默跳过写入；
+/// 3. 本次写入若导致文件超限，写入截断提示信息并阻止超出部分。
+pub async fn write_log_with_limit(
+    log_path: &std::path::Path,
+    data: &str,
+    max_bytes: usize,
+) -> std::io::Result<()> {
+    if let Some(parent) = log_path.parent().filter(|p| !p.exists()) {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    let file_len = log_path.metadata().map(|m| m.len() as usize).unwrap_or(0);
+    if file_len >= max_bytes {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(log_path)
+        .await?;
+
+    let new_len = file_len + data.len();
+    if new_len > max_bytes {
+        let _ = file
+            .write_all(b"\n[SYSTEM] Log truncated due to size limit.\n")
+            .await;
+    } else {
+        let _ = file.write_all(data.as_bytes()).await;
+    }
+    let _ = file.flush().await;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_write_log_with_limit_truncation() {
+        let temp = tempfile::tempdir().unwrap();
+        let log_path = temp.path().join("sub/test.log");
+
+        // 第一次写入正常
+        write_log_with_limit(&log_path, "12345", 20).await.unwrap();
+        let content = tokio::fs::read_to_string(&log_path).await.unwrap();
+        assert_eq!(content, "12345");
+
+        // 写入超限触发截断提示
+        write_log_with_limit(&log_path, "this-is-too-long-data-exceeding-limit", 20)
+            .await
+            .unwrap();
+        let content2 = tokio::fs::read_to_string(&log_path).await.unwrap();
+        assert!(content2.contains("[SYSTEM] Log truncated"));
+
+        // 超限后再次写入不再添加内容
+        let len_before = tokio::fs::metadata(&log_path).await.unwrap().len();
+        write_log_with_limit(&log_path, "more data", 20)
+            .await
+            .unwrap();
+        let len_after = tokio::fs::metadata(&log_path).await.unwrap().len();
+        assert_eq!(len_before, len_after);
+    }
+}

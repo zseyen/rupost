@@ -19,23 +19,42 @@ impl FromStr for Method {
     type Err = RupostError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "GET" => Ok(Method::Get),
-            "POST" => Ok(Method::Post),
-            "PUT" => Ok(Method::Put),
-            "DELETE" => Ok(Method::Delete),
-            "PATCH" => Ok(Method::Patch),
-            "HEAD" => Ok(Method::Head),
-            "OPTIONS" => Ok(Method::Options),
-            _ => Err(RupostError::ParseError(format!(
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("GET") {
+            Ok(Method::Get)
+        } else if trimmed.eq_ignore_ascii_case("POST") {
+            Ok(Method::Post)
+        } else if trimmed.eq_ignore_ascii_case("PUT") {
+            Ok(Method::Put)
+        } else if trimmed.eq_ignore_ascii_case("DELETE") {
+            Ok(Method::Delete)
+        } else if trimmed.eq_ignore_ascii_case("PATCH") {
+            Ok(Method::Patch)
+        } else if trimmed.eq_ignore_ascii_case("HEAD") {
+            Ok(Method::Head)
+        } else if trimmed.eq_ignore_ascii_case("OPTIONS") {
+            Ok(Method::Options)
+        } else {
+            Err(RupostError::ParseError(format!(
                 "Invalid HTTP method: {}",
                 s
-            ))),
+            )))
         }
     }
 }
 
 impl Method {
+    /// 标准支持的 HTTP 方法常量清单
+    pub const STANDARD_METHODS: [&'static str; 7] =
+        ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+
+    /// 判定字符串是否属于标准支持的 HTTP 方法（大小写不敏感，0 堆内存分配）
+    pub fn is_standard(s: &str) -> bool {
+        Self::STANDARD_METHODS
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(s.trim()))
+    }
+
     pub fn parse(s: &str) -> Result<Self> {
         s.parse()
     }
@@ -210,6 +229,17 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_method_is_standard_and_from_str() {
+        for method in ["get", "POST", "Put", "delete", "PATCH", "head", "options"] {
+            assert!(Method::is_standard(method));
+            assert!(method.parse::<Method>().is_ok());
+        }
+        assert!(!Method::is_standard("INVALID"));
+        assert!(!Method::is_standard("CONNECT"));
+        assert!("INVALID".parse::<Method>().is_err());
+    }
 
     #[test]
     fn test_status_accepts_nonstandard_codes() {

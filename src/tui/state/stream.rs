@@ -1,6 +1,7 @@
 //! 流式事件域：spinner、SSE/WS 流入帧、请求完成事件的 AppState 归约。
 
 use super::*;
+use std::collections::HashMap;
 
 impl AppState {
     pub fn get_spinner_char(&self) -> &'static str {
@@ -342,6 +343,45 @@ mod tests {
             .last_response
             .expect("error response must be materialized");
         assert!(!err_resp.is_success());
+    }
+
+    /// R2 守护：skip 结果短路——不污染 last_response、不误标文件执行状态
+    #[test]
+    fn test_skip_result_short_circuits_side_effects() {
+        use crate::runner::types::TestResult;
+
+        let mut state = AppState::new();
+        state.editor_file_path = Some("examples/multi.http".to_string());
+        state.is_loading = true;
+
+        let skipped = TestResult::skipped(
+            1,
+            Some("skipped-req".to_string()),
+            "GET".to_string(),
+            "http://x".to_string(),
+        );
+        assert!(skipped.success && skipped.response.is_none());
+
+        state.handle_request_result(skipped, std::collections::HashMap::new(), 1);
+
+        // 簿记正确
+        assert_eq!(state.run_results.len(), 1);
+        assert!(state.run_results[0].skipped);
+        assert!(!state.is_loading, "last result lands loading=false");
+        // 副作用短路：last_response 未被伪造错误污染
+        assert!(
+            state.last_response.is_none(),
+            "skip must not fabricate error response"
+        );
+        // 文件执行状态不得误标 Failed
+        assert!(
+            !state
+                .file_execution_states
+                .get("examples/multi.http")
+                .map(|s| *s == crate::tui::state::FileExecState::Failed)
+                .unwrap_or(false),
+            "skip must not mark file as Failed"
+        );
     }
 
     /// R4 守护：SSE 流式吸底在搜索态暂停（与 WS 变体对称）

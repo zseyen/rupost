@@ -1,10 +1,11 @@
 #![allow(clippy::manual_strip)]
+use crate::utils::path_guard::is_live_doc;
 use crate::variable::VariableContext;
 use crate::{Result, RupostError};
 
 /// 判断是否以合法 scheme 开头（RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) 后紧跟 "://"）。
 /// 不能用 `contains("://")`：`/oauth/cb?redirect=https://x` 这类 query 内含 URL 的相对路径会被误判为绝对地址。
-fn has_scheme_prefix(url: &str) -> bool {
+pub fn has_scheme_prefix(url: &str) -> bool {
     let Some(pos) = url.find("://") else {
         return false;
     };
@@ -12,6 +13,16 @@ fn has_scheme_prefix(url: &str) -> bool {
     let mut chars = scheme.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// 判定 URL 是否以 http:// 或 https:// 协议开头（忽略大小写）
+pub fn has_http_scheme(url: &str) -> bool {
+    if let Some(pos) = url.find("://") {
+        let scheme = &url[..pos];
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    } else {
+        false
+    }
 }
 
 /// 智能解析最终请求 URL，处理绝对/相对路径和本地/CLI 协议快捷简写
@@ -130,7 +141,7 @@ pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput
                 !after.is_empty() && after.chars().all(|c| c.is_ascii_digit())
             })
             .unwrap_or(false);
-    let file_like = input.contains(' ') || input.ends_with(".http") || input.ends_with(".md");
+    let file_like = input.contains(' ') || is_live_doc(input);
     if is_independent && !file_like {
         // 本地主机没有 TLS，强行补默认 scheme 会制造必败请求
         let scheme = if first.starts_with("localhost") || first.starts_with("127.") {
@@ -141,6 +152,36 @@ pub fn normalize_input_url(input: &str, default_scheme: &str) -> NormalizedInput
         return NormalizedInput::HostName(format!("{scheme}://{input}"));
     }
     NormalizedInput::NotUrl(input.to_string())
+}
+
+/// 强类型 URL 模板化组件 (消除跨模块切片与 IDN Panic 风险)
+pub struct UrlTemplatizer;
+
+impl UrlTemplatizer {
+    /// 将绝对 URL 的 origin 部分替换为指定占位符（如 `{{base_url}}`）
+    /// 无论是否为国际化域名（中文域名）、包含端口、或包含复杂 query/fragment，均能绝对安全重组
+    pub fn templatize_origin(raw_url: &str, placeholder: &str) -> String {
+        if !has_http_scheme(raw_url) {
+            return raw_url.to_string();
+        }
+
+        if let Ok(parsed) = url::Url::parse(raw_url) {
+            let path = parsed.path();
+            let query_str = parsed
+                .query()
+                .map(|q| format!("?{}", q))
+                .unwrap_or_default();
+            let fragment_str = parsed
+                .fragment()
+                .map(|f| format!("#{}", f))
+                .unwrap_or_default();
+
+            let clean_placeholder = placeholder.trim_end_matches('/');
+            format!("{}{}{}{}", clean_placeholder, path, query_str, fragment_str)
+        } else {
+            raw_url.to_string()
+        }
+    }
 }
 
 pub fn join_paths(parts: &[&str]) -> String {
@@ -172,10 +213,103 @@ pub fn join_paths(parts: &[&str]) -> String {
     result
 }
 
+/// 判断主机名或 URL 目标是否为本地回环机器（RFC 6761 / RFC 9110 / RFC 1122）。
+/// 支持 localhost、127.0.0.1、::1、[::1] 以及 *.localhost 子域（大小写不敏感，支持包含端口与 scheme）。
+pub fn is_loopback_host(host_or_url: &str) -> bool {
+    let host_only = if let Ok(parsed) = url::Url::parse(host_or_url) {
+        parsed.host_str().unwrap_or("").to_string()
+    } else {
+        let trimmed = host_or_url.trim();
+        let without_scheme = trimmed
+            .strip_prefix("http://")
+            .or_else(|| trimmed.strip_prefix("https://"))
+            .or_else(|| trimmed.strip_prefix("ws://"))
+            .or_else(|| trimmed.strip_prefix("wss://"))
+            .unwrap_or(trimmed);
+        let host_port = without_scheme.split('/').next().unwrap_or("");
+        if host_port.starts_with('[') {
+            if let Some(bracket) = host_port.find(']') {
+                host_port[1..bracket].to_string()
+            } else {
+                host_port.to_string()
+            }
+        } else if let Some(last_colon) = host_port.rfind(':')
+            && host_port.matches(':').count() == 1
+            && host_port[last_colon + 1..]
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        {
+            // 单个冒号且其后全为数字，判定为 host:port
+            host_port[..last_colon].to_string()
+        } else {
+            // 裸 IPv6 (如 ::1) 或不带端口的普通域名/IP
+            host_port.to_string()
+        }
+    };
+
+    let host_clean = host_only
+        .trim_matches('[')
+        .trim_matches(']')
+        .trim_end_matches('.');
+
+    // 1. IP 地址解析（支持 IPv4 127.0.0.0/8 全段及 IPv6 ::1）
+    if let Ok(ip) = host_clean.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    // 2. 域名解析（RFC 6761: localhost 及 *.localhost）
+    host_clean.eq_ignore_ascii_case("localhost")
+        || (host_clean.to_ascii_lowercase().ends_with(".localhost") && host_clean != ".localhost")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    #[test]
+    fn test_has_scheme_prefix_and_http_scheme() {
+        assert!(has_scheme_prefix("http://example.com"));
+        assert!(has_scheme_prefix("HTTPS://example.com"));
+        assert!(has_scheme_prefix("ws://localhost"));
+        assert!(has_scheme_prefix("custom+scheme://host"));
+        assert!(!has_scheme_prefix("/api/path"));
+        assert!(!has_scheme_prefix("localhost:8080"));
+        assert!(!has_scheme_prefix("/oauth/cb?redirect=https://x"));
+
+        assert!(has_http_scheme("http://example.com"));
+        assert!(has_http_scheme("HTTP://example.com"));
+        assert!(has_http_scheme("https://example.com"));
+        assert!(has_http_scheme("HTTPS://example.com"));
+        assert!(!has_http_scheme("ws://localhost"));
+        assert!(!has_http_scheme("ftp://example.com"));
+        assert!(!has_http_scheme("/relative/url"));
+    }
+
+    #[test]
+    fn test_is_loopback_host_table() {
+        let cases = [
+            ("localhost", true),
+            ("LocalHost", true),
+            ("127.0.0.1", true),
+            ("::1", true),
+            ("[::1]", true),
+            ("sub.localhost", true),
+            ("localhost.", true),
+            ("api.localhost.", true),
+            (".localhost", false),
+            ("http://localhost:8080/api", true),
+            ("http://127.0.0.1:3000", true),
+            ("http://[::1]:8080", true),
+            ("example.com", false),
+            ("http://192.168.1.1:8080", false),
+            ("10.0.0.1", false),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(is_loopback_host(input), expected, "case: {input}");
+        }
+    }
 
     #[test]
     fn test_normalize_input_url_decision_table() {
@@ -434,6 +568,33 @@ mod tests {
             )
             .unwrap(),
             "wss://example.com/ws"
+        );
+    }
+
+    #[test]
+    fn test_url_templatizer_security_and_idn() {
+        // 1. 标准绝对路径
+        assert_eq!(
+            UrlTemplatizer::templatize_origin(
+                "https://api.example.com/v1/users?page=1",
+                "{{base_url}}"
+            ),
+            "{{base_url}}/v1/users?page=1"
+        );
+
+        // 2. 国际化中文域名（IDN），杜绝字节切片 Panic
+        assert_eq!(
+            UrlTemplatizer::templatize_origin(
+                "http://中国.com:8080/api/users#token",
+                "{{base_url}}"
+            ),
+            "{{base_url}}/api/users#token"
+        );
+
+        // 3. 相对路径原样返回
+        assert_eq!(
+            UrlTemplatizer::templatize_origin("/api/users", "{{base_url}}"),
+            "/api/users"
         );
     }
 }

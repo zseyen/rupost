@@ -1,0 +1,64 @@
+### 1. 用户信息查询 (User Profile Query)
+# @name get-user-profile
+GET /api/v1/users/profile
+Authorization: Bearer {{auth_token}}
+Accept: application/json
+
+@assert status == 200
+@assert body.id exists
+
+@mock-when header.X-Role == admin
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "id": "usr_admin_001",
+  "username": "superadmin",
+  "role": "admin",
+  "permissions": ["all"]
+}
+
+@mock-default
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "id": "usr_standard_100",
+  "username": "alex",
+  "role": "user",
+  "permissions": ["read"]
+}
+
+### 2. 订单创建接口 (Create Order)
+# @name create-order
+POST /api/v1/orders
+Authorization: Bearer {{auth_token}}
+Content-Type: application/json
+
+{
+  "item_id": "item_9901",
+  "quantity": 1,
+  "amount": 4900
+}
+
+@assert status == 201
+@assert body.order_id exists
+
+@mock-when query.dry_run == true
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "simulated": true,
+  "estimated_fee": 4900
+}
+
+@mock-default
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{
+  "order_id": "ord_20261107_8899",
+  "status": "pending_payment",
+  "amount": 4900
+}

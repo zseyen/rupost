@@ -188,15 +188,30 @@ impl HttpFileParser {
     }
 
     /// 解析单个请求块
-    fn parse_request_block(block: &str, start_line: usize) -> ParseResult<Option<ParsedRequest>> {
+    pub(crate) fn parse_request_block(
+        block: &str,
+        start_line: usize,
+    ) -> ParseResult<Option<ParsedRequest>> {
+        // 接入统一组件 MockVariantParser：提取切分出的 Mock 变体（打通 .http 双角色能力）
+        let (request_part, mock_variants) = if let Some((req_part, var_part)) =
+            crate::parser::mock_variant::MockVariantParser::split_mock_variants(block)
+        {
+            let vars =
+                crate::parser::mock_variant::MockVariantParser::parse_mock_variants_part(&var_part);
+            (req_part, vars)
+        } else {
+            (block.to_string(), Vec::new())
+        };
+
         let mut request = ParsedRequest::new(start_line);
+        request.metadata.mock_variants = mock_variants;
         let mut http_lines = Vec::new();
         let mut current_line = start_line;
 
         let mut passed_req_line = false;
         let mut passed_empty_line = false;
 
-        for line in block.lines() {
+        for line in request_part.lines() {
             let trimmed = line.trim();
 
             if !passed_req_line && Self::is_valid_request_line(trimmed) {
@@ -226,6 +241,20 @@ impl HttpFileParser {
                 metadata::apply_metadata(&metadata, &mut request.metadata);
                 current_line += 1;
                 continue; // 成功提取元数据，该行不作为 HTTP 报文行
+            }
+
+            // 识别并跳过内联/文件级变量赋值定义（形如 @var = value 或 @var=value），避免被误判为 HTTP 请求行
+            if let Some(stripped) = directive_candidate.strip_prefix('@')
+                && let Some((ident, _)) = stripped.split_once('=')
+            {
+                let ident = ident.trim();
+                if !ident.is_empty()
+                    && !ident.contains(char::is_whitespace)
+                    && ident.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    current_line += 1;
+                    continue;
+                }
             }
             http_lines.push((line, current_line));
             current_line += 1;
@@ -340,16 +369,9 @@ impl HttpFileParser {
         Ok(())
     }
 
-    /// 解析 header 行
+    /// 解析 header 行（委托通用词法函数，保持单一实现）
     pub(crate) fn parse_header(line: &str) -> Option<(&str, &str)> {
-        if let Some(colon_pos) = line.find(':') {
-            let key = line[..colon_pos].trim();
-            let value = line[colon_pos + 1..].trim();
-            if !key.is_empty() {
-                return Some((key, value));
-            }
-        }
-        None
+        super::parse_http_header(line)
     }
 
     /// 判断是否为注释行
@@ -667,5 +689,41 @@ Content-Type: application/json
             result.requests[0].base_path,
             Some("/v1/chat/completions".to_string())
         );
+    }
+
+    #[test]
+    fn test_http_file_mock_variants_support() {
+        let content = r#"
+### 1. 登录与鉴权双角色请求
+# @name login-auth
+POST /api/v1/login
+Content-Type: application/json
+
+{"user": "admin"}
+
+@mock-when header.X-Role == admin
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{"status": "admin_granted"}
+
+@mock-default
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{"error": "forbidden"}
+"#;
+
+        let result = HttpFileParser::parse_content(content).unwrap();
+        assert_eq!(result.requests.len(), 1);
+        let req = &result.requests[0];
+        assert_eq!(req.method.as_deref(), Some("POST"));
+        assert_eq!(req.url, "/api/v1/login");
+        // 验证请求体没有被 @mock-when 污染
+        assert_eq!(req.body.as_deref(), Some("{\"user\": \"admin\"}"));
+        // 验证变体被成功提取
+        assert_eq!(req.metadata.mock_variants.len(), 2);
+        assert_eq!(req.metadata.mock_variants[0].status, 200);
+        assert_eq!(req.metadata.mock_variants[1].status, 403);
     }
 }

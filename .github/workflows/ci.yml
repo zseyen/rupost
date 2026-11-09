@@ -2,28 +2,24 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ '**' ]
+    tags-ignore: [ 'v*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      target:
-        description: '调试产物目标平台（push main 自动触发时固定 macOS ARM64）'
-        required: false
-        default: aarch64-apple-darwin
-        type: choice
-        options:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
-          - x86_64-unknown-linux-gnu
-          - x86_64-pc-windows-msvc
-          - all
+
+# 同一分支或 PR 连续推送时，自动中止上一次未跑完的任务，节省计算资源与排队时间
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  # CI 环境关闭增量图谱生成，减少磁盘 I/O 阻塞并显著提升编译速度
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  # Job 1: Check formatting
+  # Job 1: 格式检查
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
@@ -36,7 +32,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-  # Job 2: Check linting (Clippy)
+  # Job 2: 静态代码规范检查 (Clippy)
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -47,59 +43,42 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Run Clippy
-        # --workspace：默认跑法漏掉 workspace 子 crate（rupost-ai 等）的 lint
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # Job 3: Build and Test on multiple platforms
+  # Job 3: 多平台编译、全量测试与调试版本工件直出 (Linux / macOS / Windows)
   test:
-    name: Test (${{ matrix.os }})
+    name: Test & Debug Artifact (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            bin_path: target/debug/rupost
+          - os: macos-latest
+            bin_path: target/debug/rupost
+          - os: windows-latest
+            bin_path: target/debug/rupost.exe
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          # 跨 job 共享键：debug-artifacts(macos) 复用本矩阵 macos 槽位的依赖缓存
-          shared-key: debug-${{ runner.os }}-${{ runner.arch }}
-      - name: Build
-        # --workspace：预热全部 crate 的编译缓存，test 步骤零冷编译
-        run: cargo build --workspace --verbose
-      - name: Run tests
-        # --workspace：默认跑法漏掉 workspace 子 crate 的测试（测试策略 v3 §7.1）
-        run: cargo test --workspace --verbose
-
-  # Job 4: Debug build artifacts for local functional testing (after merge)
-  debug-artifacts:
-    name: Debug artifacts (aarch64-apple-darwin)
-    runs-on: macos-latest
-    # 等 test 矩阵：macos 槽位刚回写的热缓存立即可用（并行启动会在首次构建时 miss）
-    needs: [test]
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # 与 test(macos) 共享同一份依赖缓存：rust-cache 默认把 job 名编进键
-          # （v0-rust-test-… vs v0-rust-debug-artifacts-…），本 job 会永久 miss 并全量重编
-          shared-key: debug-${{ runner.os }}-${{ runner.arch }}
-          # 构建产物由 test 产出即可，本 job 只读缓存不回写（避免与 test 竞写同键）
-          save-if: false
-      - name: Build (debug)
-        # 不覆盖 debuginfo 等级：profile 一变即 rustc 指纹全变，缓存形同虚设
-        # （实测 line-tables-only 覆盖 → 266 crate 全量冷编 2m17s）
-        run: cargo build --workspace
-      - name: Upload debug artifact
+          cache-on-failure: true
+      - name: Build Debug Binary (Full Symbols)
+        run: cargo build --workspace --bins
+      - name: Run Tests
+        run: cargo test --workspace
+      - name: Upload Debug Binary Artifact
+        # 即使某个测试出现失败，只要构建产物生成即执行上传，便于开发者拉取二进制进行本地复现排障
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rupost-debug-aarch64-apple-darwin-${{ github.sha }}
-          path: target/debug/rupost
-          retention-days: 30
-          if-no-files-found: error
+          name: rupost-debug-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ matrix.bin_path }}
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,9 +1,9 @@
 //! M1：JUnit XML 报告 E2E 验收（CI 消费场景，评审 P1-1）。
 //!
 //! 契约：①退出码与失败数一致；②产出 XML 结构满足 Jenkins/GitLab 消费面
-//! （testsuites/testsuite/testcase/failure 层级 + time/skipped 字段）；
+//! （testsuites/testsuite/testcase/failure 层级 + classname/time/skipped 字段齐全）；
 //! ③`--report junit` 无 report_file 默认落盘 rupost-junit.xml；
-//! ④响应体敏感值不外泄（SSOT 脱敏复用）。
+//! ④响应体敏感值不外泄（SSOT 脱敏复用）。场景：2 请求（1 过 / 1 断言失败）。
 
 use std::fs;
 
@@ -83,11 +83,10 @@ async fn test_junit_report_e2e_structure_and_exit_code() {
     assert!(xml.contains("tests=\"2\""), "suite tests count: {xml}");
     assert!(xml.contains("failures=\"1\""), "failures count: {xml}");
     assert!(xml.contains("errors=\"0\""), "errors count: {xml}");
-    // time 字段三位小数形态
-    assert!(
-        xml.contains("time=\"0.0") || xml.contains("time=\"0."),
-        "time format: {xml}"
-    );
+    // classname / skipped 属性存在断言（PRD P1-1 ③：classname/time/skipped 齐全）
+    assert!(xml.contains("classname=\""), "classname attr: {xml}");
+    assert!(xml.contains("time=\""), "time attr: {xml}");
+    // time 格式由单测 time_aggregation 精确锁定（E2E 不重复——慢 CI ≥1s 时前缀断言会误杀）
 
     // ④SSOT 脱敏复用：junit 不外泄响应体 PII（/ok 响应经 build_json_reports 脱敏）
     //   注：/ok 通过，无 response_body_snippet——此处验证 failure 面与 url/query 面

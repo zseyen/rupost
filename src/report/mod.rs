@@ -235,4 +235,47 @@ mod tests {
             "symlink target replaced by design"
         );
     }
+    /// M1 红队 F6：write_report_files 的 Junit 分支单测（变异⑧⑨单测盲区封堵）
+    #[test]
+    fn test_write_report_files_junit_branch() {
+        use crate::http::Response;
+        use crate::runner::types::TestResult;
+        use std::time::Duration;
+        let batch = vec![(
+            std::path::PathBuf::from("t.http"),
+            vec![TestResult::success(
+                1,
+                Some("n".to_string()),
+                "GET".to_string(),
+                "http://x/a".to_string(),
+                Response::new(
+                    200,
+                    reqwest::header::HeaderMap::new(),
+                    "{}".to_string(),
+                    Duration::from_millis(5),
+                    Duration::from_millis(5),
+                    Duration::ZERO,
+                )
+                .unwrap(),
+            )],
+        )];
+        let dir = tempfile::tempdir().unwrap();
+
+        // 显式 junit + .json 扩展名 → 显式赢（内容 XML，路径按给定）
+        let p1 = dir.path().join("out.json");
+        let outcome = write_report_files(&batch, "junit", Some(p1.to_str().unwrap()), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.format, ReportFileFormat::Junit);
+        let content = std::fs::read_to_string(&p1).unwrap();
+        assert!(content.starts_with("<?xml"), "xml content: {content}");
+
+        // "xml" 别名默认落盘（红队 F5：别名端到端缺失封堵）
+        let p2 = dir.path().join("alias.xml");
+        let outcome = write_report_files(&batch, "xml", Some(p2.to_str().unwrap()), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.format, ReportFileFormat::Junit);
+        assert!(std::fs::read_to_string(&p2).unwrap().starts_with("<?xml"));
+    }
 }

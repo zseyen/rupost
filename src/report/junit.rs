@@ -360,6 +360,31 @@ mod tests {
         assert!(xml.contains("<testsuites") && xml.contains("</testsuites>"));
     }
 
+    /// 红队变异⑥守护：多文件套件聚合——漏文件变异（take(1)）必须红
+    #[test]
+    fn test_junit_multi_file_aggregation() {
+        let mut second = passing(1);
+        second.duration_ms = 80;
+        let suites = JUnitTestSuites::from_json_file_reports(&[
+            report(vec![passing(1)]),
+            report(vec![second]),
+        ]);
+        assert_eq!(suites.suites.len(), 2, "one testsuite per file");
+        assert_eq!(suites.tests, 2, "top-level tests is the sum");
+        assert_eq!(suites.suites[0].tests, 1);
+        assert_eq!(suites.suites[1].tests, 1);
+        assert_eq!(suites.suites[1].name, "tests/demo.http");
+    }
+
+    /// 红队缺口 b：空结果文件形态锁定（0 请求 → 自闭合空 suite，Jenkins 合规）
+    #[test]
+    fn test_junit_empty_results_file_shape() {
+        let suites = JUnitTestSuites::from_json_file_reports(&[report(vec![])]);
+        assert_eq!(suites.tests, 0);
+        assert_eq!(suites.suites[0].tests, 0);
+        assert!(suites.suites[0].testcases.is_empty());
+    }
+
     /// 敏感值脱敏：SSOT 输入假定——传入已掩码值（***）在 XML 中保持掩码形态
     #[test]
     fn test_junit_redacted_input_stays_masked() {

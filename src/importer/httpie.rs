@@ -9,6 +9,7 @@
 
 use crate::Result;
 use crate::error::RupostError;
+use crate::http::Method;
 use crate::http::url::UrlTemplatizer;
 use crate::importer::RequestImporter;
 use crate::parser::types::ParsedRequest;
@@ -35,9 +36,8 @@ impl HttpieImporter {
         // 跳过命令名 (http / https)
         let mut idx = 1;
         let mut method = "GET".to_string();
-        let methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
 
-        if idx < tokens.len() && methods.contains(&tokens[idx].to_uppercase().as_str()) {
+        if idx < tokens.len() && Method::is_standard(tokens[idx]) {
             method = tokens[idx].to_uppercase();
             idx += 1;
         }

@@ -19,6 +19,7 @@ pub use request_builder::{to_request, try_from_parsed_with_warnings};
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
 pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};
+pub use types::{Method, Status, Url};
 pub mod url;
 pub use url::resolve_final_url;
 

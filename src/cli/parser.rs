@@ -1,3 +1,4 @@
+use rupost::http::Method;
 use rupost::parser::types::ParsedRequest;
 use rupost::{Result, RupostError};
 use tracing::debug;
@@ -220,9 +221,7 @@ fn parse_httpie(args: Vec<String>) -> Result<ParsedRequest> {
 
     // Step 1: 检查第一个参数是否为 HTTP Method
     if let Some(first) = args_iter.peek() {
-        let is_method = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]
-            .contains(&first.to_uppercase().as_str());
-        if is_method {
+        if Method::is_standard(first) {
             method = args_iter.next().unwrap().to_uppercase();
         }
     }

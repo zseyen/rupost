@@ -85,3 +85,18 @@
 ## 8. TUI 开发与体验打磨规范 (TUI Architecture)
 
 *   **TUI Architecture**: 关于 TUI 组件的设计思想（M-V-VM）、自适应布局比例划分、无状态 Widget 封装、ASCII 经典化 aesthetics 约束、Left/Right 键树与 Tab 快捷冲突路由、流式 Word-Wrap 预折行性能优化、向心回弹光标重定位算法以及离屏 `TestBackend` 功能验证，请参考专门的 [TUI Design & Component Guidelines](file:///Users/zsyzzx/project/rust/rupost/.agents/skills/tui_design_guidelines/SKILL.md) 规则文档。
+
+---
+
+## 9. 离散逻辑治理、DRY 与 TDD 重构法则 (SSOT & TDD Refactoring)
+
+- **DRY 与单一事实来源 (Knowledge SSOT)**：
+  DRY 的第一性原理是**系统知识定义的唯一性**。任何关于 HTTP 方法集、文档后缀、协议头嗅探、URL Scheme 规范或跨平台路径转义的知识，在全库必须有且仅有一个权威定义点。
+  - 严禁在两个及以上模块中书写平行的字面量数组或相同的私有 I/O 辅助函数；
+  - 严禁在外部解构核心实体的内部结构做重复遍历（Rich Domain Model 优先）；
+  - 业务层所有暴露到外部的相对路径必须统一经过 `normalize_posix_path`。
+- **TDD 驱动重构三步法 (Red-Green-Refactor)**：
+  1. **Red**：在重构或提取任何离散逻辑前，先写表驱动单元测试锁定输入/输出契约（包含正常、异常、极值、Unicode 与跨平台路径）；
+  2. **Green**：在权威模块中极简实现，让新测试 100% 变绿；
+  3. **Refactor**：批量替换全库离散调用点，并彻底清理孤儿代码（删除被废弃的私有辅助函数与多余 import）。
+- **反假守护检验**：任何新增的守护测试必须经受“反转或删除生产逻辑后必须确定性变红”的验证，禁止假守护。

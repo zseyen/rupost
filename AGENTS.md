@@ -125,5 +125,20 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - **内联请求模式 (Inline Mode, 如直接运行 `rupost GET http://...`)**：
   由于根命令的 `args` 配置了 `trailing_var_arg = true` 以捕获任意 HTTP 请求参数与 Header，一旦将全局参数放置在 URL 之后（例如：`rupost GET http://example.com --debug`），该参数会被贪婪吸入 `cli.args` 数组中，导致 `cli.debug` 保持为 `false`。**因此，在内联请求模式下，所有全局参数必须紧跟在主程序名之后**（例如：`rupost --debug GET http://example.com`）。
 
+---
+
+## 9. 离散逻辑治理、DRY 与 TDD 重构法则 (SSOT & TDD Refactoring)
+
+- **DRY 与单一事实来源 (Knowledge SSOT)**：
+  DRY 的第一性原理是**系统知识定义的唯一性**。任何关于 HTTP 方法集、文档后缀、协议头嗅探、URL Scheme 规范或跨平台路径转义的知识，在全库必须有且仅有一个权威定义点。
+  - 严禁在两个及以上模块中书写平行的字面量数组或相同的私有 I/O 辅助函数；
+  - 严禁在外部解构核心实体的内部结构做重复遍历（Rich Domain Model 优先）；
+  - 业务层所有暴露到外部的相对路径必须统一经过 `normalize_posix_path`。
+- **TDD 驱动重构三步法 (Red-Green-Refactor)**：
+  1. **Red**：在重构或提取任何离散逻辑前，先写表驱动单元测试锁定输入/输出契约（包含正常、异常、极值、Unicode 与跨平台路径）；
+  2. **Green**：在权威模块中极简实现，让新测试 100% 变绿；
+  3. **Refactor**：批量替换全库离散调用点，并彻底清理孤儿代码（删除被废弃的私有辅助函数与多余 import）。
+- **反假守护检验**：任何新增的守护测试必须经受“反转或删除生产逻辑后必须确定性变红”的验证，禁止假守护。
+
 
 

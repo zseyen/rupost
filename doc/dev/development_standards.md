@@ -167,6 +167,73 @@ cargo fmt --all -- --check      # 格式（机械编辑后必跑）
 
 ---
 
+## 9. 跨平台兼容与路径安全（POSIX 路径纪律）
+
+### 9.1 暴露路径与断言严格 POSIX 归一化 ⚓
+***事故**：Windows CI 跑 `web::store::tests::test_local_fs_document_store_basic_and_sandbox` 和 `tests/batch_testing_test.rs:test_batch_report_json` 报断言失败（`api\\spec.md != api/spec.md` 与 `\\?\C:\... != //?/C:/...`）。原因是局部手工 `.replace('\\', "/")` 存在疏漏；而沙箱 `PathSandbox::resolve_safe_path` 防逃逸严格拒绝 `\` 输入，全库暴露给外部（Web、API、TUI、JSON Report、Snapshot）的路径必须统一为 POSIX 正斜杠。*
+
+- **规则**：禁止在业务层手写 `.replace('\\', "/")` 或 `to_str()` 拼接路径。所有对外暴露（Web API、TUI 视图、JSON Report、Snapshot、导出器）和跨平台比对的路径必须统一调用 `crate::utils::path_guard::normalize_posix_path` 单一事实来源（SSOT）。
+- **规则**：集成测试与单测断言跨平台路径时，禁止裸拿 `path.to_str().unwrap()` 直接比较，必须先经 `normalize_posix_path` 规整。
+- **规则**：实时文档判定必须统一由 `crate::utils::path_guard::is_live_doc` 与 `LIVE_DOC_EXTENSIONS` 判定（收敛 `.http`、`.md`、`.markdown`），消解散落的扩展名分支匹配。
+
+---
+
+## 10. 协议抽象与领域模型内聚（SSOT 与防 Panic 纪律）
+
+### 10.1 字符串安全截断（防 Panic 契约） ⚓
+***事故**：`history/printer.rs` 对短 ID 裸切片 `&entry.id[..8]`，在非标准短 ID 下直接越界 panic；此外多字节 UTF-8 字符（如中文）按 byte 切片会在 char boundary 内部触发 panic。*
+
+- **规则**：字符串按字符数截断统一使用 `crate::utils::text::truncate_chars(text, max_chars, suffix)`；按字节安全截断统一使用 `crate::utils::text::truncate_utf8_bytes(text, max_bytes, suffix)`。
+- **规则**：**绝对禁止使用裸切片 `&s[..N]`**，除非先经过显式 `s.is_char_boundary(N)` 或 `s.char_indices()` 保护。
+
+### 10.2 HTTP 谓词与常量集合的 SSOT 与零分配比较 ⚓
+***事故**：`cli/parser.rs` 与 `importer/httpie.rs` 分别手写 `let methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];`，并通过 `to_uppercase()` 频繁申请堆内存。*
+
+- **规则**：HTTP 方法判定与列表由领域层 `crate::http::Method` 统一持有（`Method::STANDARD_METHODS` 与 `Method::is_standard`），禁止在外部模块散落硬编码数组。
+- **规则**：字符串大小写不敏感判断统一采用 `eq_ignore_ascii_case`，禁止先调用 `.to_uppercase()` 或 `.to_ascii_lowercase()` 制造额外的堆内存分配。
+
+### 10.3 URL Scheme 识别的 RFC 3986 规范性 ⚓
+***事故**：全库散落手写粗糙的 `.starts_with("http://") || .starts_with("https://")`，漏判大写 `HTTP://`、IPv6 格式，且无法区分通用 Scheme 与仅 HTTP 协议，并在相对路径含 query 时（如 `/oauth/cb?redirect=https://x`）误判。*
+
+- **规则**：判定合法 Scheme 统一使用 `crate::http::url::has_scheme_prefix`（严格符合 RFC 3986 语法）；判定 HTTP/HTTPS 协议前缀统一使用 `crate::http::url::has_http_scheme`，禁止在业务代码中手工写 `.starts_with("http")`。
+- **规则**：环回地址解析统一使用 `crate::http::url::is_loopback_host`，支持 FQDN 尾随点（如 `localhost.`）、方括号 IPv6 与裸 IPv6（如 `::1`）。
+
+### 10.4 领域模型充血内聚（Rich Domain Model 优先于裸闭包） ⚓
+***事故**：`ParsedRequest` 缺少语义查询方法，导致导出器、HTTP 运行时、Mock 模块各自手写 4-5 行的遍历闭包解析 `Accept: text/event-stream` 与 `Content-Type`。*
+
+- **规则**：核心实体上的常见查询属性必须在实体上实现领域方法（如 `parsed.is_sse_stream()`, `parsed.content_type()`, `parsed.has_header()`），避免在外部散落嵌套遍历闭包。
+- **规则**：流式事件日志与有界落盘统一由 `crate::runner::utils::file_sync::write_log_with_limit` 托管，包含父目录自动探测、上限探测、截断标记与 flush 保护。禁止在协议 Runner 内部复制底层文件 I/O 逻辑。
+
+---
+
+## 11. 离散逻辑治理与 DRY 规范 (Single Source of Truth)
+
+### 11.1 业务知识的单一性（DRY 的第一性原理） ⚓
+***事故**：实时文档后缀（`.http`/`.md`/`.markdown`）、HTTP 标准方法名、SSE 协议头嗅探在全库多处存在平行的局部判定，当新增需求或修复边界缺陷时，漏改率高达 60%，破坏开闭原则。*
+
+- **规则**：**DRY 的核心是“系统知识的单一性”，而非仅仅消除重复的代码行**。任何业务规则、合法值集合、格式规范在代码库中必须有且仅有一个**权威定义点（Single Source of Truth, SSOT）**。当规则发生变更时，只需修改该权威点，全库自动同步。
+- **规则（坏味道排查清单）**：
+  1. **字面量数组重复**：2 处以上出现相同的字面量数组（如 `["GET", "POST", ...]`、`["http", "md", ...]`）→ 必须收敛为关联常量或枚举。
+  2. **手写字符串前缀/替换**：散落的 `.replace('\\', "/")` 或 `.starts_with("http")` → 必须提升为纯函数并锁定表驱动单测。
+  3. **同构私有 I/O 函数**：在多个不同模块中实现结构相似、仅提示文案微调的私有文件写入/解析代码（如 `write_ws_log_with_limit` 与 `write_sse_log_with_limit`）→ 必须下沉到底层工具层统一复用。
+  4. **穿透实体字段做遍历计算**：外部调用方频繁解构 `entity.headers.iter().find(...)` → 必须为实体提供富有表达力的领域方法（Rich Domain Model）。
+
+---
+
+## 12. TDD 驱动重构与行为契约锁定规范 (Test-Driven Refactoring)
+
+### 12.1 契约先行锁定（Red-Green-Refactor 纪律） ⚓
+***事故**：在未编写完备表驱动测试的情况下直接修改 `is_loopback_host` 与 `has_scheme_prefix`，导致 `::1` 裸 IPv6 与 FQDN 尾随点漏判，在 CI 阶段才暴露。*
+
+- **规则**：**在对任何既有离散逻辑进行提取、收敛或重构之前，必须先编写测试用例锁定当前行为边界与预期契约**。
+- **执行协议 (三阶段闭环)**：
+  1. **阶段 1 (Red 先行锁定)**：编写表驱动测试（Table-driven tests），显式包含正向合法值、逆向非法值、边界极值（空串、纯符号、截断点、多字节 Unicode、跨平台路径分隔符、大小写变体）。
+  2. **阶段 2 (Green 纯粹实现)**：在唯一的 SSOT 模块中完成极简、无堆内存浪费的高性能实现，使新测试 100% 变绿。
+  3. **阶段 3 (Refactor 批量替换与孤儿清理)**：将散落在全库的所有离散调用点逐一替换为调用 SSOT。每替换一处，运行相应模块测试；替换完成后，**彻底删除被取代的私有辅助代码、未使用的导入与旧有死代码（Zero Orphan Code）**。
+- **规则（反假守护校验）**：编写守护测试后必须自问：“若删掉/反转核心修复逻辑，本测试能否确定性失败？”无法明确回答或删改实现后仍全绿的测试均属**假守护**，禁止提交。
+
+---
+
 ## 附：本文件维护纪律
 
 * 每条规则必须锚定至少一次真实事故（⚓ 标记）；无事故锚点的通用建议放 future_backlog。

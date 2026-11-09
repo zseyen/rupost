@@ -1,6 +1,23 @@
 # RuPost 质量加固战役 Checkpoint 归档（2026-10 ~ 2026-11）
 
-## 最新里程碑进展 (2026-11-08)
+## 最新里程碑进展 (2026-11-09)
+- **跨平台路径归一化、转义规范与代码库离散逻辑收敛 (`feature/decoupling-and-workbench-hardening`)**：
+  1. **跨平台路径归一化体系落地 (POSIX Path Normalization)**：
+     - 在 `src/utils/path_guard.rs` 提炼 `normalize_posix_path` 纯函数作为单一事实来源（SSOT），彻底消除全库手写 `.replace('\\', "/")`；
+     - 彻底修复 Windows 环境下 `web::store::tests::test_local_fs_document_store_basic_and_sandbox` 以及 `tests/batch_testing_test.rs:test_batch_report_json` 的反斜杠与正斜杠断言断裂；
+     - `PathSandbox::resolve_safe_path` 拒绝包含 `\` 的输入以防御逃逸，确保暴露到外部（Web API、TUI 视图、Report、快照）的所有相对路径严格保持 POSIX 规范。
+  2. **转义与离散逻辑统一规整 (全面整合方案 A/B/C/D)**：
+     - **方案 A (流式日志写入去重)**：在 `src/runner/utils/file_sync.rs` 沉淀 `write_log_with_limit`，统一 WebSocket 与 SSE 流式事件的限额写盘与截断提示，消解 70+ 行冗余代码。
+     - **方案 B (请求头查询与流式谓词内聚)**：为领域实体 `ParsedRequest` 注入 `header`, `has_header`, `content_type`, `is_sse_stream`, `is_json_content` 等语义方法，消除外层遍历闭包。
+     - **方案 C (HTTP 方法 SSOT 与零分配)**：在 `src/http/types.rs` 确立 `Method::STANDARD_METHODS` 与 `Method::is_standard`，优化 `FromStr` 为纯 ASCII 比较（0 堆内存分配），消解 CLI 与 Importer 的字面量数组。
+     - **方案 D (RFC 3986 URL 协议前缀 SSOT)**：将 `has_scheme_prefix` 与 `has_http_scheme` 提升为公共基础设施，统一全库 URL 协议头嗅探。
+     - **实时文档扩展名 SSOT**：统一由 `src/utils/path_guard::is_live_doc` 与 `LIVE_DOC_EXTENSIONS` 判定（收敛 `.http`、`.md`、`.markdown`），消解散落的局部 match。
+     - **Mock 请求头匹配性能优化**：以 `eq_ignore_ascii_case` 替代全量 `to_ascii_lowercase()`，消除堆内存分配。
+     - **RFC 6761 本地环回地址解析统一**：统一通过 `src/http/url::is_loopback_host` 判定，支持 FQDN 尾随点（如 `localhost.`）、裸 IPv4/IPv6（`::1`）以及各种 localhost 变体。
+     - **安全 UTF-8 与字符截断统一**：在 `src/utils/text.rs` 沉淀 `truncate_chars` 与 `truncate_utf8_bytes`，消解裸切片导致的多字节或短字符串越界 panic（修复 `src/history/printer.rs` 裸截断）。
+  3. **质量守护与原子化提交**：
+     - 全量通过 560 个单测（100% PASS）、`cargo clippy --all-targets -- -D warnings` 零警告、`cargo fmt --all -- --check` 格式化校验通过。
+     - 借助 `jj` 进行原子化分步提交，无缝推送到远程分支 `feature/decoupling-and-workbench-hardening`。
 - **Web 工作台样式升级与纯 ASCII 架构重塑 (`feature/web-ui-redesign`)**：
   1. **Studio Pro 纯 ASCII 视觉体系**：全面清除页面中所有 Emoji 图标，以专业工程符号（如 `[R]`, `[DOC]`, `[PASS]`, `[FAIL]`）替代；基于深空碳黑与精细刻线重构三栏网格。
   2. **代码编辑器增强**：自研轻量级行号槽（Gutter）滚动同步、光标行列度量、`Ctrl+S` 快捷保存、`Shift+Enter` 单块快捷执行、`Ctrl+I` 快速导入。

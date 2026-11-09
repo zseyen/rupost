@@ -5,7 +5,7 @@ use crate::{Result, RupostError};
 
 /// 判断是否以合法 scheme 开头（RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) 后紧跟 "://"）。
 /// 不能用 `contains("://")`：`/oauth/cb?redirect=https://x` 这类 query 内含 URL 的相对路径会被误判为绝对地址。
-fn has_scheme_prefix(url: &str) -> bool {
+pub fn has_scheme_prefix(url: &str) -> bool {
     let Some(pos) = url.find("://") else {
         return false;
     };
@@ -13,6 +13,16 @@ fn has_scheme_prefix(url: &str) -> bool {
     let mut chars = scheme.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
+/// 判定 URL 是否以 http:// 或 https:// 协议开头（忽略大小写）
+pub fn has_http_scheme(url: &str) -> bool {
+    if let Some(pos) = url.find("://") {
+        let scheme = &url[..pos];
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    } else {
+        false
+    }
 }
 
 /// 智能解析最终请求 URL，处理绝对/相对路径和本地/CLI 协议快捷简写
@@ -151,7 +161,7 @@ impl UrlTemplatizer {
     /// 将绝对 URL 的 origin 部分替换为指定占位符（如 `{{base_url}}`）
     /// 无论是否为国际化域名（中文域名）、包含端口、或包含复杂 query/fragment，均能绝对安全重组
     pub fn templatize_origin(raw_url: &str, placeholder: &str) -> String {
-        if !raw_url.starts_with("http://") && !raw_url.starts_with("https://") {
+        if !has_http_scheme(raw_url) {
             return raw_url.to_string();
         }
 
@@ -256,6 +266,25 @@ pub fn is_loopback_host(host_or_url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::variable::VariableContext;
+
+    #[test]
+    fn test_has_scheme_prefix_and_http_scheme() {
+        assert!(has_scheme_prefix("http://example.com"));
+        assert!(has_scheme_prefix("HTTPS://example.com"));
+        assert!(has_scheme_prefix("ws://localhost"));
+        assert!(has_scheme_prefix("custom+scheme://host"));
+        assert!(!has_scheme_prefix("/api/path"));
+        assert!(!has_scheme_prefix("localhost:8080"));
+        assert!(!has_scheme_prefix("/oauth/cb?redirect=https://x"));
+
+        assert!(has_http_scheme("http://example.com"));
+        assert!(has_http_scheme("HTTP://example.com"));
+        assert!(has_http_scheme("https://example.com"));
+        assert!(has_http_scheme("HTTPS://example.com"));
+        assert!(!has_http_scheme("ws://localhost"));
+        assert!(!has_http_scheme("ftp://example.com"));
+        assert!(!has_http_scheme("/relative/url"));
+    }
 
     #[test]
     fn test_is_loopback_host_table() {

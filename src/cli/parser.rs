@@ -187,7 +187,7 @@ fn parse_curl(args: Vec<String>) -> Result<ParsedRequest> {
 fn is_key_value_param(arg: &str) -> bool {
     // 先排除 URL 模式
     // 1. http:// 或 https://
-    if arg.starts_with("http://") || arg.starts_with("https://") {
+    if rupost::http::url::has_http_scheme(arg) {
         return false;
     }
     // 2. 所有以 : 开头的参数均判定为冒号本地快捷键（URL），不是键值对参数

@@ -5,7 +5,7 @@
 
 use crate::Result;
 use crate::error::RupostError;
-use crate::http::url::UrlTemplatizer;
+use crate::http::url::{UrlTemplatizer, has_http_scheme};
 use crate::importer::RequestImporter;
 use crate::parser::types::ParsedRequest;
 
@@ -49,7 +49,7 @@ impl RawHttpImporter {
             } else if let Some((k, v)) = line.split_once(':') {
                 let h_name = k.trim().to_string();
                 let h_val = v.trim().to_string();
-                if h_name.eq_ignore_ascii_case("host") && !url.starts_with("http") {
+                if h_name.eq_ignore_ascii_case("host") && !has_http_scheme(&url) {
                     url = format!("http://{}{}", h_val, url);
                 }
                 headers.push((h_name, h_val));

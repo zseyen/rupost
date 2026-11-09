@@ -54,7 +54,7 @@ impl HttpieImporter {
         // HTTPie 支持简写 URL (e.g. :8000/items -> http://localhost:8000/items)
         let mut url = if raw_url.starts_with(':') {
             format!("http://localhost{}", raw_url)
-        } else if !raw_url.starts_with("http://") && !raw_url.starts_with("https://") {
+        } else if !crate::http::url::has_http_scheme(raw_url) {
             format!("http://{}", raw_url)
         } else {
             raw_url.to_string()

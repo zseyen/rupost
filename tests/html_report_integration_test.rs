@@ -111,7 +111,7 @@ async fn test_e2e_html_report_with_mock_and_waterfall() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });

@@ -129,7 +129,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             rupost::generator::run_generate(opts)?;
         }
         Some(Commands::Mock(args)) => {
-            rupost::mock::run_server_from_file(&args.file, args.port).await?;
+            rupost::mock::run_server_from_file(&args.file, args.port, !args.no_cors).await?;
         }
         Some(Commands::Init(args)) => {
             rupost::template::run_template(

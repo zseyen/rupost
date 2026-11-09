@@ -556,3 +556,120 @@ async fn test_batch_parallel_cookie_cascade() {
         }
     }
 }
+
+// ═══════════════ M3：@teardown 确定性生命周期 E2E ═══════════════
+
+/// 生命周期 E2E：创建 → teardown；主断言失败后 teardown 仍执行（Finally 语义），
+/// teardown 结果标记 is_teardown 且成功计入结果；占位结果原序号替换
+#[tokio::test]
+async fn test_teardown_runs_on_failure_and_marks_result() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/create"))
+        .respond_with(ResponseTemplate::new(201).set_body_string("created"))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/cleanup"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    // 主断言故意失败（/create 期望 400 实得 201），teardown 删除请求应仍执行
+    let case = format!(
+        "### create\n# @name create\nPOST {}/create\n\n# @assert status == 400\n\n### cleanup\n# @teardown\n# @name cleanup\nDELETE {}/cleanup\n",
+        server.uri(),
+        server.uri()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("teardown.http");
+    std::fs::write(&file, case).unwrap();
+
+    let parsed = HttpFileParser::parse_file(file.clone()).expect("parse");
+    assert_eq!(parsed.requests.len(), 2);
+    assert!(parsed.requests[1].metadata.is_teardown, "teardown marked");
+
+    let executor = rupost::runner::executor::TestExecutor::new();
+    let mut context = rupost::variable::VariableContext::default();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+
+    assert_eq!(results.len(), 2, "placeholder preserved (P0-2 numbering)");
+    assert!(
+        results[0].request_number == 1 && !results[0].success,
+        "main assertion failed"
+    );
+    assert!(
+        results[1].request_number == 2 && results[1].success,
+        "teardown ran in normal phase placeholder? — must be Finally-executed"
+    );
+    assert!(results[1].is_teardown, "teardown result marked");
+}
+
+/// 变量防呆（P1-9）：前置失败导致 teardown 依赖变量未捕获 → skipped + warning，不外发
+#[tokio::test]
+async fn test_teardown_skipped_when_variable_unresolved() {
+    let server = MockServer::start().await;
+    // /create 返回失败响应（无 token 可捕获）
+    Mock::given(method("POST"))
+        .and(path("/create"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let case = format!(
+        "### create\n# @name create\nPOST {}/create\n\n# @assert status == 200\n# @capture token from body.token\n\n### cleanup\n# @teardown\n# @name cleanup\nDELETE {}/items/{{{{token}}}}\n",
+        server.uri(),
+        server.uri()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("teardown_var.http");
+    std::fs::write(&file, case).unwrap();
+
+    let parsed = HttpFileParser::parse_file(file.clone()).expect("parse");
+    let executor = rupost::runner::executor::TestExecutor::new();
+    let mut context = rupost::variable::VariableContext::default();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+
+    // 常规阶段：teardown 占位 skipped（原序号）
+    assert!(results[1].request_number == 2 && results[1].skipped);
+
+    // 批量层 Finally：防呆 → skipped + warning（非外发）——通过 batch 层验证
+    use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest};
+    let mut parsed2 = HttpFileParser::parse_file(file.clone()).expect("parse");
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(file.clone(), parsed2.clone());
+    let order = vec![file.clone()];
+    let mut ctx = rupost::variable::VariableContext::default();
+
+    let batch = BatchRunRequest {
+        execution_order: order,
+        dependencies: std::collections::HashMap::new(),
+        files_map,
+        context: &mut ctx,
+        mode: BatchMode::Serial,
+        concurrency: 1,
+        fail_fast: false,
+    };
+    let executor2 = rupost::runner::executor::TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor2);
+    let batch_results = batch_executor.execute_batch(batch).await.unwrap();
+
+    let file_results = &batch_results[0].1;
+    let teardown_result = file_results
+        .iter()
+        .find(|r| r.request_number == 2)
+        .expect("teardown slot preserved");
+    assert!(
+        teardown_result.skipped,
+        "unresolved vars → skipped (no dirty request)"
+    );
+    assert!(
+        teardown_result
+            .warnings
+            .iter()
+            .any(|w| w.contains("@teardown 跳过")),
+        "warning explains the skip: {:?}",
+        teardown_result.warnings
+    );
+    assert!(teardown_result.is_teardown, "marked as teardown");
+}

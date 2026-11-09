@@ -1,7 +1,7 @@
 // 进程级静音历史落盘（tests/common/mod.rs：pre-main 执行，勿删）
 mod common;
 
-use rupost::mock::matcher::TrieRouteMatcher;
+use rupost::mock::matcher::{MockMatcher, TrieRouteMatcher};
 use rupost::mock::server::axum_adapter::serve_matcher;
 use rupost::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ async fn test_mock_server_integration_flow() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -126,7 +126,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -194,7 +194,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .expect("bind mock server port");
     let port_sec = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher_sec).await {
+        if let Err(e) = serve_matcher(listener, matcher_sec, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -298,7 +298,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .expect("bind mock server port");
     let port_dep = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher_dep).await {
+        if let Err(e) = serve_matcher(listener, matcher_dep, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -353,7 +353,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
         .expect("bind mock server port");
     let port_idemp = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher_idemp).await {
+        if let Err(e) = serve_matcher(listener, matcher_idemp, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -400,7 +400,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
 #[tokio::test]
 async fn test_abstract_base_url_scenario() {
     use rupost::mock::MockCompiler;
-    use rupost::mock::matcher::TrieRouteMatcher;
+    use rupost::mock::matcher::{MockMatcher, TrieRouteMatcher};
     use rupost::mock::server::axum_adapter::serve_matcher;
     use rupost::parser::MarkdownFileParser;
     use rupost::runner::TestExecutor;
@@ -425,7 +425,7 @@ async fn test_abstract_base_url_scenario() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -463,4 +463,110 @@ async fn test_abstract_base_url_scenario() {
     assert_eq!(test_2.name.as_deref(), Some("test-roles-guest-forbidden"));
     assert!(test_2.success, "test-roles-guest-forbidden should pass");
     assert!(test_2.assertions.iter().all(|a| a.passed));
+}
+
+// ═══════════════ M3：智能 CORS E2E（评审 P1-12） ═══════════════
+
+/// credentialed 预检：OPTIONS + Origin + Access-Control-Request-Headers →
+/// 204 + Allow-Origin 回显 + Credentials: true + Allow-Headers 回显请求头列表
+#[tokio::test]
+async fn test_smart_cors_credentialed_preflight() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let matcher: std::sync::Arc<dyn MockMatcher> = std::sync::Arc::new(TrieRouteMatcher::new());
+    tokio::spawn(async move {
+        let _ = serve_matcher(listener, matcher, true).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("http://{addr}/api/anything"),
+        )
+        .header("Origin", "http://localhost:3000")
+        .header("Access-Control-Request-Method", "POST")
+        .header(
+            "Access-Control-Request-Headers",
+            "content-type,authorization",
+        )
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 204, "preflight must be 204");
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "http://localhost:3000",
+        "origin echoed"
+    );
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-credentials")
+            .unwrap(),
+        "true",
+        "credentials allowed"
+    );
+    assert_eq!(
+        resp.headers().get("access-control-allow-headers").unwrap(),
+        "content-type,authorization",
+        "request headers echoed (not *)"
+    );
+    assert!(resp.headers().get("vary").is_some(), "Vary: Origin");
+
+    // 非 OPTIONS 请求也带 CORS 头
+    let resp = client
+        .get(format!("http://{addr}/api/anything"))
+        .header("Origin", "http://localhost:3000")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "http://localhost:3000"
+    );
+
+    // 无 Origin → `*` 且无 credentials
+    let resp = client
+        .request(reqwest::Method::OPTIONS, format!("http://{addr}/x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+    assert_eq!(
+        resp.headers().get("access-control-allow-origin").unwrap(),
+        "*"
+    );
+    assert!(
+        resp.headers()
+            .get("access-control-allow-credentials")
+            .is_none()
+    );
+}
+
+/// --no-cors：CORS 中间件停用（预检不再 204 短路）
+#[tokio::test]
+async fn test_smart_cors_disabled_via_no_cors() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let matcher: std::sync::Arc<dyn MockMatcher> = std::sync::Arc::new(TrieRouteMatcher::new());
+    tokio::spawn(async move {
+        let _ = serve_matcher(listener, matcher, false).await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .request(reqwest::Method::OPTIONS, format!("http://{addr}/x"))
+        .header("Origin", "http://localhost:3000")
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        204,
+        "cors disabled: no preflight short-circuit"
+    );
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
 }

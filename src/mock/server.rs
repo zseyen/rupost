@@ -4,15 +4,24 @@ use std::sync::Arc;
 
 #[allow(async_fn_in_trait)]
 pub trait MockServer: Send + Sync {
-    async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()>;
+    async fn start(
+        &self,
+        port: u16,
+        matcher: Arc<dyn MockMatcher>,
+        enable_cors: bool,
+    ) -> Result<()>;
 }
 
 pub struct DummyMockServer;
 
 impl MockServer for DummyMockServer {
-    async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()> {
-        let _ = port;
-        let _ = matcher;
+    async fn start(
+        &self,
+        port: u16,
+        matcher: Arc<dyn MockMatcher>,
+        enable_cors: bool,
+    ) -> Result<()> {
+        let _ = (port, matcher, enable_cors);
         Ok(())
     }
 }
@@ -154,7 +163,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
 }
 
 /// 解析 mock 配置文件/文档，并启动 Mock 服务器（CLI 路径：阻塞式、固定端口）
-pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
+pub async fn run_server_from_file(file_path: &str, port: u16, enable_cors: bool) -> Result<()> {
     println!(
         "{} Loading configuration from: {}",
         "[*]".bold().blue(),
@@ -174,7 +183,7 @@ pub async fn run_server_from_file(file_path: &str, port: u16) -> Result<()> {
     );
 
     let server = AxumMockServer;
-    server.start(port, Arc::new(matcher)).await?;
+    server.start(port, Arc::new(matcher), enable_cors).await?;
     Ok(())
 }
 
@@ -184,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_server_invalid_file() {
-        let res = run_server_from_file("nonexistent_file.json", 9999).await;
+        let res = run_server_from_file("nonexistent_file.json", 9999, true).await;
         assert!(res.is_err());
         match res.unwrap_err() {
             crate::error::RupostError::IoError(_) => {}

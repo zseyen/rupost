@@ -16,13 +16,74 @@ use colored::Colorize;
 pub struct AxumMockServer;
 
 impl MockServer for AxumMockServer {
-    async fn start(&self, port: u16, matcher: Arc<dyn MockMatcher>) -> Result<()> {
+    async fn start(
+        &self,
+        port: u16,
+        matcher: Arc<dyn MockMatcher>,
+        enable_cors: bool,
+    ) -> Result<()> {
         let addr = format!("127.0.0.1:{}", port);
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
             .map_err(RupostError::IoError)?;
 
-        serve_matcher(listener, matcher).await
+        serve_matcher(listener, matcher, enable_cors).await
+    }
+}
+
+/// M3：智能 CORS 中间件——预检 OPTIONS 秒回 204；动态回显 Origin；
+/// Allow-Headers 回显预检请求头（评审 P1-12：`*` 在 credentialed 请求下不展开）；
+/// Credentials: true 仅在有 Origin 时携带（否则 `*` 与 credentials 组合违规）。
+pub async fn cors_middleware(
+    axum::extract::State(enable_cors): axum::extract::State<bool>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if !enable_cors {
+        return next.run(req).await;
+    }
+    let origin = req.headers().get("origin").cloned();
+    // 预检的 Access-Control-Request-Headers 在【请求头】上（评审 P1-12 回显来源）
+    let request_headers = req.headers().get("access-control-request-headers").cloned();
+    let is_options = req.method() == axum::http::Method::OPTIONS;
+
+    let mut resp = if is_options {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        next.run(req).await
+    };
+
+    inject_cors_headers(
+        resp.headers_mut(),
+        origin.as_ref(),
+        request_headers.as_ref(),
+    );
+    resp.headers_mut()
+        .insert(axum::http::header::VARY, HeaderValue::from_static("Origin"));
+    resp
+}
+
+fn inject_cors_headers(
+    headers: &mut axum::http::HeaderMap,
+    origin: Option<&HeaderValue>,
+    request_headers: Option<&HeaderValue>,
+) {
+    if let Some(orig) = origin {
+        headers.insert("Access-Control-Allow-Origin", orig.clone());
+        headers.insert(
+            "Access-Control-Allow-Credentials",
+            HeaderValue::from_static("true"),
+        );
+    } else {
+        headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
+    }
+    headers.insert(
+        "Access-Control-Allow-Methods",
+        HeaderValue::from_static("GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD"),
+    );
+    // 预检时回显 Access-Control-Request-Headers（* 与 credentials 组合被 Fetch 规范拒绝）
+    if let Some(req_headers) = request_headers {
+        headers.insert("Access-Control-Allow-Headers", req_headers.clone());
     }
 }
 
@@ -30,10 +91,15 @@ impl MockServer for AxumMockServer {
 pub async fn serve_matcher(
     listener: tokio::net::TcpListener,
     matcher: std::sync::Arc<dyn MockMatcher>,
+    enable_cors: bool,
 ) -> Result<()> {
     let app = Router::new()
         .fallback(any(handle_mock_request))
-        .with_state(matcher);
+        .with_state(matcher)
+        .layer(axum::middleware::from_fn_with_state(
+            enable_cors,
+            cors_middleware,
+        ));
 
     axum::serve(listener, app)
         .await

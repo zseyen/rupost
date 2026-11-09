@@ -11,4 +11,8 @@ pub struct MockArgs {
     /// Port to bind the mock server to
     #[arg(short, long, default_value = "9000")]
     pub port: u16,
+
+    /// Disable smart CORS (preflight 204 + Origin echo) — for explicit OPTIONS mocks
+    #[arg(long)]
+    pub no_cors: bool,
 }

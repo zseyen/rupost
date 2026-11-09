@@ -133,7 +133,7 @@ pub async fn toggle_mock_server(state: &mut AppState) {
 
     let matcher = Arc::new(matcher);
     let handle = tokio::spawn(async move {
-        let _ = crate::mock::server::axum_adapter::serve_matcher(listener, matcher).await;
+        let _ = crate::mock::server::axum_adapter::serve_matcher(listener, matcher, true).await;
     });
 
     state.mock_session = Some(MockSessionState {

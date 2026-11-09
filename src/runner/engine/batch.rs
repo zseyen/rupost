@@ -58,22 +58,19 @@ impl BatchExecutor {
         // 已被 skip 标记（@skip / --only 未选中）的 teardown 豁免抽取。
         let mut teardowns_map: HashMap<PathBuf, Vec<(usize, crate::parser::ParsedRequest)>> =
             HashMap::new();
-        for (path, parsed_file) in request.files_map.iter_mut() {
-            let mut kept = Vec::with_capacity(parsed_file.requests.len());
-            for (pos, req) in parsed_file.requests.drain(..).enumerate() {
-                // 原始序号 = 文件内位置 + 1（与 execute_all_streaming 的 enumerate 语义一致，
-                // P0-2：partition 不得移动编号）
+        // 只记录不抽取：teardown 请求保留在 files_map 中，常规阶段由 executor 产出
+        // 原序号占位 skipped（execute_all_streaming 的 is_teardown 跳过），
+        // Finally 阶段原位替换——编号契约零破坏（P0-2）
+        for (path, parsed_file) in request.files_map.iter() {
+            for (pos, req) in parsed_file.requests.iter().enumerate() {
                 let original_number = pos + 1;
                 if req.metadata.is_teardown && !req.metadata.skip {
                     teardowns_map
                         .entry(path.clone())
                         .or_default()
-                        .push((original_number, req));
-                } else {
-                    kept.push(req);
+                        .push((original_number, req.clone()));
                 }
             }
-            parsed_file.requests = kept;
         }
         // 若有 teardown 被跳标（--only / @skip），一次性提示（P1-10）
         let skipped_teardown_total: usize = request

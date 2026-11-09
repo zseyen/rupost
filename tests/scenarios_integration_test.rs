@@ -166,7 +166,7 @@ async fn test_scenario_order_fulfillment_mock_server_flow() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -217,7 +217,7 @@ async fn test_scenario_iam_tenant_mock_server_flow() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -293,7 +293,7 @@ async fn test_scenario_order_fulfillment_dual_role_mock_dispatch() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -375,7 +375,7 @@ async fn test_scenario_order_spec_as_executable_test() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -428,7 +428,7 @@ async fn test_scenario_order_suite_runs_against_mock_server() {
         .expect("bind mock server port");
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });
@@ -598,7 +598,7 @@ async fn test_scenario_c_suite_full_execution_against_mock_servers() {
         .expect("bind mock server port");
     let http_port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
-        if let Err(e) = serve_matcher(listener, matcher).await {
+        if let Err(e) = serve_matcher(listener, matcher, false).await {
             eprintln!("mock server terminated: {e}");
         }
     });

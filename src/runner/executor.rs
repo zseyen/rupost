@@ -238,13 +238,19 @@ impl TestExecutor {
                 || parsed_request.metadata.is_teardown
                 || (has_explicit_tests && !parsed_request.metadata.is_test);
 
+            let is_teardown_req = parsed_request.metadata.is_teardown;
             let result = if should_skip {
-                TestResult::skipped(
+                let mut r = TestResult::skipped(
                     request_number,
                     parsed_request.name().map(|s| s.to_string()),
                     parsed_request.method_or_default().to_string(),
                     parsed_request.url.clone(),
-                )
+                );
+                // M3：teardown 占位结果也标记（终端/报告可区分；P1-11）
+                if is_teardown_req {
+                    r.is_teardown = true;
+                }
+                r
             } else {
                 self.execute_one(
                     parsed_request,

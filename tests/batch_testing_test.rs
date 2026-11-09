@@ -274,7 +274,7 @@ async fn test_batch_report_json() {
     assert_eq!(arr.len(), 1);
     assert_eq!(
         arr[0]["file_path"].as_str().unwrap(),
-        file_a.to_str().unwrap()
+        rupost::utils::path_guard::normalize_posix_path(&file_a)
     );
 }
 

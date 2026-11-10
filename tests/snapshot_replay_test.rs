@@ -1097,3 +1097,109 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
     assert!(err_msg.contains("[REDACTED]") || err_msg.contains("%5BREDACTED%5D"));
     assert!(!err_msg.contains("12345"));
 }
+
+#[test]
+fn test_mask_snapshot_entry_redacts_inline_tokens_and_pii_in_error_message() {
+    use rupost::history::model::ExecutionErrorDetail;
+    use rupost::history::storage::mask_snapshot_entry;
+
+    let mut entry = SnapshotEntry {
+        id: "test-err-inline".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "POST".to_string(),
+            url: "http://api.com/auth".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: None,
+        error: Some(ExecutionErrorDetail {
+            kind: "ConnectionError".to_string(),
+            message: "Failed handshake: Bearer eyJhbGciOiJIUzI1NiJ9.test and phone 13812345678"
+                .to_string(),
+            duration_ms: 120,
+            occurred_at: chrono::Utc::now(),
+        }),
+    };
+
+    mask_snapshot_entry(&mut entry);
+
+    let masked_msg = &entry.error.unwrap().message;
+    assert!(
+        !masked_msg.contains("eyJhbGci"),
+        "Inline bearer token in error message must be redacted: {masked_msg}"
+    );
+    assert!(
+        !masked_msg.contains("13812345678"),
+        "Inline PII in error message must be masked: {masked_msg}"
+    );
+    assert!(masked_msg.contains("***") || masked_msg.contains("[REDACTED]"));
+}
+
+#[tokio::test]
+async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
+    use rupost::history::model::ExecutionErrorDetail;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("transport_error_suite.json");
+
+    // 录制的是网络故障（期望无响应）
+    let error_entry = SnapshotEntry {
+        id: "err-entry-1".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://example.com/api/test".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: None,
+        error: Some(ExecutionErrorDetail {
+            kind: "ConnectionRefused".to_string(),
+            message: "connection refused".to_string(),
+            duration_ms: 50,
+            occurred_at: chrono::Utc::now(),
+        }),
+    };
+
+    let suite = SnapshotSuite {
+        version: 2,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("test.http".to_string()),
+        entries: vec![error_entry],
+    };
+
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 场景 1：回放对端意外恢复为 200 OK -> 行为不匹配，必须判为 matched: false
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/test"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+        .mount(&mock_server)
+        .await;
+
+    let executor = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let report = executor.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report.entries.len(), 1);
+    assert!(
+        !report.entries[0].matched,
+        "快照记录网络错误，重放收到 200 响应必须判定不匹配 (matched: false)"
+    );
+    assert!(
+        report.entries[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Snapshot recorded transport error")
+    );
+
+    // 场景 2：回放对端依然无法连接 -> 行为完全吻合，判定为 matched: true
+    let dead_executor = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false);
+    let dead_report = dead_executor.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(dead_report.entries.len(), 1);
+    assert!(
+        dead_report.entries[0].matched,
+        "快照记录网络错误，重放亦发生网络错误，必须判定吻合 (matched: true)"
+    );
+}

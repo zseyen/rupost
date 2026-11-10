@@ -234,6 +234,7 @@ impl ReplayExecutor {
                     target_url,
                     start.elapsed(),
                     &e,
+                    false,
                 );
             }
         };
@@ -242,28 +243,34 @@ impl ReplayExecutor {
         let res = match self.client.execute(req).await {
             Ok(res) => res,
             Err(e) => {
+                let is_expected_failure = entry.response.is_none();
                 return Self::transport_error_entry(
                     entry,
                     request_number,
                     target_url,
                     start.elapsed(),
                     &e,
+                    is_expected_failure,
                 );
             }
         };
         let elapsed = start.elapsed();
 
-        // 4. 比对状态码（若快照记录的是传输层网络故障，跳过 response 比对并提示）
+        // 4. 比对状态码（若快照记录的是传输层网络故障，收到响应则视为行为不一致）
         let Some(ref recorded_resp) = entry.response else {
             let err_desc = entry
                 .error
                 .as_ref()
                 .map(|e| e.message.as_str())
-                .unwrap_or("unknown transport error");
+                .unwrap_or("transport failure");
+            let mismatch_msg = format!(
+                "Snapshot recorded transport error ({err_desc}), but replay received HTTP {}",
+                res.status.code()
+            );
             println!(
-                "  {} [i] Snapshot recorded transport failure ({}), skipping response diff",
-                "[i]".dimmed(),
-                err_desc
+                "  {} [✗] Unexpected response: {}",
+                "[✗]".bold().red(),
+                mismatch_msg
             );
             return ReplayEntryResult {
                 request_number,
@@ -271,12 +278,12 @@ impl ReplayExecutor {
                 url: target_url,
                 expected_status: 0,
                 actual_status: Some(res.status.code()),
-                matched: true,
+                matched: false,
                 duration_ms: elapsed.as_millis() as u64,
-                error: None,
-                body_matched: None,
+                error: Some(mismatch_msg),
+                body_matched: Some(false),
                 body_diff: None,
-                response_body_snippet: None,
+                response_body_snippet: Some(res.body.chars().take(200).collect()),
             };
         };
 
@@ -424,7 +431,7 @@ impl ReplayExecutor {
         Ok(req)
     }
 
-    /// 传输层失败条目：`actual_status=None` + `error=Some(首行)`，计入 failed。
+    /// 传输层失败条目：若快照原本记录的就是网络异常则判定吻合（matched=true），否则计入 failed。
     /// duration 取请求发起至失败的实际耗时（禁止硬编码 0）。
     fn transport_error_entry(
         entry: &SnapshotEntry,
@@ -432,6 +439,7 @@ impl ReplayExecutor {
         url: String,
         elapsed: Duration,
         error: &impl std::fmt::Display,
+        matched_expected_failure: bool,
     ) -> ReplayEntryResult {
         let message = error
             .to_string()
@@ -439,16 +447,28 @@ impl ReplayExecutor {
             .next()
             .unwrap_or_default()
             .to_string();
-        println!("  {} Replay error: {}", "[✗]".bold().red(), message);
+        if matched_expected_failure {
+            println!(
+                "  {} [✓] Transport failure matched snapshot ({})",
+                "[✓]".bold().green(),
+                message
+            );
+        } else {
+            println!("  {} Replay error: {}", "[✗]".bold().red(), message);
+        }
         ReplayEntryResult {
             request_number,
             method: entry.request.method.clone(),
             url,
             expected_status: entry.response.as_ref().map(|r| r.status).unwrap_or(0),
             actual_status: None,
-            matched: false,
+            matched: matched_expected_failure,
             duration_ms: elapsed.as_millis() as u64,
-            error: Some(message),
+            error: if matched_expected_failure {
+                None
+            } else {
+                Some(message)
+            },
             body_matched: None,
             body_diff: None,
             response_body_snippet: None,

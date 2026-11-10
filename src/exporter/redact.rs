@@ -901,17 +901,23 @@ pub fn redact_free_text(text: &str) -> String {
     RedactionPolicy::builtin().redact_free_text(text)
 }
 
-/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` 形态
+/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` / 孤立 `Bearer <token>` / `Basic <base64>` 形态
 /// （键名保留、值替换为 [REDACTED]；值长度 ≥4 才掩，避免误伤短 token 字样）
 pub fn mask_inline_secrets(text: &str) -> String {
     static INLINE_SECRET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static BARE_AUTH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = INLINE_SECRET.get_or_init(|| {
         regex::Regex::new(
             r#"(?i)(token|api[_-]?key|secret|password|passwd|authorization)\s*[=:]\s*(?:(?:bearer|basic|digest|token)\s+)?[^\s"'<>&,;}{]{4,}"#,
         )
         .expect("inline secret regex")
     });
-    re.replace_all(text, "${1}=[REDACTED]").into_owned()
+    let re_auth = BARE_AUTH.get_or_init(|| {
+        regex::Regex::new(r#"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/-]{10,}={0,2}"#)
+            .expect("bare auth regex")
+    });
+    let step1 = re.replace_all(text, "${1}=[REDACTED]");
+    re_auth.replace_all(&step1, "${1} [REDACTED]").into_owned()
 }
 
 #[cfg(test)]

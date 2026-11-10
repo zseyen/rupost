@@ -364,7 +364,9 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
 /// `redact_header_value`（scheme 前缀保留），body 走 `mask_body_secrets`
 /// （敏感键 `[REDACTED]` + PII 三正则，无截断），error 走 `redact_free_text` 擦除 URL 凭证。
 pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
-    use crate::exporter::redact::{mask_body_secrets, redact_free_text, redact_header_value};
+    use crate::exporter::redact::{
+        mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value,
+    };
     // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
     // 非 UTF-8 值原样保留（掩码通道不损伤结构）
     let mask_headers = |map: &mut reqwest::header::HeaderMap| {
@@ -393,7 +395,7 @@ pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
     }
     entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
     if let Some(ref mut err) = entry.error {
-        err.message = redact_free_text(&err.message);
+        err.message = mask_pii(&mask_inline_secrets(&redact_free_text(&err.message)));
     }
 }
 

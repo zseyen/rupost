@@ -20,19 +20,6 @@ pub enum PluginStage {
     OnFailure = 50,
 }
 
-impl PluginStage {
-    /// 获取当前阶段默认的优先级权重 (默认区间 10~90)
-    pub fn default_priority(&self) -> u32 {
-        match self {
-            Self::Prepare => 20,
-            Self::Transform => 50,
-            Self::Sign => 80,
-            Self::PostResponse => 110,
-            Self::OnFailure => 140,
-        }
-    }
-}
-
 /// 解析自 .http 文本的单个插件语义注解
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginDirective {
@@ -42,8 +29,6 @@ pub struct PluginDirective {
     pub name: String,
     /// 归属生命周期阶段
     pub stage: PluginStage,
-    /// 阶段内的执行优先级 (数值越小越先执行)
-    pub priority: u32,
     /// 是否为可选插件 (缺失时是否允许优雅自愈降级)
     pub optional: bool,
     /// 传递给插件的参数键值对
@@ -52,13 +37,10 @@ pub struct PluginDirective {
 
 impl PluginDirective {
     pub fn new(directive: impl Into<String>, name: impl Into<String>, stage: PluginStage) -> Self {
-        let directive_str = directive.into();
-        let priority = stage.default_priority();
         Self {
-            directive: directive_str,
+            directive: directive.into(),
             name: name.into(),
             stage,
-            priority,
             optional: false,
             params: HashMap::new(),
         }
@@ -94,7 +76,6 @@ pub struct HookCapability {
     pub directive: String,
     pub alias: Option<String>,
     pub stage: PluginStage,
-    pub default_priority: u32,
     #[serde(default)]
     pub parameters_schema: serde_json::Value,
 }

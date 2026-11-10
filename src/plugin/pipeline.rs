@@ -11,16 +11,12 @@ pub const DEFAULT_PLUGIN_TIMEOUT_SECS: u64 = 5;
 pub struct PluginPipeline;
 
 impl PluginPipeline {
-    /// 对声明的插件注解集合执行确定性排序仲裁：
+    /// 对声明的插件注解集合执行确定性排序仲裁（03 §5.2 唯一权威）：
     /// 1. 严格依据生命周期阶段不可逆流升序 (Prepare -> Transform -> Sign)；
-    /// 2. 同一阶段内依据 priority 升序排序；
-    /// 3. priority 相同保留书写声明保底顺序 (稳定排序)。
+    /// 2. 同阶段内 100% 保留 `.http` 文件书写声明行序（稳定排序，所见即所发）——
+    ///    `priority` 等底层魔数已彻底废除（05 ADR-D6 防复活清单）。
     pub fn sort_directives(directives: &mut [PluginDirective]) {
-        directives.sort_by(|a, b| {
-            a.stage
-                .cmp(&b.stage)
-                .then_with(|| a.priority.cmp(&b.priority))
-        });
+        directives.sort_by(|a, b| a.stage.cmp(&b.stage));
     }
 
     /// 提取属于指定生命周期阶段的指令切片
@@ -39,14 +35,13 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn test_sort_directives_stage_and_priority_arbitration() {
+    fn test_sort_directives_stage_invariance_and_declaration_fifo() {
         let mut directives = vec![
             // 乱序声明：先声明了 Sign，再声明了 Prepare，再声明了 Transform
             PluginDirective {
                 directive: "sign".to_string(),
                 name: "aws-sigv4".to_string(),
                 stage: PluginStage::Sign,
-                priority: 80,
                 optional: false,
                 params: HashMap::new(),
             },
@@ -54,7 +49,6 @@ mod tests {
                 directive: "auth".to_string(),
                 name: "oauth2-token".to_string(),
                 stage: PluginStage::Prepare,
-                priority: 20,
                 optional: false,
                 params: HashMap::new(),
             },
@@ -62,7 +56,6 @@ mod tests {
                 directive: "transform".to_string(),
                 name: "aes-encrypt".to_string(),
                 stage: PluginStage::Transform,
-                priority: 50,
                 optional: false,
                 params: HashMap::new(),
             },
@@ -70,7 +63,6 @@ mod tests {
                 directive: "auth".to_string(),
                 name: "api-key".to_string(),
                 stage: PluginStage::Prepare,
-                priority: 10, // 同在 Prepare，但 priority 更小，应该排在前面
                 optional: true,
                 params: HashMap::new(),
             },
@@ -79,10 +71,12 @@ mod tests {
         PluginPipeline::sort_directives(&mut directives);
 
         let names: Vec<&str> = directives.iter().map(|d| d.name.as_str()).collect();
-        // 期望顺序：api-key (Prepare, 10) -> oauth2-token (Prepare, 20) -> aes-encrypt (Transform, 50) -> aws-sigv4 (Sign, 80)
+        // 阶段不可逆：Prepare -> Transform -> Sign；
+        // 同阶段内保留书写行序 FIFO（oauth2-token 先于 api-key 声明）——
+        // priority 魔数已废除（05 ADR-D6），声明顺序即执行顺序
         assert_eq!(
             names,
-            vec!["api-key", "oauth2-token", "aes-encrypt", "aws-sigv4"]
+            vec!["oauth2-token", "api-key", "aes-encrypt", "aws-sigv4"]
         );
     }
 

@@ -85,7 +85,6 @@ fn test_plugin_registry_discovery_and_command_mapping() {
             directive: "auth".to_string(),
             alias: Some("echo-sign".to_string()),
             stage: PluginStage::Prepare,
-            default_priority: 20,
             parameters_schema: serde_json::json!({}),
         }],
     };

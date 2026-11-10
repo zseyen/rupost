@@ -94,6 +94,16 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         compact: opts.compact,
         redact_secrets: opts.redact,
     };
+    let redaction_policy = if opts.redact {
+        Some(crate::variable::ConfigLoader::find_and_load_redaction_policy())
+    } else {
+        None
+    };
+    let mut audit_log = if opts.redact {
+        Some(crate::exporter::redact::RedactionAuditLog::new())
+    } else {
+        None
+    };
 
     for path in scanned_paths {
         let is_markdown = path
@@ -107,12 +117,14 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
             crate::parser::HttpFileParser::parse_file(&path)?
         };
 
-        let prep_res = preparer::RequestPreparer::prepare_file(
+        let prep_res = preparer::RequestPreparer::prepare_file_with_policy(
             &parsed_file,
             &mut var_context,
             cookie_store.as_ref(),
             opts.name.as_deref(),
             opts.redact,
+            redaction_policy.as_ref(),
+            audit_log.as_mut(),
             &mut captured_symbols,
         )?;
 
@@ -186,6 +198,14 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         );
     } else {
         print!("{full_output}");
+    }
+
+    // 8. 若启用脱敏且未静音，输出脱敏清单 Footer 到 stderr（确保 stdout 命令管道纯净）
+    if opts.redact && !opts.quiet
+        && let Some(ref log) = audit_log
+    {
+        let mut stderr = std::io::stderr().lock();
+        let _ = log.render_footer(&mut stderr);
     }
 
     Ok(())

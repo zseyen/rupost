@@ -105,3 +105,52 @@ payload
         "http --raw 'payload' POST 'https://api.example.com/second' 'Content-Type:text/plain'"
     ));
 }
+
+#[test]
+fn test_export_curl_with_redaction_and_metadata() {
+    let dir = tempdir().unwrap();
+    let http_file = dir.path().join("secure.http");
+    let out_file = dir.path().join("secure_curl.sh");
+
+    fs::write(
+        &http_file,
+        r#"
+# @name SecureReq
+# @sensitive x-corp-token
+# @no-redact x-api-key-safe
+GET https://api.example.com/data?token=super_secret_query&page=1
+Authorization: Bearer top_secret_jwt
+x-corp-token: raw_corp_credential
+x-api-key-safe: open_safe_key
+"#,
+    )
+    .unwrap();
+
+    let opts = ExportRunOptions {
+        target: Some("curl".to_string()),
+        paths: vec![http_file.to_string_lossy().to_string()],
+        output: Some(out_file.clone()),
+        redact: true,
+        compact: true,
+        ..Default::default()
+    };
+
+    run_export(opts).unwrap();
+
+    assert!(out_file.exists());
+    let content = fs::read_to_string(&out_file).unwrap();
+
+    // 导出的命令应该包含脱敏后的值
+    assert!(content.contains("token=%5BREDACTED%5D") || content.contains("token=[REDACTED]"));
+    assert!(content.contains("page=1"));
+    assert!(content.contains("Authorization: Bearer [REDACTED]"));
+    assert!(content.contains("x-corp-token: [REDACTED]"));
+    // @no-redact 豁免的 key 保持原值
+    assert!(content.contains("x-api-key-safe: open_safe_key"));
+    // 原始机密绝不能泄露
+    assert!(!content.contains("super_secret_query"));
+    assert!(!content.contains("top_secret_jwt"));
+    assert!(!content.contains("raw_corp_credential"));
+    // 导出的脚本本身纯净，不含审计 footer 注释
+    assert!(!content.contains("[i] Redacted"));
+}

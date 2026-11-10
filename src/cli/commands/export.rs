@@ -51,6 +51,10 @@ pub struct ExportArgs {
     /// List all available export plugins
     #[arg(short, long)]
     pub list: bool,
+
+    /// Suppress redaction audit footer on stderr
+    #[arg(short, long)]
+    pub quiet: bool,
 }
 
 impl ExportArgs {
@@ -74,6 +78,7 @@ impl ExportArgs {
             output: self.output.map(std::path::PathBuf::from),
             force: self.force,
             list: self.list,
+            quiet: self.quiet,
         }
     }
 }

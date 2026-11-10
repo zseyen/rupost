@@ -58,4 +58,5 @@ pub struct ExportRunOptions {
     pub output: Option<PathBuf>,
     pub force: bool,
     pub list: bool,
+    pub quiet: bool,
 }

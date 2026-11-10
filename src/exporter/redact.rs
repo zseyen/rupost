@@ -92,6 +92,88 @@ struct TomlRedactionConfig {
     ignore_keys: Vec<String>,
 }
 
+/// 脱敏凭据来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedactionSource {
+    Header,
+    UrlQuery,
+    BodyJson,
+}
+
+/// 单条脱敏凭据审计条目
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedactionAuditEntry {
+    pub key: String,
+    pub scheme: Option<String>,
+    pub raw_len: usize,
+    pub source: RedactionSource,
+}
+
+/// 脱敏审计日志收集器
+#[derive(Debug, Clone, Default)]
+pub struct RedactionAuditLog {
+    entries: Vec<RedactionAuditEntry>,
+}
+
+impl RedactionAuditLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(
+        &mut self,
+        key: &str,
+        scheme: Option<&str>,
+        raw_len: usize,
+        source: RedactionSource,
+    ) {
+        self.entries.push(RedactionAuditEntry {
+            key: key.to_string(),
+            scheme: scheme.map(|s| s.to_string()),
+            raw_len,
+            source,
+        });
+    }
+
+    pub fn entries(&self) -> &[RedactionAuditEntry] {
+        &self.entries
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 渲染脱敏清单 Footer（必须输出至 stderr，确保 stdout 命令纯净）
+    pub fn render_footer<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        if self.entries.is_empty() {
+            return Ok(());
+        }
+
+        writeln!(writer, "\n[i] Redacted {} credential(s):", self.entries.len())?;
+        for entry in &self.entries {
+            let scheme_desc = match &entry.scheme {
+                Some(s) => format!("{}, ", s),
+                None => String::new(),
+            };
+            let source_desc = match entry.source {
+                RedactionSource::Header => "Header",
+                RedactionSource::UrlQuery => "URL Query",
+                RedactionSource::BodyJson => "Body JSON",
+            };
+            writeln!(
+                writer,
+                "  - {} ({}{} chars) [{}]",
+                entry.key, scheme_desc, entry.raw_len, source_desc
+            )?;
+        }
+        Ok(())
+    }
+}
+
 impl RedactionPolicy {
     /// 从 TOML 配置字符串解析装配 [export.redaction] 规则
     pub fn from_toml_str(toml_str: &str) -> Result<Self, String> {
@@ -199,34 +281,59 @@ impl RedactionPolicy {
         SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
     }
 
-    /// 对 Header 凭据值进行掩码脱敏
-    pub fn redact_header_value(&self, key: &str, value: &str) -> String {
+    /// 对 Header 凭据值进行掩码脱敏（支持可选审计记录）
+    pub fn redact_header_value_audited(
+        &self,
+        key: &str,
+        value: &str,
+        mut audit_log: Option<&mut RedactionAuditLog>,
+    ) -> String {
         if !self.is_sensitive(key) {
             return value.to_string();
         }
-        if let Some((scheme, rest)) = value.split_once(' ')
+        let (masked, scheme) = if let Some((scheme, rest)) = value.split_once(' ')
             && !rest.trim().is_empty()
             && matches!(
                 scheme.to_ascii_uppercase().as_str(),
                 "BEARER" | "BASIC" | "DIGEST" | "TOKEN"
             )
         {
-            return format!("{scheme} [REDACTED]");
+            (format!("{scheme} [REDACTED]"), Some(scheme))
+        } else {
+            ("[REDACTED]".to_string(), None)
+        };
+
+        if let Some(ref mut log) = audit_log {
+            log.record(key, scheme, value.len(), RedactionSource::Header);
         }
-        "[REDACTED]".to_string()
+
+        masked
     }
 
-    /// 脱敏 URL Query 参数中的敏感键值
-    pub fn redact_url(&self, raw_url: &str) -> String {
+    /// 对 Header 凭据值进行掩码脱敏
+    pub fn redact_header_value(&self, key: &str, value: &str) -> String {
+        self.redact_header_value_audited(key, value, None)
+    }
+
+    /// 脱敏 URL Query 参数中的敏感键值（支持可选审计记录）
+    pub fn redact_url_audited(
+        &self,
+        raw_url: &str,
+        mut audit_log: Option<&mut RedactionAuditLog>,
+    ) -> String {
         let Ok(mut parsed) = url::Url::parse(raw_url) else {
             return raw_url.to_string();
         };
         let mut changed = false;
 
         // userinfo 密码段（https://user:pass@host）
-        if parsed.password().is_some() {
+        if let Some(pass) = parsed.password() {
+            let pass_len = pass.len();
             let _ = parsed.set_password(Some("[REDACTED]"));
             changed = true;
+            if let Some(ref mut log) = audit_log {
+                log.record("password", None, pass_len, RedactionSource::UrlQuery);
+            }
         }
 
         // fragment 凭据（OAuth implicit 流：#access_token=...）
@@ -235,8 +342,12 @@ impl RedactionPolicy {
                 .iter()
                 .any(|k| frag.to_ascii_lowercase().contains(k))
         {
+            let frag_len = frag.len();
             parsed.set_fragment(Some("[REDACTED]"));
             changed = true;
+            if let Some(ref mut log) = audit_log {
+                log.record("fragment", None, frag_len, RedactionSource::UrlQuery);
+            }
         }
 
         // query 敏感键值
@@ -249,6 +360,9 @@ impl RedactionPolicy {
             qp.clear();
             for (k, v) in pairs {
                 if self.is_sensitive(&k) {
+                    if let Some(ref mut log) = audit_log {
+                        log.record(&k, None, v.len(), RedactionSource::UrlQuery);
+                    }
                     qp.append_pair(&k, "[REDACTED]");
                 } else {
                     qp.append_pair(&k, &v);
@@ -262,6 +376,11 @@ impl RedactionPolicy {
         } else {
             raw_url.to_string()
         }
+    }
+
+    /// 脱敏 URL Query 参数中的敏感键值
+    pub fn redact_url(&self, raw_url: &str) -> String {
+        self.redact_url_audited(raw_url, None)
     }
 
     /// 自由文本 URL 掩码
@@ -556,6 +675,47 @@ ignore_keys = ["custom_cursor", "next_token"]
         assert!(!derived.is_sensitive("custom_cursor"));
         // 3. 硬键护栏生效，@no-redact 依然无法豁免 authorization
         assert!(derived.is_sensitive("Authorization"));
+    }
+
+    /// Step 5 Red 测试：RedactionAuditLog 审计追踪与 Footer 渲染
+    #[test]
+    fn test_redaction_audit_log_record_and_render_footer() {
+        let policy = RedactionPolicy::builtin();
+        let mut audit_log = RedactionAuditLog::new();
+
+        // 1. 带审计记录的 Header 脱敏
+        let masked_header = policy.redact_header_value_audited(
+            "Authorization",
+            "Bearer secret_token_12345",
+            Some(&mut audit_log),
+        );
+        assert_eq!(masked_header, "Bearer [REDACTED]");
+
+        // 2. 带审计记录的 URL 脱敏
+        let masked_url = policy.redact_url_audited(
+            "https://api.com/v1?api_key=sk-99999&page=1",
+            Some(&mut audit_log),
+        );
+        assert!(masked_url.contains("api_key=%5BREDACTED%5D") || masked_url.contains("api_key=[REDACTED]"));
+
+        // 3. 校验审计日志收集条目
+        assert_eq!(audit_log.len(), 2);
+        assert_eq!(audit_log.entries()[0].key, "Authorization");
+        assert_eq!(audit_log.entries()[0].scheme.as_deref(), Some("Bearer"));
+        assert_eq!(audit_log.entries()[0].raw_len, 25);
+        assert_eq!(audit_log.entries()[0].source, RedactionSource::Header);
+
+        assert_eq!(audit_log.entries()[1].key, "api_key");
+        assert_eq!(audit_log.entries()[1].source, RedactionSource::UrlQuery);
+
+        // 4. 渲染 Footer 到缓冲区，校验输出内容
+        let mut buffer = Vec::new();
+        audit_log.render_footer(&mut buffer).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert!(output.contains("[i] Redacted 2 credential(s):"));
+        assert!(output.contains("Authorization (Bearer, 25 chars) [Header]"));
+        assert!(output.contains("api_key (8 chars) [URL Query]"));
     }
 
     #[test]

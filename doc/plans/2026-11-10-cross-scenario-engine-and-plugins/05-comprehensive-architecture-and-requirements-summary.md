@@ -319,12 +319,24 @@ $$\text{Prepare (准备/认证)} \longrightarrow \text{Transform (变形/加密)
 * **策略**：命名严格受限于 `rupost-plugin-*`；工作区本地 `./.rupost/plugins` 默认必须携带 `--allow-project-plugins` 放行。
 
 ### 4.4 关键技术难点：大包管道并发死锁与插件冷启动时延隔离
-* **防死锁**：必须采用 `tokio::join!` 异步双工并发读写，并在 `stdin` 写入完毕后显式发送 EOF；
+* **防死锁硬约束**：单次 Stdio IPC 传输载荷硬限制为 **10MB**；必须将 `stdin` 写入与 `stdout/stderr` 消费拆分为两个独立并发 Task；写完 `stdin` 必须显式执行 `shutdown().await` 并立即 drop；
 * **时延隔离**：插件耗时单独记录为 `plugin_duration_us`，秒表严格与物理网络的 `ttfb` 和 `duration` 隔离。
 
-### 4.5 跨平台路径与 CRLF 换行污染防护
-* 所有路径传递统一经过 `src/utils/path_guard::normalize_posix_path`；
-* 传递 Body 时保持原始字节，严禁隐式进行换行符转换。
+### 4.5 孤儿与僵尸进程泄漏防御 (Process Tree Orphan Cleansing)
+* **Unix PGID 树状清剿**：启动子进程时建立独立进程组 Leader（`process_group(0)`），熔断超时时向整个进程组 `-pgid` 发送 `SIGKILL`，连同孙子进程彻底杀绝；
+* **Windows JobObject 终结**：绑定 `JobObject` 并配置 `KILL_ON_JOB_CLOSE`。
+
+### 4.6 注册表并发写保护与防幽灵缓存 (Atomic Rename & Fast Hash)
+* **并发写安全**：采用临时文件原子 `rename` 覆盖，杜绝多进程并发踩踏破坏 JSON；
+* **极速指纹校验**：缓存校验升级为 `mtime` + 文件前 4KB 极速哈希（BLAKE3/FNV），彻底解决 1 秒内文件修改造成的幽灵命中。
+
+### 4.7 降级假阳性穿透防御与三态判定模型 (Three-State Outcome)
+* 报告与快照引入 `ExecutionOutcome::DegradedPass`；
+* 引入 `--strict-plugins` 标志（CI 场景默认建议开启）：发生任何插件自愈降级跳过时，无论 HTTP 状态码为何，整体退出码强制为 `1`。
+
+### 4.8 跨平台路径与 Windows Shebang 执行适配
+* 统一经过 `src/utils/path_guard::normalize_posix_path` 归一化；
+* Windows 下自动探测无扩展名脚本并封装为对应解释器命令（如 `python.exe <script>`）。
 
 ---
 

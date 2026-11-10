@@ -1,6 +1,6 @@
 # 03 - 插件 SPI 体系、统一注册表与生命周期管线规范
 
-- **状态**: Approved (Updated with Registry, Ordering, Custom Commands & AI SPI)
+- **状态**: Approved (Updated with DeepSeek Harness Architecture & Review Defense Specs)
 - **归属任务**: `cross-scenario-engine-and-plugins`
 - **核心原则**: **“开发期全能扩展，调试期优雅降级，运行期硬性零 AI，架构级单一事实来源”**
 
@@ -136,7 +136,7 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 ```
 
 ### 3.2 发现与极速轻量缓存机制 (<5ms 启动守护)
-1. **轻量清单缓存**：微内核在扫描到插件后，将 Manifest 缓存于 `~/.rupost/registry.json`（带有可执行文件 `mtime` 指纹校验）；
+1. **轻量清单缓存**：微内核在扫描到插件后，将 Manifest 缓存于 `~/.rupost/registry.json`（带有文件指纹校验）；
 2. **零冷启动延迟**：日常运行 `rupost --help`、`rupost test` 或补全时，微内核**仅读取本地 JSON 缓存**，耗时 $\le 5\text{ms}$，绝不在日常运行中轮询启动 Python/Node 插件子进程；
 3. **安全隔离策略**：
    * `$PATH` 与 `~/.rupost/plugins` 目录下的插件视为全局受信任；
@@ -345,7 +345,68 @@ AI 插件生成的任何 `@assert` 表达式、`.http` 报文或 Mock 变体，�
   }
   ```
 
-### 8.2 熔断与隔离守护
-* **超时硬熔断**：每个插件调用设置默认 5 秒超时，超时后利用 `tokio::process::Command::kill_on_drop(true)` 强制杀死子进程，绝不挂死主测试流；
-* **时延隔离**：插件子进程的启动耗时独立统计为 `plugin_duration_us`，**绝不混入 HTTP 请求物理层面的 `duration` 和 `ttfb`**；
-* **大包防死锁**：必须采用 `tokio::join!` 异步双工并发读写，在写入 `stdin` 完成后显式发送 EOF，防止超过 64KB 操作系统管道缓冲区时发生互相等待的永久死锁。
+---
+
+## 9. 借鉴 DeepSeek Harness (dsh) 微内核架构实践
+
+DeepSeek Harness (`dsh`) 是由 DeepSeek 官方构建的智能体运行时框架，其架构底层基于 **Cordis 微内核元框架**。`rupost` 从中汲取了五大核心工程设计：
+
+```
+ ┌─────────────────────────────────────────────────────────┐
+ │               1. 表现扩展层 (Extension Layer)           │
+ │      (CLI 命令行 / TUI 终端 / Web UI / Desktop / MCP)   │
+ ├─────────────────────────────────────────────────────────┤
+ │               2. 运行时控制层 (Framework Control)       │
+ │   • Cordis 微内核 IoC 容器      • 统一工具注册表 (Registry)│
+ │   • 可插拔执行循环 (Loop)       • Append-Only 事件溯源日志  │
+ ├─────────────────────────────────────────────────────────┤
+ │               3. 基础适配层 (Foundation Layer)          │
+ │      (Model Adapters / Stdio 进程管道 / OS 沙箱驱动)    │
+ └─────────────────────────────────────────────────────────┘
+```
+
+1. **统一注册表作为单一事实来源 (Registry SSOT)**：
+   * 将 CLI 扩展命令、生命周期钩子与离线挖掘器统一归口管理，平常只读 Manifest（$\le 5\text{ms}$），运行时按需懒执行；
+2. **“执行现场与深度分析解耦”的事件溯源思想**：
+   * 现场只负责高保真记录网络微秒级时序与原始数据黑匣子，复杂挖掘全部留待事后离线消费；
+3. **上下文作用域安全注入 (Scoped Context)**：
+   * 杜绝隐式全局变量，插件只能通过微内核安全上下文（经过 `redactor.rs` 脱敏清洗）获取信息；
+4. **严格策略门禁拦截 (Policy Enforcement Gate)**：
+   * 在发生文件写入或子进程调用前设置安全策略门禁，本地 `./.rupost/plugins` 默认隔离防 RCE；
+5. **纯函数式单向流与不可变补丁 (Immutable Patch Pipeline)**：
+   * 插件只返回不可变的变更 Delta/Patch，消灭跨线程、跨进程的数据竞争。
+
+---
+
+## 10. 架构审查高危风险防范与硬核工程实现规约 (Review Defense Specs)
+
+结合架构审查组针对系统死锁、孤儿进程、并发争用与平台差异提出的风险，确立以下**强制性工程落地防御规约**：
+
+### 10.1 管道死锁防御与载荷硬上限 (10MB Cap & Async Drain)
+* **载荷上限硬约束**：Stdio IPC 管道单次传递的 Request/Response 载荷上限强制设定为 **10MB**。超限时拒绝管道传输并降级跳过，杜绝内存和管道缓冲区打满挂起；
+* **异步双工独立 Task 排水**：
+  在 `StdioDriver` 中，必须将 `stdin` 写入与 `stdout/stderr` 异步消费拆分为两个独立的并发 `tokio::spawn` 任务；使用 `tokio::io::AsyncReadExt::take(10 * 1024 * 1024)` 限制读取量；在写入 `stdin` 完毕后，必须显式执行 `stdin.shutdown().await` 并立即 drop 句柄。
+
+### 10.2 进程树完全清剿机制 (Process Group Termination)
+* **Unix 平台 (PGID 树状清剿)**：
+  在启动插件子进程时调用 `std::os::unix::process::CommandExt::process_group(0)`，将子进程设置为新的进程组 Leader；超时熔断时向 `-pgid` 发送 `SIGKILL`，确保连同孙子进程彻底杀绝，防止 PID/FD 耗尽与僵尸进程；
+* **Windows 平台 (Job Object)**：
+  使用 Windows `CreateJobObjectW` 并配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，绑定子进程生命周期，父进程退出时系统自动强杀所有派生进程。
+
+### 10.3 注册表并发写保护与防幽灵缓存 (Atomic Rename & Hash Fingerprint)
+* **原子重命名覆盖**：刷新 `~/.rupost/registry.json` 时，必须先写入同目录带 PID 的临时文件（`registry.json.tmp.<pid>`），再通过原子重命名（`fs::rename`）覆盖目标文件，杜绝多进程并发踩踏造成的文件损坏；
+* **极速指纹增强**：缓存校验条件由单纯比对 `mtime` 升级为：
+  $$\text{Cache Valid} \iff \text{mtime matches} \land \text{Hash}(\text{First 4KB}) \text{ matches}$$
+  彻底避免 1 秒内文件修改造成的“幽灵虚假命中”。
+
+### 10.4 Windows 平台脚本透明代理 (Shebang Runner Adapter)
+在 Windows 环境下探测插件时，若发现目标是 `.py`、`.js`、`.sh` 脚本，微内核自动将其封装为对应宿主环境解释器命令（如 `python.exe <script>`），消灭无扩展名脚本在 Windows 上的 `OS error 193` 执行崩溃。
+
+### 10.5 三态测试判定模型 (Three-State Outcome & Strict Gate)
+* **状态明确拆分**：快照与测试报告中新增 `ExecutionOutcome::DegradedPass`，严禁将自愈降级混淆为纯粹的成功；
+* **CI 门禁模式分流**：
+  * CLI 引入 `--strict-plugins` 标志（发布环境 CI 推荐默认开启）：一旦发生任何插件降级跳过，无论 HTTP 返回码为何，整体退出码强制为 `1`；
+  * 只有在现场调试排障且显式指定 `--allow-missing-plugins` 时，才允许打印高亮 `[WARN: PLUGIN DEGRADED]` 并返回 `0`。
+
+### 10.6 快照防 OOM 截断限额 (Snapshot Lightweight Limit)
+* 默认单响应体录入上限设为 `256KB`（可通过 `--max-snapshot-body-bytes` 调整）。超限响应体执行截断，并标记 `body_truncated: true`，同时记录完整报文的 `body_sha256` 校验和，确保快照文件轻盈（控制在 5MB 以内）。

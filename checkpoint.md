@@ -10,7 +10,7 @@
 * **项目定位**: 基于文档（`.http` 与 `.md`）驱动的极简高性能 API 测试、回归与排障引擎。
 * **分支与代码基线**:
   * **主干分支**: `main`（加固战役分支 `feature/decoupling-and-workbench-hardening` 已通过 **PR #13** 完整合流）。
-  * **工作区收敛**: 仅保留单一 `default` 主工作区，所有历史/辅助工作区已全部注销并出清，工作副本保持 clean。
+  * **当前活跃开发工作区**: `.workspace/cross-scenario-plugins`（全场景自适应与微内核插件生态专项工作区）。
 * **质量保障金字塔**:
   * **单元测试**: 590+ 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。
   * **集成冒烟测试**: `tests/verify_features.sh` 涵盖 14 个核心特性（脱敏扩展性、Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等）全部通过。

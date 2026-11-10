@@ -237,12 +237,19 @@ impl ReportContext {
                     })
                     .collect();
 
+                // 失败片段与 JSON 报告出口同源脱敏（redact_and_truncate_body：JSON
+                // 敏感键掩码 / 非 JSON 自由文本 URL+内联凭据兜底 + UTF-8 安全截断）——
+                // HTML 工件常随 CI 归档共享，不得弱于机器可读出口（走查缺口 #2）
                 let body_snippet = if !res.success {
-                    res.response.as_ref().and_then(|resp| {
-                        resp.text().ok().map(|text| {
-                            crate::utils::text::truncate_chars(text, 512, "... (truncated)")
+                    res.response
+                        .as_ref()
+                        .and_then(|resp| resp.text().ok())
+                        .map(|text| {
+                            crate::ai::redactor::redact_and_truncate_body(
+                                text,
+                                crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                            )
                         })
-                    })
                 } else {
                     None
                 };
@@ -526,6 +533,7 @@ mod tests {
             http_version: None,
             ttfb: Some(Duration::from_millis(10)),
             total_duration: Duration::from_millis(20), // accounted = 28 > 20
+            connection_error: None,
         };
         let wf = TimingWaterfall::from_diagnostics(&diag);
         assert_eq!(wf.dns_ms, 4.0);

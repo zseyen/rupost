@@ -234,3 +234,66 @@ fn test_offline_json_report_to_html_generation() {
     assert!(html.contains("query_user"));
     assert!(html.contains("status == 200"));
 }
+
+/// 走查缺口 #2：HTML 在线直渲路径的失败 body_snippet 必须与 JSON 出口同源脱敏
+/// （redact_and_truncate_body）——HTML 工件常随 CI 归档共享，不得弱于机器可读出口。
+#[tokio::test]
+async fn test_e2e_html_report_masks_secrets_in_failed_body_snippet() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/whoami"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                "error": "internal",
+                "token": "super-secret-token-value",
+                "api_key": "sk-live-abcdef123456"
+            })),
+        )
+        .mount(&server)
+        .await;
+
+    let http_file = temp_dir.path().join("leak.http");
+    std::fs::write(
+        &http_file,
+        format!(
+            "###\n# @assert status == 200\nGET {}/whoami\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let html_report_file = temp_dir.path().join("report.html");
+    let options = TestSuiteOptions {
+        paths: vec![http_file.to_string_lossy().to_string()],
+        report: "html".to_string(),
+        report_file: Some(html_report_file.to_string_lossy().to_string()),
+        no_cookies: true,
+        ..TestSuiteOptions::default()
+    };
+    let suite_outcome = run_test_suite(options).await.unwrap();
+    assert!(suite_outcome.has_failure, "断言失败场景是前提");
+    rupost::report::write_report_files(
+        &suite_outcome.batch_results,
+        "html",
+        Some(html_report_file.to_string_lossy().as_ref()),
+        None,
+    )
+    .unwrap()
+    .expect("report_file specified must produce a write outcome");
+
+    let html_content = std::fs::read_to_string(&html_report_file).unwrap();
+    assert!(
+        html_content.contains("[REDACTED]"),
+        "失败片段中的敏感键必须被掩码"
+    );
+    assert!(
+        !html_content.contains("super-secret-token-value"),
+        "敏感值不得原样进入 HTML 工件"
+    );
+    assert!(
+        !html_content.contains("sk-live-abcdef123456"),
+        "敏感值不得原样进入 HTML 工件"
+    );
+}

@@ -32,6 +32,11 @@ pub struct DiagnosticsReport {
     pub http_version: Option<String>,
     pub ttfb: Option<Duration>,
     pub total_duration: Duration,
+    /// 连接阶段（DNS/TCP）首个失败的分类信息（"DNS lookup failed: ..." /
+    /// "TCP connection failed: ..."）；连接成功时为 None。始终序列化（None → null），
+    /// 保证成功/失败形态键集合一致（tests/report_schema_test.rs 锁定）。
+    #[serde(default)]
+    pub connection_error: Option<String>,
 }
 
 /// 解析 X509 证书的 DER 裸字节
@@ -84,14 +89,24 @@ fn parse_http_response_header(bytes: &[u8]) -> Option<(u16, String)> {
     Some((status_code, version))
 }
 
-/// 诊断给定 URL 的 DNS、TCP、TLS 和 HTTP 性能及证书健康度
-#[allow(unused_assignments)]
-pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
-    let start_all = Instant::now();
+/// 诊断目标的解析产物（严格/宽容两条诊断路径共用的 URL 语义单一来源）
+struct DiagnoseTarget {
+    host: String,
+    path: String,
+    port: u16,
+    is_https: bool,
+    is_websocket: bool,
+}
+
+/// 各诊断阶段（DNS/TCP/TLS/TTFB）共用的统一超时
+const DIAGNOSE_STAGE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn resolve_target(url_str: &str) -> Result<DiagnoseTarget, String> {
     let url = Url::parse(url_str).map_err(|e| format!("Invalid URL: {}", e))?;
     let host = url
         .host_str()
-        .ok_or_else(|| "Missing host in URL".to_string())?;
+        .ok_or_else(|| "Missing host in URL".to_string())?
+        .to_string();
 
     // 协议识别
     let orig_scheme = url.scheme().to_lowercase();
@@ -103,15 +118,31 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
         .port_or_known_default()
         .unwrap_or(if is_https { 443 } else { 80 });
 
-    // 1 & 2. 结合超时进行统一的 DNS + TCP 握手诊断测量
-    let default_timeout = Duration::from_secs(5);
-    let (tcp_stream, socket_addr, dns_lookup_duration, tcp_connect_duration) =
-        crate::http::timing::DiagnosticsProber::connect_tcp_with_timeout(
-            host,
-            port,
-            default_timeout,
-        )
-        .await?;
+    Ok(DiagnoseTarget {
+        host,
+        path: url.path().to_string(),
+        port,
+        is_https,
+        is_websocket,
+    })
+}
+
+/// 连接建立后的共尾部：TLS 握手 + HTTP TTFB 探测与报告组装。
+/// TLS/读写阶段失败仍返回 Err（严格契约；宽容路径的边界见 diagnose_url_lenient）。
+#[allow(unused_assignments)]
+async fn probe_after_connect(
+    tcp_stream: tokio::net::TcpStream,
+    socket_addr: std::net::SocketAddr,
+    url_str: &str,
+    target: &DiagnoseTarget,
+    start_all: Instant,
+    dns_lookup_duration: Duration,
+    tcp_connect_duration: Duration,
+) -> Result<DiagnosticsReport, String> {
+    let host = target.host.as_str();
+    let is_https = target.is_https;
+    let is_websocket = target.is_websocket;
+    let default_timeout = DIAGNOSE_STAGE_TIMEOUT;
     let resolved_ips = vec![socket_addr.ip().to_string()];
 
     let mut tls_handshake_duration = None;
@@ -129,14 +160,12 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
              Connection: Upgrade\r\n\
              Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
              Sec-WebSocket-Version: 13\r\n\r\n",
-            url.path(),
-            host
+            target.path, host
         )
     } else {
         format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            url.path(),
-            host
+            target.path, host
         )
     };
 
@@ -248,7 +277,87 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
         http_version,
         ttfb,
         total_duration,
+        connection_error: None,
     })
+}
+
+/// 诊断给定 URL 的 DNS、TCP、TLS 和 HTTP 性能及证书健康度（严格契约：
+/// 连接/TLS 阶段失败返回 Err，diagnose 命令的失败退出语义依赖于此）
+pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
+    let start_all = Instant::now();
+    let target = resolve_target(url_str)?;
+
+    // 1 & 2. 结合超时进行统一的 DNS + TCP 握手诊断测量（失败 → Err）
+    let probe = crate::http::timing::DiagnosticsProber::connect_tcp_staged(
+        &target.host,
+        target.port,
+        DIAGNOSE_STAGE_TIMEOUT,
+    )
+    .await;
+    let Some(stream) = probe.stream else {
+        return Err(probe
+            .failure
+            .unwrap_or_else(|| "connection failed".to_string()));
+    };
+
+    probe_after_connect(
+        stream,
+        probe.socket_addr.unwrap(),
+        url_str,
+        &target,
+        start_all,
+        probe.dns_lookup_duration,
+        probe.tcp_connect_duration.unwrap_or_default(),
+    )
+    .await
+}
+
+/// 宽容版诊断：连接阶段（DNS/TCP）失败不返回 Err，产出带 `connection_error`
+/// 阶段分类的部分报告（已解析 IP 与已测耗时保留，TLS/HTTP 字段为空），供测试
+/// 执行器在传输层失败时仍能输出诊断瀑布（DX-Debug D2 连接层拆分）。
+/// 边界：URL 本身非法仍为 Err；TLS 握手阶段失败保持 Err（罕见场景，与本缺口无关）。
+pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, String> {
+    let start_all = Instant::now();
+    let target = resolve_target(url_str)?;
+
+    let probe = crate::http::timing::DiagnosticsProber::connect_tcp_staged(
+        &target.host,
+        target.port,
+        DIAGNOSE_STAGE_TIMEOUT,
+    )
+    .await;
+    let Some(stream) = probe.stream else {
+        return Ok(DiagnosticsReport {
+            url: url_str.to_string(),
+            is_https: target.is_https,
+            is_websocket: target.is_websocket,
+            ws_upgrade_success: None,
+            resolved_ips: probe
+                .socket_addr
+                .map(|a| vec![a.ip().to_string()])
+                .unwrap_or_default(),
+            dns_lookup_duration: probe.dns_lookup_duration,
+            tcp_connect_duration: probe.tcp_connect_duration.unwrap_or_default(),
+            tls_handshake_duration: None,
+            cert_info: None,
+            http_status: None,
+            http_version: None,
+            ttfb: None,
+            total_duration: start_all.elapsed(),
+            connection_error: probe.failure,
+        });
+    };
+
+    probe_after_connect(
+        stream,
+        probe.socket_addr.unwrap(),
+        url_str,
+        &target,
+        start_all,
+        probe.dns_lookup_duration,
+        probe.tcp_connect_duration.unwrap_or_default(),
+    )
+    .await
 }
 
 /// 极致美学格式化输出诊断报告
@@ -285,6 +394,11 @@ pub fn print_diagnose_report(report: &DiagnosticsReport) {
         "Resolved IPs",
         report.resolved_ips.join(", ").blue()
     );
+
+    // 连接阶段失败分类（部分诊断报告特有；完整报告恒为 None 不打印）
+    if let Some(ref err) = report.connection_error {
+        println!("{:<14}: {}", "Connection", err.red().bold());
+    }
     println!();
 
     println!("{}", "Latency Breakdown (Waterfall)".bold());

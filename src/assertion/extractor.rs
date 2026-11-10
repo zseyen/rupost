@@ -396,6 +396,7 @@ mod tests {
             http_version: Some("HTTP/1.1".to_string()),
             ttfb: Some(Duration::from_millis(40)),
             total_duration: Duration::from_millis(100),
+            connection_error: None,
         };
 
         let response = Response {

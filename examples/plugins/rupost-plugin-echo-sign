@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""
+rupost-plugin-echo-sign: Rupost 示例插件 (遵循方案 D Stdio IPC 与 DeepSeek Harness Manifest 规约)
+
+支持两项核心能力：
+1. 注册表元数据自省: 执行 --manifest 输出标准化能力清单
+2. Stdio IPC 加签管道: 从 stdin 接收请求上下文，输出 PluginPatch JSON
+"""
+
+import sys
+import json
+import hashlib
+import hmac
+
+def print_manifest():
+    manifest = {
+        "manifest_version": "1.0",
+        "name": "echo-sign",
+        "version": "0.1.0",
+        "description": "示例加签与认证插件 (Demonstrating Stdio IPC & Pipeline Ordering)",
+        "commands": [
+            {
+                "name": "echo-sign",
+                "usage": "rupost echo-sign --test",
+                "description": "自测并验证 echo-sign 插件环境与算法",
+                "requires_tty": False
+            }
+        ],
+        "hooks": [
+            {
+                "directive": "auth",
+                "alias": "echo-sign",
+                "stage": "prepare",
+                "default_priority": 20,
+                "parameters_schema": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "用于计算签名的 Secret Key"}
+                    }
+                }
+            },
+            {
+                "directive": "sign",
+                "alias": "echo-sign",
+                "stage": "sign",
+                "default_priority": 80,
+                "parameters_schema": {
+                    "type": "object",
+                    "properties": {
+                        "prefix": {"type": "string", "description": "签名版本前缀 (如 V1, V2)"}
+                    }
+                }
+            }
+        ]
+    }
+    print(json.dumps(manifest, indent=2))
+    sys.exit(0)
+
+def handle_pipe_ipc():
+    try:
+        # 读取 stdin 管道输入的 JSON
+        raw_input = sys.stdin.read()
+        if not raw_input:
+            sys.exit(0)
+            
+        req = json.loads(raw_input)
+        action = req.get("action", "sign")
+        method = req.get("method", "GET")
+        url = req.get("url", "")
+        body = req.get("body", "") or ""
+        params = req.get("plugin_args", {})
+        
+        secret = params.get("key", "default-rupost-secret")
+        prefix = params.get("prefix", "RUP-HMAC")
+        
+        # 计算确定性 HMAC-SHA256 签名
+        payload = f"{method}\n{url}\n{body}"
+        signature = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        
+        # 构造符合 PluginPatch 规约的输出
+        patch = {
+            "extra_headers": [
+                ["Authorization", f"Bearer echo-token-{signature[:8]}"],
+                ["X-Echo-Signature", f"{prefix}-{signature}"]
+            ],
+            "mutated_body": None,
+            "set_variables": {
+                "LAST_ECHO_SIG": signature
+            },
+            "warnings": []
+        }
+        
+        # 纯净输出到 stdout
+        print(json.dumps(patch))
+        sys.exit(0)
+    except Exception as e:
+        sys.stderr.write(f"[Plugin Error] {str(e)}\n")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--manifest":
+        print_manifest()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--test":
+        print("Echo-sign plugin is installed and ready.")
+        sys.exit(0)
+    else:
+        handle_pipe_ipc()

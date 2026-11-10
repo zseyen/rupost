@@ -1,0 +1,24 @@
+### 示例 1: 使用插件进行前置认证与报文加签 (Pipeline Stage Demo)
+# Prepare 阶段 (Stage=Prepare, Priority=20): 生成动态 Authorization Token
+# Sign 阶段 (Stage=Sign, Priority=80): 根据完整报文计算 X-Echo-Signature
+# 即使书写顺序对调，内核亦依据不可逆阶段单向流 (Prepare -> Transform -> Sign) 严格保序执行
+POST https://httpbin.org/post
+@auth echo-sign key=my-secret-key ?optional
+@sign echo-sign prefix=V2
+
+Content-Type: application/json
+
+{
+  "order_id": 9527,
+  "action": "create_payment"
+}
+
+@assert status == 200
+@assert headers["Content-Type"] contains "application/json"
+
+### 示例 2: 声明式自愈降级示例 (Fallback Gracefully)
+# 生产调试机无 Python 插件时，?optional 自动跳过外部插件调用并记录黄色警告
+# 配合静态兜底 Header，发包与底层网络时序 (DNS/TCP/TLS/TTFB) 100% 录入快照黑匣子
+GET https://httpbin.org/get
+@auth not-installed-plugin key=production-secret ?optional
+Authorization: Bearer {{DEBUG_FALLBACK_TOKEN}}

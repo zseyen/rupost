@@ -35,6 +35,9 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@teardown" => Ok(Some(Metadata::Teardown)),
         "@sensitive" => parse_key_list(content).map(|keys| Some(Metadata::Sensitive(keys))),
         "@no-redact" => parse_key_list(content).map(|keys| Some(Metadata::NoRedact(keys))),
+        "@auth" | "@transform" | "@sign" | "@plugin" => {
+            parse_plugin_directive(directive, content).map(Some)
+        }
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -98,6 +101,9 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         Metadata::NoRedact(keys) => {
             target.no_redact_keys.extend(keys.clone());
         }
+        Metadata::Plugin(directive) => {
+            target.plugins.push(directive.clone());
+        }
     }
 }
 
@@ -111,6 +117,82 @@ fn parse_key_list(content: &str) -> ParseResult<Vec<String>> {
         .filter(|s| !s.is_empty())
         .collect();
     Ok(keys)
+}
+
+/// 解析插件语义注解：@auth, @transform, @sign, @plugin
+fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadata> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: format!("{} directive requires at least a plugin name", directive),
+        });
+    }
+
+    let default_stage = match directive {
+        "@auth" => crate::plugin::PluginStage::Prepare,
+        "@transform" => crate::plugin::PluginStage::Transform,
+        "@sign" => crate::plugin::PluginStage::Sign,
+        _ => crate::plugin::PluginStage::Transform,
+    };
+
+    let mut tokens = content.split_whitespace();
+    let name = tokens.next().unwrap().to_string();
+
+    let mut stage = default_stage;
+    let mut priority = default_stage.default_priority();
+    let mut optional = false;
+    let mut params = std::collections::HashMap::new();
+
+    for token in tokens {
+        if token == "?optional" || token == "optional=true" {
+            optional = true;
+        } else if let Some((k, v)) = token.split_once('=') {
+            let val = v.trim_matches(|c| c == '\'' || c == '"');
+            match k {
+                "stage" => {
+                    stage = match val.to_ascii_lowercase().as_str() {
+                        "prepare" | "auth" => crate::plugin::PluginStage::Prepare,
+                        "transform" => crate::plugin::PluginStage::Transform,
+                        "sign" => crate::plugin::PluginStage::Sign,
+                        "post_response" | "post" => crate::plugin::PluginStage::PostResponse,
+                        "on_failure" | "fail" => crate::plugin::PluginStage::OnFailure,
+                        unknown => {
+                            return Err(ParseError::InvalidMetadata {
+                                line: 0,
+                                message: format!("Unknown plugin stage: '{}'", unknown),
+                            });
+                        }
+                    };
+                    priority = stage.default_priority();
+                }
+                "priority" => {
+                    priority = val
+                        .parse::<u32>()
+                        .map_err(|_| ParseError::InvalidMetadata {
+                            line: 0,
+                            message: format!("Invalid plugin priority integer: '{}'", val),
+                        })?;
+                }
+                "optional" => {
+                    optional = val.eq_ignore_ascii_case("true") || val == "1";
+                }
+                _ => {
+                    params.insert(k.to_string(), val.to_string());
+                }
+            }
+        }
+    }
+
+    let dir_name = directive.strip_prefix('@').unwrap_or(directive).to_string();
+    Ok(Metadata::Plugin(crate::plugin::PluginDirective {
+        directive: dir_name,
+        name,
+        stage,
+        priority,
+        optional,
+        params,
+    }))
 }
 
 fn parse_diagnose(content: &str) -> ParseResult<Metadata> {
@@ -530,5 +612,74 @@ mod tests {
         let sensitive_meta = Metadata::Sensitive(vec!["x-secret".to_string()]);
         apply_metadata(&sensitive_meta, &mut meta);
         assert_eq!(meta.sensitive_keys, vec!["x-secret"]);
+    }
+
+    #[test]
+    fn test_parse_plugin_directives_contract() {
+        use crate::plugin::PluginStage;
+
+        // 1. @auth 默认进入 Prepare 阶段，支持 ?optional
+        let res = parse_metadata("@auth aws-sigv4 region=us-east-1 service=s3 ?optional")
+            .unwrap()
+            .expect("should parse @auth");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.directive, "auth");
+            assert_eq!(p.name, "aws-sigv4");
+            assert_eq!(p.stage, PluginStage::Prepare);
+            assert!(p.optional);
+            assert_eq!(p.params.get("region").unwrap(), "us-east-1");
+            assert_eq!(p.params.get("service").unwrap(), "s3");
+            assert_eq!(p.priority, 20); // 默认 Prepare priority
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 2. @transform 默认进入 Transform 阶段，支持 priority 与显式引号
+        let res = parse_metadata(r#"@transform aes-gcm key="my-secret-key" priority=45"#)
+            .unwrap()
+            .expect("should parse @transform");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.directive, "transform");
+            assert_eq!(p.name, "aes-gcm");
+            assert_eq!(p.stage, PluginStage::Transform);
+            assert!(!p.optional);
+            assert_eq!(p.priority, 45);
+            assert_eq!(p.params.get("key").unwrap(), "my-secret-key");
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 3. @sign 默认进入 Sign 阶段
+        let res = parse_metadata("@sign hmac-sha256")
+            .unwrap()
+            .expect("should parse @sign");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.directive, "sign");
+            assert_eq!(p.name, "hmac-sha256");
+            assert_eq!(p.stage, PluginStage::Sign);
+            assert_eq!(p.priority, 80);
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 4. @plugin 兼容写法 + 显式 stage=sign
+        let res = parse_metadata("@plugin custom-tool stage=sign priority=99 optional=true")
+            .unwrap()
+            .expect("should parse @plugin");
+        if let Metadata::Plugin(ref p) = res {
+            assert_eq!(p.directive, "plugin");
+            assert_eq!(p.name, "custom-tool");
+            assert_eq!(p.stage, PluginStage::Sign);
+            assert_eq!(p.priority, 99);
+            assert!(p.optional);
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 5. 应用到 RequestMetadata
+        let mut req_meta = RequestMetadata::default();
+        apply_metadata(&res, &mut req_meta);
+        assert_eq!(req_meta.plugins.len(), 1);
+        assert_eq!(req_meta.plugins[0].name, "custom-tool");
     }
 }

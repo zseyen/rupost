@@ -155,6 +155,9 @@ pub struct RequestMetadata {
     /// 是否追加流内容到同步文件（@stream_to 路径 append）
     pub stream_to_append: bool,
 
+    /// 插件生命周期指令列表（@auth, @transform, @sign, @plugin）
+    pub plugins: Vec<crate::plugin::PluginDirective>,
+
     /// 请求重定向转发 URL（@forward_to，可选）
     pub forward_to: Option<String>,
 
@@ -207,6 +210,8 @@ pub enum Metadata {
     Sensitive(Vec<String>),
     /// 显式声明的豁免键列表（@no-redact）
     NoRedact(Vec<String>),
+    /// 插件生命周期指令（@auth, @transform, @sign, @plugin）
+    Plugin(crate::plugin::PluginDirective),
 }
 
 /// 整个文件的解析结果

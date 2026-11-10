@@ -253,8 +253,8 @@ pub struct PluginRegistry {
 #### 2. 顺序仲裁不可逆单向流
 执行流水线严格遵循：
 $$\text{Prepare (准备/认证)} \longrightarrow \text{Transform (变形/加密)} \longrightarrow \text{Sign (报文加签)} \longrightarrow \text{物理发包}$$
-* 同一阶段内默认按 `.http` 文件的**书写声明顺序**保底执行；
-* 支持使用 `priority=<int>`（默认 100，越小越靠前）进行精细权重微调。
+* 同一阶段内 100% 严格依照 `.http` 文件的**书写声明行序 (FIFO / Stable Order)** 执行；
+* **彻底消灭 `priority=99` 与 `stage=sign` 等底层调度魔数**，杜绝内部实现细节向用例层泄露。
 
 #### 3. 纯函数式不可变补丁管道 (`PluginPatch`)
 每个插件接收当前只读上下文，输出强类型 Patch，由内核完成原子合入并传递至下一阶段，杜绝数据竞争。

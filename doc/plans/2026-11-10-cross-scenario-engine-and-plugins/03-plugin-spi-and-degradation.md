@@ -150,14 +150,19 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 
 ### 4.1 语义化领域语法糖 (Domain Directives)
 
-用户不再书写低级的 `@plugin <name> stage=... priority=...`，而是直接根据业务意图书写领域注解：
+用户直接根据业务意图书写领域注解，**100% 屏蔽 `stage=` 与 `priority=` 等底层调度魔数**：
 
 | 注解语法 | 归属生命周期 Stage | 典型业务场景 | 示例 |
 | :--- | :--- | :--- | :--- |
-| **`@auth <name> [params]`** | `Prepare` 阶段 (优先级 10~30) | OAuth2 获取 Token、动态鉴权、STS 会话拉取 | `@auth aws-sigv4 region=us-east-1 ?optional` |
-| **`@transform <name> [params]`** | `Transform` 阶段 (优先级 40~60) | 请求体 AES 加密、动态数据格式转换、Gzip 压缩 | `@transform aes-gcm key=env.AES_KEY` |
-| **`@sign <name> [params]`** | `Sign` 阶段 (优先级 70~90) | 报文哈希计算、防篡改签名、支付开放网关加签 | `@sign hmac-sha256 key=env.SECRET` |
+| **`@auth <name> [params]`** | `Prepare` 阶段 (固定不可逆) | OAuth2 获取 Token、动态鉴权、STS 会话拉取 | `@auth aws-sigv4 region=us-east-1 ?optional` |
+| **`@transform <name> [params]`** | `Transform` 阶段 (固定不可逆) | 请求体 AES 加密、动态数据格式转换、Gzip 压缩 | `@transform aes-gcm key=env.AES_KEY` |
+| **`@sign <name> [params]`** | `Sign` 阶段 (固定不可逆) | 报文哈希计算、防篡改签名、支付开放网关加签 | `@sign hmac-sha256 key=env.SECRET` |
 | **`@pipeline a -> b -> c`** | 跨阶段链式编排 | 严格保证多插件时序依赖流转 | `@pipeline oauth2 -> aes-gcm -> aws-sigv4` |
+
+#### 为什么彻底废除 `@plugin <name> stage=... priority=...`？
+- **内部实现泄露 (Leaky Abstraction)**：用户在写测试用例时，只关心“我要鉴权”或“我要签名”。强迫用户指定 `stage` 和 `priority` 属于把微内核内部调度术语甩给用户；
+- **消除魔数与认知负担**：用户无需猜测 `priority=80` 与 `priority=99` 哪个先执行；
+- **消灭解析器顺序依赖 Bug**：彻底避免了扁平解析参数时 `stage` 与 `priority` 互相覆盖的脆弱性。
 
 #### 复杂多行参数块（针对长参数场景）
 当插件参数过多时，支持直观的缩进块语法：
@@ -224,12 +229,12 @@ Content-Type: application/json
 ```
 
 ### 5.2 仲裁规则 (Arbitration Rules)
-1. **阶段优先原则 (Stage Order)**：
+1. **阶段不可逆原则 (Stage Invariance)**：
    无论在 `.http` 文件中的书写顺序如何，`Prepare` 阶段插件必然先于 `Transform` 执行，`Transform` 必然先于 `Sign` 执行；
-2. **阶段内声明保底 (Declaration Order Fallback)**：
-   在同一个 Stage 内，默认严格遵循用户在 `.http` 文件中**从上到下的书写声明顺序**执行；
-3. **权重精细仲裁 (Priority Weighting)**：
-   若需显式干预同一阶段内的次序，可在注解后追加 `priority=<int>`（默认 100，数值越小越靠前）。
+2. **同阶段所见即所发 (FIFO Order & No Magic Numbers)**：
+   在同一个 Stage 内，100% 严格依照用户在 `.http` 文件中**从上到下的视觉书写行序（Stable Order）**推进，**彻底消灭 `priority=99` 等底层魔数**；
+3. **显式管道链式表达 (`@pipeline`)**：
+   若需显式声明数据流动关系，直接使用 `@pipeline auth -> transform -> sign`，直观反映输入输出流向。
 
 ### 5.3 纯函数式不可变补丁管道契约 (Immutable Patching Pipeline)
 

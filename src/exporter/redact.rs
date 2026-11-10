@@ -1,26 +1,58 @@
 //! 敏感凭据脱敏工具
 
-/// 判断 Header 键名是否属于敏感信息
+/// 永远不可豁免的绝对硬键（按 ASCII 字母升序严格排列，以保证 binary_search 确定性生效）
+pub const EXACT_KEYS: &[&str] = &[
+    "api-key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+];
+
+/// 易受子串误报的模糊词族（可被 ignore_keys 豁免）
+pub const SUBSTRINGS: &[&str] = &[
+    "access_key",
+    "apikey",
+    "api_key",
+    "credential",
+    "passphrase",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+];
+
+/// 内置默认豁免词表（按 ASCII 字母升序严格排列，解决分页游标过度脱敏痛点）
+pub const DEFAULT_IGNORE_KEYS: &[&str] = &[
+    "cursor",
+    "next_cursor",
+    "next_page_token",
+    "next_token",
+    "page_token",
+    "pagination_token",
+];
+
+/// 判断 Header 键名是否属于敏感信息（全局内置默认判定）
+#[inline]
 pub fn is_sensitive_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    matches!(
-        lower.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "x-api-key"
-            | "api-key"
-            | "x-auth-token"
-            | "cookie"
-            | "set-cookie"
-    ) || lower.contains("secret")
-        || lower.contains("token")
-        || lower.contains("password")
-        || lower.contains("apikey")
-        || lower.contains("api_key")
-        || lower.contains("private_key")
-        || lower.contains("access_key")
-        || lower.contains("credential")
-        || lower.contains("passphrase")
+    let lower = key.trim().to_ascii_lowercase();
+    let key_str = lower.as_str();
+
+    // 1. 绝对硬键（最高优先级，不可穿透豁免）
+    if EXACT_KEYS.binary_search(&key_str).is_ok() {
+        return true;
+    }
+
+    // 2. 内置默认豁免游标（误报治理，豁免模糊子串匹配）
+    if DEFAULT_IGNORE_KEYS.binary_search(&key_str).is_ok() {
+        return false;
+    }
+
+    // 3. 模糊词族子串匹配
+    SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
 }
 
 /// 对 Header 凭据值进行掩码脱敏
@@ -143,6 +175,57 @@ mod tests {
         assert!(is_sensitive_key("Cookie"));
         assert!(!is_sensitive_key("Content-Type"));
         assert!(!is_sensitive_key("User-Agent"));
+    }
+
+    /// 表驱动决策表：验证硬键、模糊词族、以及内置忽略词表（误报治理）
+    #[test]
+    fn test_is_sensitive_key_decision_table() {
+        // 常量表基本完整性验证
+        assert!(EXACT_KEYS.contains(&"authorization"));
+        assert!(EXACT_KEYS.contains(&"cookie"));
+        assert!(SUBSTRINGS.contains(&"token"));
+        assert!(DEFAULT_IGNORE_KEYS.contains(&"next_token"));
+        assert!(DEFAULT_IGNORE_KEYS.contains(&"page_token"));
+
+        // 决策表用例：(输入键, 期望是否敏感, 描述)
+        let cases = [
+            // 硬键（必须敏感）
+            ("Authorization", true, "规范大写鉴权头"),
+            ("authorization", true, "小写鉴权头"),
+            ("  AUTHORIZATION  ", true, "带空白鉴权头"),
+            ("Cookie", true, "Cookie 头"),
+            ("x-api-key", true, "API Key 头"),
+            ("proxy-authorization", true, "代理鉴权头"),
+            // 模糊词族（敏感）
+            ("my_secret_token", true, "含 secret 和 token"),
+            ("user_password", true, "含 password"),
+            ("private_key", true, "含 private_key"),
+            ("github_token", true, "含 token"),
+            // 内置误报治理白名单（必须豁免，不再被 token 误伤！）
+            ("next_token", false, "分页游标 next_token"),
+            ("page_token", false, "分页游标 page_token"),
+            ("next_page_token", false, "分页游标 next_page_token"),
+            ("cursor", false, "分页游标 cursor"),
+            ("next_cursor", false, "分页游标 next_cursor"),
+            ("pagination_token", false, "分页游标 pagination_token"),
+            // 普通安全键（不敏感）
+            ("Content-Type", false, "内容类型"),
+            ("Accept", false, "接收类型"),
+            ("User-Agent", false, "客户端代理"),
+            ("Host", false, "域名主机"),
+        ];
+
+        for (input, expected, desc) in cases {
+            assert_eq!(
+                is_sensitive_key(input),
+                expected,
+                "键名 '{}' ({}) 判定不符合预期，期望: {}, 实际: {}",
+                input,
+                desc,
+                expected,
+                !expected
+            );
+        }
     }
 
     #[test]

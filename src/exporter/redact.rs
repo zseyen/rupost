@@ -97,6 +97,7 @@ struct TomlRedactionConfig {
 pub enum RedactionSource {
     Header,
     UrlQuery,
+    UrlFragment,
     BodyJson,
 }
 
@@ -162,6 +163,7 @@ impl RedactionAuditLog {
             let source_desc = match entry.source {
                 RedactionSource::Header => "Header",
                 RedactionSource::UrlQuery => "URL Query",
+                RedactionSource::UrlFragment => "URL Fragment",
                 RedactionSource::BodyJson => "Body JSON",
             };
             writeln!(
@@ -315,7 +317,35 @@ impl RedactionPolicy {
         self.redact_header_value_audited(key, value, None)
     }
 
-    /// 脱敏 URL Query 参数中的敏感键值（支持可选审计记录）
+    /// 对形如 `key=value&k2=v2` 的序列进行脱敏，复用 policy.is_sensitive
+    /// 返回 `(脱敏后的序列字符串, 是否发生改变)`
+    pub fn redact_key_value_pairs(
+        &self,
+        pairs: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>)>,
+        source: RedactionSource,
+        mut audit_log: Option<&mut RedactionAuditLog>,
+    ) -> (String, bool) {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        let mut changed = false;
+
+        for (k, v) in pairs {
+            let k_ref = k.as_ref();
+            let v_ref = v.as_ref();
+            if self.is_sensitive(k_ref) {
+                if let Some(ref mut log) = audit_log {
+                    log.record(k_ref, None, v_ref.len(), source);
+                }
+                serializer.append_pair(k_ref, "[REDACTED]");
+                changed = true;
+            } else {
+                serializer.append_pair(k_ref, v_ref);
+            }
+        }
+
+        (serializer.finish(), changed)
+    }
+
+    /// 脱敏 URL Query 与 Fragment 参数中的敏感键值（支持可选审计记录）
     pub fn redact_url_audited(
         &self,
         raw_url: &str,
@@ -336,18 +366,46 @@ impl RedactionPolicy {
             }
         }
 
-        // fragment 凭据（OAuth implicit 流：#access_token=...）
-        if let Some(frag) = parsed.fragment()
-            && ["token", "access", "key", "secret"]
-                .iter()
-                .any(|k| frag.to_ascii_lowercase().contains(k))
-        {
-            let frag_len = frag.len();
-            parsed.set_fragment(Some("[REDACTED]"));
-            changed = true;
-            if let Some(ref mut log) = audit_log {
-                log.record("fragment", None, frag_len, RedactionSource::UrlQuery);
+        // fragment 凭据（OAuth implicit 流：#access_token=...，SPA 路由：#/login?token=...）
+        if let Some(frag) = parsed.fragment() {
+            if let Some((path, query_str)) = frag.split_once('?') {
+                // SPA 路由形态：#/path?token=secret123&env=prod
+                let pairs: Vec<(String, String)> =
+                    url::form_urlencoded::parse(query_str.as_bytes())
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
+                if pairs.iter().any(|(k, _)| self.is_sensitive(k)) {
+                    let (redacted_query, was_changed) = self.redact_key_value_pairs(
+                        pairs,
+                        RedactionSource::UrlFragment,
+                        audit_log.as_deref_mut(),
+                    );
+                    if was_changed {
+                        let new_frag = format!("{path}?{redacted_query}");
+                        parsed.set_fragment(Some(&new_frag));
+                        changed = true;
+                    }
+                }
+            } else if frag.contains('=') {
+                // OAuth implicit 流形态：#access_token=secret123&state=xyz
+                let pairs: Vec<(String, String)> =
+                    url::form_urlencoded::parse(frag.as_bytes())
+                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                        .collect();
+                if pairs.iter().any(|(k, _)| self.is_sensitive(k)) {
+                    let (redacted_frag, was_changed) = self.redact_key_value_pairs(
+                        pairs,
+                        RedactionSource::UrlFragment,
+                        audit_log.as_deref_mut(),
+                    );
+                    if was_changed {
+                        parsed.set_fragment(Some(&redacted_frag));
+                        changed = true;
+                    }
+                }
             }
+            // 纯锚点形态（无 '?' 且无 '='），如 #keyboard-shortcuts、#accessibility、#section-2
+            // 纯锚点不包含键值参数，100% 保持原样，彻底避免误杀！
         }
 
         // query 敏感键值
@@ -356,19 +414,15 @@ impl RedactionPolicy {
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         if pairs.iter().any(|(k, _)| self.is_sensitive(k)) {
-            let mut qp = parsed.query_pairs_mut();
-            qp.clear();
-            for (k, v) in pairs {
-                if self.is_sensitive(&k) {
-                    if let Some(ref mut log) = audit_log {
-                        log.record(&k, None, v.len(), RedactionSource::UrlQuery);
-                    }
-                    qp.append_pair(&k, "[REDACTED]");
-                } else {
-                    qp.append_pair(&k, &v);
-                }
+            let (new_query, was_changed) = self.redact_key_value_pairs(
+                pairs,
+                RedactionSource::UrlQuery,
+                audit_log,
+            );
+            if was_changed {
+                parsed.set_query(Some(&new_query));
+                changed = true;
             }
-            changed = true;
         }
 
         if changed {
@@ -435,18 +489,21 @@ impl RedactionPolicy {
     }
 }
 
+static BUILTIN_POLICY: std::sync::LazyLock<RedactionPolicy> =
+    std::sync::LazyLock::new(RedactionPolicy::builtin);
+
 /// 对 Header 凭据值进行掩码脱敏（全局默认内置策略）
 ///
 /// 若包含常见的认证 scheme 前缀（如 Bearer / Basic / Digest / Token），保留前缀便于识别认证模式
 pub fn redact_header_value(key: &str, value: &str) -> String {
-    RedactionPolicy::builtin().redact_header_value(key, value)
+    BUILTIN_POLICY.redact_header_value(key, value)
 }
 
 /// 脱敏 URL Query 参数中的敏感键值（全局默认内置策略）
 ///
 /// 示例：`https://api.com?api_key=secret123&page=1` -> `https://api.com/?api_key=%5BREDACTED%5D&page=1`
 pub fn redact_url(raw_url: &str) -> String {
-    RedactionPolicy::builtin().redact_url(raw_url)
+    BUILTIN_POLICY.redact_url(raw_url)
 }
 
 #[cfg(test)]
@@ -479,6 +536,52 @@ mod tests {
             redact_url("https://docs.example.com/guide#section-2"),
             "https://docs.example.com/guide#section-2"
         );
+    }
+
+    #[test]
+    fn test_redact_url_fragment_key_value_reuse_and_no_false_positives() {
+        // 1. 结构保真：敏感键脱敏，非敏感键保留
+        let url = "https://api.example.com/callback#access_token=secret123&state=xyz_state";
+        let masked = redact_url(url);
+        assert!(!masked.contains("secret123"));
+        assert!(
+            masked.contains("access_token=%5BREDACTED%5D")
+                || masked.contains("access_token=[REDACTED]")
+        );
+        assert!(masked.contains("state=xyz_state"));
+
+        // 2. SPA 路由形态：带 ? 的 fragment
+        let spa_url = "https://app.com/spa#/login?token=secret456&role=admin";
+        let spa_masked = redact_url(spa_url);
+        assert!(!spa_masked.contains("secret456"));
+        assert!(
+            spa_masked.contains("token=%5BREDACTED%5D")
+                || spa_masked.contains("token=[REDACTED]")
+        );
+        assert!(spa_masked.contains("role=admin"));
+
+        // 3. 避免过度脱敏误杀：包含 "key" 或 "access" 的非凭据普通文本锚点 100% 保留
+        assert_eq!(
+            redact_url("https://docs.example.com/guide#keyboard-shortcuts"),
+            "https://docs.example.com/guide#keyboard-shortcuts"
+        );
+        assert_eq!(
+            redact_url("https://ui.org/guide#accessibility"),
+            "https://ui.org/guide#accessibility"
+        );
+        assert_eq!(
+            redact_url("https://site.com/faq#hotkeys"),
+            "https://site.com/faq#hotkeys"
+        );
+
+        // 4. 审计日志精确记录真实键名与 UrlFragment 来源
+        let mut audit_log = RedactionAuditLog::new();
+        let policy = RedactionPolicy::builtin();
+        let _ = policy.redact_url_audited(url, Some(&mut audit_log));
+        assert_eq!(audit_log.len(), 1);
+        let entry = &audit_log.entries()[0];
+        assert_eq!(entry.key, "access_token");
+        assert_eq!(entry.source, RedactionSource::UrlFragment);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 # 非目标（PRD 裁决）：不引 just/nextest；不做 jj hook 强制；CI 三 job 结构不动——
 # 本文件仅服务本地 DX，Windows CI 路径不依赖它。
 
-.PHONY: help gate gate-fast gate-all examples features prd build coverage
+.PHONY: help gate gate-fast gate-all examples features prd build coverage test-web
 
 help: ## 目标清单（注释即文档）
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36mmake %-12s\033[0m %s\n", $$1, $$2}'
@@ -70,4 +70,11 @@ coverage: ## 覆盖率汇总（cargo-llvm-cov，本地可选；维持不进 CI �
 		echo "  cargo install cargo-llvm-cov"; \
 		echo "详见 doc/guides/testing_guide.md §4 覆盖率"; \
 		exit 1; \
+	fi
+
+test-web: ## 跑 Web 前端无依赖原生单元测试（node --test）
+	@if command -v node >/dev/null 2>&1; then \
+		node --test tests/web/app_test.mjs; \
+	else \
+		echo "node 未安装，跳过 Web 前端测试"; \
 	fi

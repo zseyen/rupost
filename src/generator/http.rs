@@ -4,6 +4,14 @@ use crate::history::model::HistoryEntry;
 use colored::Colorize;
 use std::collections::{BTreeSet, HashMap};
 
+fn is_key_sensitive(key: &str, policy: Option<&crate::exporter::redact::RedactionPolicy>) -> bool {
+    if let Some(p) = policy {
+        p.is_sensitive(key)
+    } else {
+        is_sensitive_key(key)
+    }
+}
+
 pub struct HttpGenerator;
 
 impl HttpGenerator {
@@ -15,15 +23,20 @@ impl HttpGenerator {
     /// Convert history entries to .http content, plus the sorted names of all
     /// variables referenced by templated credentials.
     ///
-    /// 敏感凭据一律模板化为 `{{variable}}` 引用（绝不内联原值），用户经四层级联
-    /// （`--var` > 系统环境变量 > `.env` > `rupost.toml`）任一渠道提供真值即可运行；
-    /// 与 `export` 的 `[REDACTED]` 脱敏分工：export 给人看，generate 给机器跑。
-    ///
-    /// `templatize_host` 为 true 时，将请求 origin（scheme://host[:port]）改写为
-    /// `{{base_url}}`，使同一文件经变量级联跨环境运行。
+    /// 自动从配置中加载脱敏策略 [export.redaction]，未配置时回退到内置默认策略。
     pub fn generate_with_variables(
         entries: &[HistoryEntry],
         templatize_host: bool,
+    ) -> Result<(String, Vec<String>)> {
+        let policy = crate::variable::ConfigLoader::find_and_load_redaction_policy();
+        Self::generate_with_policy(entries, templatize_host, Some(&policy))
+    }
+
+    /// 接受显式脱敏策略的生成入口
+    pub fn generate_with_policy(
+        entries: &[HistoryEntry],
+        templatize_host: bool,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> Result<(String, Vec<String>)> {
         let mut output = String::new();
         let mut variables = BTreeSet::new();
@@ -54,6 +67,7 @@ impl HttpGenerator {
                     Some(captures.as_slice())
                 },
                 if has_trace { Some(&trace_plan) } else { None },
+                policy,
             ));
         }
 
@@ -79,6 +93,7 @@ impl HttpGenerator {
         used_names: &mut HashMap<String, usize>,
         captures: Option<&[&super::trace::TracedLink]>,
         traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> String {
         let mut block = String::new();
 
@@ -108,9 +123,10 @@ impl HttpGenerator {
                 &Self::templatize_host_in_url(&entry.request.url, variables),
                 variables,
                 traced,
+                policy,
             )
         } else {
-            Self::variabilize_url(&entry.request.url, variables, traced)
+            Self::variabilize_url(&entry.request.url, variables, traced, policy)
         };
         block.push_str(&format!("{} {}\n", entry.request.method, rendered_url));
 
@@ -153,7 +169,7 @@ impl HttpGenerator {
                 continue;
             }
             // 凭据模板化：生成的测试文件严禁落盘明文凭证
-            if is_sensitive_key(key_str) {
+            if is_key_sensitive(key_str, policy) {
                 let var = Self::var_name_from_key(key_str);
                 variables.insert(var.clone());
                 match Self::split_auth_scheme(&val_str) {
@@ -187,7 +203,7 @@ impl HttpGenerator {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
                 // T1：JSON 字符串叶子命中动态形状 → 反向模板化（敏感键跳过，凭据警告语义不变）；
                 // T2 溯源命中优先于形状（PRD 管线序）
-                let templatized = Self::templatize_dynamic_leaves(&json, None, traced);
+                let templatized = Self::templatize_dynamic_leaves(&json, None, traced, policy);
                 if let Ok(pretty) = serde_json::to_string_pretty(&templatized) {
                     block.push_str(&pretty);
                 } else {
@@ -333,6 +349,7 @@ impl HttpGenerator {
         value: &serde_json::Value,
         key: Option<&str>,
         traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> serde_json::Value {
         use serde_json::Value;
         if let Value::String(s) = value
@@ -342,7 +359,7 @@ impl HttpGenerator {
             return Value::String(format!("{{{{{}}}}}", l.capture_name));
         }
         if let Some(k) = key
-            && crate::exporter::redact::is_sensitive_key(k)
+            && is_key_sensitive(k, policy)
         {
             return value.clone();
         }
@@ -358,7 +375,7 @@ impl HttpGenerator {
                     .map(|(k, v)| {
                         (
                             k.clone(),
-                            Self::templatize_dynamic_leaves(v, Some(k), traced),
+                            Self::templatize_dynamic_leaves(v, Some(k), traced, policy),
                         )
                     })
                     .collect(),
@@ -366,7 +383,7 @@ impl HttpGenerator {
             Value::Array(items) => Value::Array(
                 items
                     .iter()
-                    .map(|v| Self::templatize_dynamic_leaves(v, key, traced))
+                    .map(|v| Self::templatize_dynamic_leaves(v, key, traced, policy))
                     .collect(),
             ),
             other => other.clone(),
@@ -380,6 +397,7 @@ impl HttpGenerator {
         raw: &str,
         variables: &mut BTreeSet<String>,
         traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> String {
         let Some((base, query)) = raw.split_once('?') else {
             return raw.to_string();
@@ -388,7 +406,7 @@ impl HttpGenerator {
         let rebuilt: Vec<String> = query
             .split('&')
             .map(|pair| match pair.split_once('=') {
-                Some((k, _v)) if is_sensitive_key(k) => {
+                Some((k, _v)) if is_key_sensitive(k, policy) => {
                     templated = true;
                     let var = Self::var_name_from_key(k);
                     variables.insert(var.clone());
@@ -434,5 +452,53 @@ mod tests {
         assert_eq!(HttpGenerator::var_name_from_key("api.token.secret"), "api_token_secret");
         assert_eq!(HttpGenerator::var_name_from_key("---$$$---"), "secret");
         assert_eq!(HttpGenerator::var_name_from_key(""), "secret");
+    }
+
+    #[test]
+    fn test_generator_with_custom_redaction_policy() {
+        use crate::exporter::redact::RedactionPolicy;
+        use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
+        use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-custom-signature"),
+            HeaderValue::from_static("sig-123456"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-normal-header"),
+            HeaderValue::from_static("normal-val"),
+        );
+
+        let entry = HistoryEntry {
+            id: "entry-1".to_string(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 10,
+            source: None,
+            request: RequestSnapshot {
+                timeout: None,
+                method: "GET".to_string(),
+                url: "https://api.com/users?x-tenant-token=tok999&limit=10".to_string(),
+                headers,
+                body: None,
+            },
+            response: ResponseMeta {
+                status: 200,
+                headers: HeaderMap::new(),
+                body: None,
+            },
+        };
+
+        // 自定义策略：把 x-custom-signature 和 x-tenant-token 加入 extra_keys
+        let policy = RedactionPolicy::new(["x-custom-signature", "x-tenant-token"], Vec::<&str>::new());
+        let (output, vars) = HttpGenerator::generate_with_policy(&[entry], false, Some(&policy)).unwrap();
+
+        // 验证 Header 与 Query 中的自定义凭据均被模板化
+        assert!(output.contains("x-custom-signature: {{x_custom_signature}}"));
+        assert!(output.contains("x-normal-header: normal-val"));
+        assert!(output.contains("x-tenant-token={{x_tenant_token}}"));
+        assert!(output.contains("limit=10"));
+        assert!(vars.contains(&"x_custom_signature".to_string()));
+        assert!(vars.contains(&"x_tenant_token".to_string()));
     }
 }

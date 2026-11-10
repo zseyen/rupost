@@ -55,53 +55,10 @@ impl ConfigLoader {
     }
 
     /// 查找并加载配置文件
-    /// 查找顺序：
-    /// 1. 当前目录
-    /// 2. 父目录递归查找
-    /// 3. 用户配置目录 ~/.config/rupost/
+    /// 查找顺序：当前目录 -> 父目录递归 -> 用户配置目录 ~/.config/rupost/
     pub fn find_and_load() -> Option<VariableConfig> {
-        // 1. 当前目录
-        if let Some(config) = Self::try_load_from_current_dir() {
-            return Some(config);
-        }
-
-        // 2. 用户配置目录
-        if let Some(config) = Self::try_load_from_user_dir() {
-            return Some(config);
-        }
-
-        None
-    }
-
-    /// 尝试从当前目录及其父目录加载
-    fn try_load_from_current_dir() -> Option<VariableConfig> {
-        let mut current = std::env::current_dir().ok()?;
-
-        loop {
-            let config_path = current.join(Self::CONFIG_FILE);
-            if config_path.exists() {
-                return Self::load_from_path(&config_path).ok();
-            }
-
-            // 尝试父目录
-            if !current.pop() {
-                break;
-            }
-        }
-
-        None
-    }
-
-    /// 尝试从用户配置目录加载
-    fn try_load_from_user_dir() -> Option<VariableConfig> {
-        let home = dirs::home_dir()?;
-        let config_path = home.join(".config").join("rupost").join(Self::CONFIG_FILE);
-
-        if config_path.exists() {
-            Self::load_from_path(&config_path).ok()
-        } else {
-            None
-        }
+        let path = Self::find_config_path()?;
+        Self::load_from_path(&path).ok()
     }
 
     /// 构建变量上下文

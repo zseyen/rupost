@@ -8,6 +8,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **HTTP 请求体原样保真与零分配语法嗅探 (Raw Body Verbatim & Zero-Alloc Sniffing)**：
+  - `Request` 模型引入 `raw_body: Option<String>` 与 `with_verbatim_body`；
+  - `add_body` 采用 `serde_json::from_str::<serde::de::IgnoredAny>` 进行零堆分配合法性嗅探；
+  - 发包底层原样保真发送原始文本，彻底根除键字典序洗牌、空白折叠与浮点精度变形，确保 API 加签校验 100% 保真。
+
+- **快照全量黑匣子录制与 Schema v2 演进 (Full Snapshot Recording & Schema v2)**：
+  - 引入强类型 `ExecutionErrorDetail`，`SnapshotEntry` 演进为 `response: Option<ResponseSnapshot>` 与 `error: Option<ExecutionErrorDetail>`；
+  - 解除快照落盘时的 `r.response.is_some()` 过滤守卫，超时、断网与连接被拒等网络异常 100% 录入黑匣子快照；
+  - `SnapshotSuite` 支持 Schema `version: 2`，借助 `#[serde(default)]` 保证与 Schema v1 双向平滑兼容；
+  - `mask_snapshot_entry` 联动 `redact_free_text`，对 `error.message` 中潜伏的 URL Query / Basic Auth 凭据进行安全脱敏。
+
+- **全链路测试基建补强与守护套件 (Full Testing Baseline & Guard Suites)**：
+  - **格式化器直测**：`ResponseFormatter` 扩充 `with_color`、`with_body`、`with_headers`、`with_timing` Fluent Builder 接口，补齐全量表驱动单测；
+  - **TUI 关键动作与守卫直测**：新增 `tests/tui_key_actions_test.rs`，覆盖 `start_ws_session` 互斥防线与 `replay_latest_snapshot` 错误流，并通过 `TestBackend` 离屏验证；
+  - **Web 前端原生测试基建**：微调 `app.js` 环境安全守卫，基于 Node.js 原生 `node --test` 与 Micro-DOM 打桩建立 `tests/web/app_test.mjs`（零 npm 依赖），`Makefile` 接入 `make test-web`。
+
 - **凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)**：
   - 核心策略控制中心 `RedactionPolicy`：表驱动三层过滤（`EXACT_KEYS` 硬键 $\to$ `ignore_keys` 豁免 $\to$ `SUBSTRINGS` 模糊匹配），二分查找与静态切片常量化；
   - R3 硬键安全护栏：`Authorization`、`Cookie` 等 8 项 RFC 认证硬键绝对不可豁免，配置尝试豁免时启动即阻断防呆并输出黄色告警；

@@ -312,10 +312,43 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
     .await
 }
 
-/// 宽容版诊断：连接阶段（DNS/TCP）失败不返回 Err，产出带 `connection_error`
-/// 阶段分类的部分报告（已解析 IP 与已测耗时保留，TLS/HTTP 字段为空），供测试
-/// 执行器在传输层失败时仍能输出诊断瀑布（DX-Debug D2 连接层拆分）。
-/// 边界：URL 本身非法仍为 Err；TLS 握手阶段失败保持 Err（罕见场景，与本缺口无关）。
+/// 部分诊断报告组装（连接阶段或 TLS/HTTP 探测阶段失败时的降级产物）：
+/// 已测得的阶段数据原样保留，未达成的阶段为空，`connection_error` 携带
+/// 首个失败阶段的分类信息。
+#[allow(clippy::too_many_arguments)]
+fn partial_connection_report(
+    url_str: &str,
+    is_https: bool,
+    is_websocket: bool,
+    resolved_ips: Vec<String>,
+    dns_lookup_duration: Duration,
+    tcp_connect_duration: Duration,
+    total_duration: Duration,
+    connection_error: String,
+) -> DiagnosticsReport {
+    DiagnosticsReport {
+        url: url_str.to_string(),
+        is_https,
+        is_websocket,
+        ws_upgrade_success: None,
+        resolved_ips,
+        dns_lookup_duration,
+        tcp_connect_duration,
+        tls_handshake_duration: None,
+        cert_info: None,
+        http_status: None,
+        http_version: None,
+        ttfb: None,
+        total_duration,
+        connection_error: Some(connection_error),
+    }
+}
+
+/// 宽容版诊断：DNS/TCP/TLS/HTTP 任一阶段失败都不返回 Err，产出带
+/// `connection_error` 阶段分类的部分报告（已解析 IP 与已测耗时保留，未达成
+/// 阶段为空），供测试执行器在传输层失败时仍能输出诊断瀑布
+/// （DX-Debug D2 连接层拆分；审查扩展：TLS/HTTP 阶段失败同样降级）。
+/// 边界：仅 URL 本身非法时返回 Err。
 pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, String> {
     let start_all = Instant::now();
     let target = resolve_target(url_str)?;
@@ -327,28 +360,24 @@ pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, St
     )
     .await;
     let Some(stream) = probe.stream else {
-        return Ok(DiagnosticsReport {
-            url: url_str.to_string(),
-            is_https: target.is_https,
-            is_websocket: target.is_websocket,
-            ws_upgrade_success: None,
-            resolved_ips: probe
+        return Ok(partial_connection_report(
+            url_str,
+            target.is_https,
+            target.is_websocket,
+            probe
                 .socket_addr
                 .map(|a| vec![a.ip().to_string()])
                 .unwrap_or_default(),
-            dns_lookup_duration: probe.dns_lookup_duration,
-            tcp_connect_duration: probe.tcp_connect_duration.unwrap_or_default(),
-            tls_handshake_duration: None,
-            cert_info: None,
-            http_status: None,
-            http_version: None,
-            ttfb: None,
-            total_duration: start_all.elapsed(),
-            connection_error: probe.failure,
-        });
+            probe.dns_lookup_duration,
+            probe.tcp_connect_duration.unwrap_or_default(),
+            start_all.elapsed(),
+            probe
+                .failure
+                .unwrap_or_else(|| "connection failed".to_string()),
+        ));
     };
 
-    probe_after_connect(
+    match probe_after_connect(
         stream,
         probe.socket_addr.unwrap(),
         url_str,
@@ -358,6 +387,19 @@ pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, St
         probe.tcp_connect_duration.unwrap_or_default(),
     )
     .await
+    {
+        Ok(report) => Ok(report),
+        Err(stage_err) => Ok(partial_connection_report(
+            url_str,
+            target.is_https,
+            target.is_websocket,
+            vec![probe.socket_addr.unwrap().ip().to_string()],
+            probe.dns_lookup_duration,
+            probe.tcp_connect_duration.unwrap_or_default(),
+            start_all.elapsed(),
+            stage_err,
+        )),
+    }
 }
 
 /// 极致美学格式化输出诊断报告

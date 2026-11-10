@@ -258,7 +258,7 @@ async fn test_e2e_html_report_masks_secrets_in_failed_body_snippet() {
     std::fs::write(
         &http_file,
         format!(
-            "###\n# @assert status == 200\nGET {}/whoami\n",
+            "###\n# @assert status == 200\nGET {}/whoami?api_key=sk-query-secret-999\n",
             server.uri()
         ),
     )
@@ -295,5 +295,14 @@ async fn test_e2e_html_report_masks_secrets_in_failed_body_snippet() {
     assert!(
         !html_content.contains("sk-live-abcdef123456"),
         "敏感值不得原样进入 HTML 工件"
+    );
+    // 审查扩展：顶层 URL 的 query 凭据与 JSON 出口同口径掩码（redact_url）
+    assert!(
+        !html_content.contains("sk-query-secret-999"),
+        "URL query 凭据不得原样进入 HTML 工件"
+    );
+    assert!(
+        html_content.contains("api_key="),
+        "query 键名保留（掩码只针对值）"
     );
 }

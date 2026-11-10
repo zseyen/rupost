@@ -221,19 +221,26 @@ impl ReportContext {
                     file_failed += 1;
                 }
 
+                // 断言 expected/actual/message 与 JSON 出口同源脱敏（可能携带
+                // body.access_token 等响应敏感值；raw 命中敏感键 → 整体 [REDACTED]）
                 let assertions = res
                     .assertions
                     .iter()
                     .map(|a| ReportAssertionItem {
                         raw: a.raw.clone(),
                         passed: a.passed,
-                        message: a.message.clone(),
-                        expected: if a.expected.is_empty() {
-                            None
-                        } else {
-                            Some(a.expected.clone())
-                        },
-                        actual: a.actual.clone(),
+                        message: crate::ai::redactor::redact_assertion_value(
+                            &a.raw,
+                            a.message.as_deref(),
+                        ),
+                        expected: crate::ai::redactor::redact_assertion_value(
+                            &a.raw,
+                            (!a.expected.is_empty()).then_some(a.expected.as_str()),
+                        ),
+                        actual: crate::ai::redactor::redact_assertion_value(
+                            &a.raw,
+                            a.actual.as_deref(),
+                        ),
                     })
                     .collect();
 
@@ -250,6 +257,7 @@ impl ReportContext {
                                 crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
                             )
                         })
+                        .filter(|s| !s.is_empty())
                 } else {
                     None
                 };
@@ -260,14 +268,23 @@ impl ReportContext {
                     request_number: res.request_number,
                     name: res.name.clone(),
                     method: res.method.clone(),
-                    url: res.url.clone(),
+                    // 以下四字段与 build_json_reports 同一脱敏原语（审查发现：在线
+                    // 直渲路径曾弱于 JSON 出口——url query 凭据/错误文本 URL/断言值）
+                    url: crate::ai::redactor::redact_url(&res.url),
                     status: res.status,
                     duration_ms,
                     success: res.success,
                     skipped: res.skipped,
-                    error: res.error.clone(),
+                    error: res
+                        .error
+                        .as_deref()
+                        .map(crate::ai::redactor::redact_free_text),
                     assertions,
-                    warnings: res.warnings.clone(),
+                    warnings: res
+                        .warnings
+                        .iter()
+                        .map(|w| crate::ai::redactor::redact_free_text(w))
+                        .collect(),
                     timing_waterfall,
                     body_snippet,
                 });

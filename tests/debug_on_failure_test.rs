@@ -196,3 +196,58 @@ async fn test_connection_refused_carries_staged_partial_diagnose() {
     assert_eq!(diag["cert_info"], serde_json::Value::Null);
     assert_eq!(diag["http_status"], serde_json::Value::Null);
 }
+
+/// 审查扩展（D2 边界收口）：TLS 阶段失败同样降级为部分诊断——对明文端口发
+/// https 请求，reqwest TLS 握手失败进入传输错误路径，lenient 诊断的 TLS 阶段
+/// 同样失败 → connection_error 分类落在 TLS 阶段、DNS/TCP 阶段数据保留。
+#[tokio::test]
+async fn test_tls_stage_failure_degrades_to_partial_diagnose() {
+    let dir = tempdir().unwrap();
+    // wiremock 是明文 HTTP 服务器：https:// 请求必然 TLS 握手失败（双方确定性）
+    let server = MockServer::start().await;
+    let case = dir.path().join("tls.http");
+    fs::write(
+        &case,
+        format!(
+            "GET {}/broken\n",
+            server.uri().replace("http://", "https://")
+        ),
+    )
+    .unwrap();
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            case.to_string_lossy().as_ref(),
+            "--debug-on-failure",
+            "--report",
+            "json",
+        ],
+    );
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout 应为纯 JSON 报告");
+    let diag = &report[0]["results"][0]["diagnose_report"];
+    assert!(
+        !diag.is_null(),
+        "TLS 阶段失败也必须携带部分诊断报告, json: {report}"
+    );
+    let conn_err = diag["connection_error"]
+        .as_str()
+        .expect("connection_error 应携带阶段分类");
+    assert!(
+        conn_err.starts_with("TLS handshake failed"),
+        "分类应落在 TLS 阶段: {conn_err}"
+    );
+    assert!(
+        !diag["resolved_ips"]
+            .as_array()
+            .expect("resolved_ips 数组")
+            .is_empty(),
+        "DNS/TCP 已成功，IP 必须保留"
+    );
+    assert_eq!(diag["http_status"], serde_json::Value::Null);
+    assert_eq!(diag["cert_info"], serde_json::Value::Null);
+}

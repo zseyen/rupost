@@ -42,7 +42,10 @@ pub fn write_log_with_limit(
         LogDecision::Skip => Ok(()),
         LogDecision::Append => repo.append(file_path, data),
         LogDecision::AppendTruncated => {
-            repo.append(file_path, "\n[SYSTEM] Log truncated due to size limit\n")
+            repo.append(
+                file_path,
+                crate::runner::utils::file_sync::LOG_TRUNCATED_MARKER,
+            )
         }
     }
 }

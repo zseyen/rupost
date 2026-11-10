@@ -67,6 +67,9 @@ impl FileSyncWriter {
     }
 }
 
+/// 流式日志截断标记（SSOT 常量：`tui/state/retention.rs` 端口版同引此值，消除句号分叉）
+pub const LOG_TRUNCATED_MARKER: &str = "\n[SYSTEM] Log truncated due to size limit.\n";
+
 /// 针对流式事件日志的安全追加写入函数：
 /// 1. 自动确保父级目录存在；
 /// 2. 检测当前文件大小，达到上限则静默跳过写入；
@@ -94,13 +97,14 @@ pub async fn write_log_with_limit(
 
     let new_len = file_len + data.len();
     if new_len > max_bytes {
-        let _ = file
-            .write_all(b"\n[SYSTEM] Log truncated due to size limit.\n")
-            .await;
+        // 截断提示是 best-effort 附加信息，写失败不阻断主流程
+        let _ = file.write_all(LOG_TRUNCATED_MARKER.as_bytes()).await;
     } else {
-        let _ = file.write_all(data.as_bytes()).await;
+        // 数据写失败必须上抛——外层 SSE/WS 的 once 告警闸门依赖此 Err
+        // （审查 P0-A：此前 let _ = 吞错返回 Ok，闸门只保护到 open 为止）
+        file.write_all(data.as_bytes()).await?;
+        file.flush().await?;
     }
-    let _ = file.flush().await;
     Ok(())
 }
 

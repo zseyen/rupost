@@ -35,6 +35,8 @@ pub const DEFAULT_IGNORE_KEYS: &[&str] = &[
     "pagination_token",
 ];
 
+use std::collections::HashSet;
+
 /// 判断 Header 键名是否属于敏感信息（全局内置默认判定）
 #[inline]
 pub fn is_sensitive_key(key: &str) -> bool {
@@ -55,73 +57,166 @@ pub fn is_sensitive_key(key: &str) -> bool {
     SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
 }
 
-/// 对 Header 凭据值进行掩码脱敏
+/// 脱敏策略控制中心
+#[derive(Debug, Clone)]
+pub struct RedactionPolicy {
+    /// 项目自定义新增的敏感键（强制判定为敏感）
+    extra_keys: HashSet<String>,
+    /// 用户与内置的豁免键（豁免 SUBSTRINGS 模糊匹配）
+    ignore_keys: HashSet<String>,
+}
+
+impl Default for RedactionPolicy {
+    fn default() -> Self {
+        Self::builtin()
+    }
+}
+
+impl RedactionPolicy {
+    /// 获取内核内置默认策略
+    pub fn builtin() -> Self {
+        Self {
+            extra_keys: HashSet::new(),
+            ignore_keys: DEFAULT_IGNORE_KEYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+
+    /// 构建包含外部配置与活文档标注的定制策略
+    pub fn new(
+        extra_keys: impl IntoIterator<Item = impl AsRef<str>>,
+        ignore_keys: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Self {
+        let mut policy = Self::builtin();
+
+        for key in extra_keys {
+            let normalized = key.as_ref().trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                policy.extra_keys.insert(normalized);
+            }
+        }
+
+        for key in ignore_keys {
+            let normalized = key.as_ref().trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            // R3 安全护栏：严禁豁免硬键！
+            if EXACT_KEYS.binary_search(&normalized.as_str()).is_ok() {
+                eprintln!("[warn] 安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！");
+                continue;
+            }
+            policy.ignore_keys.insert(normalized);
+        }
+
+        policy
+    }
+
+    /// 核心判定函数：判断键名是否属于敏感信息
+    #[inline]
+    pub fn is_sensitive(&self, key: &str) -> bool {
+        let lower = key.trim().to_ascii_lowercase();
+        let key_str = lower.as_str();
+
+        // 1. 用户显式标注 / 配置的敏感键优先
+        if self.extra_keys.contains(key_str) {
+            return true;
+        }
+
+        // 2. 内置硬键不可穿透
+        if EXACT_KEYS.binary_search(&key_str).is_ok() {
+            return true;
+        }
+
+        // 3. 豁免检查（只作用于 SUBSTRINGS 模糊匹配层）
+        if self.ignore_keys.contains(key_str) {
+            return false;
+        }
+
+        // 4. 内置模糊词族子串匹配
+        SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
+    }
+
+    /// 对 Header 凭据值进行掩码脱敏
+    pub fn redact_header_value(&self, key: &str, value: &str) -> String {
+        if !self.is_sensitive(key) {
+            return value.to_string();
+        }
+        if let Some((scheme, rest)) = value.split_once(' ')
+            && !rest.trim().is_empty()
+            && matches!(
+                scheme.to_ascii_uppercase().as_str(),
+                "BEARER" | "BASIC" | "DIGEST" | "TOKEN"
+            )
+        {
+            return format!("{scheme} [REDACTED]");
+        }
+        "[REDACTED]".to_string()
+    }
+
+    /// 脱敏 URL Query 参数中的敏感键值
+    pub fn redact_url(&self, raw_url: &str) -> String {
+        let Ok(mut parsed) = url::Url::parse(raw_url) else {
+            return raw_url.to_string();
+        };
+        let mut changed = false;
+
+        // userinfo 密码段（https://user:pass@host）
+        if parsed.password().is_some() {
+            let _ = parsed.set_password(Some("[REDACTED]"));
+            changed = true;
+        }
+
+        // fragment 凭据（OAuth implicit 流：#access_token=...）
+        if let Some(frag) = parsed.fragment()
+            && ["token", "access", "key", "secret"]
+                .iter()
+                .any(|k| frag.to_ascii_lowercase().contains(k))
+        {
+            parsed.set_fragment(Some("[REDACTED]"));
+            changed = true;
+        }
+
+        // query 敏感键值
+        let pairs: Vec<(String, String)> = parsed
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        if pairs.iter().any(|(k, _)| self.is_sensitive(k)) {
+            let mut qp = parsed.query_pairs_mut();
+            qp.clear();
+            for (k, v) in pairs {
+                if self.is_sensitive(&k) {
+                    qp.append_pair(&k, "[REDACTED]");
+                } else {
+                    qp.append_pair(&k, &v);
+                }
+            }
+            changed = true;
+        }
+
+        if changed {
+            parsed.into()
+        } else {
+            raw_url.to_string()
+        }
+    }
+}
+
+/// 对 Header 凭据值进行掩码脱敏（全局默认内置策略）
 ///
 /// 若包含常见的认证 scheme 前缀（如 Bearer / Basic / Digest / Token），保留前缀便于识别认证模式
 pub fn redact_header_value(key: &str, value: &str) -> String {
-    if !is_sensitive_key(key) {
-        return value.to_string();
-    }
-    if let Some((scheme, rest)) = value.split_once(' ')
-        && !rest.trim().is_empty()
-        && matches!(
-            scheme.to_ascii_uppercase().as_str(),
-            "BEARER" | "BASIC" | "DIGEST" | "TOKEN"
-        )
-    {
-        return format!("{scheme} [REDACTED]");
-    }
-    "[REDACTED]".to_string()
+    RedactionPolicy::builtin().redact_header_value(key, value)
 }
 
-/// 脱敏 URL Query 参数中的敏感键值
+/// 脱敏 URL Query 参数中的敏感键值（全局默认内置策略）
 ///
 /// 示例：`https://api.com?api_key=secret123&page=1` -> `https://api.com/?api_key=%5BREDACTED%5D&page=1`
 pub fn redact_url(raw_url: &str) -> String {
-    let Ok(mut parsed) = url::Url::parse(raw_url) else {
-        return raw_url.to_string();
-    };
-    let mut changed = false;
-
-    // userinfo 密码段（https://user:pass@host）
-    if parsed.password().is_some() {
-        let _ = parsed.set_password(Some("[REDACTED]"));
-        changed = true;
-    }
-
-    // fragment 凭据（OAuth implicit 流：#access_token=...）
-    if let Some(frag) = parsed.fragment()
-        && ["token", "access", "key", "secret"]
-            .iter()
-            .any(|k| frag.to_ascii_lowercase().contains(k))
-    {
-        parsed.set_fragment(Some("[REDACTED]"));
-        changed = true;
-    }
-
-    // query 敏感键值
-    let pairs: Vec<(String, String)> = parsed
-        .query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-    if pairs.iter().any(|(k, _)| is_sensitive_key(k)) {
-        let mut qp = parsed.query_pairs_mut();
-        qp.clear();
-        for (k, v) in pairs {
-            if is_sensitive_key(&k) {
-                qp.append_pair(&k, "[REDACTED]");
-            } else {
-                qp.append_pair(&k, &v);
-            }
-        }
-        changed = true;
-    }
-
-    if changed {
-        parsed.into()
-    } else {
-        raw_url.to_string()
-    }
+    RedactionPolicy::builtin().redact_url(raw_url)
 }
 
 #[cfg(test)]
@@ -226,6 +321,63 @@ mod tests {
                 !expected
             );
         }
+    }
+
+    /// Step 2 Red 测试：RedactionPolicy 策略实体与自定义 extra_keys / ignore_keys
+    #[test]
+    fn test_redaction_policy_custom_extra_and_ignore() {
+        let policy = RedactionPolicy::new(
+            ["x-sentry-key", "fastly-key"],
+            ["custom_token", "next_token"],
+        );
+
+        // 自定义 extra_keys 必须敏感
+        assert!(policy.is_sensitive("X-Sentry-Key"));
+        assert!(policy.is_sensitive("fastly-key"));
+
+        // 自定义 ignore_keys 必须豁免（即使包含 token 子串）
+        assert!(!policy.is_sensitive("custom_token"));
+        assert!(!policy.is_sensitive("next_token"));
+
+        // 未被 ignore 的常规 token 依然敏感
+        assert!(policy.is_sensitive("user_token"));
+    }
+
+    /// Step 2 Red 测试：R3 硬键不可豁免安全护栏（恶意或错误配置无法穿透）
+    #[test]
+    fn test_redaction_policy_hard_keys_cannot_be_ignored() {
+        // 尝试通过 ignore_keys 豁免绝对硬键
+        let policy = RedactionPolicy::new(
+            Vec::<&str>::new(),
+            ["authorization", "cookie", "set-cookie", "x-api-key"],
+        );
+
+        // 构建期护栏守护：硬键绝对不能被装配进 ignore_keys 集合
+        assert!(!policy.ignore_keys.contains("authorization"));
+        assert!(!policy.ignore_keys.contains("cookie"));
+
+        // 判定期双重护栏：即使显式声明 ignore，硬键必须坚决判定为敏感！
+        assert!(policy.is_sensitive("Authorization"));
+        assert!(policy.is_sensitive("authorization"));
+        assert!(policy.is_sensitive("Cookie"));
+        assert!(policy.is_sensitive("set-cookie"));
+        assert!(policy.is_sensitive("X-Api-Key"));
+    }
+
+    /// Step 2 Red 测试：大小写与空白字符规范化
+    #[test]
+    fn test_case_and_whitespace_canonicalization() {
+        let policy = RedactionPolicy::new(
+            ["  X-Custom-Secret  ", "MY_API_KEY"],
+            ["  NEXT_PAGE_CURSOR  "],
+        );
+
+        // 各种大小写与空白组合输入均能正确匹配
+        assert!(policy.is_sensitive("x-custom-secret"));
+        assert!(policy.is_sensitive("  X-CUSTOM-SECRET  "));
+        assert!(policy.is_sensitive("my_api_key"));
+        assert!(!policy.is_sensitive("next_page_cursor"));
+        assert!(!policy.is_sensitive("  Next_Page_Cursor  "));
     }
 
     #[test]

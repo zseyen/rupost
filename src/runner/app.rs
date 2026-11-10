@@ -162,8 +162,10 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         (order, dependencies)
     };
 
-    // 4. 加载配置并构建变量上下文
-    let config = ConfigLoader::find_and_load().unwrap_or_default();
+    // 4. 加载配置并构建变量上下文（配置/env 文件损坏或显式缺失的告警走 stderr，
+    //    保 `--report json` stdout 纯净——走查缺口 #6）
+    let (config, mut loader_warnings) = ConfigLoader::find_and_load();
+    let config = config.unwrap_or_default();
 
     // 解析 CLI 变量覆盖
     let cli_vars: Vec<(String, String)> = options
@@ -172,11 +174,19 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         .filter_map(|s| ConfigLoader::parse_cli_var(s))
         .collect();
 
-    // 如果指定了 env_file 则使用它，否则默认自动寻找加载并合并本地 .env
-    let env_file_to_load = options.env_file.as_deref().or(Some(".env"));
+    // 如果指定了 env_file 则使用它（显式意图），否则默认自动寻找加载并合并本地 .env
+    let env_file_to_load = options
+        .env_file
+        .as_deref()
+        .map(|p| (p, true))
+        .or(Some((".env", false)));
 
-    let mut var_context =
+    let (mut var_context, env_warnings) =
         ConfigLoader::build_context(&config, options.env.as_deref(), &cli_vars, env_file_to_load);
+    loader_warnings.extend(env_warnings);
+    for warning in &loader_warnings {
+        eprintln!("[!] {warning}");
+    }
     var_context.insert("__default_scheme", &options.default_scheme);
 
     // 5. 构建 TestExecutor

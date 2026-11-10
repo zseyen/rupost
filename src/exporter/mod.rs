@@ -54,20 +54,29 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         return Ok(());
     }
 
-    // 3. 5层级联加载环境配置
-    let config = crate::variable::ConfigLoader::find_and_load().unwrap_or_default();
+    // 3. 5层级联加载环境配置（配置/env 文件告警走 stderr，不污染导出 stdout——走查缺口 #6）
+    let (config, mut loader_warnings) = crate::variable::ConfigLoader::find_and_load();
+    let config = config.unwrap_or_default();
     let cli_vars: Vec<(String, String)> = opts
         .var
         .iter()
         .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
         .collect();
-    let env_file_to_load = opts.env_file.as_deref().or(Some(".env"));
-    let mut var_context = crate::variable::ConfigLoader::build_context(
+    let env_file_to_load = opts
+        .env_file
+        .as_deref()
+        .map(|p| (p, true))
+        .or(Some((".env", false)));
+    let (mut var_context, env_warnings) = crate::variable::ConfigLoader::build_context(
         &config,
         opts.env.as_deref(),
         &cli_vars,
         env_file_to_load,
     );
+    loader_warnings.extend(env_warnings);
+    for warning in &loader_warnings {
+        eprintln!("[!] {warning}");
+    }
     var_context.insert("__default_scheme", &opts.default_scheme);
 
     // 4. 加载 CookieStore (若指定了 cookie_file)
@@ -201,7 +210,8 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
     }
 
     // 8. 若启用脱敏且未静音，输出脱敏清单 Footer 到 stderr（确保 stdout 命令管道纯净）
-    if opts.redact && !opts.quiet
+    if opts.redact
+        && !opts.quiet
         && let Some(ref log) = audit_log
     {
         let mut stderr = std::io::stderr().lock();

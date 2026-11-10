@@ -613,13 +613,7 @@ impl WsRunner {
 
 impl WsRunner {
     pub(crate) fn resolve_ws_url(url: &str) -> String {
-        let mut resolved = url.to_string();
-        if resolved.starts_with("https://") {
-            resolved.replace_range(0..8, "wss://");
-        } else if resolved.starts_with("http://") {
-            resolved.replace_range(0..7, "ws://");
-        }
-        resolved
+        crate::http::url::UrlTemplatizer::normalize_ws_url(url)
     }
 }
 

@@ -1247,3 +1247,60 @@ fn test_replay_cli_invalid_target_fails_fast_before_any_io() {
         "应报 target 非法而非文件不存在: {combined}"
     );
 }
+
+#[tokio::test]
+async fn test_replay_target_with_path_prefix() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("snapshot_prefix.json");
+
+    let entry = SnapshotEntry {
+        id: "test-prefix-1".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://example.com/users".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: Some(ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: r#"{"status": "ok"}"#.to_string(),
+        }),
+        error: None,
+    };
+
+    let suite = SnapshotSuite {
+        version: 1,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("test_suite_prefix".to_string()),
+        entries: vec![entry],
+    };
+
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 1. target 带路径前缀（无尾随斜杠）
+    let target = format!("{}/api/v1", mock_server.uri());
+    let replayer = ReplayExecutor::new(Some(target), true).unwrap();
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report.total, 1);
+    assert_eq!(report.passed, 1);
+    assert_eq!(report.failed, 0);
+
+    // 2. target 带路径前缀（有尾随斜杠）
+    let target_trailing = format!("{}/api/v1/", mock_server.uri());
+    let replayer_trailing = ReplayExecutor::new(Some(target_trailing), true).unwrap();
+    let report_trailing = replayer_trailing.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report_trailing.total, 1);
+    assert_eq!(report_trailing.passed, 1);
+    assert_eq!(report_trailing.failed, 0);
+}

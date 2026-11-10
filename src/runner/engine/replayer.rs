@@ -234,6 +234,15 @@ impl ReplayExecutor {
             parsed_url.set_scheme(parsed_target.scheme()).ok();
             parsed_url.set_host(parsed_target.host_str()).ok();
             parsed_url.set_port(parsed_target.port()).ok();
+
+            // 若 target 显式包含非根路径前缀（如 http://host/api/v1），与原路径组合
+            let target_path = parsed_target.path().trim_end_matches('/');
+            if !target_path.is_empty() {
+                let original_path = parsed_url.path();
+                let combined_path = crate::http::url::join_paths(&[target_path, original_path]);
+                parsed_url.set_path(&combined_path);
+            }
+
             target_url = parsed_url.to_string();
         }
 

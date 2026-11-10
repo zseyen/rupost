@@ -159,27 +159,63 @@ pub struct UrlTemplatizer;
 
 impl UrlTemplatizer {
     /// 将绝对 URL 的 origin 部分替换为指定占位符（如 `{{base_url}}`）
-    /// 无论是否为国际化域名（中文域名）、包含端口、或包含复杂 query/fragment，均能绝对安全重组
+    /// 无论是否为国际化域名（中文域名）、包含端口、或包含复杂 query/fragment，均能绝对安全重组。
+    /// 支持 http, https, ws, wss 协议。
     pub fn templatize_origin(raw_url: &str, placeholder: &str) -> String {
-        if !has_http_scheme(raw_url) {
+        let Ok(parsed) = url::Url::parse(raw_url) else {
+            return raw_url.to_string();
+        };
+
+        let scheme = parsed.scheme();
+        if !matches!(scheme, "http" | "https" | "ws" | "wss") {
             return raw_url.to_string();
         }
 
-        if let Ok(parsed) = url::Url::parse(raw_url) {
-            let path = parsed.path();
-            let query_str = parsed
-                .query()
-                .map(|q| format!("?{}", q))
-                .unwrap_or_default();
-            let fragment_str = parsed
-                .fragment()
-                .map(|f| format!("#{}", f))
-                .unwrap_or_default();
+        let clean_placeholder = placeholder.trim_end_matches('/');
+        let path = parsed.path();
 
-            let clean_placeholder = placeholder.trim_end_matches('/');
-            format!("{}{}{}{}", clean_placeholder, path, query_str, fragment_str)
+        let est_capacity = clean_placeholder.len()
+            + path.len()
+            + parsed.query().map_or(0, |q| q.len() + 1)
+            + parsed.fragment().map_or(0, |f| f.len() + 1);
+
+        let mut out = String::with_capacity(est_capacity);
+        out.push_str(clean_placeholder);
+
+        let before_query = raw_url.split_once('?').map(|(b, _)| b).unwrap_or(raw_url);
+        let before_frag = before_query.split_once('#').map(|(b, _)| b).unwrap_or(before_query);
+        if path == "/" && !before_frag.ends_with('/') {
+            // 裸根域名（如 https://example.com）未以斜杠结尾时保持原样
         } else {
-            raw_url.to_string()
+            out.push_str(path);
+        }
+
+        if let Some(q) = parsed.query() {
+            out.push('?');
+            out.push_str(q);
+        }
+        if let Some(f) = parsed.fragment() {
+            out.push('#');
+            out.push_str(f);
+        }
+
+        out
+    }
+
+    /// 针对 WebSocket 请求的 URL 规范化（自动清洗 RFC 6455 禁用的 Fragment，平滑协议映射）
+    pub fn normalize_ws_url(raw_url: &str) -> String {
+        let mut target = raw_url.to_string();
+        if target.starts_with("https://") {
+            target.replace_range(0..8, "wss://");
+        } else if target.starts_with("http://") {
+            target.replace_range(0..7, "ws://");
+        }
+
+        // RFC 6455 §3 防护：WebSocket 握手请求行严禁携带 #fragment
+        if let Some((clean_url, _frag)) = target.split_once('#') {
+            clean_url.to_string()
+        } else {
+            target
         }
     }
 }
@@ -595,6 +631,40 @@ mod tests {
         assert_eq!(
             UrlTemplatizer::templatize_origin("/api/users", "{{base_url}}"),
             "/api/users"
+        );
+
+        // 4. WebSocket 协议支持（ws:// 与 wss://）
+        assert_eq!(
+            UrlTemplatizer::templatize_origin("ws://localhost:8080/ws?room=1", "{{base_url}}"),
+            "{{base_url}}/ws?room=1"
+        );
+        assert_eq!(
+            UrlTemplatizer::templatize_origin("wss://stream.example.com/feed#active", "{{base_url}}"),
+            "{{base_url}}/feed#active"
+        );
+
+        // 5. 裸根域名（无尾随斜线）保持无斜线原样，不强行追加 /
+        assert_eq!(
+            UrlTemplatizer::templatize_origin("https://api.example.com", "{{base_url}}"),
+            "{{base_url}}"
+        );
+        assert_eq!(
+            UrlTemplatizer::templatize_origin("https://api.example.com/", "{{base_url}}"),
+            "{{base_url}}/"
+        );
+
+        // 6. WebSocket 规范防护：normalize_ws_url 剥离 RFC 6455 禁用的 #fragment 并平滑转换 scheme
+        assert_eq!(
+            UrlTemplatizer::normalize_ws_url("http://example.com/chat#presence"),
+            "ws://example.com/chat"
+        );
+        assert_eq!(
+            UrlTemplatizer::normalize_ws_url("https://secure.example.com/socket?id=1#anchor"),
+            "wss://secure.example.com/socket?id=1"
+        );
+        assert_eq!(
+            UrlTemplatizer::normalize_ws_url("wss://pure.example.com/feed"),
+            "wss://pure.example.com/feed"
         );
     }
 }

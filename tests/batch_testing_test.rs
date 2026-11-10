@@ -735,16 +735,15 @@ async fn test_teardown_parallel_fail_fast_still_runs() {
 
     // 2 文件：A（失败 + teardown）、B（正常 + teardown）——并发 1 保证 A 先完成触发 fail_fast，B 被取消
     let dir = tempfile::tempdir().unwrap();
-    for (name, path_seg, status) in [("a", "boom", 500), ("b", "ok", 200)] {
+    for (name, path_seg) in [("a", "boom"), ("b", "ok")] {
         let f = dir.path().join(format!("{}.http", name));
         std::fs::write(
             &f,
             format!(
-                "### {name}\n# @name {name}\nGET {server_uri}/{path_seg}\n\n# @assert status == {good_status}\n\n### {name}-teardown\n# @teardown\n# @name {name}-td\nDELETE {server_uri}/cleanup\n",
+                "### {name}\n# @name {name}\nGET {server_uri}/{path_seg}\n\n# @assert status == 200\n\n### {name}-teardown\n# @teardown\n# @name {name}-td\nDELETE {server_uri}/cleanup\n",
                 name = name,
                 server_uri = server.uri(),
                 path_seg = path_seg,
-                good_status = if name == "a" { 200 } else { 200 },
             ),
         )
         .unwrap();

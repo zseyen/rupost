@@ -128,8 +128,9 @@ fn resolve_target(url_str: &str) -> Result<DiagnoseTarget, String> {
 }
 
 /// 连接建立后的共尾部：TLS 握手 + HTTP TTFB 探测与报告组装。
-/// TLS/读写阶段失败仍返回 Err（严格契约；宽容路径的边界见 diagnose_url_lenient）。
-#[allow(unused_assignments)]
+/// lenient = false 时遵循严格契约：TLS/读写阶段失败直接返回 Err；
+/// lenient = true 时遵循宽容契约：保留已测得的 TLS 耗时与证书实体，将阶段失败下沉至 connection_error。
+#[allow(unused_assignments, clippy::too_many_arguments)]
 async fn probe_after_connect(
     tcp_stream: tokio::net::TcpStream,
     socket_addr: std::net::SocketAddr,
@@ -138,6 +139,7 @@ async fn probe_after_connect(
     start_all: Instant,
     dns_lookup_duration: Duration,
     tcp_connect_duration: Duration,
+    lenient: bool,
 ) -> Result<DiagnosticsReport, String> {
     let host = target.host.as_str();
     let is_https = target.is_https;
@@ -150,6 +152,32 @@ async fn probe_after_connect(
     let mut http_status = None;
     let mut http_version = None;
     let mut ttfb = None;
+
+    let handle_stage_error = |err: String,
+                              tls_dur: Option<Duration>,
+                              cert: Option<CertInfo>|
+     -> Result<DiagnosticsReport, String> {
+        if lenient {
+            Ok(DiagnosticsReport {
+                url: url_str.to_string(),
+                is_https,
+                is_websocket,
+                ws_upgrade_success: None,
+                resolved_ips: resolved_ips.clone(),
+                dns_lookup_duration,
+                tcp_connect_duration,
+                tls_handshake_duration: tls_dur,
+                cert_info: cert,
+                http_status: None,
+                http_version: None,
+                ttfb: None,
+                total_duration: start_all.elapsed(),
+                connection_error: Some(err),
+            })
+        } else {
+            Err(err)
+        }
+    };
 
     // 根据是否是 WebSocket，自适应组装 Upgrade 握手或常规 HTTP 请求
     let request_payload = if is_websocket {
@@ -192,8 +220,20 @@ async fn probe_after_connect(
                 .await
             {
                 Ok(Ok(stream)) => stream,
-                Ok(Err(e)) => return Err(format!("TLS handshake failed: {}", e)),
-                Err(_) => return Err(format!("TLS handshake timeout after {:?}", default_timeout)),
+                Ok(Err(e)) => {
+                    return handle_stage_error(
+                        format!("TLS handshake failed: {}", e),
+                        None,
+                        None,
+                    )
+                }
+                Err(_) => {
+                    return handle_stage_error(
+                        format!("TLS handshake timeout after {:?}", default_timeout),
+                        None,
+                        None,
+                    )
+                }
             };
         tls_handshake_duration = Some(tls_start.elapsed());
 
@@ -208,50 +248,106 @@ async fn probe_after_connect(
         // 4. HTTP TTFB (HTTPS)
         let ttfb_start = Instant::now();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        tls_stream
-            .write_all(request_payload.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to send request over TLS: {}", e))?;
+        if let Err(e) = tls_stream.write_all(request_payload.as_bytes()).await {
+            return handle_stage_error(
+                format!("Failed to send request over TLS: {}", e),
+                tls_handshake_duration,
+                cert_info,
+            );
+        }
         tls_stream.flush().await.ok();
 
         let mut buffer = [0u8; 1024];
         let n = match tokio::time::timeout(default_timeout, tls_stream.read(&mut buffer)).await {
             Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(format!("Failed to read response over TLS: {}", e)),
-            Err(_) => return Err(format!("HTTP TTFB timeout after {:?}", default_timeout)),
+            Ok(Err(e)) => {
+                return handle_stage_error(
+                    format!("Failed to read response over TLS: {}", e),
+                    tls_handshake_duration,
+                    cert_info,
+                )
+            }
+            Err(_) => {
+                return handle_stage_error(
+                    format!("HTTP TTFB timeout after {:?}", default_timeout),
+                    tls_handshake_duration,
+                    cert_info,
+                )
+            }
         };
+
+        if n == 0 {
+            return handle_stage_error(
+                "Connection closed by server over TLS before HTTP response was received (EOF)".to_string(),
+                tls_handshake_duration,
+                cert_info,
+            );
+        }
+
         ttfb = Some(ttfb_start.elapsed());
 
-        if n > 0
-            && let Some((status, version)) = parse_http_response_header(&buffer[..n])
-        {
+        if let Some((status, version)) = parse_http_response_header(&buffer[..n]) {
             http_status = Some(status);
             http_version = Some(version);
+        } else {
+            return handle_stage_error(
+                "Invalid HTTP response header over TLS from server".to_string(),
+                tls_handshake_duration,
+                cert_info,
+            );
         }
     } else {
         // 4. HTTP TTFB (HTTP)
         let ttfb_start = Instant::now();
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tcp_stream;
-        stream
-            .write_all(request_payload.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to send request: {}", e))?;
+        if let Err(e) = stream.write_all(request_payload.as_bytes()).await {
+            return handle_stage_error(
+                format!("Failed to send request: {}", e),
+                None,
+                None,
+            );
+        }
         stream.flush().await.ok();
 
         let mut buffer = [0u8; 1024];
         let n = match tokio::time::timeout(default_timeout, stream.read(&mut buffer)).await {
             Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(format!("Failed to read response: {}", e)),
-            Err(_) => return Err(format!("HTTP TTFB timeout after {:?}", default_timeout)),
+            Ok(Err(e)) => {
+                return handle_stage_error(
+                    format!("Failed to read response: {}", e),
+                    None,
+                    None,
+                )
+            }
+            Err(_) => {
+                return handle_stage_error(
+                    format!("HTTP TTFB timeout after {:?}", default_timeout),
+                    None,
+                    None,
+                )
+            }
         };
+
+        if n == 0 {
+            return handle_stage_error(
+                "Connection closed by server before HTTP response was received (EOF)".to_string(),
+                None,
+                None,
+            );
+        }
+
         ttfb = Some(ttfb_start.elapsed());
 
-        if n > 0
-            && let Some((status, version)) = parse_http_response_header(&buffer[..n])
-        {
+        if let Some((status, version)) = parse_http_response_header(&buffer[..n]) {
             http_status = Some(status);
             http_version = Some(version);
+        } else {
+            return handle_stage_error(
+                "Invalid HTTP response header from server".to_string(),
+                None,
+                None,
+            );
         }
     }
 
@@ -308,6 +404,7 @@ pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
         start_all,
         probe.dns_lookup_duration,
         probe.tcp_connect_duration.unwrap_or_default(),
+        false,
     )
     .await
 }
@@ -377,7 +474,7 @@ pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, St
         ));
     };
 
-    match probe_after_connect(
+    probe_after_connect(
         stream,
         probe.socket_addr.unwrap(),
         url_str,
@@ -385,21 +482,9 @@ pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, St
         start_all,
         probe.dns_lookup_duration,
         probe.tcp_connect_duration.unwrap_or_default(),
+        true,
     )
     .await
-    {
-        Ok(report) => Ok(report),
-        Err(stage_err) => Ok(partial_connection_report(
-            url_str,
-            target.is_https,
-            target.is_websocket,
-            vec![probe.socket_addr.unwrap().ip().to_string()],
-            probe.dns_lookup_duration,
-            probe.tcp_connect_duration.unwrap_or_default(),
-            start_all.elapsed(),
-            stage_err,
-        )),
-    }
 }
 
 /// 极致美学格式化输出诊断报告

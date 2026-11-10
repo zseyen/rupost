@@ -130,3 +130,19 @@ async fn test_no_history_inline_mode_skips_recording() {
         "内联请求模式的 --no-history 必须关停落盘"
     );
 }
+
+/// 契约 6：全局分发入口顶层禁用 —— 任何子命令均不落盘且输出提示至 stderr
+#[tokio::test]
+async fn test_no_history_global_dispatch_level_enforcement() {
+    let dir = tempdir().unwrap();
+    let out = run(dir.path(), &["--no-history", "history", "list"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("历史记录已停用 (--no-history)"),
+        "stderr 必须包含停用提示，实际: {stderr}"
+    );
+    assert!(
+        !history_file(dir.path()).exists(),
+        "全局分发层 --no-history 不得生成 history.jsonl"
+    );
+}

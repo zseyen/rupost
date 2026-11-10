@@ -3,7 +3,24 @@
 - **任务代号**: `cross-scenario-engine-and-plugins`
 - **创建日期**: 2026-11-10
 - **管理目录**: `doc/plans/2026-11-10-cross-scenario-engine-and-plugins/`
-- **任务状态**: Active / Execution Ready (v2.0.0 Architecture Baseline)
+- **任务状态**: Active / Draft (v2.1.0 修订稿待评审——M1 开工前须完成人工评审，通过后回标 Execution Ready)
+
+---
+
+## 0. 文档治理与权威矩阵 (Governance, v2.1.0)
+
+| 权威域 | 唯一事实来源 |
+| :--- | :--- |
+| **MVP 范围与施工顺序** | [06 §3/§4](./06-mvp-implementation-plan-personas-and-scenarios.md) |
+| **快照产物 Schema** | [02 §2](./02-artifact-contract-for-plugins.md) |
+| **插件发现/IPC 协议/降级语义/执行仲裁** | [03](./03-plugin-spi-and-degradation.md) |
+| **基础能力与 API 现状基线** | [01](./01-core-capabilities-and-api.md) |
+| **测试防护网** | [04](./04-testing-strategy-and-scenarios.md) |
+| **ADR 决策与风险登记** | [05](./05-comprehensive-architecture-and-requirements-summary.md)（已从白皮书降级为 ADR 索引） |
+
+* **基线标注约定**：所有能力条目必须标注 `[已有]`（附 file:line 锚点）或 `[待建 M<N>]`——禁止把待建能力写成既有能力（v2.0.0 的核心失真模式）；
+* 对抗性审查记录（4 路子代理独立攻击 + 交叉验证 + 修订索引）：[review-adversarial.md](./review-adversarial.md)；
+* **P0/P1 缺陷追踪底账**（解决方案 + 落点 + 验收，M5 结束全表 ✅ 方可回标 Execution Ready）：[p0-p1-remediation-plan.md](./p0-p1-remediation-plan.md)。
 
 ---
 
@@ -37,7 +54,7 @@
 | 功能维度 | 场景 1：开发环境 (Full Dev) | 场景 2：发布环境 (Pipeline CI) | 场景 3：调试环境 (Portable Debug) |
 | :--- | :--- | :--- | :--- |
 | **运行时依赖** | 系统已安装 Python、Node、AWS CLI 等 | 容器环境，仅保证基础 glibc/musl | **纯静态单二进制，0 外部依赖，即拷即走** |
-| **请求加签与变形** | `@auth` / `@sign` / `@transform` 插件调用 | 纯 Rust 内置宏（`$hmac_sha256`、`$sha256`） | 内置宏优先；外置插件支持声明降级或使用预留 Token |
+| **请求加签与变形** | `@auth` / `@sign` / `@transform` 插件调用 | 纯 Rust 内置宏（`$hmac_sha256`、`$sha256`）`[待建 M1]` | 内置宏优先；外置插件缺失时按 03 §2.1 声明降级（原样 Header 外发 + 三处 WARNING） |
 | **执行顺序控制** | `Prepare` $\to$ `Transform` $\to$ `Sign` 阶段保序 | 纯内置宏确定性执行 | 阶段顺序保证 + 缺失优雅降级 |
 | **CLI 命令扩展** | 注册表双模路由 (`rupost flamegraph`) | 仅调用内置核心子命令 | 离线仅录制产物，不调用外部扩展命令 |
 | **AI 接口预留** | 创作期 `@ai-assert` / 离线黑匣子归因分诊 | 严禁运行期 AI (B0 铁律) | 严禁运行期 AI (B0 铁律) |

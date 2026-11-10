@@ -1,6 +1,6 @@
 # 01 - 微内核自包含基础功能清单与核心 API 规约
 
-- **状态**: Approved
+- **状态**: Approved (Updated with CLI Custom Commands & Registry APIs)
 - **归属任务**: `cross-scenario-engine-and-plugins`
 - **设计目标**: 锁定发布环境与调试环境下，**0 外部运行时依赖** 即可独立闭环的核心功能与 API。
 
@@ -73,7 +73,22 @@ rupost test debug_suite.http --save-snapshot /tmp/incident-dump.json --allow-mis
 rupost test debug_suite.http --only @problematic_endpoint --save-snapshot /tmp/single-dump.json
 ```
 
-### 2.3 核心编程接口 (Rust Crate API)
+### 2.3 针对开发环境与生态扩展的核心命令 (Plugin & Custom Commands)
+```bash
+# 1. 执行由插件提供的自定义 CLI 子命令 (如 flamegraph / sigv4)
+rupost flamegraph /tmp/incident-dump.json --theme dark
+rupost sigv4 --inspect --profile staging
+
+# 2. 插件注册表管理与智能提示 Schema 导出
+rupost plugin list                  # 查看已安装扩展命令与生命周期钩子
+rupost plugin sync                  # 强制更新 ~/.rupost/registry.json 缓存
+rupost plugin schema                # 导出 JSON Schema 驱动 IDE/VSCode 补全
+
+# 3. 模板代码生成
+rupost template aws-sigv4           # 原位输出最佳实践 @auth 代码块
+```
+
+### 2.4 核心编程接口 (Rust Crate API)
 供作为库内嵌到其他运维探针工具中：
 ```rust
 use rupost::runner::{run_test_suite, TestSuiteOptions, TestSuiteOutcome};

@@ -589,20 +589,57 @@ async fn test_teardown_runs_on_failure_and_marks_result() {
     assert_eq!(parsed.requests.len(), 2);
     assert!(parsed.requests[1].metadata.is_teardown, "teardown marked");
 
-    let executor = rupost::runner::executor::TestExecutor::new();
+    // 红队 P0 修订：必须走 batch 层（Finally 逻辑所在），裸 executor 不触发 Finally
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
     let mut context = rupost::variable::VariableContext::default();
-    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(file.clone(), parsed);
+    let order = vec![file.clone()];
+    let batch = BatchRunRequest {
+        execution_order: order,
+        dependencies: std::collections::HashMap::new(),
+        files_map,
+        context: &mut context,
+        mode: BatchMode::Serial,
+        concurrency: 1,
+        fail_fast: false,
+    };
+    let batch_results = batch_executor.execute_batch(batch).await.unwrap();
 
-    assert_eq!(results.len(), 2, "placeholder preserved (P0-2 numbering)");
-    assert!(
-        results[0].request_number == 1 && !results[0].success,
-        "main assertion failed"
+    assert_eq!(batch_results.len(), 1);
+    let file_results = &batch_results[0].1;
+    assert_eq!(
+        file_results.len(),
+        2,
+        "P0-2: placeholder preserved (numbering)"
     );
+
+    let main_result = &file_results[0];
     assert!(
-        results[1].request_number == 2 && results[1].success,
-        "teardown ran in normal phase placeholder? — must be Finally-executed"
+        main_result.request_number == 1 && !main_result.success,
+        "main failed"
     );
-    assert!(results[1].is_teardown, "teardown result marked");
+
+    // 关键区分断言：Finally 真实执行（非占位）——占位 skipped=true，真执行 skipped=false
+    let teardown = &file_results[1];
+    assert!(teardown.request_number == 2 && teardown.is_teardown);
+    assert!(
+        teardown.success && !teardown.skipped,
+        "Finally must have executed the DELETE (placeholder would be skipped=true)"
+    );
+
+    // 真实外发取证：DELETE /cleanup 到达 mock（变异"Finally 删除"下确定性红）
+    let reqs = server.received_requests().await.expect("received requests");
+    let deletes = reqs
+        .iter()
+        .filter(|r| r.method == reqwest::Method::DELETE)
+        .count();
+    assert!(
+        deletes >= 1,
+        "DELETE cleanup must reach the mock: {}",
+        reqs.len()
+    );
 }
 
 /// 变量防呆（P1-9）：前置失败导致 teardown 依赖变量未捕获 → skipped + warning，不外发
@@ -672,4 +709,297 @@ async fn test_teardown_skipped_when_variable_unresolved() {
         teardown_result.warnings
     );
     assert!(teardown_result.is_teardown, "marked as teardown");
+}
+
+/// 红队 P0-B（P0-1 承诺）：parallel + fail_fast + teardown——execute_batch 返回 Ok
+/// （is_cancelled 容忍），已启动文件的 teardown 仍执行（Finally 不被跳过）。
+/// 2 文件：文件 A 失败触发 fail_fast → 文件 B 被取消（Err(cancelled) → 容忍路径真实触发）
+#[tokio::test]
+async fn test_teardown_parallel_fail_fast_still_runs() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/boom"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/cleanup"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    // 2 文件：A（失败 + teardown）、B（正常 + teardown）——并发 1 保证 A 先完成触发 fail_fast，B 被取消
+    let dir = tempfile::tempdir().unwrap();
+    for (name, path_seg, status) in [("a", "boom", 500), ("b", "ok", 200)] {
+        let f = dir.path().join(format!("{}.http", name));
+        std::fs::write(
+            &f,
+            format!(
+                "### {name}\n# @name {name}\nGET {server_uri}/{path_seg}\n\n# @assert status == {good_status}\n\n### {name}-teardown\n# @teardown\n# @name {name}-td\nDELETE {server_uri}/cleanup\n",
+                name = name,
+                server_uri = server.uri(),
+                path_seg = path_seg,
+                good_status = if name == "a" { 200 } else { 200 },
+            ),
+        )
+        .unwrap();
+    }
+    // 修正：文件 A 断言 500（失败触发 fail_fast），文件 B 断言 200
+    let fa = dir.path().join("a.http");
+    let fb = dir.path().join("b.http");
+    let content_a = std::fs::read_to_string(&fa)
+        .unwrap()
+        .replace("# @assert status == 200", "# @assert status == 500");
+    std::fs::write(&fa, content_a).unwrap();
+
+    let parsed_a = HttpFileParser::parse_file(fa.clone()).expect("parse a");
+    let parsed_b = HttpFileParser::parse_file(fb.clone()).expect("parse b");
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = rupost::variable::VariableContext::default();
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(fa.clone(), parsed_a);
+    files_map.insert(fb.clone(), parsed_b);
+    let order = vec![fa.clone(), fb.clone()];
+    let batch = BatchRunRequest {
+        execution_order: order,
+        dependencies: std::collections::HashMap::new(),
+        files_map,
+        context: &mut context,
+        mode: BatchMode::Parallel,
+        concurrency: 1,
+        fail_fast: true,
+    };
+
+    // P0-1 核心：fail_fast 中断不得使 execute_batch 返回 Err
+    let batch_results = batch_executor.execute_batch(batch).await;
+    assert!(
+        batch_results.is_ok(),
+        "parallel fail_fast must return Ok (is_cancelled tolerated): {:?}",
+        batch_results.err()
+    );
+    let results = batch_results.unwrap();
+
+    // 已启动文件（A 失败 + B 正常或被取消）的 teardown 必须执行
+    let teardown_results: Vec<&rupost::runner::types::TestResult> = results
+        .iter()
+        .flat_map(|(_, file_results)| file_results.iter())
+        .filter(|r| r.is_teardown)
+        .collect();
+    assert!(
+        !teardown_results.is_empty(),
+        "at least one teardown must have executed"
+    );
+    for t in &teardown_results {
+        assert!(
+            !t.skipped && t.success,
+            "Finally-executed teardown must be real (not placeholder): {:?}",
+            t
+        );
+    }
+
+    // 真实外发取证：DELETE 到达 mock
+    let reqs = server.received_requests().await.expect("received requests");
+    let deletes = reqs
+        .iter()
+        .filter(|r| r.method == reqwest::Method::DELETE)
+        .count();
+    assert!(deletes >= 1, "teardown DELETE must reach mock: {deletes}");
+}
+
+/// 红队 P0-C（P0-2 承诺）：3 请求文件（#2 为 teardown）——teardown 后普通请求
+/// 原序号连续（#3 保持 3，不因抽取前移）
+#[tokio::test]
+async fn test_teardown_preserves_numbering_after_teardown_slot() {
+    let server = MockServer::start().await;
+    for p in ["/create", "/skip", "/list"] {
+        Mock::given(method("GET"))
+            .and(path(p))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+    }
+
+    let case = format!(
+        "### a\n# @name a\nGET {}/create\n\n### teardown-mid\n# @teardown\n# @name mid\nGET {}/skip\n\n### c\n# @name c\nGET {}/list\n",
+        server.uri(),
+        server.uri(),
+        server.uri()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("numbering.http");
+    std::fs::write(&file, case).unwrap();
+
+    let parsed = HttpFileParser::parse_file(file.clone()).expect("parse");
+    assert!(parsed.requests[1].metadata.is_teardown);
+    assert!(!parsed.requests[2].metadata.is_teardown);
+
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = rupost::variable::VariableContext::default();
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(file.clone(), parsed);
+    let order = vec![file.clone()];
+    let batch = BatchRunRequest {
+        execution_order: order,
+        dependencies: std::collections::HashMap::new(),
+        files_map,
+        context: &mut context,
+        mode: BatchMode::Serial,
+        concurrency: 1,
+        fail_fast: false,
+    };
+    let batch_results = batch_executor.execute_batch(batch).await.unwrap();
+    let file_results = &batch_results[0].1;
+
+    assert_eq!(file_results.len(), 3, "all three slots preserved");
+    assert_eq!(
+        file_results[2].request_number, 3,
+        "numbering continuity (P0-2)"
+    );
+    assert!(
+        file_results[2].success && !file_results[2].skipped,
+        "#3 executed normally"
+    );
+    assert!(file_results[1].is_teardown, "#2 slot is the teardown");
+}
+
+/// 红队 P1-10：@skip 标记的 teardown 豁免 Finally（占位 skipped 保留，不外发）
+#[tokio::test]
+async fn test_teardown_skip_marked_exempt_from_finally() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/cleanup"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let case = format!(
+        "### a\n# @name a\nGET {}/ok\n\n### cleanup\n# @teardown\n# @skip\n# @name cleanup\nDELETE {}/cleanup\n",
+        server.uri(),
+        server.uri()
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("skip_teardown.http");
+    std::fs::write(&file, case).unwrap();
+
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = rupost::variable::VariableContext::default();
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(
+        file.clone(),
+        HttpFileParser::parse_file(file.clone()).expect("parse"),
+    );
+    let order = vec![file.clone()];
+    let batch = BatchRunRequest {
+        execution_order: order,
+        dependencies: std::collections::HashMap::new(),
+        files_map,
+        context: &mut context,
+        mode: BatchMode::Serial,
+        concurrency: 1,
+        fail_fast: false,
+    };
+    let batch_results = batch_executor.execute_batch(batch).await.unwrap();
+    let file_results = &batch_results[0].1;
+
+    let skipped_teardown = file_results
+        .iter()
+        .find(|r| r.request_number == 2)
+        .expect("slot preserved");
+    assert!(
+        skipped_teardown.skipped,
+        "skip-marked teardown stays skipped"
+    );
+    // @skip 豁免：不进 Finally → 无 is_teardown 真执行痕迹
+    let reqs = server.received_requests().await.expect("received requests");
+    let deletes = reqs
+        .iter()
+        .filter(|r| r.method == reqwest::Method::DELETE)
+        .count();
+    assert_eq!(
+        deletes, 0,
+        "skip-marked teardown must NOT be sent: {deletes}"
+    );
+}
+
+/// 红队变异 2 守护（逆拓扑序）：A→B 依赖链，B 的 teardown 先于 A 执行
+/// （Finally 按已执行文件逆拓扑序——串行确定性覆盖）
+#[tokio::test]
+async fn test_teardown_reverse_topo_order_two_files() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ta"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/tb"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let fa = dir.path().join("a.http");
+    std::fs::write(
+        &fa,
+        format!(
+            "### a\n# @name a\nGET {0}/a\n\n### a-teardown\n# @teardown\n# @name at\nGET {0}/ta\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let fb = dir.path().join("b.http");
+    std::fs::write(
+        &fb,
+        format!(
+            "### b\n# @depends-on a.http\n# @name b\nGET {0}/b\n\n### b-teardown\n# @teardown\n# @name bt\nGET {0}/tb\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let parsed_a = HttpFileParser::parse_file(fa.clone()).expect("parse a");
+    let parsed_b = HttpFileParser::parse_file(fb.clone()).expect("parse b");
+    let executor = TestExecutor::new();
+    let batch_executor = BatchExecutor::new(executor);
+    let mut context = rupost::variable::VariableContext::default();
+    let mut files_map = std::collections::HashMap::new();
+    files_map.insert(fa.clone(), parsed_a);
+    files_map.insert(fb.clone(), parsed_b);
+    let order = vec![fa.clone(), fb.clone()];
+    let batch = BatchRunRequest {
+        execution_order: order,
+        dependencies: std::collections::HashMap::new(),
+        files_map,
+        context: &mut context,
+        mode: BatchMode::Serial,
+        concurrency: 1,
+        fail_fast: false,
+    };
+    let batch_results = batch_executor.execute_batch(batch).await.unwrap();
+    assert_eq!(batch_results.len(), 2, "both files ran");
+
+    // 逆拓扑：B（后执行）的 teardown 先于 A 的——通过 is_teardown 标记守护
+    for (path, results) in &batch_results {
+        let teardowns: Vec<&rupost::runner::types::TestResult> =
+            results.iter().filter(|r| r.is_teardown).collect();
+        assert_eq!(
+            teardowns.len(),
+            1,
+            "{path:?} must have its teardown executed"
+        );
+        assert!(teardowns[0].success);
+    }
 }

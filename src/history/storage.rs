@@ -565,4 +565,67 @@ mod tests {
             "{\"hello\":\"world\"}"
         );
     }
+    /// 红队变异 5 守护（P1-11）：is_teardown 结果排除出快照（防 replay 重放 DELETE）
+    #[test]
+    fn test_save_batch_snapshot_excludes_teardown_results() {
+        use crate::http::Response;
+        use crate::runner::types::TestResult;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot_file = dir.path().join("snap.json");
+
+        let resp = Response::new(
+            200,
+            reqwest::header::HeaderMap::new(),
+            "{}".to_string(),
+            Duration::from_millis(5),
+            Duration::from_millis(5),
+            Duration::ZERO,
+        )
+        .unwrap();
+
+        let mut normal = TestResult::success(
+            1,
+            Some("normal".to_string()),
+            "GET".to_string(),
+            "http://x/normal".to_string(),
+            resp.clone(),
+        );
+        normal.request = Some(crate::history::RequestSnapshot {
+            method: "GET".to_string(),
+            url: "http://x/normal".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+            timeout: None,
+        });
+
+        let mut teardown = TestResult::success(
+            2,
+            Some("cleanup".to_string()),
+            "DELETE".to_string(),
+            "http://x/cleanup".to_string(),
+            resp,
+        );
+        teardown.is_teardown = true;
+        teardown.request = None;
+
+        let batch_results = vec![(PathBuf::from("t.http"), vec![normal, teardown])];
+
+        save_batch_snapshot(
+            &batch_results,
+            &["t.http".to_string()],
+            &snapshot_file,
+            false,
+        )
+        .unwrap();
+
+        let suite = read_snapshot_suite(&snapshot_file).unwrap();
+        assert_eq!(
+            suite.entries.len(),
+            1,
+            "teardown result must be excluded from snapshot"
+        );
+        assert_eq!(suite.entries[0].request.url, "http://x/normal");
+    }
 }

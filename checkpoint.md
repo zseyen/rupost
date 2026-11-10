@@ -21,6 +21,7 @@
     * `核心引擎保真与快照黑匣子演进 (Engine Fidelity & Snapshot Schema v2)`：请求体零分配嗅探（`IgnoredAny`，根除加签字典序洗牌）；快照全量强类型网络错误录制（`ExecutionErrorDetail`，Schema v2 平滑兼容）。
     * `全链路测试基建闭环 (Testing Baseline & Guard Suites)`：`ResponseFormatter` Fluent Builder 表驱动单测、TUI 关键动作与守卫直测（`tests/tui_key_actions_test.rs` + `TestBackend`）、Web 原生前端单测。
     * `凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)`：`RedactionPolicy`、R3硬键护栏、TOML级联装配、`@sensitive` / `@no-redact` 指令、stderr审计清单Footer、变量名安全清洗。
+    * `脱敏引擎同构复用与快照回放对称语义纠偏 (Redaction Reuse & Replay Parity)`：提炼 `redact_key_value_pairs` 统一同构引擎（彻底解决 URL Fragment 键值脱敏并杜绝锚点误杀）；修正快照网络错误对称回放比对逻辑；快照异常信息深度脱敏（含 `BARE_AUTH` 正则覆盖孤立 Token）；代码生成接线脱敏策略及配置加载 DRY 统一。
 
 ---
 
@@ -55,3 +56,18 @@
 * **规则双镜像 100% 对齐**: 根目录 `AGENTS.md` 与 `.agents/AGENTS.md` 实现零 diff 字节级一致，作为平台与智能体协作的唯一权威契约。
 * **技能单一事实来源**: 全仓 8 大核心技能（AI 集成、头脑风暴、CLI 美学、前端设计、微内核架构、异步模式、编排调度、TUI 设计）全部收敛于 `.agent/skills/`。
 * **TDD 驱动重构法则**: 遵循 Red-Green-Refactor 三阶段闭环；守护测试必须经受反转生产代码必然变红的验证，杜绝假守护。
+
+---
+
+## 3. 全场景架构与微内核插件体系规划 (Cross-Scenario & Plugin Ecosystem)
+* **最新决策白皮书**: [`doc/plans/2026-11-10-cross-scenario-engine-and-plugins/05-comprehensive-architecture-and-requirements-summary.md`](doc/plans/2026-11-10-cross-scenario-engine-and-plugins/05-comprehensive-architecture-and-requirements-summary.md)
+* **核心架构裁决**:
+  1. **三异构场景适配**: 开发环境（插件最全）、发布环境（单二进制确定性门禁）、调试环境（单二进制即拷即走，离线数据黑匣子保真）。
+  2. **插件技术选型**: 确定采用 **方案 D (Unix Stdio IPC 管道协议)**。零外部 Crate 依赖，二进制不膨胀，语言绝对自由（Python/Node/Go/Shell/Rust）。
+  3. **产物契约与离线深层挖掘**: 现场录制全量失败/超时/网络时序快照（Snapshot v1.0），拷回开发机由富插件离线二次挖掘。
+  4. **阻断性风险防护**: 锁定 Phase 0 决策 A（请求体零拷贝保真与 `raw_body` 保护，防止签名篡改）；锁定快照模型升级（`response: Option<...>` + `error` + `waterfall`）。
+  5. **统一注册表机制 (DeepSeek Harness 模式)**: 引入 `PluginRegistry` 统一管理 CLI 自定义命令、生命周期钩子与离线挖掘器，提供 `<5ms` 的 Manifest 轻量缓存。
+  6. **生命周期顺序控制与友好语法**: 废除生硬底阶语法，确立 `@auth` / `@transform` / `@sign` / `@pipeline` 语义注解，绑定 `Prepare -> Transform -> Sign` 不可逆阶段流与不可变 Patch 链；通过 JSON Schema 驱动 IDE 智能补全。
+  7. **CLI 自定义命令动态路由**: 采用规范命名与双模路由，直通 TTY（支持交互终端与密码输入），100% 穿透退出码，并在 `rupost --help` 优雅聚合 EXTENSIONS 清单。
+  8. **AI 预留接口体系 (AI Integration SPI)**: 严守 `ai-master-roadmap.md` B0~B4 不变量（运行期零 AI），预留脱敏上下文 (`AiContextSPI`)、离线快照分诊 (`AiMinerSPI`)、引擎语法裁决 (`EngineArbiter`) 与 MCP 双向桥梁 (`McpToolBridge`)。
+

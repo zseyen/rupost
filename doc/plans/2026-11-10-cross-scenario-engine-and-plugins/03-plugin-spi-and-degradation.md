@@ -1,15 +1,15 @@
-# 03 - 插件 SPI 体系与环境自愈降级策略
+# 03 - 插件 SPI 体系、统一注册表与生命周期管线规范
 
-- **状态**: Approved
+- **状态**: Approved (Updated with Registry, Ordering, Custom Commands & AI SPI)
 - **归属任务**: `cross-scenario-engine-and-plugins`
-- **核心原则**: **“开发期全能扩展，调试期优雅降级”** —— 插件缺失绝不破坏基础网络请求与数据录制。
+- **核心原则**: **“开发期全能扩展，调试期优雅降级，运行期硬性零 AI，架构级单一事实来源”**
 
 ---
 
 ## 1. 异构环境冲突场景与降级核心矛盾
 
 在真实研发旅程中经常发生以下断裂：
-* 开发者在本地 Mac 上写了测试用例，声明了 `@plugin aws-sigv4`（依赖本地 Python 和 boto3）；
+* 开发者在本地 Mac 上写了测试用例，使用了外部插件（如 `@auth aws-sigv4`，依赖本地 Python 和 boto3）；
 * 生产报警后，运维或开发把这套 `.http` 用例直接扔上了一台极简的 Linux 生产跳板机，使用 `rupost` 单二进制快速排查；
 * **致命矛盾**：如果因为生产机器没有 Python 或没装 `rupost-plugin-aws-sigv4`，`rupost` 就直接 Panic 报错退出，会导致**整个现场排障直接瘫痪**！
 
@@ -20,7 +20,7 @@
 为了让测试用例具备跨环境的自愈能力，`rupost` 提供**两层降级防线**：
 
 ```
-                              [ 执行带有 @plugin 的测试用例 ]
+                              [ 执行带有插件调用的测试用例 ]
                                              │
                                              ▼
                              [ PluginRegistry 本地/PATH 探测 ]
@@ -32,7 +32,7 @@
                       ▼                                             ▼
              [ 执行外部 Stdio IPC 管道 ]              ┌───────────────────────────┐
              计算动态签名，注入 Header                │ 检查降级标志:              │
-                                                      │ 1. @plugin optional=true ?│
+                                                      │ 1. 用例显式 ?optional     │
                                                       │ 2. CLI --allow-missing ?  │
                                                       └─────────────┬─────────────┘
                                                                     │
@@ -45,12 +45,12 @@
              基础功能照常发包，录制完整原始现场至 dump.json
 ```
 
-### 2.1 用例级声明降级：`@plugin <NAME> [optional=true]`
+### 2.1 用例级声明降级：`@auth <NAME> [params] ?optional`
 ```http
 ### 获取受保护的订单详情
 POST https://api.my-cloud.com/v1/orders
 # 开发环境自动调用插件签名；调试环境若无插件，自动跳过插件并不阻断测试
-@plugin aws-sigv4 region=us-east-1 optional=true
+@auth aws-sigv4 region=us-east-1 ?optional
 
 # 配合静态兜底 Header（现场调试时直接使用临时的运维 Token）
 Authorization: Bearer {{DEBUG_FALLBACK_TOKEN}}
@@ -66,17 +66,263 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 ```
 * **行为**：
   * 所有找不到对应二进制的插件调用均被静默降级为“跳过”；
-  * 向最终的测试报告与产物中追加明确警告：
+  * 向最终的测试报告与快照产物中追加明确警告：
     `[Warning] 插件 'aws-sigv4' 未安装，已降级跳过（现场数据已记录至快照）`；
   * 基础请求正常外发，完整的网络时序与响应内容被完整录入快照，保证现场排查任务能够顺利完成。
 
 ---
 
-## 3. 插件通信协议规范 (Stdio IPC Protocol)
+## 3. DeepSeek Harness 统一注册表架构 (PluginRegistry)
+
+借鉴 **DeepSeek Harness**（以及先进基准评测框架）的 Registry 模式，`rupost` 将全系统的插件资产统一收敛至 `PluginRegistry`，作为全系统插件发现、元数据自省、CLI 路由与生命周期的**单一事实来源 (SSOT)**。
+
+```
++----------------------------------------------------------------------------------------------------+
+|                                      统一插件注册表 (PluginRegistry)                                |
++----------------------------------------------------------------------------------------------------+
+|                                                                                                    |
+|    ~/.rupost/registry.json (全局缓存)  +  ./.rupost/registry.json (项目级)  +  $PATH 探测          |
+|                                                                                                    |
+|   ┌────────────────────────────────────────────────────────────────────────────────────────────┐   |
+|   │ 1. CLI Commands 注册表      : 路由 rupost <subcommand> -> 绑定执行入口与 TTY 规则          │   |
+|   │ 2. Lifecycle Hooks 注册表   : 路由 @auth/@sign/@transform -> 绑定 Stage, Priority, Schema  │   |
+|   │ 3. Offline Miners 注册表    : 路由 snapshot.json 离线二次挖掘 -> 绑定分析驱动器            │   |
+|   └────────────────────────────────────────────────────────────────────────────────────────────┘   |
++----------------------------------------------------------------------------------------------------+
+                                      │
+               ┌──────────────────────┴──────────────────────┐
+               ▼                                             ▼
+       [ CLI 顶层分派器 ]                             [ HTTP 运行引擎 ]
+  (rupost flamegraph snapshot.json)                 (@auth aws-sigv4 ...)
+```
+
+### 3.1 插件元数据清单契约 (Plugin Manifest)
+
+任何语言（Python、Node、Go、Shell、Rust）编写的插件均在安装或探测时响应 `--manifest` 命令，输出标准化 JSON：
+
+```json
+{
+  "manifest_version": "1.0",
+  "name": "aws-sigv4",
+  "version": "0.3.1",
+  "description": "AWS Signature Version 4 动态认证与加签插件",
+  "commands": [
+    {
+      "name": "sigv4",
+      "usage": "rupost sigv4 --inspect [options]",
+      "description": "检查并校验本地 AWS 凭据与 STS 状态",
+      "requires_tty": true
+    }
+  ],
+  "hooks": [
+    {
+      "directive": "auth",
+      "alias": "aws-sigv4",
+      "stage": "prepare",
+      "default_priority": 20,
+      "parameters_schema": {
+        "type": "object",
+        "properties": {
+          "region": { "type": "string", "description": "AWS 区域，如 us-east-1" },
+          "service": { "type": "string", "description": "AWS 服务名，如 s3, execute-api" },
+          "profile": { "type": "string", "description": "本地 AWS profile 名称" }
+        },
+        "required": ["region"]
+      }
+    }
+  ],
+  "miners": []
+}
+```
+
+### 3.2 发现与极速轻量缓存机制 (<5ms 启动守护)
+1. **轻量清单缓存**：微内核在扫描到插件后，将 Manifest 缓存于 `~/.rupost/registry.json`（带有可执行文件 `mtime` 指纹校验）；
+2. **零冷启动延迟**：日常运行 `rupost --help`、`rupost test` 或补全时，微内核**仅读取本地 JSON 缓存**，耗时 $\le 5\text{ms}$，绝不在日常运行中轮询启动 Python/Node 插件子进程；
+3. **安全隔离策略**：
+   * `$PATH` 与 `~/.rupost/plugins` 目录下的插件视为全局受信任；
+   * 当前工作区目录 `./.rupost/plugins` 默认处于沙箱警戒状态，必须携带 `--allow-project-plugins` 或在首次交互确认后才允许加载，彻底杜绝恶意仓库的 RCE（远程代码执行）攻击。
+
+---
+
+## 4. 插件友好语法与智能提示 (Directives & IntelliSense)
+
+为了消灭生硬的底层配置感，提升用例编写的流畅度与美感，`rupost` 提供语义化语法糖与 IDE 智能提示机制。
+
+### 4.1 语义化领域语法糖 (Domain Directives)
+
+用户不再书写低级的 `@plugin <name> stage=... priority=...`，而是直接根据业务意图书写领域注解：
+
+| 注解语法 | 归属生命周期 Stage | 典型业务场景 | 示例 |
+| :--- | :--- | :--- | :--- |
+| **`@auth <name> [params]`** | `Prepare` 阶段 (优先级 10~30) | OAuth2 获取 Token、动态鉴权、STS 会话拉取 | `@auth aws-sigv4 region=us-east-1 ?optional` |
+| **`@transform <name> [params]`** | `Transform` 阶段 (优先级 40~60) | 请求体 AES 加密、动态数据格式转换、Gzip 压缩 | `@transform aes-gcm key=env.AES_KEY` |
+| **`@sign <name> [params]`** | `Sign` 阶段 (优先级 70~90) | 报文哈希计算、防篡改签名、支付开放网关加签 | `@sign hmac-sha256 key=env.SECRET` |
+| **`@pipeline a -> b -> c`** | 跨阶段链式编排 | 严格保证多插件时序依赖流转 | `@pipeline oauth2 -> aes-gcm -> aws-sigv4` |
+
+#### 复杂多行参数块（针对长参数场景）
+当插件参数过多时，支持直观的缩进块语法：
+```http
+POST https://api.my-cloud.com/v1/orders
+@use aws-sigv4:
+  region: us-east-1
+  service: execute-api
+  profile: staging
+  optional: true
+
+Content-Type: application/json
+
+{"order_id": 123}
+```
+
+### 4.2 智能提示与补全体系 (IntelliSense Architecture)
+
+```
+                    ┌────────────────────────────┐
+                    │  统一插件注册表 (Registry) │
+                    └─────────────┬──────────────┘
+                                  │ 导出 Schema / 补全定义
+         ┌────────────────────────┼────────────────────────┐
+         ▼                        ▼                        ▼
+【1. VSCode / IDE 扩展】    【2. TUI / Web 工作台】    【3. CLI 交互模板】
+ • JSON Schema 契约关联    • 原位 Tab / @ 补全弹窗    • rupost template
+ • 字段 Hover 说明与校验   • 实时渲染参数占位符       • 终端代码片段即插即用
+```
+
+1. **JSON Schema 导出联动 (`rupost plugin schema`)**：
+   * 注册表聚合所有已安装插件的 `parameters_schema`，输出标准 Schema；
+   * VSCode / IntelliJ 插件加载该 Schema，用户键入 `@auth ` 时，自动提示本地已安装的插件名；
+   * 选中插件后，自动触发 Snippet 展开必填参数（如 `region=${1:us-east-1}`），并在悬浮（Hover）时展示参数释义。
+2. **TUI 与 Web 工作台的原位补全**：
+   * 在 TUI 编辑器（`ratatui-textarea`）和 Web 编辑器中，当用户键入 `@` 字符时，弹窗自动显示候选注解与插件清单。
+3. **CLI 脚手架模板 (`rupost template <name>`)**：
+   * 运行 `rupost template aws-sigv4`，终端原位输出最佳实践代码片段，支持一键追加至当前 `.http` 文件。
+
+---
+
+## 5. 多插件生命周期管线与执行顺序控制规约
+
+### 5.1 顺序控制第一性原理：不可逆单向阶段流
+
+为彻底杜绝“先加签后加密导致签名失效”等逻辑灾难，微内核将生命周期严格划分为**不可逆的阶段（Stages）**：
+
+```
+                              [ 单请求用例触发执行 ]
+                                         │
+    ┌────────────────────────────────────┴────────────────────────────────────┐
+    ▼                                    ▼                                    ▼
+[ 1. Prepare 阶段 ]              [ 2. Transform 阶段 ]                 [ 3. Sign 阶段 ]
+  • OAuth/Token 动态获取           • 请求体/参数动态变形 (AES/压缩)      • 报文摘要与防篡改 (SigV4/HMAC)
+  • Priority: 10~30                • Priority: 40~60                     • Priority: 70~90
+    └────────────────────────────────────┬────────────────────────────────────┘
+                                         ▼
+                             [ 4. 物理网络发送 (Reqwest) ]
+                                         ▼
+    ┌────────────────────────────────────┴────────────────────────────────────┐
+    ▼                                    ▼                                    ▼
+[ 5. Post-Response 阶段 ]         [ 6. On-Failure 阶段 ]               [ 7. Harvest 阶段 ]
+  • 响应报文解密/反脱敏            • 故障时触发 (现场指标增强)           • 离线黑匣子聚合挖掘
+```
+
+### 5.2 仲裁规则 (Arbitration Rules)
+1. **阶段优先原则 (Stage Order)**：
+   无论在 `.http` 文件中的书写顺序如何，`Prepare` 阶段插件必然先于 `Transform` 执行，`Transform` 必然先于 `Sign` 执行；
+2. **阶段内声明保底 (Declaration Order Fallback)**：
+   在同一个 Stage 内，默认严格遵循用户在 `.http` 文件中**从上到下的书写声明顺序**执行；
+3. **权重精细仲裁 (Priority Weighting)**：
+   若需显式干预同一阶段内的次序，可在注解后追加 `priority=<int>`（默认 100，数值越小越靠前）。
+
+### 5.3 纯函数式不可变补丁管道契约 (Immutable Patching Pipeline)
+
+内核在内存中维持请求对象的不可变性，每个插件通过标准 Stdio IPC 接收当前流转的 Context，并输出增量 `PluginPatch`：
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginPatch {
+    /// 增量追加或覆盖的请求头
+    pub extra_headers: Vec<(String, String)>,
+    /// 经变形/加密后的请求体 (若为 None 则保持原样)
+    pub mutated_body: Option<String>,
+    /// 动态回传给测试上下文的局部变量
+    pub set_variables: HashMap<String, String>,
+    /// 非致命警告信息 (录入报告与快照)
+    pub warnings: Vec<String>,
+}
+```
+
+* **链式折叠**：前序插件产生的 Patch 经微内核校验后合入临时上下文中，后续插件能够读取到前序插件产生的变更结果，形成无数据竞争的纯净函数式流水线。
+
+---
+
+## 6. CLI 自定义命令扩展规范 (Custom Commands SPI)
+
+插件不仅能在请求内作为钩子运行，还可以作为子命令无缝扩展 `rupost` CLI。
+
+### 6.1 命名契约与双模动态路由
+* **命名契约**：插件二进制统一遵循 `rupost-plugin-<name>`（推荐）或兼容 `rupost-<name>`；
+* **双模路由流程**：
+  1. 用户在终端执行 `rupost flamegraph snapshot.json --theme dark`；
+  2. Clap 匹配内置子命令（`test`, `mock`, `diagnose`, `tui` 等）；
+  3. 若内置命令未命中，CLI 派发器通过 `PluginRegistry` 查找对应的命令 `flamegraph`；
+  4. 查找到 `rupost-plugin-flamegraph` 后，启动子进程拉起执行。
+
+### 6.2 零损耗 TTY 直通与上下文注入
+* **TTY 独占直通**：直接继承终端的 `stdin`、`stdout`、`stderr`，使外部插件能够原生运行交互式 TUI、密码输入或进度动画；
+* **上下文环境变量注入**：
+  * `RUPOST_WORKSPACE`：当前工作区绝对路径；
+  * `RUPOST_ENV`：当前激活的环境标签（如 `--env staging`）；
+  * `RUPOST_CONFIG_DIR`：配置与插件注册表目录路径；
+* **退出码 100% 穿透**：子进程退出后，微内核将子进程的 Exit Code 作为自身的退出码返回，完全遵守 CI/CD 流水线退出码判定契约。
+
+---
+
+## 7. AI 预留接口体系 (AI Integration SPI)
+
+严格遵循 `doc/plans/archive/2026-q4/2026-10-27-ai-master-roadmap.md` 中的宪法原则（B0~B4 分级、五阶段管线模板），插件注册表为未来的 AI 扩展预留以下四大核心接口：
+
+### 7.1 `AiContextSPI`：安全脱敏上下文提取与注入接口
+AI 插件在排查故障时需要上下文，但严禁泄露生产凭据。微内核保证在将数据推入 AI 管道前，强制经由 `src/ai/redactor.rs` 进行脱敏清洗：
+```rust
+#[async_trait]
+pub trait AiContextProvider: Send + Sync {
+    async fn extract_context(
+        &self,
+        request: &SnapshotRequest,
+        response: Option<&SnapshotResponse>,
+        error: Option<&ExecutionErrorDetail>,
+    ) -> AiSanitizedContext;
+}
+```
+
+### 7.2 `AiMinerSPI`：离线快照黑匣子分诊与归因接口
+对应路线图中的 **E2（失败归因就地化）** 与 **E5（CI 失败聚类 triage）**。
+在离线场景下，AI 插件作为独立的 `Miner` 消费 `snapshot.json`，产出结构化归因建议：
+```rust
+#[async_trait]
+pub trait AiSnapshotMiner: Send + Sync {
+    fn miner_id(&self) -> &str;
+    async fn analyze_snapshot(
+        &self,
+        snapshot: &ExecutionSnapshotFile,
+        options: &MinerOptions,
+    ) -> Result<AiTriageReport>;
+}
+```
+* **B1/B2 兜底机制**：AI 插件不可用（断网、无 Key、超时）时，微内核自动降级为基于状态码和网络时序指标的**确定性机械归因**，绝不崩溃挂起。
+
+### 7.3 `EngineArbiter`：引擎裁决与建议校验接口
+贯彻宪法 **“AI 建议，引擎裁决”**：
+AI 插件生成的任何 `@assert` 表达式、`.http` 报文或 Mock 变体，必须先送入 `EngineArbiter` 进行 AST 语法检查。非法建议立即丢弃并输出警告，绝不污染代码库。
+
+### 7.4 `McpToolBridge`：MCP 模型上下文协议双向桥梁
+在统一注册表的驱动下，所有已注册的插件和内核命令均可一键导出为标准的 MCP (Model Context Protocol) Tools，使 `rupost` 原生充当**“AI Agent 的网络手脚”**。
+
+---
+
+## 8. 通信底层守护 (Stdio IPC Protocol & Guard)
 
 外部插件与微内核通信遵循无死锁、强类型的 JSON 管道规范：
 
-### 3.1 运行时 Signer 协议
+### 8.1 运行时 Signer 协议
 * **输入 (`stdin`)**:
   ```json
   {
@@ -99,6 +345,7 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
   }
   ```
 
-### 3.2 熔断与隔离守护
+### 8.2 熔断与隔离守护
 * **超时硬熔断**：每个插件调用设置默认 5 秒超时，超时后利用 `tokio::process::Command::kill_on_drop(true)` 强制杀死子进程，绝不挂死主测试流；
-* **时延隔离**：插件子进程的启动耗时独立统计为 `plugin_duration_ms`，**绝不混入 HTTP 请求的 `duration` 和 `ttfb`**。
+* **时延隔离**：插件子进程的启动耗时独立统计为 `plugin_duration_us`，**绝不混入 HTTP 请求物理层面的 `duration` 和 `ttfb`**；
+* **大包防死锁**：必须采用 `tokio::join!` 异步双工并发读写，在写入 `stdin` 完成后显式发送 EOF，防止超过 64KB 操作系统管道缓冲区时发生互相等待的永久死锁。

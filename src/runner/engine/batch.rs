@@ -72,13 +72,23 @@ impl BatchExecutor {
                 }
             }
         }
-        // 若有 teardown 被跳标（--only / @skip），一次性提示（P1-10）
-        let skipped_teardown_total: usize = request
+        // 若有 teardown 被跳标（--only / @skip），一次性提示（P1-10：提示不可为死代码）
+        let skip_marked_teardowns: usize = request
             .files_map
             .values()
-            .map(|f| f.requests.iter().filter(|r| r.metadata.is_teardown).count())
+            .map(|f| {
+                f.requests
+                    .iter()
+                    .filter(|r| r.metadata.is_teardown && r.metadata.skip)
+                    .count()
+            })
             .sum();
-        let _ = skipped_teardown_total;
+        if skip_marked_teardowns > 0 {
+            eprintln!(
+                "[i] {} 个 @teardown 请求被跳过（--only 未选中或 @skip 标记）——清理阶段不执行",
+                skip_marked_teardowns
+            );
+        }
 
         match request.mode {
             BatchMode::Parallel => {

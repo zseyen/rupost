@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 
 /// 建立交互式 WS 会话（R6）：编辑器首个请求须为 @websocket；
 /// 快速授权注入 + 变量解析后建连；帧经转发 task 回流既有渲染链路。
-pub(crate) async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
+pub async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Sender<TuiEvent>) {
     if state.is_loading {
         state.last_error = Some("busy: request execution in flight".to_string());
         return;
@@ -18,6 +18,7 @@ pub(crate) async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Send
     }
     let parsed_req = match crate::parser::parse_content(&state.editor_text) {
         Ok(parsed) => parsed.requests.first().cloned(),
+        Err(crate::parser::ParseError::NoRequests) => None,
         Err(e) => {
             state.last_error = Some(format!("HTTP Parser Error: {e}"));
             return;

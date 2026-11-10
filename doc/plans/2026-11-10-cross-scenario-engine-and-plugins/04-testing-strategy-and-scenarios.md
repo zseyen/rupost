@@ -58,17 +58,20 @@
 
 ---
 
-### 测试套件 2：插件缺失与自愈降级验证 (Graceful Degradation Test)
-* **目标**：验证调试环境遇到未安装的插件时，测试流程不崩溃，基础发包与数据记录正常闭环。
+### 测试套件 2：插件缺失、自愈降级与三态门禁验证 (Graceful Degradation & Strict Gate Test)
+* **目标**：验证调试环境遇到未安装的插件时，测试流程不崩溃，基础发包与数据记录正常闭环；同时验证 CI `--strict-plugins` 门禁能拦截降级假阳性。
 * **测试用例实现 (`tests/plugin_degradation_test.rs`)**：
   1. **未声明降级（默认安全拦截）**：
-     - 用例包含 `@plugin non_existent_signer`；
+     - 用例包含 `@sign non_existent_signer`；
      - 未传 `--allow-missing-plugins`；
-     - 断言：返回明确的错误提示（包含搜索过的路径清单），进程非零退出。
-  2. **声明 `optional=true` 或 `--allow-missing-plugins`（优雅自愈）**：
-     - 用例包含 `@plugin non_existent_signer optional=true`；
-     - 断言：测试正常发送请求（使用预设的兜底 Header），测试通过；
+     - 断言：返回明确的错误提示（包含搜索过的路径清单），进程非零退出（Exit Code `1`）。
+  2. **声明 `?optional` 或 `--allow-missing-plugins`（现场排障优雅自愈）**：
+     - 用例包含 `@sign non_existent_signer ?optional`；
+     - 断言：测试正常发送请求（使用预设的兜底 Header），单条结果状态标记为 `ExecutionOutcome::DegradedPass`；
      - 导出的快照 JSON 中，明确包含 Warning：`"插件 'non_existent_signer' 未安装，已降级跳过"`。
+  3. **CI 严格门禁拦截（`--strict-plugins`）**：
+     - 用例包含 `@sign non_existent_signer ?optional`，同时传入 `--strict-plugins`；
+     - 断言：即使 HTTP 响应为 200，因发生插件降级，整体退出码强制为 `1`，阻断假阳性流入生产。
 
 ---
 
@@ -86,13 +89,13 @@
       let snapshot: ExecutionSnapshotFile = serde_json::from_str(&content).unwrap();
 
       // 3. 验证关键性能指标与现场未丢失
-      assert_eq!(snapshot.results[0].status, Some(504));
-      let timing = snapshot.results[0].timing_waterfall.as_ref().unwrap();
+      assert_eq!(snapshot.entries[0].status, Some(504));
+      let timing = snapshot.entries[0].timing_waterfall.as_ref().unwrap();
       assert!(timing.dns_lookup_us > 0);
       assert!(timing.ttfb_us > 4_000_000); // 识别出 4s+ 的 TTFB 瓶颈
 
       // 4. 验证 AI 归因输入适配器能基于该快照提取 FailureContext
-      let ctx = crate::ai::rules::context_from_snapshot_entry(&snapshot.results[0]);
+      let ctx = crate::ai::rules::context_from_snapshot_entry(&snapshot.entries[0]);
       assert!(ctx.error_message.contains("504"));
   }
   ```
@@ -105,6 +108,16 @@
   * 使用 WireMock 监听原始 TCP 字节流；
   * 发送带有换行、多级缩进、以及 `100.00` 尾随零的复杂 JSON；
   * 对比 WireMock 收到的裸字节与输入文本，断言 **MD5 校验和 100% 绝对一致**。
+
+---
+
+### 测试套件 5：插件生命周期顺序、复合键与防死锁守护测试 (`tests/plugin_framework_test.rs`)
+* **目标**：验证阶段不可逆性、同阶段书写行序 FIFO、单插件多阶段复合键注册、带空格引号参数解析及进程管道防死锁。
+* **核心断言覆盖**：
+  1. **阶段不可逆 + 同阶段 FIFO**：乱序声明 `@sign s1`、`@transform t2`、`@auth a1`、`@transform t1`，断言最终执行序列恒为 `[a1, t2, t1, s1]`；
+  2. **复合键 `(plugin_name, stage)` 防覆盖**：单插件同时注册 `@auth` 与 `@sign` 钩子，断言两个阶段钩子均可在 `PluginRegistry` 中独立寻址；
+  3. **带空格引号参数解析**：`@auth oauth2 scope="read:orders write:orders" ?optional` 完整保留 `"read:orders write:orders"`；
+  4. **Header 大小写不敏感 Upsert**：后序插件输出的 `authorization` 覆盖前序 `Authorization` 兜底头，不产生重复 Header。
 
 ---
 

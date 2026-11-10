@@ -85,7 +85,7 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 |                                                                                                    |
 |   ┌────────────────────────────────────────────────────────────────────────────────────────────┐   |
 |   │ 1. CLI Commands 注册表      : 路由 rupost <subcommand> -> 绑定执行入口与 TTY 规则          │   |
-|   │ 2. Lifecycle Hooks 注册表   : 路由 @auth/@sign/@transform -> 绑定 Stage, Priority, Schema  │   |
+|   │ 2. Lifecycle Hooks 注册表   : 复合键 (name, Stage) 路由 @auth/@transform/@sign -> Schema   │   |
 |   │ 3. Offline Miners 注册表    : 路由 snapshot.json 离线二次挖掘 -> 绑定分析驱动器            │   |
 |   └────────────────────────────────────────────────────────────────────────────────────────────┘   |
 +----------------------------------------------------------------------------------------------------+
@@ -119,7 +119,6 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
       "directive": "auth",
       "alias": "aws-sigv4",
       "stage": "prepare",
-      "default_priority": 20,
       "parameters_schema": {
         "type": "object",
         "properties": {
@@ -135,10 +134,13 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 }
 ```
 
-### 3.2 发现与极速轻量缓存机制 (<5ms 启动守护)
-1. **轻量清单缓存**：微内核在扫描到插件后，将 Manifest 缓存于 `~/.rupost/registry.json`（带有文件指纹校验）；
-2. **零冷启动延迟**：日常运行 `rupost --help`、`rupost test` 或补全时，微内核**仅读取本地 JSON 缓存**，耗时 $\le 5\text{ms}$，绝不在日常运行中轮询启动 Python/Node 插件子进程；
-3. **安全隔离策略**：
+### 3.2 发现、复合键索引与极速轻量缓存机制 (<5ms 启动守护)
+1. **复合键无冲突索引 (`(plugin_name, PluginStage)`)**：
+   * 单个插件（如 `aws-sigv4`）可同时提供 `@auth`（`Prepare` 阶段拉取 STS 临时凭据）与 `@sign`（`Sign` 阶段计算请求体签名）多个钩子；
+   * `PluginRegistry` 内部强制使用 `(String, PluginStage)` 复合键（或 `Vec<HookCapability>`）存储钩子，严禁仅以插件名作为单一 Key 导致后注册的 Hook 静默覆盖先注册的 Hook。
+2. **轻量清单缓存**：微内核在扫描到插件后，将 Manifest 缓存于 `~/.rupost/registry.json`（带有文件指纹校验）；
+3. **零冷启动延迟**：日常运行 `rupost --help`、`rupost test` 或补全时，微内核**仅读取本地 JSON 缓存**，耗时 $\le 5\text{ms}$，绝不在日常运行中轮询启动 Python/Node 插件子进程；
+4. **安全隔离策略**：
    * `$PATH` 与 `~/.rupost/plugins` 目录下的插件视为全局受信任；
    * 当前工作区目录 `./.rupost/plugins` 默认处于沙箱警戒状态，必须携带 `--allow-project-plugins` 或在首次交互确认后才允许加载，彻底杜绝恶意仓库的 RCE（远程代码执行）攻击。
 
@@ -164,7 +166,10 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 - **消除魔数与认知负担**：用户无需猜测 `priority=80` 与 `priority=99` 哪个先执行；
 - **消灭解析器顺序依赖 Bug**：彻底避免了扁平解析参数时 `stage` 与 `priority` 互相覆盖的脆弱性。
 
-#### 复杂多行参数块（针对长参数场景）
+#### 引号感知的参数分词器 (Quote-Aware Tokenizer)
+当参数值包含空格（如 OAuth2 `scope="read:orders write:orders"`）时，解析器必须采用引号感知状态机（支持双引号 `"..."` 与单引号 `'...'` 及转义 `\"`），严禁使用裸 `split_whitespace()` 导致带空格的参数值被错误撕裂。
+
+#### 复杂多行参数块（Phase 2 演进规划，针对长参数场景）
 当插件参数过多时，支持直观的缩进块语法：
 ```http
 POST https://api.my-cloud.com/v1/orders
@@ -215,9 +220,9 @@ Content-Type: application/json
                                          │
     ┌────────────────────────────────────┴────────────────────────────────────┐
     ▼                                    ▼                                    ▼
-[ 1. Prepare 阶段 ]              [ 2. Transform 阶段 ]                 [ 3. Sign 阶段 ]
+[ 1. Prepare 阶段 (@auth) ]      [ 2. Transform 阶段 (@transform) ]   [ 3. Sign 阶段 (@sign) ]
   • OAuth/Token 动态获取           • 请求体/参数动态变形 (AES/压缩)      • 报文摘要与防篡改 (SigV4/HMAC)
-  • Priority: 10~30                • Priority: 40~60                     • Priority: 70~90
+  • 阶段内严格按书写行序 (FIFO)     • 阶段内严格按书写行序 (FIFO)         • 阶段内严格按书写行序 (FIFO)
     └────────────────────────────────────┬────────────────────────────────────┘
                                          ▼
                              [ 4. 物理网络发送 (Reqwest) ]
@@ -241,19 +246,27 @@ Content-Type: application/json
 内核在内存中维持请求对象的不可变性，每个插件通过标准 Stdio IPC 接收当前流转的 Context，并输出增量 `PluginPatch`：
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginPatch {
-    /// 增量追加或覆盖的请求头
+    /// 增量追加或大小写不敏感覆盖 (Upsert) 的请求头
+    #[serde(default)]
     pub extra_headers: Vec<(String, String)>,
+    /// 需要显式移除的请求头名称列表 (大小写不敏感匹配)
+    #[serde(default)]
+    pub remove_headers: Vec<String>,
     /// 经变形/加密后的请求体 (若为 None 则保持原样)
+    #[serde(default)]
     pub mutated_body: Option<String>,
     /// 动态回传给测试上下文的局部变量
+    #[serde(default)]
     pub set_variables: HashMap<String, String>,
     /// 非致命警告信息 (录入报告与快照)
+    #[serde(default)]
     pub warnings: Vec<String>,
 }
 ```
 
+* **Header 合并语义 (Case-Insensitive Upsert)**：当后序插件（或插件覆盖请求预留兜底 Header，如 `Authorization`）输出同名 Header 时，`PluginPatch` 按 HTTP 规范执行**大小写不敏感覆盖更新（Upsert）**，并先执行 `remove_headers` 清理，避免产生重复冲突的 `Authorization` 头。
 * **链式折叠**：前序插件产生的 Patch 经微内核校验后合入临时上下文中，后续插件能够读取到前序插件产生的变更结果，形成无数据竞争的纯净函数式流水线。
 
 ---
@@ -327,25 +340,29 @@ AI 插件生成的任何 `@assert` 表达式、`.http` 报文或 Mock 变体，�
 
 外部插件与微内核通信遵循无死锁、强类型的 JSON 管道规范：
 
-### 8.1 运行时 Signer 协议
+### 8.1 运行时 Hook 协议
 * **输入 (`stdin`)**:
   ```json
   {
     "protocol_version": "1.0",
-    "action": "sign",
-    "method": "POST",
-    "url": "https://api.my-cloud.com/v1/orders",
-    "headers": [["Content-Type", "application/json"]],
-    "body": "{\"order_id\": 123}",
-    "plugin_args": {"region": "us-east-1"}
+    "stage": "sign",
+    "plugin": "aws-sigv4",
+    "request": {
+      "method": "POST",
+      "url": "https://api.my-cloud.com/v1/orders",
+      "headers": [["Content-Type", "application/json"]],
+      "body": "{\"order_id\": 123}"
+    },
+    "params": {"region": "us-east-1"}
   }
   ```
-* **输出 (`stdout`)**:
+* **输出 (`stdout` - 直接对应 `PluginPatch` 契约)**:
   ```json
   {
-    "success": true,
     "extra_headers": [["Authorization", "AWS4-HMAC-SHA256 ..."]],
+    "remove_headers": [],
     "mutated_body": null,
+    "set_variables": {},
     "warnings": []
   }
   ```
@@ -399,7 +416,7 @@ DeepSeek Harness (`dsh`) 是由 DeepSeek 官方构建的智能体运行时框架
   使用 Windows `CreateJobObjectW` 并配置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，绑定子进程生命周期，父进程退出时系统自动强杀所有派生进程。
 
 ### 10.3 注册表并发写保护与防幽灵缓存 (Atomic Rename & Hash Fingerprint)
-* **原子重命名覆盖**：刷新 `~/.rupost/registry.json` 时，必须先写入同目录带 PID 的临时文件（`registry.json.tmp.<pid>`），再通过原子重命名（`fs::rename`）覆盖目标文件，杜绝多进程并发踩踏造成的文件损坏；
+* **多进程与多线程原子重命名覆盖**：刷新 `~/.rupost/registry.json` 时，必须先写入同目录带 `PID + 原子递增序号 (AtomicU64)` 的临时文件（`registry.json.tmp.<pid>.<seq>`），再通过原子重命名（`fs::rename`）覆盖目标文件，彻底杜绝多进程及同进程多线程并行测试时的并发踩踏；
 * **极速指纹增强**：缓存校验条件由单纯比对 `mtime` 升级为：
   $$\text{Cache Valid} \iff \text{mtime matches} \land \text{Hash}(\text{First 4KB}) \text{ matches}$$
   彻底避免 1 秒内文件修改造成的“幽灵虚假命中”。

@@ -59,32 +59,59 @@ pub struct ExecutionSnapshotFile {
     pub entries: Vec<ExecutionSnapshotEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionOutcome {
+    /// 全部插件与断言 100% 正常通过
+    Pass,
+    /// 发生可选插件缺失降级跳过，但基础 HTTP 请求与断言通过
+    DegradedPass,
+    /// 断言失败、网络异常或未授权插件缺失
+    Fail,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionSnapshotEntry {
     pub request_number: usize,
     pub name: Option<String>,
     pub file_path: String,
     pub success: bool,
+    pub outcome: ExecutionOutcome,
     pub status: Option<u16>,
-    pub duration_us: u64, // 微秒级总耗时
+    pub duration_us: u64, // 物理网络微秒级总耗时（严格隔离插件冷启动耗时）
+    pub plugin_duration_us: Option<u64>, // 外部插件管道总耗时
 
     /// 1. 原始发包请求镜像 (经过所有加签和变量解析后的最终形态)
     pub request: SnapshotRequest,
 
-    /// 2. 完整原始响应镜像
+    /// 2. 完整原始响应镜像 (支持 256KB 防 OOM 截断保护与 SHA-256 摘要)
     pub response: Option<SnapshotResponse>,
 
-    /// 3. 微秒级细粒度网络时延拆解 (核心性能指标)
+    /// 3. 网络/协议/插件执行错误详情 (确保 DNS 失败或连接超时 100% 留存现场)
+    pub error: Option<ExecutionErrorDetail>,
+
+    /// 4. 微秒级细粒度网络时延拆解 (核心性能指标)
     pub timing_waterfall: Option<TimingWaterfallUs>,
 
-    /// 4. 底层物理网络连接诊断指纹
+    /// 5. 底层物理网络连接诊断指纹
     pub socket_diagnostics: Option<SocketDiagnostics>,
 
-    /// 5. 规则断言结果明细
+    /// 6. 规则断言结果明细
     pub assertions: Vec<SnapshotAssertion>,
 
-    /// 6. 运行期非致命告警 (如降级说明、未定义变量等)
+    /// 7. 运行期非致命告警 (如降级说明、未定义变量等)
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+    /// 若响应体超过 --max-snapshot-body-bytes (默认 256KB)，标记为 true
+    pub body_truncated: bool,
+    /// 截断前完整原始响应体的 SHA-256 校验和，供离线比对验真
+    pub body_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

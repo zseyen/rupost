@@ -50,15 +50,15 @@
 
 ### 2.1 针对发布环境（CI/CD）的核心命令
 ```bash
-# 1. 批处理回归测试，输出标准 JUnit XML 并触发快速熔断
-rupost test ./tests/ --report-file /ci-cache/junit.xml --fail-fast
+# 1. 批处理回归测试，输出标准 JUnit XML 并触发快速熔断（严格门禁：禁止插件降级）
+rupost test ./tests/ --report-file /ci-cache/junit.xml --fail-fast --strict-plugins
 
 # 2. 携带环境变量与文件覆盖
 rupost test suite.http --env staging --var BASE_URL=https://staging.internal.net
 ```
 * **返回码约定**：
-  * `0`：全部用例（含 `@teardown`）100% 通过；
-  * `1`：存在测试断言失败、网络错误或 Teardown 失败；
+  * `0`：全部用例（含 `@teardown`）100% 通过（或在显式开启 `--allow-missing-plugins` 时的 `DegradedPass`）；
+  * `1`：存在测试断言失败、网络错误、Teardown 失败，或在 `--strict-plugins` 下发生插件缺失降级；
   * `2`：命令行参数错误或 AST 语法解析错误。
 
 ### 2.2 针对调试环境（现场排障 / 即拷即走）的核心命令

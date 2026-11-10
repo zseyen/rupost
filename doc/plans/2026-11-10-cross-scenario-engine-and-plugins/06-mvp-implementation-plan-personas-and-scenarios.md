@@ -187,15 +187,15 @@
 
 ### Milestone 1: 核心领域实体与 AST 注解扩展 (Phase 0: Domain & Parser)
 
-* **主要职责**：让 `rupost` 原生识别 `@auth`、`@transform`、`@sign` 与 `?optional`，构建不可变变更实体。
+* **主要职责**：让 `rupost` 原生识别 `@auth`、`@transform`、`@sign` 与 `?optional`，构建不可变变更实体，彻底剥离 `stage=` / `priority=` 等底层调度魔数。
 * **开发任务拆解**：
   1. **Red (单测先行)**：
      - 在 `src/parser/metadata.rs` 对应测试模块中编写表驱动测试 `test_parse_plugin_directives_contract`；
-     - 覆盖：`@auth aws-sigv4 region=us-east-1`、`@sign hmac-sha256 key=env.KEY ?optional`、非法指令拦截；
+     - 覆盖：`@auth aws-sigv4 region=us-east-1`、`@sign hmac-sha256 key=env.KEY ?optional`、带空格引号参数 `scope="read:orders write:orders"`、非法指令拦截；
   2. **Green (实现领域模型)**：
-     - 在 `src/parser/types.rs` 中新增 `PluginDirective`、`PluginStage`（`Prepare`, `Transform`, `Sign`）实体；
+     - 在 `src/plugin/types.rs` 与 `src/parser/types.rs` 中定义 `PluginDirective`、`PluginStage`（`Prepare`, `Transform`, `Sign`）实体；
      - 在 `RequestMetadata` 中扩展 `pub plugins: Vec<PluginDirective>`；
-     - 在 `src/parser/metadata.rs` 中实现 `@auth` / `@transform` / `@sign` 解析并填充到 `RequestMetadata`；
+     - 在 `src/parser/metadata.rs` 中实现引号感知的 `@auth` / `@transform` / `@sign` 解析器并填充到 `RequestMetadata`；
   3. **Refactor & JJ 提交**：
      - 消除重复解析逻辑，执行 `cargo test -p rupost --lib parser` 确保单测全绿；
      - 使用 `jj describe` 提交。
@@ -204,16 +204,17 @@
 
 ### Milestone 2: DeepSeek Harness 统一注册表与 Manifest 引擎 (Phase 1: PluginRegistry)
 
-* **主要职责**：建立插件统一索引、元数据自省模型与轻量高速缓存机制。
+* **主要职责**：建立插件统一索引、复合键 `(plugin_name, stage)` 无冲突映射、元数据自省模型与轻量高速缓存机制。
 * **开发任务拆解**：
   1. **Red (单测先行)**：
-     - 编写测试用例 `test_plugin_manifest_serialization` 与 `test_registry_cache_staleness`；
-     - 验证 Manifest JSON 序列化反序列化；验证基于文件 `mtime` 的高速缓存有效性判定；
+     - 编写测试用例 `test_plugin_manifest_serialization`、`test_registry_multi_hook_composite_key` 与 `test_registry_cache_staleness`；
+     - 验证 Manifest JSON 序列化反序列化；验证同一插件注册多个阶段 Hook 不互相覆盖；验证基于文件 `mtime` + 前 4KB 哈希的高速缓存有效性判定；
   2. **Green (实现注册表核心)**：
-     - 新建模块 `src/runner/engine/plugin/manifest.rs`：定义 `PluginManifest`、`CommandCapability`、`HookCapability`；
-     - 新建模块 `src/runner/engine/plugin/registry.rs`：
+     - 在 `src/plugin/types.rs` 中定义 `PluginManifest`、`CommandCapability`、`HookCapability`；
+     - 在 `src/plugin/registry.rs` 中实现 `PluginRegistry`：
+       - 使用 `(String, PluginStage)` 复合键索引 `hooks`，支持单插件跨阶段挂载；
        - 实现 `PluginRegistry::discover()`：扫描 `$PATH` 与 `~/.rupost/plugins`；
-       - 实现缓存读写：读取/刷新 `~/.rupost/registry.json`（目标耗时 $\le 5\text{ms}$）；
+       - 实现并发安全缓存读写：通过 `registry.json.tmp.<pid>.<seq>` 原子重命名刷新 `~/.rupost/registry.json`（目标耗时 $\le 5\text{ms}$）；
        - 实现安全检查：工作区 `./.rupost/plugins` 必须有 `--allow-project-plugins` 放行；
   3. **Refactor & JJ 提交**：
      - 优化路径归一化，使用 `normalize_posix_path` 保护路径跨平台一致性。
@@ -222,23 +223,23 @@
 
 ### Milestone 3: 顺序仲裁管线与 Stdio IPC 双工驱动器 (Phase 2: Pipeline & IPC Driver)
 
-* **主要职责**：确保插件严格按不可逆阶段保序执行，通过 Stdio IPC 管道安全交互，防死锁防挂死。
+* **主要职责**：确保插件严格按不可逆阶段 + 书写行序 (FIFO) 保序执行，通过 Stdio IPC 管道安全交互，防死锁防挂死。
 * **开发任务拆解**：
   1. **Red (单测先行)**：
      - 编写 Mock 插件脚本（分别模拟正常输出 Patch、写入超 64KB 大报文、运行超过 5s 超时）；
-     - 编写流水线调度单元测试，验证加签插件必然晚于加密插件执行；
+     - 编写流水线调度单元测试，验证加签插件必然晚于加密插件执行，且同阶段内严格保持 `.http` 文件书写行序；
   2. **Green (实现管道驱动与管线编排)**：
-     - 新建模块 `src/runner/engine/plugin/patch.rs`：定义强类型不可变补丁 `PluginPatch`；
-     - 新建模块 `src/runner/engine/plugin/driver.rs`（`StdioDriver`）：
-       - 利用 `tokio::process::Command` 启动子进程；
-       - 使用 `tokio::join!` 并发读写 `stdin` 与 `stdout`；
-       - `stdin` 写完后显式 `shutdown()` 并 drop 发送 EOF；
-       - 配置 5 秒 `kill_on_drop(true)` 超时熔断；
+     - 在 `src/plugin/patch.rs` 中定义强类型不可变补丁 `PluginPatch`（支持 Header 大小写不敏感 Upsert 与 `remove_headers`）；
+     - 新建模块 `src/plugin/driver.rs`（`StdioDriver`）：
+       - 利用 `tokio::process::Command` 启动独立进程组子进程（`process_group(0)`）；
+       - 拆分独立并发 Task 读写 `stdin` 与 `stdout`（限制 10MB 载荷上限）；
+       - `stdin` 写完后显式 `shutdown().await` 并 drop 发送 EOF；
+       - 配置 5 秒进程组 `SIGKILL` 超时熔断；
        - 隔离插件耗时至 `plugin_duration_us`，绝不污染物理网络 TTFB；
-     - 新建模块 `src/runner/engine/plugin/pipeline.rs`（`PluginPipeline`）：
-       - 实现排序仲裁：按 `Stage`（`Prepare` $\to$ `Transform` $\to$ `Sign`）分组，同阶段内按声明顺序 + `priority` 排序；
+     - 在 `src/plugin/pipeline.rs`（`PluginPipeline`）中实现管线编排：
+       - 实现排序仲裁：按 `Stage`（`Prepare` $\to$ `Transform` $\to$ `Sign`）分组，同阶段内严格按声明书写行序（FIFO）执行；
        - 逐级应用 Patch 折叠合并到不可变请求上下文；
-       - 遇到插件缺失时，联动 `?optional` 与 `--allow-missing-plugins` 执行自愈降级；
+       - 遇到插件缺失时，联动 `?optional`、`--allow-missing-plugins` 与 `--strict-plugins` 执行自愈降级或严格门禁拦截；
   3. **Refactor & 接入 Middleware**：
      - 在 `src/runner/executor.rs` 中将 `PluginPipeline` 串入执行链路；
      - 使用 `jj` 原子化提交。

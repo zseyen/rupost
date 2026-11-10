@@ -30,7 +30,7 @@
    - 3.1 Clean Architecture 分层映射
    - 3.2 微内核 7 大自包含基础功能底座
    - 3.3 DeepSeek Harness 统一注册表 (PluginRegistry) 架构
-   - 3.4 插件执行顺序控制体系 (Stage + Priority + Patch) 与友好语法 (IntelliSense)
+   - 3.4 插件执行顺序控制体系 (Stage + FIFO + Patch) 与友好语法 (IntelliSense)
    - 3.5 CLI 自定义命令双模动态路由与 TTY 透传 (Custom Commands SPI)
    - 3.6 AI 预留接口体系 (Context, Miner, Arbiter, MCP Bridge)
    - 3.7 优雅降级与环境自愈协议
@@ -39,7 +39,10 @@
    - 4.2 阻断性风险 2：现场快照静默吞没网络失败/超时请求
    - 4.3 安全模糊点：项目级本地插件恶意执行 (RCE) 防范
    - 4.4 关键技术难点：大包管道并发死锁与插件冷启动时延隔离
-   - 4.5 跨平台路径与 CRLF 换行污染防护
+   - 4.5 孤儿与僵尸进程泄漏防御 (Process Tree Orphan Cleansing)
+   - 4.6 注册表并发写保护与防幽灵缓存 (Atomic Rename & Fast Hash)
+   - 4.7 降级假阳性穿透防御与三态判定模型 (Three-State Outcome)
+   - 4.8 跨平台路径与 Windows Shebang 执行适配
 5. [总结与路线图规划 (Roadmap & Milestones)](#5-总结与路线图规划-roadmap--milestones)
 
 ---
@@ -109,7 +112,7 @@
 | **运行时依赖** | 宿主语言丰富 (Python/Node/Go) | 裸单二进制 (0 外部依赖) | 裸单二进制 (即拷即走) | 静态编译大小 $\le 20\text{MB}$，内存常驻 $\le 30\text{MB}$ |
 | **HTTP 规范解析** | RFC 7230 语法，支持变量插值 | 严格解析，JSON 零拷贝保真 | 严格解析，语法容错并捕获 | 保留原始 JSON 字段顺序与空格格式 (Phase 0) |
 | **请求加签能力** | `@auth` / `@sign` 语义化插件调用 | 纯 Rust 内置通用哈希与 HMAC 宏 | 内置宏优先；外置插件支持降级 | 内置 `$sha256`、`$hmac_sha256` 覆盖 80% 签名 |
-| **执行顺序控制** | `Prepare` $\to$ `Transform` $\to$ `Sign` 阶段流 | 纯宏确定性执行 | 顺序保证 + 缺失降级 | 阶段内按声明顺序，支持 `priority` 微调 |
+| **执行顺序控制** | `Prepare` $\to$ `Transform` $\to$ `Sign` 阶段流 | 纯宏确定性执行 | 顺序保证 + 缺失降级 | 阶段不可逆，同阶段严格按书写行序 (FIFO) 执行 |
 | **自定义命令扩展** | 注册表动态分发 (`rupost flamegraph`) | 不调用扩展命令 | 离线仅录制产物，回传挖掘 | 双模动态路由 + TTY 直通透传 |
 | **AI 接口预留** | 创作期 `@ai-assert` / 离线黑匣子分诊 | 严禁运行期 AI (B0 铁律) | 严禁运行期 AI (B0 铁律) | 四大 SPI 预留，脱敏清洗强制阻断凭据泄露 |
 | **链路时序感知** | 微米级 DNS/TCP/TLS/TTFB 瀑布图 | 汇总平均 TTFB 与慢请求报警 | 逐请求完整录制微米级物理时延 | 记录 DNS、TCP 握手、TLS 握手、首包 TTFB |
@@ -229,8 +232,8 @@
 pub struct PluginRegistry {
     /// 命令路由表: 子命令名 -> 插件元数据
     pub commands: HashMap<String, Arc<CommandCapability>>,
-    /// 注解路由表: 注解名 (如 "auth", "sign") -> 插件钩子定义
-    pub hooks: HashMap<String, Arc<HookCapability>>,
+    /// 注解路由表: 复合键 (插件别名, PluginStage) -> 插件钩子定义 (支持单插件多阶段钩子无冲突共存)
+    pub hooks: HashMap<(String, PluginStage), Arc<HookCapability>>,
     /// 挖掘器路由表: 挖掘器标识 -> 挖掘能力定义
     pub miners: HashMap<String, Arc<MinerCapability>>,
 }
@@ -241,7 +244,7 @@ pub struct PluginRegistry {
 
 ---
 
-### 3.4 插件执行顺序控制体系 (Stage + Priority + Patch) 与友好语法 (IntelliSense)
+### 3.4 插件执行顺序控制体系 (Stage + FIFO + Patch) 与友好语法 (IntelliSense)
 
 #### 1. 语义化领域语法糖
 废除生硬的底层配置注解，转用符合 HTTP 意图的一等公民语法：
@@ -353,7 +356,7 @@ $$\text{Prepare (准备/认证)} \longrightarrow \text{Transform (变形/加密)
 +----------------------------------------------------------------------------------------------------+
 | Phase 1: 注册表体系与生命周期管线调度 (Pipeline Engine)                                             |
 |   - 实现 PluginRegistry 统一注册表与 ~/.rupost/registry.json 轻量缓存 (<5ms)                       |
-|   - 实现 PluginPipeline: Stage 阶段切片与 Priority 仲裁排序                                         |
+|   - 实现 PluginPipeline: Stage 不可逆阶段切片与同阶段书写行序 (FIFO) 稳定排序                       |
 |   - 实现 StdioDriver: Tokio 异步双工、EOF 防死锁与 5s 熔断                                           |
 |   - 声明式降级 (?optional 与 --allow-missing-plugins)                                               |
 +----------------------------------------------------------------------------------------------------+

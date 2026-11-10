@@ -169,6 +169,12 @@ pub struct RequestMetadata {
 
     /// 是否为清理请求（@teardown，M3：常规阶段跳过，Finally 阶段逆拓扑执行）
     pub is_teardown: bool,
+
+    /// 显式声明的敏感键（@sensitive，追加到脱敏策略）
+    pub sensitive_keys: Vec<String>,
+
+    /// 显式声明的豁免键（@no-redact，从脱敏策略中豁免）
+    pub no_redact_keys: Vec<String>,
 }
 
 /// 解析出的元数据指令（中间状态）
@@ -197,6 +203,10 @@ pub enum Metadata {
     Diagnose(bool),
     /// M3：清理请求标记（无参数）
     Teardown,
+    /// 显式声明的敏感键列表（@sensitive）
+    Sensitive(Vec<String>),
+    /// 显式声明的豁免键列表（@no-redact）
+    NoRedact(Vec<String>),
 }
 
 /// 整个文件的解析结果

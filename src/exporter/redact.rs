@@ -148,6 +148,32 @@ impl RedactionPolicy {
         policy
     }
 
+    /// 结合请求级元数据 (@sensitive / @no-redact) 派生新策略（活文档就地标注优先于全局配置）
+    pub fn with_request_metadata(&self, meta: &crate::parser::types::RequestMetadata) -> Self {
+        if meta.sensitive_keys.is_empty() && meta.no_redact_keys.is_empty() {
+            return self.clone();
+        }
+        let mut derived = self.clone();
+        for k in &meta.sensitive_keys {
+            let normalized = k.trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                derived.extra_keys.insert(normalized);
+            }
+        }
+        for k in &meta.no_redact_keys {
+            let normalized = k.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                continue;
+            }
+            if EXACT_KEYS.binary_search(&normalized.as_str()).is_ok() {
+                eprintln!("[warn] 安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！");
+                continue;
+            }
+            derived.ignore_keys.insert(normalized);
+        }
+        derived
+    }
+
     /// 核心判定函数：判断键名是否属于敏感信息
     #[inline]
     pub fn is_sensitive(&self, key: &str) -> bool {
@@ -510,6 +536,26 @@ ignore_keys = ["custom_cursor", "next_token"]
         assert!(masked.contains(r#""page_token":"cursor-abc""#));
         // user_token 未豁免，打码
         assert!(masked.contains(r#""user_token":"[REDACTED]""#));
+    }
+
+    /// Step 4 Red 测试：RedactionPolicy 结合 RequestMetadata 动态派生
+    #[test]
+    fn test_redaction_policy_with_request_metadata() {
+        let base_policy = RedactionPolicy::builtin();
+        let mut meta = crate::parser::types::RequestMetadata::default();
+        meta.sensitive_keys.push("x-app-session".to_string());
+        meta.no_redact_keys.push("custom_cursor".to_string());
+        // 尝试通过标注豁免硬键
+        meta.no_redact_keys.push("authorization".to_string());
+
+        let derived = base_policy.with_request_metadata(&meta);
+
+        // 1. 显式 @sensitive 生效
+        assert!(derived.is_sensitive("X-App-Session"));
+        // 2. 显式 @no-redact 生效
+        assert!(!derived.is_sensitive("custom_cursor"));
+        // 3. 硬键护栏生效，@no-redact 依然无法豁免 authorization
+        assert!(derived.is_sensitive("Authorization"));
     }
 
     #[test]

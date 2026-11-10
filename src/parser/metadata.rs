@@ -33,6 +33,8 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@decoder" => parse_decoder(content).map(Some),
         "@diagnose" => parse_diagnose(content).map(Some),
         "@teardown" => Ok(Some(Metadata::Teardown)),
+        "@sensitive" => parse_key_list(content).map(|keys| Some(Metadata::Sensitive(keys))),
+        "@no-redact" => parse_key_list(content).map(|keys| Some(Metadata::NoRedact(keys))),
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -90,10 +92,26 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         Metadata::Teardown => {
             target.is_teardown = true;
         }
+        Metadata::Sensitive(keys) => {
+            target.sensitive_keys.extend(keys.clone());
+        }
+        Metadata::NoRedact(keys) => {
+            target.no_redact_keys.extend(keys.clone());
+        }
     }
 }
 
 // === 各个解析器实现 ===
+
+/// 解析以逗号或空白字符分隔的键名列表，统一小写化并过滤空项
+fn parse_key_list(content: &str) -> ParseResult<Vec<String>> {
+    let keys: Vec<String> = content
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(keys)
+}
 
 fn parse_diagnose(content: &str) -> ParseResult<Metadata> {
     let value = if content.is_empty() {
@@ -470,5 +488,44 @@ mod tests {
         let mut plain = RequestMetadata::default();
         apply_metadata(&Metadata::Test, &mut plain);
         assert!(!plain.is_teardown);
+    }
+
+    /// Step 4 Red 测试：@sensitive 与 @no-redact 元数据解析与应用
+    #[test]
+    fn test_sensitive_and_no_redact_metadata() {
+        // 1. @sensitive 支持多值逗号与空白分隔，且小写规范化
+        let res = parse_metadata("@sensitive X-Sentry-Key, fastly_key  custom-token")
+            .unwrap()
+            .expect("should parse @sensitive");
+        assert_eq!(
+            res,
+            Metadata::Sensitive(vec![
+                "x-sentry-key".to_string(),
+                "fastly_key".to_string(),
+                "custom-token".to_string()
+            ])
+        );
+
+        // 2. @no-redact 解析与小写规范化
+        let res = parse_metadata("@no-redact next_token, cursor, Page_Token")
+            .unwrap()
+            .expect("should parse @no-redact");
+        assert_eq!(
+            res,
+            Metadata::NoRedact(vec![
+                "next_token".to_string(),
+                "cursor".to_string(),
+                "page_token".to_string()
+            ])
+        );
+
+        // 3. 应用到 RequestMetadata
+        let mut meta = RequestMetadata::default();
+        apply_metadata(&res, &mut meta);
+        assert_eq!(meta.no_redact_keys, vec!["next_token", "cursor", "page_token"]);
+
+        let sensitive_meta = Metadata::Sensitive(vec!["x-secret".to_string()]);
+        apply_metadata(&sensitive_meta, &mut meta);
+        assert_eq!(meta.sensitive_keys, vec!["x-secret"]);
     }
 }

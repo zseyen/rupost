@@ -14,6 +14,10 @@ use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// cookie 持久化失败的统一告警前缀（SSOT：executor/TUI/Drop 三处共用，
+/// 此前三种英文措辞分叉——审查 DRY#8）
+pub const ERR_COOKIE_PERSIST: &str = "cookie 持久化失败";
+
 /// 根据环境名自动重构 Cookie 文件名，实现环境间隔离。
 ///
 /// env 名会直接拼进文件名，因此必须校验：为空、含路径分隔符或 `..` 时会把
@@ -239,7 +243,7 @@ impl Drop for CookieMiddleware {
         // Best effort save on drop
         if matches!(self.mode, CookieMode::AutoPersist) {
             let _ = self.save().map_err(|e| {
-                tracing::warn!("Failed to save cookies on drop: {}", e);
+                tracing::warn!("{}（Drop 兜底）: {}", ERR_COOKIE_PERSIST, e);
             });
         }
     }

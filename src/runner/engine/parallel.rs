@@ -166,7 +166,17 @@ impl<'a> ParallelScheduler<'a> {
 
                     // 7. 计算变量差集增量与 Cookie 导出状态
                     let diff_vars = Self::extract_changed_vars(&base_context, &worker_context);
-                    let my_cookie_state = worker_executor.export_cookie_state();
+                    // 导出失败不得静默（审查 P1）：下游子节点将无前置会话，
+                    // 依赖 cookie 的用例会连锁 401 且难归因
+                    let my_cookie_state =
+                        worker_executor.export_cookie_state().unwrap_or_else(|e| {
+                            tracing::warn!(
+                                "{}: worker cookie 状态导出失败: {}",
+                                crate::middleware::ERR_COOKIE_PERSIST,
+                                e
+                            );
+                            None
+                        });
 
                     // 8. 广播并更新自己的状态给后置子节点
                     let _ = my_sender.send(Some(TaskOutput {
@@ -299,8 +309,11 @@ impl<'a> ParallelScheduler<'a> {
         executor.debug = debug;
         executor.debug_on_failure = debug_on_failure;
 
-        if let Some(state) = cookie_state {
-            let _ = executor.import_cookie_state(state);
+        if let Some(state) = cookie_state
+            && let Err(e) = executor.import_cookie_state(state)
+        {
+            // 与 TUI 侧对齐（此前静默）：导入失败 → 本 worker 无前置会话
+            tracing::warn!("{}: 导入失败: {}", crate::middleware::ERR_COOKIE_PERSIST, e);
         }
         executor
     }
@@ -423,7 +436,7 @@ mod tests {
         );
 
         assert!(executor.has_cookies());
-        let current_state = executor.export_cookie_state().unwrap();
+        let current_state = executor.export_cookie_state().unwrap().unwrap();
         // 应该能重新导出来
         assert!(current_state.to_string().contains("session"));
         assert!(current_state.to_string().contains("abcdef"));

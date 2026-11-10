@@ -154,7 +154,11 @@ impl RedactionAuditLog {
             return Ok(());
         }
 
-        writeln!(writer, "\n[i] Redacted {} credential(s):", self.entries.len())?;
+        writeln!(
+            writer,
+            "\n[i] Redacted {} credential(s):",
+            self.entries.len()
+        )?;
         for entry in &self.entries {
             let scheme_desc = match &entry.scheme {
                 Some(s) => format!("{}, ", s),
@@ -195,10 +199,7 @@ impl RedactionPolicy {
     pub fn builtin() -> Self {
         Self {
             extra_keys: HashSet::new(),
-            ignore_keys: DEFAULT_IGNORE_KEYS
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            ignore_keys: DEFAULT_IGNORE_KEYS.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -223,7 +224,9 @@ impl RedactionPolicy {
             }
             // R3 安全护栏：严禁豁免硬键！
             if EXACT_KEYS.binary_search(&normalized.as_str()).is_ok() {
-                eprintln!("[warn] 安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！");
+                eprintln!(
+                    "[warn] 安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！"
+                );
                 continue;
             }
             policy.ignore_keys.insert(normalized);
@@ -250,7 +253,9 @@ impl RedactionPolicy {
                 continue;
             }
             if EXACT_KEYS.binary_search(&normalized.as_str()).is_ok() {
-                eprintln!("[warn] 安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！");
+                eprintln!(
+                    "[warn] 安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！"
+                );
                 continue;
             }
             derived.ignore_keys.insert(normalized);
@@ -298,8 +303,7 @@ impl RedactionPolicy {
             && matches!(
                 scheme.to_ascii_uppercase().as_str(),
                 "BEARER" | "BASIC" | "DIGEST" | "TOKEN"
-            )
-        {
+            ) {
             (format!("{scheme} [REDACTED]"), Some(scheme))
         } else {
             ("[REDACTED]".to_string(), None)
@@ -388,10 +392,9 @@ impl RedactionPolicy {
                 }
             } else if frag.contains('=') {
                 // OAuth implicit 流形态：#access_token=secret123&state=xyz
-                let pairs: Vec<(String, String)> =
-                    url::form_urlencoded::parse(frag.as_bytes())
-                        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                        .collect();
+                let pairs: Vec<(String, String)> = url::form_urlencoded::parse(frag.as_bytes())
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect();
                 if pairs.iter().any(|(k, _)| self.is_sensitive(k)) {
                     let (redacted_frag, was_changed) = self.redact_key_value_pairs(
                         pairs,
@@ -414,11 +417,8 @@ impl RedactionPolicy {
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         if pairs.iter().any(|(k, _)| self.is_sensitive(k)) {
-            let (new_query, was_changed) = self.redact_key_value_pairs(
-                pairs,
-                RedactionSource::UrlQuery,
-                audit_log,
-            );
+            let (new_query, was_changed) =
+                self.redact_key_value_pairs(pairs, RedactionSource::UrlQuery, audit_log);
             if was_changed {
                 parsed.set_query(Some(&new_query));
                 changed = true;
@@ -440,9 +440,8 @@ impl RedactionPolicy {
     /// 自由文本 URL 掩码
     pub fn redact_free_text(&self, text: &str) -> String {
         static URL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        let re = URL_RE.get_or_init(|| {
-            regex::Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("url regex")
-        });
+        let re = URL_RE
+            .get_or_init(|| regex::Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("url regex"));
         re.replace_all(text, |caps: &regex::Captures| self.redact_url(&caps[0]))
             .into_owned()
     }
@@ -480,9 +479,9 @@ impl RedactionPolicy {
                     })
                     .collect(),
             ),
-            serde_json::Value::Array(items) => {
-                serde_json::Value::Array(items.iter().map(|item| self.mask_json_pii(item)).collect())
-            }
+            serde_json::Value::Array(items) => serde_json::Value::Array(
+                items.iter().map(|item| self.mask_json_pii(item)).collect(),
+            ),
             serde_json::Value::String(s) => serde_json::Value::String(mask_pii(s)),
             other => other.clone(),
         }
@@ -555,8 +554,7 @@ mod tests {
         let spa_masked = redact_url(spa_url);
         assert!(!spa_masked.contains("secret456"));
         assert!(
-            spa_masked.contains("token=%5BREDACTED%5D")
-                || spa_masked.contains("token=[REDACTED]")
+            spa_masked.contains("token=%5BREDACTED%5D") || spa_masked.contains("token=[REDACTED]")
         );
         assert!(spa_masked.contains("role=admin"));
 
@@ -734,11 +732,15 @@ ignore_keys = ["custom_cursor", "next_token"]
     fn test_redact_url_with_custom_policy() {
         let policy = RedactionPolicy::new(["custom_sentry_key"], ["allowed_token"]);
 
-        let url = "https://example.com/api?custom_sentry_key=val1&allowed_token=val2&raw_token=val3";
+        let url =
+            "https://example.com/api?custom_sentry_key=val1&allowed_token=val2&raw_token=val3";
         let masked = policy.redact_url(url);
 
         // custom_sentry_key 必须掩码
-        assert!(masked.contains("custom_sentry_key=%5BREDACTED%5D") || masked.contains("custom_sentry_key=[REDACTED]"));
+        assert!(
+            masked.contains("custom_sentry_key=%5BREDACTED%5D")
+                || masked.contains("custom_sentry_key=[REDACTED]")
+        );
         // allowed_token 被 ignore_keys 豁免，值必须原样保留！
         assert!(masked.contains("allowed_token=val2"));
         // raw_token 未豁免，必须掩码
@@ -799,7 +801,10 @@ ignore_keys = ["custom_cursor", "next_token"]
             "https://api.com/v1?api_key=sk-99999&page=1",
             Some(&mut audit_log),
         );
-        assert!(masked_url.contains("api_key=%5BREDACTED%5D") || masked_url.contains("api_key=[REDACTED]"));
+        assert!(
+            masked_url.contains("api_key=%5BREDACTED%5D")
+                || masked_url.contains("api_key=[REDACTED]")
+        );
 
         // 3. 校验审计日志收集条目
         assert_eq!(audit_log.len(), 2);

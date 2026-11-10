@@ -484,11 +484,16 @@ mod tests {
         let mut req = ParsedRequest::new(1);
         req.method = Some("GET".to_string());
         req.url = "https://api.example.com/items?auth_token=tok123&page=2".to_string();
-        req.headers.push(("Authorization".to_string(), "Bearer secret_abc".to_string()));
-        req.headers.push(("x-custom-secret".to_string(), "secret_xyz".to_string()));
-        req.headers.push(("x-debug-key".to_string(), "keep_this".to_string()));
+        req.headers
+            .push(("Authorization".to_string(), "Bearer secret_abc".to_string()));
+        req.headers
+            .push(("x-custom-secret".to_string(), "secret_xyz".to_string()));
+        req.headers
+            .push(("x-debug-key".to_string(), "keep_this".to_string()));
         // 请求级指令：标记 x-custom-secret 敏感，豁免 x-debug-key
-        req.metadata.sensitive_keys.push("x-custom-secret".to_string());
+        req.metadata
+            .sensitive_keys
+            .push("x-custom-secret".to_string());
         req.metadata.no_redact_keys.push("x-debug-key".to_string());
         file.add_request(req);
 
@@ -511,12 +516,19 @@ mod tests {
 
         let req_out = &output.requests[0];
         // 1. URL 脱敏
-        assert!(req_out.url.contains("auth_token=%5BREDACTED%5D") || req_out.url.contains("auth_token=[REDACTED]"));
+        assert!(
+            req_out.url.contains("auth_token=%5BREDACTED%5D")
+                || req_out.url.contains("auth_token=[REDACTED]")
+        );
         assert!(req_out.url.contains("page=2"));
 
         // 2. Headers 脱敏
-        let headers_map: std::collections::HashMap<_, _> = req_out.headers.iter().cloned().collect();
-        assert_eq!(headers_map.get("Authorization").unwrap(), "Bearer [REDACTED]");
+        let headers_map: std::collections::HashMap<_, _> =
+            req_out.headers.iter().cloned().collect();
+        assert_eq!(
+            headers_map.get("Authorization").unwrap(),
+            "Bearer [REDACTED]"
+        );
         assert_eq!(headers_map.get("x-custom-secret").unwrap(), "[REDACTED]");
         assert_eq!(headers_map.get("x-debug-key").unwrap(), "keep_this");
 

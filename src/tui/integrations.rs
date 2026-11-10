@@ -179,6 +179,6 @@ pub fn persist_cookie_bridge(state: &AppState) {
             .clone()
         && let Err(e) = std::fs::write(path, json.to_string())
     {
-        tracing::warn!("cookie file persist failed: {}", e);
+        tracing::warn!("{}: {}: {}", crate::middleware::ERR_COOKIE_PERSIST, path, e);
     }
 }

@@ -1088,7 +1088,10 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
     assert_eq!(entries.len(), 1, "超时或连接失败请求必须被录入快照黑匣子");
 
     let entry = &entries[0];
-    assert!(entry.get("response").unwrap().is_null(), "response 字段应为 null");
+    assert!(
+        entry.get("response").unwrap().is_null(),
+        "response 字段应为 null"
+    );
 
     let error_obj = entry.get("error").unwrap();
     assert!(error_obj.get("message").is_some());

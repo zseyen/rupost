@@ -13,8 +13,8 @@
 #![allow(clippy::collapsible_if, clippy::result_large_err)]
 
 use futures_util::{SinkExt, StreamExt};
-use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use rupost::tui::event::TuiEvent;
 use rupost::tui::handlers::start_ws_session;
 use rupost::tui::integrations::replay_latest_snapshot;
@@ -173,7 +173,8 @@ async fn test_replay_latest_snapshot_failed_stream_event() {
 
     // 写入一个损坏的 snapshot json 文件
     let snapshot_file = snapshots_dir.join("snapshot_20261110_000000.json");
-    std::fs::write(&snapshot_file, "{ corrupted json without proper fields ").expect("write corrupted snapshot");
+    std::fs::write(&snapshot_file, "{ corrupted json without proper fields ")
+        .expect("write corrupted snapshot");
 
     let mut state = AppState::new();
     state.workspace_root = temp_dir.path().to_path_buf();

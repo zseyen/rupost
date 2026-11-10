@@ -88,7 +88,18 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         if resolved.exists() {
             let file = std::fs::File::open(&resolved)?;
             let reader = std::io::BufReader::new(file);
-            cookie_store::serde::json::load_all(reader).ok()
+            // 文件存在即意图（#6 同语义）：JSON 损坏必须可见——导出的命令
+            // 将缺失 cookie 注入，静默会让粘贴方拿到必然 401 的命令
+            match cookie_store::serde::json::load_all(reader) {
+                Ok(store) => Some(store),
+                Err(e) => {
+                    eprintln!(
+                        "[!] cookie 文件 '{}' 解析失败，导出命令将不含 cookie 注入: {e}",
+                        resolved.display()
+                    );
+                    None
+                }
+            }
         } else {
             None
         }

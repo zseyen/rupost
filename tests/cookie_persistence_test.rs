@@ -267,3 +267,14 @@ async fn test_serial_persists_while_batch_still_running() {
          while the batch is still blocked on file B"
     );
 }
+
+/// 审查 P1：导出语义三分——未启用 cookie → Ok(None)（非错误），
+/// 启用但序列化失败 → Err（此前 `.ok()` 把两者混同导致落盘链静默跳过）
+#[test]
+fn test_export_cookie_state_none_when_disabled() {
+    let executor = rupost::runner::TestExecutor::new();
+    assert!(
+        executor.export_cookie_state().unwrap().is_none(),
+        "未启用 cookie 应返回 Ok(None) 而非 Err"
+    );
+}

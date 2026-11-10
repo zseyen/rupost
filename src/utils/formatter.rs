@@ -206,11 +206,7 @@ mod tests {
                 status: 200,
                 body: r#"{"status":"ready"}"#.to_string(),
                 color: false,
-                expected_fragments: vec![
-                    "HTTP 200 OK",
-                    "Time: 125ms",
-                    "\"status\": \"ready\"",
-                ],
+                expected_fragments: vec!["HTTP 200 OK", "Time: 125ms", "\"status\": \"ready\""],
                 unexpected_fragments: vec!["Body:", "Headers:"],
             },
             Case {
@@ -218,11 +214,7 @@ mod tests {
                 status: 404,
                 body: "A".repeat(250),
                 color: false,
-                expected_fragments: vec![
-                    "HTTP 404 Not Found",
-                    "Time: 125ms",
-                    "Body: 250 bytes",
-                ],
+                expected_fragments: vec!["HTTP 404 Not Found", "Time: 125ms", "Body: 250 bytes"],
                 unexpected_fragments: vec!["AAAAA"],
             },
             Case {
@@ -230,10 +222,7 @@ mod tests {
                 status: 500,
                 body: "Invalid {JSON} syntax".to_string(),
                 color: false,
-                expected_fragments: vec![
-                    "HTTP 500 Internal Server Error",
-                    "Invalid {JSON} syntax",
-                ],
+                expected_fragments: vec!["HTTP 500 Internal Server Error", "Invalid {JSON} syntax"],
                 unexpected_fragments: vec!["Body:"],
             },
         ];

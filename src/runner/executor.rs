@@ -103,11 +103,14 @@ impl TestExecutor {
         self.cookie_middleware.is_some()
     }
 
-    /// 导出当前执行器的 Cookie 状态为 JSON Value (如果启用了 Cookie)
-    pub fn export_cookie_state(&self) -> Option<serde_json::Value> {
-        self.cookie_middleware
-            .as_ref()
-            .and_then(|mw| mw.export_cookie_state().ok())
+    /// 导出当前执行器的 Cookie 状态为 JSON Value。
+    /// 未启用 cookie → Ok(None)；启用但序列化失败 → Err（审查 P1：此前 `.ok()`
+    /// 把序列化失败与"未启用"混同，调用方静默跳过落盘/传递）
+    pub fn export_cookie_state(&self) -> Result<Option<serde_json::Value>> {
+        match self.cookie_middleware.as_ref() {
+            Some(mw) => Ok(Some(mw.export_cookie_state()?)),
+            None => Ok(None),
+        }
     }
 
     /// 将 Cookie 状态导入到当前的执行器中
@@ -125,7 +128,7 @@ impl TestExecutor {
         if let Some(mw) = &self.cookie_middleware
             && let Err(e) = mw.save()
         {
-            tracing::warn!("Failed to persist cookies: {}", e);
+            tracing::warn!("{}: {}", crate::middleware::ERR_COOKIE_PERSIST, e);
         }
     }
 

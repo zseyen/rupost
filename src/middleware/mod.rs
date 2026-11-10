@@ -6,7 +6,7 @@
 mod cookie;
 pub mod routing;
 
-pub use cookie::{CookieMiddleware, CookieMode, resolve_cookie_path};
+pub use cookie::{CookieMiddleware, CookieMode, ERR_COOKIE_PERSIST, resolve_cookie_path};
 pub use routing::{RoutingMiddleware, RoutingRule};
 use std::future::Future;
 

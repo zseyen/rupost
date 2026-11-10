@@ -154,3 +154,35 @@ x-api-key-safe: open_safe_key
     // 导出的脚本本身纯净，不含审计 footer 注释
     assert!(!content.contains("[i] Redacted"));
 }
+
+/// 审查 P1：`--cookie-file` 存在但 JSON 损坏 → stderr 告警 + 导出继续
+/// （文件存在即意图；静默会让粘贴方拿到必然 401 的命令且无从归因）
+#[test]
+fn test_export_corrupt_cookie_file_warns_but_exports() {
+    let dir = tempfile::tempdir().unwrap();
+    let bad_cookie = dir.path().join("bad_cookies.json");
+    std::fs::write(&bad_cookie, "{ not valid json [[[").unwrap();
+    let case = dir.path().join("api.http");
+    std::fs::write(&case, "###\nGET http://127.0.0.1:1/api\n").unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "export",
+            "curl",
+            case.to_str().unwrap(),
+            "--cookie-file",
+            bad_cookie.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("解析失败") && stderr.contains("cookie"),
+        "损坏 cookie 必须告警: {stderr}"
+    );
+    // 导出本身照常完成（stdout 有 curl 命令，exit 0）
+    assert!(out.status.success(), "告警后导出应继续: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("curl"), "导出命令应照常产出: {stdout}");
+}

@@ -239,7 +239,6 @@ impl ReplayExecutor {
 
         let start = Instant::now();
 
-
         // 2. 还原 Request（失败落条目，不再 Err 分叉）
         let req = match Self::restore_request(entry, &target_url) {
             Ok(req) => req,

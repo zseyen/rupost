@@ -182,25 +182,35 @@ impl WsRunner {
                     resolved_payload.clone().into_bytes(),
                     0,
                 );
-                let _ = client.send_frame(outbound_frame).await;
-                let ts = chrono::Local::now().format("%H:%M:%S").to_string();
-                let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
-                accumulated_log.push(log_line.trim_end().to_string());
-                if let Err(e) = write_log_with_limit(&log_path, &log_line, max_bytes).await {
-                    if !ws_log_write_failed {
-                        ws_log_write_failed = true;
-                        capture_warnings.push(format!(
-                            "WS 流式日志 '{}' 写入失败，数据未落盘: {e}",
-                            log_path.display()
-                        ));
-                    }
-                }
+                // 审查 P1：发送失败不得静默（此前静默且日志已记 [→] SEND，
+                // 日志与事实不符）——告警一次并跳过日志/事件
+                match client.send_frame(outbound_frame).await {
+                    Ok(()) => {
+                        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                        let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
+                        accumulated_log.push(log_line.trim_end().to_string());
+                        if let Err(e) = write_log_with_limit(&log_path, &log_line, max_bytes).await
+                        {
+                            if !ws_log_write_failed {
+                                ws_log_write_failed = true;
+                                capture_warnings.push(format!(
+                                    "WS 流式日志 '{}' 写入失败，数据未落盘: {e}",
+                                    log_path.display()
+                                ));
+                            }
+                        }
 
-                if let Some(ref sender) = stream_sender {
-                    let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
-                        is_send: true,
-                        content: resolved_payload,
-                    });
+                        if let Some(ref sender) = stream_sender {
+                            let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                                is_send: true,
+                                content: resolved_payload,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        // live 模式仅此一次发包，无需 once 闸门
+                        capture_warnings.push(format!("WS 发送失败，帧未发出: {e}"));
+                    }
                 }
             }
 

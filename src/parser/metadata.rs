@@ -522,7 +522,10 @@ mod tests {
         // 3. 应用到 RequestMetadata
         let mut meta = RequestMetadata::default();
         apply_metadata(&res, &mut meta);
-        assert_eq!(meta.no_redact_keys, vec!["next_token", "cursor", "page_token"]);
+        assert_eq!(
+            meta.no_redact_keys,
+            vec!["next_token", "cursor", "page_token"]
+        );
 
         let sensitive_meta = Metadata::Sensitive(vec!["x-secret".to_string()]);
         apply_metadata(&sensitive_meta, &mut meta);

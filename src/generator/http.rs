@@ -447,9 +447,18 @@ mod tests {
     #[test]
     fn test_var_name_from_key_sanitization() {
         assert_eq!(HttpGenerator::var_name_from_key("X-Api-Key"), "x_api_key");
-        assert_eq!(HttpGenerator::var_name_from_key("Authorization"), "authorization");
-        assert_eq!(HttpGenerator::var_name_from_key("---X--Api--Key---"), "x_api_key");
-        assert_eq!(HttpGenerator::var_name_from_key("api.token.secret"), "api_token_secret");
+        assert_eq!(
+            HttpGenerator::var_name_from_key("Authorization"),
+            "authorization"
+        );
+        assert_eq!(
+            HttpGenerator::var_name_from_key("---X--Api--Key---"),
+            "x_api_key"
+        );
+        assert_eq!(
+            HttpGenerator::var_name_from_key("api.token.secret"),
+            "api_token_secret"
+        );
         assert_eq!(HttpGenerator::var_name_from_key("---$$$---"), "secret");
         assert_eq!(HttpGenerator::var_name_from_key(""), "secret");
     }
@@ -490,8 +499,10 @@ mod tests {
         };
 
         // 自定义策略：把 x-custom-signature 和 x-tenant-token 加入 extra_keys
-        let policy = RedactionPolicy::new(["x-custom-signature", "x-tenant-token"], Vec::<&str>::new());
-        let (output, vars) = HttpGenerator::generate_with_policy(&[entry], false, Some(&policy)).unwrap();
+        let policy =
+            RedactionPolicy::new(["x-custom-signature", "x-tenant-token"], Vec::<&str>::new());
+        let (output, vars) =
+            HttpGenerator::generate_with_policy(&[entry], false, Some(&policy)).unwrap();
 
         // 验证 Header 与 Query 中的自定义凭据均被模板化
         assert!(output.contains("x-custom-signature: {{x_custom_signature}}"));

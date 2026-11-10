@@ -72,7 +72,41 @@ impl Default for RedactionPolicy {
     }
 }
 
+#[derive(Debug, serde::Deserialize, Default)]
+struct TomlRootForRedaction {
+    #[serde(default)]
+    export: Option<TomlExportForRedaction>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct TomlExportForRedaction {
+    #[serde(default)]
+    redaction: Option<TomlRedactionConfig>,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct TomlRedactionConfig {
+    #[serde(default)]
+    extra_keys: Vec<String>,
+    #[serde(default)]
+    ignore_keys: Vec<String>,
+}
+
 impl RedactionPolicy {
+    /// 从 TOML 配置字符串解析装配 [export.redaction] 规则
+    pub fn from_toml_str(toml_str: &str) -> Result<Self, String> {
+        let root: TomlRootForRedaction = toml::from_str(toml_str)
+            .map_err(|e| format!("Failed to parse [export.redaction] config: {e}"))?;
+
+        if let Some(export) = root.export
+            && let Some(redaction) = export.redaction
+        {
+            Ok(Self::new(redaction.extra_keys, redaction.ignore_keys))
+        } else {
+            Ok(Self::builtin())
+        }
+    }
+
     /// 获取内核内置默认策略
     pub fn builtin() -> Self {
         Self {
@@ -201,6 +235,57 @@ impl RedactionPolicy {
             parsed.into()
         } else {
             raw_url.to_string()
+        }
+    }
+
+    /// 自由文本 URL 掩码
+    pub fn redact_free_text(&self, text: &str) -> String {
+        static URL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re = URL_RE.get_or_init(|| {
+            regex::Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("url regex")
+        });
+        re.replace_all(text, |caps: &regex::Captures| self.redact_url(&caps[0]))
+            .into_owned()
+    }
+
+    /// 快照 body 掩码：支持注入定制策略，豁免无需打码的字段
+    pub fn mask_body_secrets(&self, body: &str) -> String {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        if (trimmed.starts_with('{') || trimmed.starts_with('['))
+            && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+        {
+            let out = self.mask_json_pii(&val);
+            serde_json::to_string(&out).unwrap_or_else(|_| trimmed.to_string())
+        } else {
+            mask_pii(&mask_inline_secrets(&self.redact_free_text(trimmed)))
+        }
+    }
+
+    /// JSON 掩码变体：敏感键 `[REDACTED]` 之外，普通字符串叶子上的 PII 也打码
+    pub fn mask_json_pii(&self, val: &serde_json::Value) -> serde_json::Value {
+        match val {
+            serde_json::Value::Object(map) => serde_json::Value::Object(
+                map.iter()
+                    .map(|(k, v)| {
+                        if self.is_sensitive(k) {
+                            (
+                                k.clone(),
+                                serde_json::Value::String("[REDACTED]".to_string()),
+                            )
+                        } else {
+                            (k.clone(), self.mask_json_pii(v))
+                        }
+                    })
+                    .collect(),
+            ),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(|item| self.mask_json_pii(item)).collect())
+            }
+            serde_json::Value::String(s) => serde_json::Value::String(mask_pii(s)),
+            other => other.clone(),
         }
     }
 }
@@ -380,6 +465,53 @@ mod tests {
         assert!(!policy.is_sensitive("  Next_Page_Cursor  "));
     }
 
+    /// Step 3 Red 测试：从 TOML 字符串解析装配 RedactionPolicy
+    #[test]
+    fn test_redaction_policy_from_toml() {
+        let toml_str = r#"
+[export.redaction]
+extra_keys = ["x-sentry-key", "fastly-key"]
+ignore_keys = ["custom_cursor", "next_token"]
+"#;
+        let policy = RedactionPolicy::from_toml_str(toml_str).expect("parse toml failed");
+
+        assert!(policy.is_sensitive("X-Sentry-Key"));
+        assert!(policy.is_sensitive("fastly-key"));
+        assert!(!policy.is_sensitive("custom_cursor"));
+        assert!(!policy.is_sensitive("next_token"));
+    }
+
+    /// Step 3 Red 测试：自定义 Policy 驱动 URL Query 脱敏
+    #[test]
+    fn test_redact_url_with_custom_policy() {
+        let policy = RedactionPolicy::new(["custom_sentry_key"], ["allowed_token"]);
+
+        let url = "https://example.com/api?custom_sentry_key=val1&allowed_token=val2&raw_token=val3";
+        let masked = policy.redact_url(url);
+
+        // custom_sentry_key 必须掩码
+        assert!(masked.contains("custom_sentry_key=%5BREDACTED%5D") || masked.contains("custom_sentry_key=[REDACTED]"));
+        // allowed_token 被 ignore_keys 豁免，值必须原样保留！
+        assert!(masked.contains("allowed_token=val2"));
+        // raw_token 未豁免，必须掩码
+        assert!(!masked.contains("raw_token=val3"));
+    }
+
+    /// Step 3 Red 测试：自定义 Policy 驱动 JSON Body 字段脱敏
+    #[test]
+    fn test_mask_body_secrets_with_custom_policy() {
+        let policy = RedactionPolicy::new(["internal_device_id"], ["page_token"]);
+
+        let body = r#"{"internal_device_id":"dev-999","page_token":"cursor-abc","user_token":"secret-xyz"}"#;
+        let masked = policy.mask_body_secrets(body);
+
+        assert!(masked.contains(r#""internal_device_id":"[REDACTED]""#));
+        // page_token 豁免，原样保留
+        assert!(masked.contains(r#""page_token":"cursor-abc""#));
+        // user_token 未豁免，打码
+        assert!(masked.contains(r#""user_token":"[REDACTED]""#));
+    }
+
     #[test]
     fn test_redact_header_value_bearer() {
         assert_eq!(
@@ -450,56 +582,14 @@ pub fn mask_pii(text: &str) -> String {
     phone.replace_all(&s, "${1}***${2}").into_owned()
 }
 
-/// 快照 body 掩码（无截断——分享面要求内容完整、仅值打码）：
-/// JSON：敏感键值 `[REDACTED]`（复用 redact_json_value 语义）+ 字符串叶子 PII 掩码；
-/// 非 JSON：内联键值凭据 + URL query + PII。
+/// 快照 body 掩码（全局默认内置策略）
 pub fn mask_body_secrets(body: &str) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if (trimmed.starts_with('{') || trimmed.starts_with('['))
-        && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
-    {
-        let out = mask_json_pii(&val);
-        serde_json::to_string(&out).unwrap_or_else(|_| trimmed.to_string())
-    } else {
-        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
-    }
+    RedactionPolicy::builtin().mask_body_secrets(body)
 }
 
-/// JSON 掩码变体：敏感键 `[REDACTED]` 之外，普通字符串叶子上的 PII 也打码
-fn mask_json_pii(val: &serde_json::Value) -> serde_json::Value {
-    match val {
-        serde_json::Value::Object(map) => serde_json::Value::Object(
-            map.iter()
-                .map(|(k, v)| {
-                    if is_sensitive_key(k) {
-                        (
-                            k.clone(),
-                            serde_json::Value::String("[REDACTED]".to_string()),
-                        )
-                    } else {
-                        (k.clone(), mask_json_pii(v))
-                    }
-                })
-                .collect(),
-        ),
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(mask_json_pii).collect())
-        }
-        serde_json::Value::String(s) => serde_json::Value::String(mask_pii(s)),
-        other => other.clone(),
-    }
-}
-
-/// 自由文本 URL 掩码（自 ai/redactor 下沉：掩码原语统一归 exporter/redact，ai 侧 re-export）
+/// 自由文本 URL 掩码（全局默认内置策略）
 pub fn redact_free_text(text: &str) -> String {
-    static URL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re =
-        URL_RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("url regex"));
-    re.replace_all(text, |caps: &regex::Captures| redact_url(&caps[0]))
-        .into_owned()
+    RedactionPolicy::builtin().redact_free_text(text)
 }
 
 /// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` 形态

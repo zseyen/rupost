@@ -19,6 +19,41 @@ impl ConfigLoader {
         toml::from_str(&content).map_err(|e| format!("Failed to parse config file: {}", e))
     }
 
+    /// 查找配置文件物理路径（查找顺序：当前目录 -> 父目录递归 -> ~/.config/rupost/）
+    pub fn find_config_path() -> Option<std::path::PathBuf> {
+        if let Ok(mut current) = std::env::current_dir() {
+            loop {
+                let config_path = current.join(Self::CONFIG_FILE);
+                if config_path.exists() {
+                    return Some(config_path);
+                }
+                if !current.pop() {
+                    break;
+                }
+            }
+        }
+
+        let home = dirs::home_dir()?;
+        let user_path = home.join(".config").join("rupost").join(Self::CONFIG_FILE);
+        if user_path.exists() {
+            Some(user_path)
+        } else {
+            None
+        }
+    }
+
+    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
+    pub fn find_and_load_redaction_policy() -> crate::exporter::redact::RedactionPolicy {
+        if let Some(path) = Self::find_config_path()
+            && let Ok(content) = fs::read_to_string(path)
+            && let Ok(policy) = crate::exporter::redact::RedactionPolicy::from_toml_str(&content)
+        {
+            policy
+        } else {
+            crate::exporter::redact::RedactionPolicy::builtin()
+        }
+    }
+
     /// 查找并加载配置文件
     /// 查找顺序：
     /// 1. 当前目录
@@ -298,5 +333,13 @@ base_url = "http://localhost:8080"
         );
 
         assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
+    }
+
+    #[test]
+    fn test_find_and_load_redaction_policy_fallback() {
+        // 未提供配置文件时，应回退至内置默认策略，且游标默认豁免
+        let policy = ConfigLoader::find_and_load_redaction_policy();
+        assert!(policy.is_sensitive("Authorization"));
+        assert!(!policy.is_sensitive("next_token"));
     }
 }

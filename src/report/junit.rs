@@ -22,6 +22,14 @@ fn strip_ansi(text: &str) -> String {
     re.replace_all(&stripped, "").into_owned()
 }
 
+/// 执行主机名取值链：`RUPOST_RUN_HOST` env（CI 显式注入）> `HOSTNAME` env
+/// （Linux shell 常见）> 空串兜底（零新依赖；macOS 无 HOSTNAME env 属预期）
+fn execution_hostname() -> String {
+    std::env::var("RUPOST_RUN_HOST")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_default()
+}
+
 /// JUnit 顶层 `<testsuites>`
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename = "testsuites")]
@@ -36,6 +44,12 @@ pub struct JUnitTestSuites {
     pub skipped: usize,
     #[serde(rename = "@time")]
     pub time: String,
+    /// 聚合时间锚点（RFC3339）——CI 平台按此归档/跨构建比对（走查缺口 #3）
+    #[serde(rename = "@timestamp")]
+    pub timestamp: String,
+    /// 执行主机名（区分 runner 节点；`RUPOST_RUN_HOST` > `HOSTNAME` env > 空串兜底）
+    #[serde(rename = "@hostname")]
+    pub hostname: String,
     #[serde(rename = "testsuite")]
     pub suites: Vec<JUnitTestSuite>,
 }
@@ -230,6 +244,8 @@ impl JUnitTestSuites {
             errors,
             skipped,
             time: secs(total_ms),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            hostname: execution_hostname(),
             suites,
         }
     }
@@ -246,6 +262,22 @@ impl JUnitTestSuites {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_execution_hostname_prefers_explicit_env() {
+        // 取值链：RUPOST_RUN_HOST > HOSTNAME > 空串（CI 显式注入优先）
+        unsafe {
+            std::env::set_var("RUPOST_RUN_HOST", "ci-node-7");
+        }
+        assert_eq!(super::execution_hostname(), "ci-node-7");
+        unsafe {
+            std::env::remove_var("RUPOST_RUN_HOST");
+        }
+        // 移除后回落：HOSTNAME 存在则取之，否则空串（两种环境都合法）
+        let fallback = super::execution_hostname();
+        let expected = std::env::var("HOSTNAME").unwrap_or_default();
+        assert_eq!(fallback, expected);
+    }
     use super::*;
     use crate::report::json::{JsonAssertionReport, JsonTestReport};
 

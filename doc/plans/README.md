@@ -102,7 +102,12 @@ doc/plans/
 ├── progress_summary.md            # [长青 SSOT] 项目唯一的进度事实来源
 ├── future_backlog.md              # [长青待办] 统一需求与技术债务池
 ├── rupost_product_strategy.md     # [长青战略] 产品战略与竞争定位
-├── active/                        # [当前活跃] 正在进行设计评审与实现的最新方案
+├── 2026-11-10-redaction-extensibility-prd.md                  # [当前活跃] 凭据脱敏判定可扩展性与掩码可读性 PRD
+├── 2026-11-10-redaction-extensibility-implementation-plan.md  # [当前活跃] 脱敏扩展性技术实施方案与盲区攻坚
+├── active/                        # [当前活跃] 正在进行设计评审与实现的方案集
+│   ├── 2026-11-09-full-scenario-architecture-review-and-roadmap.md
+│   ├── 2026-11-09-implementation-plan-milestones-1-to-3.md
+│   ├── 2026-11-09-plugin-architecture-and-extensibility-plan.md
 │   ├── 2026-11-06-web-ui-md-editor-prd.md
 │   └── 2026-11-06-web-ui-technical-proposal.md
 └── archive/                       # [历史归档] 100% 保留全部历史 PRD 原文，按里程碑分层

@@ -18,15 +18,17 @@ pub fn save_current_snapshot(state: &mut AppState) {
     let mut entry = SnapshotEntry {
         id: uuid::Uuid::new_v4().to_string(),
         request: RequestSnapshot::from_parsed(&req),
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: resp.status.code(),
             headers: resp.headers.clone(),
             body: resp.body.clone(),
-        },
+        }),
+        error: None,
     };
     crate::history::storage::mask_snapshot_entry(&mut entry);
 
     let suite = SnapshotSuite {
+        version: 2,
         timestamp: chrono::Utc::now(),
         source_file: state.editor_file_path.clone(),
         entries: vec![entry],

@@ -33,14 +33,16 @@ async fn test_snapshot_recording_and_replaying() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"message": "hello world"}"#.to_string(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("test_suite".to_string()),
         entries: vec![entry],
@@ -103,11 +105,12 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: "resp_a".to_string(),
-        },
+        }),
+        error: None,
     };
 
     let entry_b = SnapshotEntry {
@@ -119,14 +122,16 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
             headers: reqwest::header::HeaderMap::new(),
             body: Some("{\"k\":\"v\"}".to_string()),
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 201,
             headers: reqwest::header::HeaderMap::new(),
             body: "resp_b".to_string(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("multi_test".to_string()),
         entries: vec![entry_a, entry_b],
@@ -173,14 +178,16 @@ async fn test_replay_honors_recorded_timeout() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: "slow response".to_string(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("timeout_test".to_string()),
         entries: vec![entry],
@@ -230,6 +237,7 @@ async fn test_replay_corrupt_snapshot_readable_error() {
     // 3. 坏输入三：结构合法但 entries 为空数组
     let path_empty = temp_dir.path().join("empty_suite.json");
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("empty".to_string()),
         entries: vec![],
@@ -269,14 +277,16 @@ async fn test_replay_mixed_results_entries_structured() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("mixed_test".to_string()),
         entries: vec![
@@ -338,13 +348,15 @@ async fn test_replay_transport_error_entry_structured() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("dead_port_test".to_string()),
         entries: vec![entry],
@@ -406,14 +418,16 @@ async fn test_replay_cli_exit_code_and_failed_entries_stdout() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_mixed_test".to_string()),
         entries: vec![make_entry("id-1", "ok"), make_entry("id-2", "bad")],
@@ -470,13 +484,15 @@ async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_ok_test".to_string()),
         entries: vec![entry],
@@ -607,13 +623,15 @@ async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("slow_timeout_test".to_string()),
         entries: vec![entry],
@@ -654,13 +672,15 @@ async fn test_smart_diff_jitter_tolerated_and_real_diff_caught() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"quota":100,"timestamp":"2026-01-01T00:00:00Z"}"#.to_string(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("smart_diff".to_string()),
         entries: vec![entry],
@@ -732,13 +752,15 @@ async fn test_smart_diff_cli_fourth_form_and_escapes() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"quota":100,"timestamp":"new"}"#.to_string(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_sd".to_string()),
         entries: vec![entry],
@@ -835,13 +857,15 @@ async fn test_replay_explain_no_key_degradation() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"ok":true}"#.to_string(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("explain".to_string()),
         entries: vec![entry],
@@ -1015,4 +1039,61 @@ async fn test_t1_generated_file_reruns_with_fresh_values() {
         })
         .collect();
     assert_ne!(ids[0], ids[ids.len() - 1], "fresh uuid per run: {ids:?}");
+}
+
+#[tokio::test]
+async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
+    use rupost::history::storage::save_batch_snapshot;
+    use rupost::runner::types::TestResult;
+    use std::path::PathBuf;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("error_snapshot.json");
+
+    let req_snap = RequestSnapshot {
+        timeout: None,
+        method: "GET".to_string(),
+        url: "http://example.com/timeout".to_string(),
+        headers: reqwest::header::HeaderMap::new(),
+        body: None,
+    };
+
+    let fail_result = TestResult {
+        request_number: 1,
+        name: Some("TimeoutReq".to_string()),
+        method: "GET".to_string(),
+        url: "http://example.com/timeout".to_string(),
+        status: None,
+        duration: Duration::from_millis(5000),
+        success: false,
+        error: Some("connection timed out to https://api.com?secret_token=12345".to_string()),
+        response: None, // 模拟网络超时，没有收到 Response
+        skipped: false,
+        assertions: vec![],
+        timing: None,
+        diagnose_report: None,
+        request: Some(req_snap),
+        warnings: vec![],
+        is_teardown: false,
+    };
+
+    let batch = vec![(PathBuf::from("test.http"), vec![fail_result])];
+    save_batch_snapshot(&batch, &["test.http".to_string()], &snapshot_file, true).unwrap();
+
+    let content = fs::read_to_string(&snapshot_file).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+    // 验证：条目数必须为 1，不能被静默吞掉
+    let entries = parsed.get("entries").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(entries.len(), 1, "超时或连接失败请求必须被录入快照黑匣子");
+
+    let entry = &entries[0];
+    assert!(entry.get("response").unwrap().is_null(), "response 字段应为 null");
+
+    let error_obj = entry.get("error").unwrap();
+    assert!(error_obj.get("message").is_some());
+    // 验证脱敏生效：错误信息中的敏感 token 必须被脱敏
+    let err_msg = error_obj.get("message").unwrap().as_str().unwrap();
+    assert!(err_msg.contains("[REDACTED]") || err_msg.contains("%5BREDACTED%5D"));
+    assert!(!err_msg.contains("12345"));
 }

@@ -266,6 +266,7 @@ pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) ->
     }
 
     let mut suite = SnapshotSuite {
+        version: 2,
         timestamp: chrono::Utc::now(),
         source_file: Some("history".to_string()),
         entries: entries.into_iter().map(SnapshotEntry::from).collect(),
@@ -281,6 +282,24 @@ pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) ->
     Ok(())
 }
 
+fn classify_error_kind(err_msg: &str) -> String {
+    let lower = err_msg.to_ascii_lowercase();
+    if lower.contains("timeout") || lower.contains("timed out") {
+        "ConnectionTimeout".to_string()
+    } else if lower.contains("dns")
+        || lower.contains("resolve")
+        || lower.contains("name or service not known")
+    {
+        "DnsResolutionFailed".to_string()
+    } else if lower.contains("tls") || lower.contains("ssl") || lower.contains("certificate") {
+        "TlsHandshakeFailed".to_string()
+    } else if lower.contains("refused") || lower.contains("connection refused") {
+        "ConnectionRefused".to_string()
+    } else {
+        "HttpTransportError".to_string()
+    }
+}
+
 /// 从批处理测试结果中提取请求/响应快照并写入指定文件
 pub fn save_batch_snapshot<P: AsRef<Path>>(
     batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
@@ -288,7 +307,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     snapshot_path: P,
     mask_secrets: bool,
 ) -> Result<()> {
-    use super::model::{ResponseSnapshot, SnapshotEntry, SnapshotSuite};
+    use super::model::{ExecutionErrorDetail, ResponseSnapshot, SnapshotEntry, SnapshotSuite};
     let mut entries = Vec::new();
     for (_, file_results) in batch_results {
         for r in file_results {
@@ -296,17 +315,29 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             if r.is_teardown {
                 continue;
             }
-            if let Some(req) = &r.request
-                && let Some(resp) = &r.response
-            {
+            if let Some(req) = &r.request {
+                let response = r.response.as_ref().map(|resp| ResponseSnapshot {
+                    status: resp.status.code(),
+                    headers: resp.headers.clone(),
+                    body: resp.body.clone(),
+                });
+
+                let error = if r.response.is_none() {
+                    r.error.as_ref().map(|err_msg| ExecutionErrorDetail {
+                        kind: classify_error_kind(err_msg),
+                        message: err_msg.clone(),
+                        duration_ms: r.duration.as_millis() as u64,
+                        occurred_at: chrono::Utc::now(),
+                    })
+                } else {
+                    None
+                };
+
                 let mut entry = SnapshotEntry {
                     id: uuid::Uuid::new_v4().to_string(),
                     request: req.clone(),
-                    response: ResponseSnapshot {
-                        status: resp.status.code(),
-                        headers: resp.headers.clone(),
-                        body: resp.body.clone(),
-                    },
+                    response,
+                    error,
                 };
                 if mask_secrets {
                     mask_snapshot_entry(&mut entry);
@@ -321,6 +352,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
         .collect::<Vec<_>>()
         .join(", ");
     let suite = SnapshotSuite {
+        version: 2,
         timestamp: chrono::Utc::now(),
         source_file: Some(normalized_source),
         entries,
@@ -330,9 +362,9 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
 
 /// Secrets Masker（路线图条目 1 残余）：opt-in 快照脱敏——headers 走
 /// `redact_header_value`（scheme 前缀保留），body 走 `mask_body_secrets`
-/// （敏感键 `[REDACTED]` + PII 三正则，无截断）。schema 不变，产物仍可被 replay 加载。
+/// （敏感键 `[REDACTED]` + PII 三正则，无截断），error 走 `redact_free_text` 擦除 URL 凭证。
 pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
-    use crate::exporter::redact::{mask_body_secrets, redact_header_value};
+    use crate::exporter::redact::{mask_body_secrets, redact_free_text, redact_header_value};
     // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
     // 非 UTF-8 值原样保留（掩码通道不损伤结构）
     let mask_headers = |map: &mut reqwest::header::HeaderMap| {
@@ -355,9 +387,14 @@ pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
         }
     };
     mask_headers(&mut entry.request.headers);
-    mask_headers(&mut entry.response.headers);
+    if let Some(ref mut resp) = entry.response {
+        mask_headers(&mut resp.headers);
+        resp.body = mask_body_secrets(resp.body.as_str());
+    }
     entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
-    entry.response.body = mask_body_secrets(entry.response.body.as_str());
+    if let Some(ref mut err) = entry.error {
+        err.message = redact_free_text(&err.message);
+    }
 }
 
 #[cfg(test)]
@@ -479,8 +516,9 @@ mod tests {
         let suite = read_snapshot_suite(&snapshot_file).unwrap();
         assert_eq!(suite.entries.len(), 1);
         assert_eq!(suite.entries[0].request.method, "POST");
-        assert_eq!(suite.entries[0].response.status, 201);
-        assert_eq!(suite.entries[0].response.body, "{\"status\":\"ok\"}");
+        let resp = suite.entries[0].response.as_ref().unwrap();
+        assert_eq!(resp.status, 201);
+        assert_eq!(resp.body, "{\"status\":\"ok\"}");
     }
 
     #[test]

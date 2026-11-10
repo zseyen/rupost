@@ -253,8 +253,34 @@ impl ReplayExecutor {
         };
         let elapsed = start.elapsed();
 
-        // 4. 比对状态码（精确相等语义；状态不等短路 body 比对——单一归因原则）
-        let expected_status = entry.response.status;
+        // 4. 比对状态码（若快照记录的是传输层网络故障，跳过 response 比对并提示）
+        let Some(ref recorded_resp) = entry.response else {
+            let err_desc = entry
+                .error
+                .as_ref()
+                .map(|e| e.message.as_str())
+                .unwrap_or("unknown transport error");
+            println!(
+                "  {} [i] Snapshot recorded transport failure ({}), skipping response diff",
+                "[i]".dimmed(),
+                err_desc
+            );
+            return ReplayEntryResult {
+                request_number,
+                method: entry.request.method.clone(),
+                url: target_url,
+                expected_status: 0,
+                actual_status: Some(res.status.code()),
+                matched: true,
+                duration_ms: elapsed.as_millis() as u64,
+                error: None,
+                body_matched: None,
+                body_diff: None,
+                response_body_snippet: None,
+            };
+        };
+
+        let expected_status = recorded_resp.status;
         let actual_status = res.status.code();
         let status_matched = expected_status == actual_status;
 
@@ -266,7 +292,7 @@ impl ReplayExecutor {
                 .map(|s| s.to_string())
                 .collect();
             keys.extend(self.ignore_fields.iter().cloned());
-            Self::compare_bodies(&entry.response.body, &res.body, &keys)
+            Self::compare_bodies(&recorded_resp.body, &res.body, &keys)
         } else {
             (None, None)
         };
@@ -418,7 +444,7 @@ impl ReplayExecutor {
             request_number,
             method: entry.request.method.clone(),
             url,
-            expected_status: entry.response.status,
+            expected_status: entry.response.as_ref().map(|r| r.status).unwrap_or(0),
             actual_status: None,
             matched: false,
             duration_ms: elapsed.as_millis() as u64,

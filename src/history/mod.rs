@@ -5,7 +5,9 @@ pub mod selector;
 pub mod serialization;
 pub mod storage;
 
-pub use model::{RequestSnapshot, ResponseSnapshot, SnapshotEntry, SnapshotSuite};
+pub use model::{
+    ExecutionErrorDetail, RequestSnapshot, ResponseSnapshot, SnapshotEntry, SnapshotSuite,
+};
 pub use storage::{
     export_history_snapshot, read_snapshot_suite, save_batch_snapshot, write_snapshot_suite,
 };

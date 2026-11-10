@@ -114,6 +114,10 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
         MockFileConfig::Snapshots(snapshots) => {
             let mut groups: HashMap<(String, String), Vec<MockVariant>> = HashMap::new();
             for s in snapshots {
+                let Some(ref resp) = s.response else {
+                    continue;
+                };
+
                 let path = extract_path(&s.request.url);
                 let method = s.request.method.to_uppercase();
 
@@ -135,7 +139,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
                 };
 
                 let mut headers = HashMap::new();
-                for (name, val) in &s.response.headers {
+                for (name, val) in &resp.headers {
                     if let Ok(val_str) = val.to_str() {
                         headers.insert(name.to_string(), val_str.to_string());
                     }
@@ -143,9 +147,9 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
 
                 let variant = MockVariant {
                     condition,
-                    status: s.response.status,
+                    status: resp.status,
                     headers,
-                    response_body: s.response.body,
+                    response_body: resp.body.clone(),
                 };
                 groups.entry((method, path)).or_default().push(variant);
             }

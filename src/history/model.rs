@@ -55,6 +55,19 @@ pub struct ResponseMeta {
     pub body: Option<String>,
 }
 
+/// 现场执行错误强类型明细
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecutionErrorDetail {
+    /// 错误分类标签（如 "ConnectionTimeout", "DnsResolutionFailed", "HttpTransport"）
+    pub kind: String,
+    /// 错误详细描述（必须经过脱敏过滤）
+    pub message: String,
+    /// 故障发生前的耗时（毫秒）
+    pub duration_ms: u64,
+    /// 故障发生时间点
+    pub occurred_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// 单个 HTTP 交互快照
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotEntry {
@@ -62,16 +75,47 @@ pub struct SnapshotEntry {
     pub id: String,
     /// 关联的请求快照
     pub request: RequestSnapshot,
-    /// 关联的响应快照 (包含 Body)
-    pub response: ResponseSnapshot,
+    /// 关联的响应快照 (带 Body)；当网络层连接失败或超时时为 None
+    #[serde(default)]
+    pub response: Option<ResponseSnapshot>,
+    /// 现场异常详情（正常收到响应时为 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ExecutionErrorDetail>,
+}
+
+impl SnapshotEntry {
+    pub fn new_success(id: String, request: RequestSnapshot, response: ResponseSnapshot) -> Self {
+        Self {
+            id,
+            request,
+            response: Some(response),
+            error: None,
+        }
+    }
+
+    pub fn new_error(id: String, request: RequestSnapshot, error: ExecutionErrorDetail) -> Self {
+        Self {
+            id,
+            request,
+            response: None,
+            error: Some(error),
+        }
+    }
 }
 
 /// 快照套件结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SnapshotSuite {
+    /// 快照 Schema 版本号（旧快照未写此字段时默认反序列化为 1）
+    #[serde(default = "default_snapshot_version")]
+    pub version: u32,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub source_file: Option<String>,
     pub entries: Vec<SnapshotEntry>,
+}
+
+fn default_snapshot_version() -> u32 {
+    1
 }
 
 /// 响应快照 (带 Body)
@@ -90,14 +134,15 @@ impl From<HistoryEntry> for SnapshotEntry {
         Self {
             id: entry.id,
             request: entry.request,
-            response: ResponseSnapshot {
+            response: Some(ResponseSnapshot {
                 status: entry.response.status,
                 headers: entry.response.headers,
                 body: entry
                     .response
                     .body
                     .unwrap_or_else(|| "Old snapshot: body not recorded".to_string()),
-            },
+            }),
+            error: None,
         }
     }
 }

@@ -345,12 +345,12 @@ fn test_history_export_snapshot_schema_and_placeholder() {
     assert_eq!(suite.source_file.as_deref(), Some("history"));
     // body=None 旧条目占位导出：条目保留、body 为既有 From 转换的占位标记文本
     assert_eq!(
-        suite.entries[0].response.body,
+        suite.entries[0].response.as_ref().unwrap().body,
         "Old snapshot: body not recorded"
     );
     // body=Some 条目原样导出
     assert_eq!(
-        suite.entries[1].response.body,
+        suite.entries[1].response.as_ref().unwrap().body,
         "response body for 22222222-aaaa-bbbb-cccc-222222222222"
     );
 }

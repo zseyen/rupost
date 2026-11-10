@@ -22,6 +22,12 @@
     * `全链路测试基建闭环 (Testing Baseline & Guard Suites)`：`ResponseFormatter` Fluent Builder 表驱动单测、TUI 关键动作与守卫直测（`tests/tui_key_actions_test.rs` + `TestBackend`）、Web 原生前端单测。
     * `凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)`：`RedactionPolicy`、R3硬键护栏、TOML级联装配、`@sensitive` / `@no-redact` 指令、stderr审计清单Footer、变量名安全清洗。
     * `脱敏引擎同构复用与快照回放对称语义纠偏 (Redaction Reuse & Replay Parity)`：提炼 `redact_key_value_pairs` 统一同构引擎（彻底解决 URL Fragment 键值脱敏并杜绝锚点误杀）；修正快照网络错误对称回放比对逻辑；快照异常信息深度脱敏（含 `BARE_AUTH` 正则覆盖孤立 Token）；代码生成接线脱敏策略及配置加载 DRY 统一。
+    * `分支深度审查加固与核心缺陷闭环 (Branch Review Hardening & Core Defect Fixes)`：
+      * **P0-1 复合 URL 凭据明文泄露封堵**：重构 `variabilize_url` 与 `variabilize_query_pairs`，废除互斥分支，引入正交解构模型（主体 Query 与 Hash SPA Query 双侧独立脱敏并重组）；
+      * **P0-2 `--no-history` 全局分派顶层下沉**：在 `dispatch` 最外层统一禁用录制，消除 TUI/Web/Inline 旁路泄露风险；
+      * **P1-4 诊断 TLS 阶段数据保留**：`probe_after_connect` 引入 `lenient` 参数，在 HTTP TTFB 超时或 0 字节 EOF 时完整保留 TLS 耗时与证书实体；
+      * **P1-5 重放引擎 `--target` 路径前缀支持**：复用 `join_paths` 支持含上下文路径的目标 URL 重放；
+      * **DRY 协议规范化治理**：`UrlTemplatizer` 统一管理 WebSocket URL 规范化（RFC 6455 剥离 `#fragment`）与 origin 模板化。
 
 ---
 

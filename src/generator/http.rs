@@ -266,17 +266,25 @@ impl HttpGenerator {
         (title, name)
     }
 
-    /// Header/Query 键名转变量名：小写、非字母数字转下划线（`X-Api-Key` -> `x_api_key`）
+    /// Header/Query 键名转变量名：小写、非字母数字转下划线、压缩连续下划线并去除首尾下划线（若为空则回退至 "secret"）
     fn var_name_from_key(key: &str) -> String {
-        key.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect()
+        let mut s = String::with_capacity(key.len());
+        let mut prev_underscore = false;
+        for c in key.chars() {
+            if c.is_ascii_alphanumeric() {
+                s.push(c.to_ascii_lowercase());
+                prev_underscore = false;
+            } else if !prev_underscore {
+                s.push('_');
+                prev_underscore = true;
+            }
+        }
+        let trimmed = s.trim_matches('_');
+        if trimmed.is_empty() {
+            "secret".to_string()
+        } else {
+            trimmed.to_string()
+        }
     }
 
     /// 已识别认证 scheme（Bearer/Basic/Digest/Token）时返回它，变量仅承载凭证本体
@@ -411,5 +419,20 @@ impl HttpGenerator {
         } else {
             raw.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_var_name_from_key_sanitization() {
+        assert_eq!(HttpGenerator::var_name_from_key("X-Api-Key"), "x_api_key");
+        assert_eq!(HttpGenerator::var_name_from_key("Authorization"), "authorization");
+        assert_eq!(HttpGenerator::var_name_from_key("---X--Api--Key---"), "x_api_key");
+        assert_eq!(HttpGenerator::var_name_from_key("api.token.secret"), "api_token_secret");
+        assert_eq!(HttpGenerator::var_name_from_key("---$$$---"), "secret");
+        assert_eq!(HttpGenerator::var_name_from_key(""), "secret");
     }
 }

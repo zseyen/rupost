@@ -8,6 +8,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)**：
+  - 核心策略控制中心 `RedactionPolicy`：表驱动三层过滤（`EXACT_KEYS` 硬键 $\to$ `ignore_keys` 豁免 $\to$ `SUBSTRINGS` 模糊匹配），二分查找与静态切片常量化；
+  - R3 硬键安全护栏：`Authorization`、`Cookie` 等 8 项 RFC 认证硬键绝对不可豁免，配置尝试豁免时启动即阻断防呆并输出黄色告警；
+  - 配置文件级联驱动：支持在 `rupost.toml` 中配置 `[export.redaction]` 的 `extra_keys` 与 `ignore_keys`；
+  - 请求级双向微调：支持在 `.http` 文件中通过 `# @sensitive <keys>`（追加脱敏）与 `# @no-redact <keys>`（局部豁免），支持逗号与空白分隔多值解析及大小写规范化；
+  - 导出审计清单 Footer：`rupost export` 导出脱敏命令时，在 stderr 输出格式化脱敏清单摘要（凭据键名、认证类型、字符数与来源维度），stdout 纯净命令管道不被破坏，支持 `--quiet` 静音；
+  - 模板变量清洗：`HttpGenerator` 自动将 Header/Query 键名规范化清洗为紧凑合法的变量名（去除首尾及连续下划线，空值回退为 `secret`）。
+
 - `@teardown` 确定性生命周期（M3）：请求块标记为清理步骤——常规阶段占位跳过（原序号保留），批处理 Finally 阶段按已执行文件逆拓扑序执行；变量防呆（渲染副本检残留，未解析 → skipped + 警告，杜绝脏请求外发）；`TestResult.is_teardown` 标记 + 快照导出默认排除（防 replay 重放 DELETE）；失败继续全部清理、最终聚合失败；parallel + fail_fast 中断路径修复（JoinError::is_cancelled 容忍，变量合并与 Finally 不再被跳过）。
 - `rupost mock` 智能 CORS（M3，默认开启）：预检 OPTIONS 秒回 204 + 动态回显 Origin + Credentials: true + Allow-Headers 回显预检请求头（非 `*`——credentialed 请求合规）；`--no-cors` 停用；无 Origin 时 `*` 形态；`Vary: Origin`。
 - `rupost t --report junit / --report-file <PATH>.xml`（M1/T8）：**工业级 JUnit XML 测试报告**——100% 符合 Jenkins/GitLab/GitHub Actions 消费规格；基于 build_json_reports 统一脱敏结果生成（SSOT 复用，敏感值不外泄）；终端 ANSI 控制符构造期彻底剥离（防 XML 解析异常）；`<failure>`（断言失败）与 `<error>`（请求异常）节点区分（Jenkins 红绿语义）；`--report junit` 无文件默认落盘 rupost-junit.xml；junit_schema_test E2E + verify_features 步骤 14。

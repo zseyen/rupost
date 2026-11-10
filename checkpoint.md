@@ -12,10 +12,11 @@
   * **主干分支**: `main`（加固战役分支 `feature/decoupling-and-workbench-hardening` 已通过 **PR #13** 完整合流）。
   * **工作区收敛**: 仅保留单一 `default` 主工作区，所有历史/辅助工作区已全部注销并出清，工作副本保持 clean。
 * **质量保障金字塔**:
-  * **单元测试**: 564 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。
-  * **集成冒烟测试**: `tests/verify_features.sh` 涵盖 Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等全部通过。
+  * **单元测试**: 586+ 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。
+  * **集成冒烟测试**: `tests/verify_features.sh` 涵盖 14 个核心特性（脱敏扩展性、Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等）全部通过。
   * **真实端到端回归**: `examples/run_all.sh` 涵盖 15 套真实复杂场景（变量级联、SSE 流式、WebSocket 握手）全绿。
-  * **代码质量与工具链**: Rust MSRV 1.89，`cargo clippy --all-targets -- -D warnings` 零告警，`cargo fmt` 零格式漂移。
+  * **代码质量与工具链**: Rust MSRV 1.89，`cargo clippy --workspace --all-targets -- -D warnings` 零告警，`cargo fmt` 零格式漂移。
+  * **近期重大交付**: `凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)`（`RedactionPolicy`、R3硬键护栏、TOML级联装配、`@sensitive` / `@no-redact` 指令、stderr审计清单Footer、变量名安全清洗）。
 
 ---
 

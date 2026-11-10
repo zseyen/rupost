@@ -8,6 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- `rupost --no-history`（走查缺口 #1）：**运行级历史落盘停用开关**——CI/共享环境防凭据明文落盘（此前每次 `rupost t` 都把完整 headers/body 写入 `.rupost/history.jsonl`，与报告出口的强制脱敏在同一进程内不一致）；全局旗标（子命令前后双序 + 内联模式，位置契约测试锁定）；派发层在任何请求执行前关停记录器（进程级不可逆，与测试进程静音同一原语）；停用提示走 stderr，`--report json` stdout 机器可读纯净不破坏。
+- **连接层诊断瀑布补齐（走查缺口 #5，DX-Debug D2 拆分）**：传输层失败（DNS/TCP/TLS）此前产出零诊断——恰在最需要诊断的场景断裂。`DiagnosticsProber::connect_tcp_staged` 分阶段探测（失败不早退，保留已测 DNS 阶段与已解析 IP，携带阶段分类失败信息；严格版 `connect_tcp_with_timeout` 委托之、错误文案不变）；`DiagnosticsReport` 新增 `connection_error` 字段（始终序列化 None→null，成功/失败形态键集合一致，schema 锁定 13→14 键）；`diagnose_url_lenient` 任一阶段失败均产出部分诊断报告（DNS/TCP/TLS/HTTP 全阶段降级——审查扩展把 TLS 阶段一并收口；严格版 `diagnose_url` 与 diagnose 命令的 Err 契约不变）；`http_runner` 传输错误路径换用宽容诊断——`--debug-on-failure` 在连接拒绝/证书损坏时也能给出 `Connection: TCP connection failed: ...` / `TLS handshake failed: ...` 分类瀑布（DNS 成功时 resolved_ips 非空可区分阶段）。
+- **HTML 报告失败片段同源脱敏（走查缺口 #2，审查扩展至全字段）**：在线直渲路径此前整体弱于 JSON 出口——body_snippet 仅 512 字符截断（`redact_and_truncate_body` 对齐），url/error/warnings/断言 expected-actual-message 裸奔（审查发现后补齐 `redact_url`/`redact_free_text`/`redact_assertion_value` 同一原语）——CI 归档的 `rupost-report.html` 可能携带失败响应中的 token/api_key 回显与 query 凭据。
 - **HTTP 请求体原样保真与零分配语法嗅探 (Raw Body Verbatim & Zero-Alloc Sniffing)**：
   - `Request` 模型引入 `raw_body: Option<String>` 与 `with_verbatim_body`；
   - `add_body` 采用 `serde_json::from_str::<serde::de::IgnoredAny>` 进行零堆分配合法性嗅探；

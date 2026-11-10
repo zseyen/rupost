@@ -45,6 +45,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub debug_on_failure: bool,
 
+    /// Disable request history recording for this run (CI/共享环境防凭据落盘)
+    #[arg(long, global = true)]
+    pub no_history: bool,
+
     /// Default scheme when URL does not contain one
     #[arg(long, global = true, default_value = "http")]
     pub default_scheme: String,
@@ -147,6 +151,30 @@ mod tests {
         assert!(export_args.paths.is_empty());
         assert!(!export_args.compact);
         assert!(!export_args.redact);
+    }
+
+    /// `--no-history` 全局旗标位置契约：子命令前后双序均可解析（AGENTS §5 同源规则），
+    /// 且不污染 trailing_var_arg 的内联 args
+    #[test]
+    fn test_no_history_position_contract() {
+        let pre = Cli::try_parse_from(["rupost", "--no-history", "test", "suite.http"])
+            .expect("pre-subcommand parse failed");
+        assert!(pre.no_history);
+        assert!(matches!(pre.command, Some(Commands::Test(_))));
+
+        let post = Cli::try_parse_from(["rupost", "test", "suite.http", "--no-history"])
+            .expect("post-subcommand parse failed");
+        assert!(post.no_history);
+        assert!(matches!(post.command, Some(Commands::Test(_))));
+
+        let inline = Cli::try_parse_from(["rupost", "--no-history", "GET", "http://x"])
+            .expect("inline parse failed");
+        assert!(inline.no_history);
+        assert_eq!(inline.args, vec!["GET", "http://x"]);
+
+        let default_off =
+            Cli::try_parse_from(["rupost", "test", "suite.http"]).expect("default parse failed");
+        assert!(!default_off.no_history);
     }
 
     struct TestCase {

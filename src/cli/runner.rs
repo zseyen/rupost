@@ -19,6 +19,7 @@ pub struct RunParams {
     pub default_scheme: String,
     pub debug: bool,
     pub debug_on_failure: bool,
+    pub no_history: bool,
 }
 
 #[allow(dead_code)]
@@ -32,6 +33,7 @@ impl Default for RunParams {
             default_scheme: "http".to_string(),
             debug: false,
             debug_on_failure: false,
+            no_history: false,
         }
     }
 }
@@ -56,6 +58,7 @@ impl RunParams {
             default_scheme: cli.default_scheme.clone(),
             debug: cli.debug,
             debug_on_failure: cli.debug_on_failure,
+            no_history: cli.no_history,
         }
     }
 
@@ -162,6 +165,11 @@ impl CliRunner {
 }
 
 pub async fn run(params: RunParams) -> Result<()> {
+    if params.no_history {
+        rupost::history::recorder::disable_history_recording();
+        // 提示走 stderr，保持内联请求 stdout 管道纯净
+        eprintln!("[i] 历史记录已停用 (--no-history)：本次运行不写入 history.jsonl");
+    }
     let args = params.args.clone();
     let runner = CliRunner::new(&params)?;
     runner.run(args).await

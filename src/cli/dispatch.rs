@@ -12,6 +12,13 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
     match cli.command {
         Some(Commands::Test(args)) => {
+            // --no-history 必须在任何请求执行前关停记录器（进程级不可逆开关，
+            // CI/共享环境防凭据明文落盘；提示走 stderr，保持 --report json stdout 纯净）
+            if cli.no_history {
+                rupost::history::recorder::disable_history_recording();
+                eprintln!("[i] 历史记录已停用 (--no-history)：本次运行不写入 history.jsonl");
+            }
+
             let crate::cli::TestArgs {
                 paths,
                 mode,

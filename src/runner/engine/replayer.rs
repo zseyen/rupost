@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 pub struct ReplayExecutor {
     client: Client,
     target_url: Option<String>,
+    /// 构造期一次性解析的 target（审查 P0-B：target 非法在 new 即 Err 快失败，
+    /// 杜绝 per-entry `if let Ok` 静默跳过覆写——流量会打向快照原始主机）
+    parsed_target: Option<url::Url>,
     verbose: bool,
     /// T4 追加排除的叶子键名（默认列表之外，大小写敏感精确匹配）
     ignore_fields: Vec<String>,
@@ -78,14 +81,25 @@ pub struct ReplayReport {
 }
 
 impl ReplayExecutor {
-    pub fn new(target_url: Option<String>, verbose: bool) -> Self {
-        Self {
+    pub fn new(target_url: Option<String>, verbose: bool) -> crate::Result<Self> {
+        let parsed_target = match target_url.as_deref() {
+            // 无 scheme 的裸 host（如 `--target example.com`）是最高频误写形态，
+            // 此前静默跳过全部覆写 → 重放流量打向快照原始主机
+            Some(t) => Some(url::Url::parse(t).map_err(|e| {
+                crate::error::RupostError::ParseError(format!(
+                    "--target '{t}' 不是合法 URL（需含 scheme，如 http://host:port）: {e}"
+                ))
+            })?),
+            None => None,
+        };
+        Ok(Self {
             client: Client::new(None),
             target_url,
+            parsed_target,
             verbose,
             ignore_fields: Vec::new(),
             status_only: false,
-        }
+        })
     }
 
     /// 追加排除键（`--ignore-fields`，逗号分隔）
@@ -212,10 +226,11 @@ impl ReplayExecutor {
     ) -> ReplayEntryResult {
         // 1. 地址覆写
         let mut target_url = entry.request.url.clone();
-        if let Some(target) = &self.target_url
+        if let Some(parsed_target) = &self.parsed_target
             && let Ok(mut parsed_url) = url::Url::parse(&entry.request.url)
-            && let Ok(parsed_target) = url::Url::parse(target)
         {
+            // 构造期已保证 target 合法；set_* 的 .ok() 仅防御奇异 scheme 转换
+            // （逐 entry 确定性相同，告警会刷屏——登记注释即可）
             parsed_url.set_scheme(parsed_target.scheme()).ok();
             parsed_url.set_host(parsed_target.host_str()).ok();
             parsed_url.set_port(parsed_target.port()).ok();
@@ -223,6 +238,7 @@ impl ReplayExecutor {
         }
 
         let start = Instant::now();
+
 
         // 2. 还原 Request（失败落条目，不再 Err 分叉）
         let req = match Self::restore_request(entry, &target_url) {

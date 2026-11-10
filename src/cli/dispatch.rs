@@ -147,7 +147,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             )?;
         }
         Some(Commands::Replay(args)) => {
-            let mut replayer = rupost::runner::ReplayExecutor::new(args.target, args.verbose);
+            let mut replayer = rupost::runner::ReplayExecutor::new(args.target, args.verbose)?;
             if let Some(keys) = args.ignore_fields {
                 let parsed: Vec<String> = keys
                     .split(',')

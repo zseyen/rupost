@@ -53,7 +53,7 @@ async fn test_snapshot_recording_and_replaying() {
     assert!(snapshot_file.exists());
 
     // 3. 执行重放 (使用 --target 参数覆写 URL 指向本地 mock 端口)
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), true);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), true).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.total, 1);
@@ -139,7 +139,7 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.total, 2);
@@ -195,7 +195,7 @@ async fn test_replay_honors_recorded_timeout() {
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
 
     let start = Instant::now();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
@@ -217,7 +217,7 @@ async fn test_replay_honors_recorded_timeout() {
 #[tokio::test]
 async fn test_replay_corrupt_snapshot_readable_error() {
     let temp_dir = TempDir::new().unwrap();
-    let replayer = ReplayExecutor::new(None, false);
+    let replayer = ReplayExecutor::new(None, false).unwrap();
 
     // 1. 坏输入一：纯文本非合法 JSON
     let path_plain = temp_dir.path().join("plain.txt");
@@ -297,7 +297,7 @@ async fn test_replay_mixed_results_entries_structured() {
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     // 聚合守恒：passed + failed = total = entries.len()
@@ -364,7 +364,7 @@ async fn test_replay_transport_error_entry_structured() {
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
     // 指向必然连接拒绝的端口（1 保留端口）
-    let replayer = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false);
+    let replayer = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.total, 1);
@@ -638,7 +638,7 @@ async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.failed, 1);
@@ -686,7 +686,7 @@ async fn test_smart_diff_jitter_tolerated_and_real_diff_caught() {
         entries: vec![entry],
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
 
     // 1) 抖动：timestamp 漂移（quota 相同）→ matched，无假失败
     mock_server.reset().await;
@@ -981,7 +981,7 @@ async fn test_save_snapshot_mask_secrets_flag() {
     assert!(content.contains("***"), "pii placeholder present");
 
     // 掩码快照 schema 未变——replay 仍可加载（本测试只验证 loadable，不验证 pass/fail）
-    let replayer = ReplayExecutor::new(None, false);
+    let replayer = ReplayExecutor::new(None, false).unwrap();
     let report = replayer.replay_file(&snap).await.unwrap();
     assert_eq!(report.total, 1);
     let _ = mock_server;
@@ -1179,7 +1179,7 @@ async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
         .mount(&mock_server)
         .await;
 
-    let executor = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let executor = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = executor.replay_file(&snapshot_file).await.unwrap();
     assert_eq!(report.entries.len(), 1);
     assert!(
@@ -1195,11 +1195,52 @@ async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
     );
 
     // 场景 2：回放对端依然无法连接 -> 行为完全吻合，判定为 matched: true
-    let dead_executor = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false);
+    let dead_executor = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false).unwrap();
     let dead_report = dead_executor.replay_file(&snapshot_file).await.unwrap();
     assert_eq!(dead_report.entries.len(), 1);
     assert!(
         dead_report.entries[0].matched,
         "快照记录网络错误，重放亦发生网络错误，必须判定吻合 (matched: true)"
+    );
+}
+
+/// 审查 P0-B：非法 `--target` 在构造期快失败——此前 per-entry 三层 `if let Ok`
+/// 静默跳过覆写，重放流量会打向快照**原始主机**（最高频误写：裸 host 无 scheme）。
+#[test]
+fn test_replay_executor_rejects_invalid_target_at_construction() {
+    let err = ReplayExecutor::new(Some("example.com".to_string()), false)
+        .err()
+        .expect("裸 host（无 scheme）必须在构造期被拒绝");
+    let msg = err.to_string();
+    assert!(msg.contains("--target"), "错误应点名 --target: {msg}");
+    assert!(msg.contains("scheme"), "错误应指引补全 scheme: {msg}");
+
+    // 合法 target 与无 target 均可构造（行为不回归）
+    assert!(ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false).is_ok());
+    assert!(ReplayExecutor::new(None, false).is_ok());
+}
+
+/// P0-B CLI 时序守护：target 校验先于快照加载——即使快照文件不存在，
+/// 报错也必须是 target 非法（证明没有任何 I/O 发生在校验之前）。
+#[test]
+fn test_replay_cli_invalid_target_fails_fast_before_any_io() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            "/no/such/snapshot_for_p0b.json",
+            "--target",
+            "example.com",
+        ])
+        .output()
+        .expect("Failed to execute rupost binary");
+    assert!(!out.status.success(), "非法 target 必须非零退出");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("--target"),
+        "应报 target 非法而非文件不存在: {combined}"
     );
 }

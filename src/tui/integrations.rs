@@ -46,7 +46,8 @@ pub async fn replay_latest_snapshot(
     let path = path.clone();
     let tx = event_tx.clone();
     tokio::spawn(async move {
-        let executor = crate::runner::ReplayExecutor::new(None, true);
+        // target 恒为 None，构造不可能失败；unwrap 兼容 async block 无 Result 返回
+        let executor = crate::runner::ReplayExecutor::new(None, true).ok().unwrap();
         match executor.replay_file(&path).await {
             Ok(report) => {
                 let _ = tx

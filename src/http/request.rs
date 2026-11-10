@@ -18,6 +18,8 @@ pub struct Request {
     /// 单请求总时长超时（覆盖 client 级 30s 默认）；流式请求（SSE/WS）不设置，
     /// 否则 reqwest 的总时长语义会在中途切断本应长连的流。
     pub timeout: Option<std::time::Duration>,
+    /// 原始请求体文本（保留用户原始排版、空格与换行，供签名算法、快照与插件使用）
+    pub raw_body: Option<String>,
 }
 
 impl Request {
@@ -29,6 +31,7 @@ impl Request {
             body: None,
             query_params: HashMap::new(),
             timeout: None,
+            raw_body: None,
         })
     }
 
@@ -53,20 +56,27 @@ impl Request {
         Ok(self)
     }
 
-    pub fn with_text(mut self, text: &str) -> Self {
-        self.body = Some(Body::from(text.to_owned()));
+    /// 逐字节保真注入 Body，同时记录 raw_body
+    pub fn with_verbatim_body(mut self, body: &str) -> Self {
+        self.raw_body = Some(body.to_owned());
+        self.body = Some(Body::from(body.to_owned()));
         self
+    }
+
+    pub fn with_text(self, text: &str) -> Self {
+        self.with_verbatim_body(text)
     }
 
     pub fn with_json<T: Serialize>(mut self, data: &T) -> Result<Self> {
         let json = serde_json::to_string(data)?;
         self.insert_header("Content-Type", "application/json")?;
+        self.raw_body = Some(json.clone());
         self.body = Some(Body::from(json));
         Ok(self)
     }
-    pub fn with_body(mut self, body: &str) -> Self {
-        self.body = Some(Body::from(body.to_owned()));
-        self
+
+    pub fn with_body(self, body: &str) -> Self {
+        self.with_verbatim_body(body)
     }
 
     pub fn with_query(mut self, key: &str, value: &str) -> Self {

@@ -262,19 +262,80 @@ impl PluginRegistry {
     }
 
     /// 从磁盘缓存或重新发现构建注册表（`--allow-project-plugins` 由调用方透传）。
-    /// 缓存过期 → 重新扫描 → 原子写回（03 §3.0 stat 新鲜度闭环：新装插件在
-    /// 任何一次发现后即可被路由，消除"假降级窗口"）。
+    ///
+    /// stat 新鲜度闭环（03 §3.0）：缓存命中前必须对插件根做目录级 readdir 清单
+    /// 对比——缓存条目集合 ≠ 磁盘静态 manifest 集合（新装/删除插件）即失效重建。
+    /// 仅靠"缓存内逐条指纹"会漏掉**新增**插件（条目不在缓存里，逐条全过 → 假命中、
+    /// 假降级窗口），这正是 P1-4 要求消除的场景。清单扫描零子进程，≤5ms 预算内。
     pub fn load_or_discover(options: &DiscoverOptions, cache_path: &Path) -> Result<Self> {
         if let Some(cache) = Self::load_cache(cache_path) {
-            let mut registry = Self::new();
-            for entry in cache.manifests {
-                registry.register_manifest(PathBuf::from(entry.executable_path), entry.manifest);
+            let inventory = Self::scan_manifest_inventory(options);
+            // 集合完全相等判定（含空集边界）：磁盘有缓存无（新装插件）、缓存有磁盘无
+            // （已删除）、或指纹漂移——任一即失效重建。空缓存 + 磁盘有插件 →
+            // 0 != N → 必须重建（本边界曾造成"新装插件永远找不到"的假命中）。
+            let cache_set: std::collections::BTreeSet<(String, u64, String)> = cache
+                .manifests
+                .iter()
+                .map(|e| {
+                    (
+                        e.manifest_path.clone(),
+                        e.mtime_secs,
+                        e.fingerprint_hash.clone(),
+                    )
+                })
+                .collect();
+            let disk_set: std::collections::BTreeSet<(String, u64, String)> = inventory
+                .into_iter()
+                .map(|(path, (mtime, hash))| (path.to_string_lossy().to_string(), mtime, hash))
+                .collect();
+            if cache_set == disk_set {
+                let mut registry = Self::new();
+                for entry in cache.manifests {
+                    registry
+                        .register_manifest(PathBuf::from(entry.executable_path), entry.manifest);
+                }
+                return Ok(registry);
             }
-            return Ok(registry);
         }
         let mut registry = Self::discover(options)?;
         registry.persist_cache(cache_path);
         Ok(registry)
+    }
+
+    /// 插件根静态 manifest 清单扫描（零子进程：readdir + 指纹，供缓存新鲜度对比）
+    fn scan_manifest_inventory(options: &DiscoverOptions) -> Vec<(PathBuf, (u64, String))> {
+        let mut roots: Vec<PathBuf> = Vec::new();
+        if let Some(path_env) = std::env::var_os("PATH") {
+            roots.extend(std::env::split_paths(&path_env));
+        }
+        if let Some(home) = dirs::home_dir() {
+            roots.push(home.join(".rupost").join("plugins"));
+        }
+        if options.allow_project_plugins {
+            let base = options
+                .project_root
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            roots.push(base.join(".rupost").join("plugins"));
+        }
+        let mut inventory = Vec::new();
+        for root in roots {
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(file_name) = path.file_name().and_then(|f| f.to_str()) else {
+                    continue;
+                };
+                if is_manifest_file(file_name)
+                    && let Some(fp) = manifest_fingerprint(&path)
+                {
+                    inventory.push((path, fp));
+                }
+            }
+        }
+        inventory
     }
 
     /// 原子化持久化保存到磁盘缓存文件（临时文件 + rename；文件强制 0600）
@@ -532,6 +593,45 @@ mod tests {
             .write_all(b"");
     }
 
+    /// P1-4 边界回归：空缓存 + 磁盘有新装插件 → 必须判过期重建（假命中曾致
+    /// "新装插件永远找不到"，jj M3 评审修复）
+    #[test]
+    fn test_empty_cache_with_new_disk_plugin_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("registry.json");
+        let empty = RegistryCacheFile {
+            version: "1.0".to_string(),
+            updated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            manifests: vec![],
+        };
+        PluginRegistry::save_cache_atomic(&empty, &cache_path).unwrap();
+        let plugin_dir = dir.path().join(".rupost").join("plugins");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let bin = plugin_dir.join("rupost-plugin-newcomer");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(
+            plugin_dir.join("rupost-plugin-newcomer.json"),
+            r#"{"manifest_version":"1.0","name":"newcomer","version":"1","description":"x","commands":[{"name":"new-cmd","usage":"u","description":"d"}],"hooks":[]}"#,
+        )
+        .unwrap();
+        let options = DiscoverOptions {
+            allow_project_plugins: true,
+            project_root: Some(dir.path().to_path_buf()),
+        };
+        unsafe {
+            std::env::set_var("PATH", "/nonexistent-empty-root");
+        }
+        let registry = PluginRegistry::load_or_discover(&options, &cache_path).unwrap();
+        unsafe {
+            std::env::remove_var("PATH");
+        }
+        assert!(
+            registry.find_command("new-cmd").is_some(),
+            "空缓存必须重建发现新装插件: warnings={:?}",
+            registry.warnings
+        );
+    }
+
     /// 缓存数据文件本身被篡改指向根外二进制时：指纹校验失败（内容变了）→ 过期重建，
     /// 重建走静态 manifest 白名单。此处锁定"缓存非权威，manifest 才是"的裁决。
     #[test]
@@ -577,6 +677,76 @@ mod tests {
             registry.warnings.iter().any(|w| w.contains("冲突")),
             "覆盖必须告警: {:?}",
             registry.warnings
+        );
+    }
+}
+
+#[cfg(test)]
+mod project_root_tests {
+    use super::*;
+
+    /// 工作区插件根分支：project_root 显式指定时必须扫到 ./.rupost/plugins
+    #[test]
+    fn test_discovery_project_root_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".rupost").join("plugins");
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = root.join("rupost-plugin-local");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(
+            root.join("rupost-plugin-local.json"),
+            r#"{"manifest_version":"1.0","name":"local","version":"1","description":"x","commands":[{"name":"local-cmd","usage":"u","description":"d"}],"hooks":[]}"#,
+        )
+        .unwrap();
+
+        let options = DiscoverOptions {
+            allow_project_plugins: true,
+            project_root: Some(dir.path().to_path_buf()),
+        };
+        unsafe {
+            std::env::set_var("PATH", "/nonexistent-empty-root");
+        }
+        let registry = PluginRegistry::discover(&options).unwrap();
+        unsafe {
+            std::env::remove_var("PATH");
+        }
+        assert!(
+            registry.find_command("local-cmd").is_some(),
+            "project_root 分支必须发现工作区插件: warnings={:?}",
+            registry.warnings
+        );
+    }
+
+    /// 闸门默认关闭：不传 --allow-project-plugins 时工作区插件严禁被发现（RCE 防线）
+    #[test]
+    fn test_project_root_gate_closed_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".rupost").join("plugins");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("rupost-plugin-local.json"),
+            r#"{"manifest_version":"1.0","name":"local","version":"1","description":"x","commands":[],"hooks":[]}"#,
+        )
+        .unwrap();
+        let options = DiscoverOptions {
+            allow_project_plugins: false,
+            project_root: Some(dir.path().to_path_buf()),
+        };
+        unsafe {
+            std::env::set_var("PATH", "/nonexistent-empty-root");
+        }
+        let registry = PluginRegistry::discover(&options).unwrap();
+        unsafe {
+            std::env::remove_var("PATH");
+        }
+        assert!(
+            registry.commands.is_empty(),
+            "闸门关闭时工作区插件不得被发现"
         );
     }
 }

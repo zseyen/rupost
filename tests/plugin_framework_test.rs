@@ -43,6 +43,7 @@ Content-Type: application/json
     // 3. 验证 Patch 折叠传递与合并
     let auth_patch = PluginPatch {
         extra_headers: vec![("Authorization".to_string(), "Bearer token-abc".to_string())],
+        remove_headers: vec![],
         mutated_body: None,
         set_variables: std::collections::HashMap::from([(
             "TOKEN".to_string(),
@@ -53,6 +54,7 @@ Content-Type: application/json
 
     let sign_patch = PluginPatch {
         extra_headers: vec![("X-Signature".to_string(), "V2-sig-xyz".to_string())],
+        remove_headers: vec![],
         mutated_body: None,
         set_variables: std::collections::HashMap::new(),
         warnings: vec![],

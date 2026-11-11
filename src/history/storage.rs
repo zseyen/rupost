@@ -395,11 +395,13 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 .map(|t| t.total_us)
                 .unwrap_or_else(|| r.duration.as_micros() as u64);
 
-            let outcome = if r.success {
-                // DegradedPass 标记由 M3 插件降级链路接线（03 §10.5）
-                ExecutionOutcome::Pass
-            } else {
+            // 三态判定（03 §10.5）：降级形态的成功严禁混淆为纯粹 Pass
+            let outcome = if !r.success {
                 ExecutionOutcome::Fail
+            } else if r.degraded {
+                ExecutionOutcome::DegradedPass
+            } else {
+                ExecutionOutcome::Pass
             };
 
             let assertions = r
@@ -422,7 +424,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 outcome,
                 status: r.status,
                 duration_us,
-                plugin_duration_us: None,
+                plugin_duration_us: r.plugin_duration_us,
                 request: SnapshotRequest {
                     method: req.method.clone(),
                     url: req.url.clone(),

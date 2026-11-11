@@ -2,11 +2,13 @@
 //!
 //! 遵循 DeepSeek Harness 统一注册表哲学，实现零外部运行时依赖的 Stdio IPC 扩展通道。
 
+pub mod driver;
 pub mod patch;
 pub mod pipeline;
 pub mod registry;
 pub mod types;
 
+pub use driver::{PluginFailureKind, PluginInvocationOutcome, invoke_plugin};
 pub use patch::PluginPatch;
 pub use pipeline::PluginPipeline;
 pub use registry::{DiscoverOptions, PluginRegistry, RegistryCacheFile};

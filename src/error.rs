@@ -44,6 +44,10 @@ pub enum RupostError {
     #[error("安全拦截: {0}")]
     SecurityViolation(String),
 
+    /// 插件 Stdio IPC 通道错误（启动失败/管道 IO；协议级失败走失败分类学而非此变体）
+    #[error("插件错误: {0}")]
+    PluginError(String),
+
     #[error("{0}")]
     Other(String),
 }

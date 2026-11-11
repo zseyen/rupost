@@ -12,7 +12,8 @@ use crate::variable::ConfigLoader;
 use colored::Colorize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub struct TestSuiteOptions {
     pub paths: Vec<String>,
@@ -43,6 +44,16 @@ pub struct TestSuiteOptions {
     /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
     /// 经 RUPOST_FAILED_URL/STATUS/TRACE_ID 环境变量暴露锚点
     pub on_failure: Option<String>,
+    /// 插件缺失/失败时降级为警告跳过（03 §2；现场排障即拷即走）
+    pub allow_missing_plugins: bool,
+    /// CI 严格门禁：发生任何插件降级 → 套件整体判失败（03 §10.5）
+    pub strict_plugins: bool,
+    /// 单次插件调用超时秒数（默认 5，`--plugin-timeout` 覆盖）
+    pub plugin_timeout_secs: u64,
+    /// `--plugin-env KEY=VALUE`：requires_env 声明外的显式放行
+    pub plugin_env: Vec<String>,
+    /// 工作区本地插件放行（03 §3.2 沙箱警戒闸门）
+    pub allow_project_plugins: bool,
 }
 
 impl Default for TestSuiteOptions {
@@ -70,6 +81,11 @@ impl Default for TestSuiteOptions {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             mask_snapshot: false,
+            allow_missing_plugins: false,
+            strict_plugins: false,
+            plugin_timeout_secs: crate::plugin::pipeline::DEFAULT_PLUGIN_TIMEOUT_SECS,
+            plugin_env: Vec::new(),
+            allow_project_plugins: false,
         }
     }
 }
@@ -211,6 +227,46 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         .with_debug(options.debug)
         .with_debug_on_failure(options.debug_on_failure);
 
+    // 5.5 插件注册表装配（03 §3.0 静态 manifest 发现；缓存快路径命中 ≤5ms，
+    // 过期自动重建 → 新装插件无需手动 sync 即可路由，P1-4 闭环）
+    let plugin_runtime = crate::plugin::pipeline::PluginRuntimeOptions {
+        allow_missing_plugins: options.allow_missing_plugins,
+        strict_plugins: options.strict_plugins,
+        plugin_timeout: Duration::from_secs(options.plugin_timeout_secs),
+        plugin_env: options
+            .plugin_env
+            .iter()
+            .filter_map(|s| {
+                s.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect(),
+    };
+    let discover_options = crate::plugin::DiscoverOptions {
+        allow_project_plugins: options.allow_project_plugins,
+        project_root: None,
+    };
+    let cache_path = dirs::home_dir()
+        .map(|h| h.join(".rupost").join("registry.json"))
+        .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
+    let plugin_registry =
+        match crate::plugin::PluginRegistry::load_or_discover(&discover_options, &cache_path) {
+            Ok(registry) => {
+                for warning in &registry.warnings {
+                    eprintln!("[!] {warning}");
+                }
+                Some(Arc::new(registry))
+            }
+            Err(e) => {
+                // 反静默：发现失败必须可见，但绝不阻塞无插件注解的主流程
+                eprintln!("[!] 插件注册表发现失败（插件注解将按缺失降级处理）: {e}");
+                None
+            }
+        };
+    if let Some(registry) = plugin_registry {
+        executor = executor.with_plugins(registry, plugin_runtime);
+    }
+
     let batch_executor = BatchExecutor::new(executor);
 
     // 6. 执行批处理
@@ -240,10 +296,30 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         on_failure::fire_failure_hooks(&mut batch_results, hook_cmd).await;
     }
 
-    // 7. 渲染与汇报结果
+    // 7. 渲染与汇报结果。
+    // --strict-plugins CI 门禁（03 §10.5）：任何插件降级 → 整体判失败；
+    // 默认排障模式下降级只计 DegradedPass，不阻塞 exit 0（与任务使命第 4 条一致）
+    let any_degraded = batch_results
+        .iter()
+        .any(|(_, res_list)| res_list.iter().any(|r| r.degraded));
+    if any_degraded {
+        let degraded_count: usize = batch_results
+            .iter()
+            .map(|(_, res_list)| res_list.iter().filter(|r| r.degraded).count())
+            .sum();
+        eprintln!(
+            "[WARN] {degraded_count} 个请求以降级形态发送{}",
+            if options.strict_plugins {
+                "（--strict-plugins：整体判失败，阻断假阳性流入生产）"
+            } else {
+                "（现场数据已完整录入快照；CI 门禁请加 --strict-plugins）"
+            }
+        );
+    }
     let has_failure = batch_results
         .iter()
-        .any(|(_, res_list)| res_list.iter().any(|r| !r.success));
+        .any(|(_, res_list)| res_list.iter().any(|r| !r.success))
+        || (options.strict_plugins && any_degraded);
 
     if options.report.eq_ignore_ascii_case("json") {
         // Gap Review P3-4：JSON 模式下 explain/triage 无法渲染，显式提示而非静默忽略
@@ -331,6 +407,11 @@ mod tests {
             mask_snapshot: false,
             only: None,
             on_failure: None,
+            allow_missing_plugins: false,
+            strict_plugins: false,
+            plugin_timeout_secs: 5,
+            plugin_env: vec![],
+            allow_project_plugins: false,
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());

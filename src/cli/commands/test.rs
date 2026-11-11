@@ -75,4 +75,24 @@ pub struct TestArgs {
     /// 失败时执行的 shell 命令（每个失败请求一次；env: RUPOST_FAILED_URL/STATUS/TRACE_ID）
     #[arg(long, value_name = "CMD")]
     pub on_failure: Option<String>,
+
+    /// 插件缺失/失败时降级为警告跳过，请求按 .http 原样外发（03 §2；现场排障）
+    #[arg(long)]
+    pub allow_missing_plugins: bool,
+
+    /// CI 严格门禁：发生任何插件降级 → 整体判失败 exit 1（03 §10.5）
+    #[arg(long)]
+    pub strict_plugins: bool,
+
+    /// 单次插件调用超时秒数（默认 5；SigV4 STS 冷启动等慢插件可调大）
+    #[arg(long, value_name = "SEC", default_value_t = 5)]
+    pub plugin_timeout: u64,
+
+    /// 显式放行插件子进程环境变量（manifest requires_env 声明外；KEY=VALUE）
+    #[arg(long, value_name = "KEY=VALUE")]
+    pub plugin_env: Vec<String>,
+
+    /// 放行工作区本地 ./.rupost/plugins 插件（默认隔离，防恶意仓库 RCE）
+    #[arg(long)]
+    pub allow_project_plugins: bool,
 }

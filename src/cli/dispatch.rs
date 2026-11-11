@@ -38,6 +38,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 mask_secrets,
                 only,
                 on_failure,
+                allow_missing_plugins,
+                strict_plugins,
+                plugin_timeout,
+                plugin_env,
+                allow_project_plugins,
             } = args;
 
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
@@ -68,6 +73,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 mask_snapshot: mask_secrets,
                 only,
                 on_failure,
+                allow_missing_plugins,
+                strict_plugins,
+                plugin_timeout_secs: plugin_timeout,
+                plugin_env,
+                allow_project_plugins,
             };
             let outcome = rupost::runner::run_test_suite(options).await?;
 

@@ -1075,6 +1075,8 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
         request: Some(req_snap),
         warnings: vec![],
         is_teardown: false,
+        degraded: false,
+        degraded: false,
     };
 
     let batch = vec![(PathBuf::from("test.http"), vec![fail_result])];

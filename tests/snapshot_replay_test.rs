@@ -1078,7 +1078,14 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
     };
 
     let batch = vec![(PathBuf::from("test.http"), vec![fail_result])];
-    save_batch_snapshot(&batch, &["test.http".to_string()], &snapshot_file, true, None).unwrap();
+    save_batch_snapshot(
+        &batch,
+        &["test.http".to_string()],
+        &snapshot_file,
+        true,
+        None,
+    )
+    .unwrap();
 
     let content = fs::read_to_string(&snapshot_file).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();

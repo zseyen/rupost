@@ -203,9 +203,10 @@ fn tokenize_plugin_args(content: &str) -> Vec<String> {
             continue;
         }
         match ch {
+            // 转义语义（与 resolver 宏分词一致）：反斜杠只作转义标记，
+            // 下一字符原样保留（`\"` → `"`），反斜杠本身不进参数值
             '\\' if in_quote.is_some() => {
                 escaped = true;
-                cur.push(ch);
             }
             q @ ('\'' | '"') if in_quote == Some(q) => {
                 in_quote = None;

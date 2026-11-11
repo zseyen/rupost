@@ -347,14 +347,8 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
 
             // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03 §10.6）
             let response = r.response.as_ref().map(|resp| {
-                let (body, truncated) = if resp.body.len() > DEFAULT_MAX_SNAPSHOT_BODY_BYTES {
-                    (
-                        resp.body[..DEFAULT_MAX_SNAPSHOT_BODY_BYTES].to_string(),
-                        true,
-                    )
-                } else {
-                    (resp.body.clone(), false)
-                };
+                let (body, truncated) =
+                    truncate_response_body(&resp.body, DEFAULT_MAX_SNAPSHOT_BODY_BYTES);
                 let body_sha256 = truncated.then(|| {
                     use sha2::{Digest, Sha256};
                     let mut hasher = Sha256::new();
@@ -471,16 +465,30 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     write_execution_snapshot(&snapshot, snapshot_path)
 }
 
-/// HeaderMap → 保序键值对（黑匣子契约要求 Vec<(String, String)>）
+/// HeaderMap → 保序键值对（黑匣子契约要求 Vec<(String, String)>）。
+/// 非 UTF-8 值走 lossy 保留可读字节（反静默：绝不静默丢弃为空串）。
 fn header_map_to_pairs(map: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
     map.iter()
         .map(|(name, value)| {
             (
                 name.as_str().to_string(),
-                value.to_str().unwrap_or_default().to_string(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
             )
         })
         .collect()
+}
+
+/// 响应体截断（UTF-8 边界安全）：多字节字符中点绝不 panic，
+/// 截断点回退到最近的字符边界（反静默 + 防崩溃双约束）。
+fn truncate_response_body(body: &str, max_bytes: usize) -> (String, bool) {
+    if body.len() <= max_bytes {
+        return (body.to_string(), false);
+    }
+    let mut end = max_bytes;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    (body[..end].to_string(), true)
 }
 
 /// 将黑匣子契约快照写入指定文件。
@@ -926,6 +934,41 @@ mod tests {
             .collect::<String>();
         // 与 save 路径同构的验真链：sha256(原始) 可由截断产物 + 标记还原比对
         assert_eq!(expected.len(), 64);
+    }
+
+    /// 截断的 UTF-8 边界安全回归：多字节字符中点绝不 panic，截断点回退字符边界
+    #[test]
+    fn test_truncate_response_body_char_boundary_safety() {
+        // 中文每字符 3 字节：256KB 处必落在字符中点（256*1024 = 262144，非 3 的倍数边界）
+        let cjk = "汉".repeat(crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES / 3 + 10);
+        assert!(cjk.len() > crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES);
+        let (truncated, flag) = crate::history::storage::truncate_response_body(
+            &cjk,
+            crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+        );
+        assert!(flag);
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert!(truncated.len() <= crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES);
+        assert!(truncated.chars().all(|c| c == '汉'), "截断不得产生替换符");
+        // 未超限：原样返回
+        let (same, no_flag) = crate::history::storage::truncate_response_body("hello", 100);
+        assert_eq!(same, "hello");
+        assert!(!no_flag);
+    }
+
+    /// 反静默契约：非 UTF-8 Header 值 lossy 保留可读字节，绝不静默丢弃为空串
+    #[test]
+    fn test_header_map_to_pairs_lossy_bytes() {
+        use reqwest::header::{HeaderMap, HeaderValue};
+        let mut map = HeaderMap::new();
+        map.insert(
+            "x-raw",
+            HeaderValue::from_bytes(&[0xFF, b'a', 0xFE]).unwrap(),
+        );
+        let pairs = crate::history::storage::header_map_to_pairs(&map);
+        let (_, value) = &pairs[0];
+        assert!(value.contains('a'), "可读字节必须保留: {value:?}");
+        assert!(!value.is_empty(), "非 UTF-8 值不得静默变空串");
     }
 
     /// TimingWaterfallUs 合成契约：diagnose 提供 TLS 阶段；total = 已发生阶段之和

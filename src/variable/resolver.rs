@@ -12,12 +12,13 @@ impl VariableResolver {
     /// 1. 函数宏通道（`{{$hmac_sha256(key, msg)}}` 等）：先于普通变量求值，
     ///    宏参数在求值时再做一次嵌套 `{{...}}` 插值（内外层求值序由守护测试锁定）；
     /// 2. 简单变量通道（`{{$uuid}}` / `{{user_id}}`）。
+    ///
     /// 求值失败的函数宏保留字面量，交由 `unresolved_placeholders` 显式告警（反静默）。
     pub fn substitute(text: &str, context: &VariableContext) -> String {
         static FN_MACRO_REGEX: OnceLock<Regex> = OnceLock::new();
         static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
-        let fn_re = FN_MACRO_REGEX
-            .get_or_init(|| Regex::new(r"\{\{\$([a-z_0-9]+)\((.*?)\)\}\}").unwrap());
+        let fn_re =
+            FN_MACRO_REGEX.get_or_init(|| Regex::new(r"\{\{\$([a-z_0-9]+)\((.*?)\)\}\}").unwrap());
 
         // 通道 1：函数宏（带参数）
         let with_fns = fn_re.replace_all(text, |caps: &Captures| {
@@ -411,8 +412,7 @@ mod tests {
     #[test]
     fn test_hmac_sha256_quoted_comma_arg() {
         let ctx = VariableContext::new();
-        let output =
-            VariableResolver::resolve(r#"{{$sha256("a,b c")}}"#, &ctx);
+        let output = VariableResolver::resolve(r#"{{$sha256("a,b c")}}"#, &ctx);
         // SHA-256("a,b c")
         assert_eq!(
             output,
@@ -436,7 +436,10 @@ mod tests {
     #[test]
     fn test_random_int_param_bounds() {
         let ctx = VariableContext::new();
-        assert_eq!(VariableResolver::resolve("{{$random_int(5, 5)}}", &ctx), "5");
+        assert_eq!(
+            VariableResolver::resolve("{{$random_int(5, 5)}}", &ctx),
+            "5"
+        );
         for _ in 0..32 {
             let out = VariableResolver::resolve("{{$random_int( 1 , 3 )}}", &ctx);
             let n: i64 = out.parse().unwrap();
@@ -459,10 +462,7 @@ mod tests {
             let mut parsed = crate::parser::ParsedRequest::new(1);
             parsed.url = bad.to_string();
             let warnings = VariableResolver::unresolved_placeholders(&parsed);
-            assert!(
-                !warnings.is_empty(),
-                "非法函数宏必须被残留检查捕获: {bad}"
-            );
+            assert!(!warnings.is_empty(), "非法函数宏必须被残留检查捕获: {bad}");
         }
     }
 

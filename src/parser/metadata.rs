@@ -750,10 +750,8 @@ mod tests {
                         message.contains("已废除"),
                         "error should cite abolition, got: {message}"
                     );
-                    let hint_matches = input.contains("stage=")
-                        && message.contains("阶段由注解")
-                        || input.contains("priority=")
-                            && message.contains("无需 priority")
+                    let hint_matches = input.contains("stage=") && message.contains("阶段由注解")
+                        || input.contains("priority=") && message.contains("无需 priority")
                         || input.contains("optional=") && message.contains("?optional");
                     assert!(hint_matches, "guidance mismatch for {input}: {message}");
                 }

@@ -193,7 +193,10 @@ pub fn build_trace_plan_with_policy(
         // 敏感键值跳过——凭据模板化管线负责（管线序：敏感键凭据 > T2）
         // 剥离尾随 #fragment，防止最后一个参数值带入锚点导致比对失效
         if let Some((_, raw_query)) = entry.request.url.split_once('?') {
-            let query = raw_query.split_once('#').map(|(q, _)| q).unwrap_or(raw_query);
+            let query = raw_query
+                .split_once('#')
+                .map(|(q, _)| q)
+                .unwrap_or(raw_query);
             for pair in query.split('&') {
                 if let Some((k, v)) = pair.split_once('=')
                     && !is_key_sensitive(k, policy)

@@ -221,18 +221,14 @@ async fn probe_after_connect(
             {
                 Ok(Ok(stream)) => stream,
                 Ok(Err(e)) => {
-                    return handle_stage_error(
-                        format!("TLS handshake failed: {}", e),
-                        None,
-                        None,
-                    )
+                    return handle_stage_error(format!("TLS handshake failed: {}", e), None, None);
                 }
                 Err(_) => {
                     return handle_stage_error(
                         format!("TLS handshake timeout after {:?}", default_timeout),
                         None,
                         None,
-                    )
+                    );
                 }
             };
         tls_handshake_duration = Some(tls_start.elapsed());
@@ -265,20 +261,21 @@ async fn probe_after_connect(
                     format!("Failed to read response over TLS: {}", e),
                     tls_handshake_duration,
                     cert_info,
-                )
+                );
             }
             Err(_) => {
                 return handle_stage_error(
                     format!("HTTP TTFB timeout after {:?}", default_timeout),
                     tls_handshake_duration,
                     cert_info,
-                )
+                );
             }
         };
 
         if n == 0 {
             return handle_stage_error(
-                "Connection closed by server over TLS before HTTP response was received (EOF)".to_string(),
+                "Connection closed by server over TLS before HTTP response was received (EOF)"
+                    .to_string(),
                 tls_handshake_duration,
                 cert_info,
             );
@@ -302,11 +299,7 @@ async fn probe_after_connect(
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tcp_stream;
         if let Err(e) = stream.write_all(request_payload.as_bytes()).await {
-            return handle_stage_error(
-                format!("Failed to send request: {}", e),
-                None,
-                None,
-            );
+            return handle_stage_error(format!("Failed to send request: {}", e), None, None);
         }
         stream.flush().await.ok();
 
@@ -314,18 +307,14 @@ async fn probe_after_connect(
         let n = match tokio::time::timeout(default_timeout, stream.read(&mut buffer)).await {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => {
-                return handle_stage_error(
-                    format!("Failed to read response: {}", e),
-                    None,
-                    None,
-                )
+                return handle_stage_error(format!("Failed to read response: {}", e), None, None);
             }
             Err(_) => {
                 return handle_stage_error(
                     format!("HTTP TTFB timeout after {:?}", default_timeout),
                     None,
                     None,
-                )
+                );
             }
         };
 

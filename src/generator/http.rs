@@ -372,7 +372,7 @@ impl HttpGenerator {
     }
 
     /// 结构化切分 URL 并模板化 Query 参数与 SPA Fragment 参数中的敏感键。
-    /// 
+    ///
     /// 核心保障：
     /// 1. 标准 URL：`https://api.com/items?page=1&token=sec#my-anchor`
     ///    - `token` 正确模板化为 `{{token}}`；

@@ -183,7 +183,10 @@ impl UrlTemplatizer {
         out.push_str(clean_placeholder);
 
         let before_query = raw_url.split_once('?').map(|(b, _)| b).unwrap_or(raw_url);
-        let before_frag = before_query.split_once('#').map(|(b, _)| b).unwrap_or(before_query);
+        let before_frag = before_query
+            .split_once('#')
+            .map(|(b, _)| b)
+            .unwrap_or(before_query);
         if path == "/" && !before_frag.ends_with('/') {
             // 裸根域名（如 https://example.com）未以斜杠结尾时保持原样
         } else {
@@ -639,7 +642,10 @@ mod tests {
             "{{base_url}}/ws?room=1"
         );
         assert_eq!(
-            UrlTemplatizer::templatize_origin("wss://stream.example.com/feed#active", "{{base_url}}"),
+            UrlTemplatizer::templatize_origin(
+                "wss://stream.example.com/feed#active",
+                "{{base_url}}"
+            ),
             "{{base_url}}/feed#active"
         );
 

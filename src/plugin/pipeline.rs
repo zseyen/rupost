@@ -16,7 +16,7 @@ impl PluginPipeline {
     /// 2. 同阶段内 100% 保留 `.http` 文件书写声明行序（稳定排序，所见即所发）——
     ///    `priority` 等底层魔数已彻底废除（05 ADR-D6 防复活清单）。
     pub fn sort_directives(directives: &mut [PluginDirective]) {
-        directives.sort_by(|a, b| a.stage.cmp(&b.stage));
+        directives.sort_by_key(|d| d.stage);
     }
 
     /// 提取属于指定生命周期阶段的指令切片

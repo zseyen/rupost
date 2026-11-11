@@ -350,15 +350,15 @@ impl TimingWaterfallUs {
         timing: &crate::http::timing::RequestTiming,
         diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
     ) -> Self {
-        let dns = Some(timing.dns_lookup.as_micros() as u64);
-        let tcp = Some(timing.tcp_connect.as_micros() as u64);
+        let dns_us = timing.dns_lookup.as_micros() as u64;
+        let tcp_us = timing.tcp_connect.as_micros() as u64;
         let tls = diagnose.and_then(|d| d.tls_handshake_duration.map(|t| t.as_micros() as u64));
         let ttfb = timing.ttfb.as_micros() as u64;
         let transfer = timing.transfer.as_micros() as u64;
-        let total = dns.unwrap_or(0) + tcp.unwrap_or(0) + tls.unwrap_or(0) + ttfb + transfer;
+        let total = dns_us + tcp_us + tls.unwrap_or(0) + ttfb + transfer;
         Self {
-            dns_lookup_us: dns,
-            tcp_connect_us: tcp,
+            dns_lookup_us: Some(dns_us),
+            tcp_connect_us: Some(tcp_us),
             tls_handshake_us: tls,
             ttfb_us: ttfb,
             transfer_us: transfer,
@@ -369,9 +369,7 @@ impl TimingWaterfallUs {
 
 impl SocketDiagnostics {
     /// 从深度诊断报告提取物理连接指纹；非 HTTPS 时 TLS/证书字段为 None
-    pub fn from_diagnose(
-        diagnose: &crate::http::diagnose::DiagnosticsReport,
-    ) -> Option<Self> {
+    pub fn from_diagnose(diagnose: &crate::http::diagnose::DiagnosticsReport) -> Option<Self> {
         let port = url::Url::parse(&diagnose.url)
             .ok()
             .map(|u| u.port_or_known_default().unwrap_or(80))?;

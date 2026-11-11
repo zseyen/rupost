@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if)]
-use crate::history::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
+use crate::history::model::HistoryEntry;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -268,8 +268,8 @@ pub fn read_snapshot_suite_compat<P: AsRef<Path>>(path: P) -> Result<SnapshotSui
 /// - 空历史：warn 后不写文件、exit 0（对齐 generate 先例）
 /// - 输出路径静默覆盖（`write_snapshot_suite` 无 `--force` 语义）；凭据不脱敏（与 `--save-snapshot` 同暴露面）
 pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) -> Result<()> {
-    use crate::history::model::{SnapshotEntry, SnapshotSuite};
     use super::selector::{SelectionStrategy, select_entries};
+    use crate::history::model::{SnapshotEntry, SnapshotSuite};
 
     let storage = get_storage();
     let entries = select_entries(storage, SelectionStrategy::Last(last))?;
@@ -326,9 +326,9 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     environment: Option<&str>,
 ) -> Result<()> {
     use crate::history::model::{
-        ExecutionErrorDetail, ExecutionOutcome, ExecutionSnapshotEntry, ExecutionSnapshotFile,
-        MaskingMode, RunnerFingerprint, SnapshotAssertion, SnapshotRequest, SnapshotResponse,
-        DEFAULT_MAX_SNAPSHOT_BODY_BYTES, SNAPSHOT_SCHEMA_VERSION,
+        DEFAULT_MAX_SNAPSHOT_BODY_BYTES, ExecutionErrorDetail, ExecutionOutcome,
+        ExecutionSnapshotEntry, ExecutionSnapshotFile, MaskingMode, RunnerFingerprint,
+        SNAPSHOT_SCHEMA_VERSION, SnapshotAssertion, SnapshotRequest, SnapshotResponse,
     };
 
     let mut entries = Vec::new();
@@ -359,7 +359,11 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                     use sha2::{Digest, Sha256};
                     let mut hasher = Sha256::new();
                     hasher.update(resp.body.as_bytes());
-                    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    hasher
+                        .finalize()
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
                 });
                 SnapshotResponse {
                     status: resp.status.code(),
@@ -382,10 +386,9 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             };
 
             // 时序瀑布 + Socket 指纹：diagnose 报告优先（含 TLS/证书），退回 RequestTiming
-            let timing_waterfall = r
-                .timing
-                .as_ref()
-                .map(|t| crate::history::model::TimingWaterfallUs::from_probes(t, r.diagnose_report.as_ref()));
+            let timing_waterfall = r.timing.as_ref().map(|t| {
+                crate::history::model::TimingWaterfallUs::from_probes(t, r.diagnose_report.as_ref())
+            });
             let socket_diagnostics = r
                 .diagnose_report
                 .as_ref()
@@ -504,7 +507,8 @@ pub fn write_execution_snapshot<P: AsRef<Path>>(
             .mode(0o600)
             .open(path)
             .map_err(RupostError::IoError)?;
-        file.write_all(json.as_bytes()).map_err(RupostError::IoError)?;
+        file.write_all(json.as_bytes())
+            .map_err(RupostError::IoError)?;
         Ok(())
     }
     #[cfg(not(unix))]
@@ -565,7 +569,9 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
 /// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/exporter/redact.rs`），
 /// Headers 为保序键值对形态（02 §2 SnapshotRequest/SnapshotResponse）。
 pub fn mask_execution_snapshot_entry(entry: &mut crate::history::model::ExecutionSnapshotEntry) {
-    use crate::exporter::redact::{mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value};
+    use crate::exporter::redact::{
+        mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value,
+    };
     let mask_pairs = |headers: &mut Vec<(String, String)>| {
         for (name, value) in headers.iter_mut() {
             *value = redact_header_value(name, value);
@@ -706,7 +712,10 @@ mod tests {
         assert_eq!(snap.schema_version, "1.0");
         assert_eq!(snap.masking, crate::history::model::MaskingMode::None);
         assert_eq!(snap.environment.as_deref(), Some("staging"));
-        assert_eq!(snap.runner_fingerprint.rupost_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            snap.runner_fingerprint.rupost_version,
+            env!("CARGO_PKG_VERSION")
+        );
         assert_eq!(snap.entries.len(), 1);
         let entry = &snap.entries[0];
         assert_eq!(entry.request_number, 1);
@@ -717,7 +726,12 @@ mod tests {
         assert_eq!(entry.status, Some(201));
         assert_eq!(entry.request.method, "POST");
         assert_eq!(entry.request.url, "http://example.com/test");
-        assert!(entry.request.headers.contains(&("content-type".to_string(), "application/json".to_string())));
+        assert!(
+            entry
+                .request
+                .headers
+                .contains(&("content-type".to_string(), "application/json".to_string()))
+        );
         assert_eq!(entry.request.body.as_deref(), Some("{\"key\":\"value\"}"));
         let resp = entry.response.as_ref().unwrap();
         assert_eq!(resp.status, 201);
@@ -870,18 +884,16 @@ mod tests {
     #[test]
     fn test_execution_snapshot_unknown_field_tolerance() {
         use crate::history::model::ExecutionSnapshotFile;
-        let json = format!(
-            r#"{{
-                "schema_version": "1.0",
-                "generated_at": "2026-11-11T00:00:00Z",
-                "environment": null,
-                "runner_fingerprint": {{"os": "os", "arch": "arch", "rupost_version": "0.2.0"}},
-                "masking": "none",
-                "entries": [],
-                "future_field_appended_in_v11": true
-            }}"#
-        );
-        let snap: ExecutionSnapshotFile = serde_json::from_str(&json).unwrap();
+        let json = r#"{
+            "schema_version": "1.0",
+            "generated_at": "2026-11-11T00:00:00Z",
+            "environment": null,
+            "runner_fingerprint": {"os": "os", "arch": "arch", "rupost_version": "0.2.0"},
+            "masking": "none",
+            "entries": [],
+            "future_field_appended_in_v11": true
+        }"#;
+        let snap: ExecutionSnapshotFile = serde_json::from_str(json).unwrap();
         assert_eq!(snap.schema_version, "1.0");
         assert!(snap.entries.is_empty());
     }
@@ -891,20 +903,27 @@ mod tests {
     fn test_snapshot_body_truncation_and_sha256() {
         use sha2::{Digest, Sha256};
         let original = "x".repeat(crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES + 1024);
-        let (truncated_body, flag) = if original.len() > crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES
-        {
-            (
-                original[..crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES].to_string(),
-                true,
-            )
-        } else {
-            (original.clone(), false)
-        };
+        let (truncated_body, flag) =
+            if original.len() > crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES {
+                (
+                    original[..crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES].to_string(),
+                    true,
+                )
+            } else {
+                (original.clone(), false)
+            };
         assert!(flag);
-        assert_eq!(truncated_body.len(), crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES);
+        assert_eq!(
+            truncated_body.len(),
+            crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES
+        );
         let mut hasher = Sha256::new();
         hasher.update(original.as_bytes());
-        let expected = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let expected = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         // 与 save 路径同构的验真链：sha256(原始) 可由截断产物 + 标记还原比对
         assert_eq!(expected.len(), 64);
     }

@@ -324,6 +324,31 @@
 
 ---
 
+## 4.5 里程碑落地状态（2026-11-11 收官核对）
+
+| Milestone | 状态 | 交付证据 |
+| :-- | :--- | :--- |
+| M1 | ✅ 落地 | 内置宏（RFC 4231 向量）/ 快照 Schema v1.0 / FIFO 仲裁 / 冻结清单 interface-freeze-m1.md |
+| M2 | ✅ 落地 | 静态 manifest 零子进程发现 / 缓存安全硬化 / bench 0.58ms ≤5ms |
+| M3 | ✅ 落地 | StdioDriver / 失败分类学 / 统一降级 / `--strict-plugins`（04 套件 2/5 全绿）|
+| M4 | ✅ 落地 | args[0] 裁决序 / TOFU / 环境白名单 / 信号感知穿透（e2e exit 7）|
+| M5 | ✅ 落地 | plugin list/schema / `ai triage-snapshot`（masking 感知）/ 套件 1 与套件 4 |
+| M6 | 🆕 立项（v2.1.1） | 插件运行时就绪：`runtime` 声明 + readdir 预检 + 三态状态机 + 处方提示（03 §3.1.1/§8.3）+ §6 缺口收尾清单 |
+
+**M6 任务拆解（环境就绪与缺口收尾）**：
+1. **runtime 预检与三态**：`PluginRuntime` manifest 解析；readdir 级解释器存在性预检；插件三态（ready/pending/failed）状态机；`plugin list` 三态可视化与处方提示（03 §3.1.1）；
+2. **失败分类学扩展**：`runtime_missing` / `dependency_missing`（stderr 特征表驱动：`ModuleNotFoundError`/`Cannot find module`/`ImportError`，从 stderr 提取缺失模块名入处方）；
+3. **`requires_env` 放行告警**：manifest 声明但运行时缺 `--plugin-env` 放行 → 启动 WARNING（不阻断）；
+4. **`--max-snapshot-body-bytes` 旗标接线**（冻结清单缺口 #4）；
+5. **exit 2 = AST 语法错误归位**（P1-5 残尾：dispatch 未知命令已 exit 2，AST 解析错误路径仍 exit 1）；
+6. **DoD 性能验证测试补齐**：时延隔离确定性不变量（mock 插件 sleep 3s 断言 `ttfb < 100ms && plugin_duration_us > 3s`）；suite `cache_scope` 进程数上限（100 请求 × 1 @auth ≤ 2）；fail-fast × 插件组级 kill 传播；并发模式 × 插件管线组合；
+7. **04 套件 3 落地**：`tests/artifact_mining_test.rs`（Schema 契约半已在 M1 交付于 lib 内，录制保真半补集成测试文件）；
+8. **掩码扩面表驱动单测**：X-Sign 类自定义签名头 / query token / Set-Cookie / body PII 全表（02 §4）。
+
+**登记不做的裁决项（P2/生态期，非缺口）**：`@pipeline`/`@use` 语法、miners 路由化入口、TUI/Web 补全、`$md5`/`$random_string`/`$random_email`、正则断言、`plugin sync --regenerate`、doctor 自报健康协议（生态期，`plugin list --doctor` 聚合）、降级链 `fallback.builtin`（仅签名类开放）、RLIMIT 配额、全量 sha256 指纹、MCP Server、Windows shebang 透明代理（跨平台 CI 批次）。
+
+---
+
 ## 5. MVP 验收标准与交付物契约 (DoD & Acceptance Criteria)
 
 > v2.1.0 修订：指标全部改为**可证伪**口径（v2.0.0 的"≤100KB 增量"偏紧、"TTFB 误差为 0"无基准量、"564+ 测试"陈旧、"内存 ≤30MB"无测量手段）。

@@ -125,6 +125,11 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
   "name": "aws-sigv4",
   "version": "0.3.1",
   "description": "AWS Signature Version 4 动态认证与加签插件",
+  "runtime": {
+    "interpreter": "python3",
+    "min_version": "3.8",
+    "modules": ["boto3"]
+  },
   "commands": [
     {
       "name": "sigv4",
@@ -157,11 +162,39 @@ rupost test production_suite.http --allow-missing-plugins --save-snapshot /tmp/l
 
 字段裁决（v2.1.0 新增/修订）：
 * **`stage` 合法枚举**：MVP 仅 `prepare | transform | sign`；`post-response | on-failure | harvest` 为保留字（`[P2]`，§5.1 阶段 5~7 未放行注册路径）；
+* **`runtime`（v2.1.1 新增，跨语言运行时依赖声明）**：
+  * `interpreter`（可选）：解释器/宿主命令名（如 `python3`、`node`）。**原生二进制插件省略此字段**；
+  * `min_version`（可选）：最低版本语义化声明（如 `"3.8"`）；
+  * `modules`（可选）：解释器依赖清单（如 `["boto3"]`），仅作声明与提示素材，**内核不做依赖库存在性探测**（P2，见 §3.3）；
+  * **预检语义（零额外哲学负担）**：`interpreter` 的存在性检测 = readdir 级 PATH 查找，**不 spawn `--version` probe**（各语言版本输出格式不一，解析表维护贵；真实版本问题由首次执行失败暴露并按 §8.3 给出处方）。预检未过 → 插件进入 **pending 状态**（§3.3），与"缺失"共享同一组降级开关（§2.1）；
 * **`cache_scope`**：`none | request | suite`（`ttl` 为 `[P2]`）。OAuth2 取 Token 类插件声明 `suite`，内核跨请求复用其 Patch 结果（消除"100 请求拉起 100 次取 Token 子进程"的进程风暴，量化验收见 06 §5）；
-* **`requires_env`**：环境白名单声明（§6.2）；
+* **`requires_env`**：环境白名单声明（§6.2）；**声明了但运行时未放行（缺 `--plugin-env`）→ 启动 WARNING 提示放行缺失**（不阻断，子进程仅缺该变量）；
 * **`requires_tty`**：仅 commands 可为 true；**hooks 一律禁止声明 TTY**（hook 走 §8 管道）；
 * v2.0.0 的 `default_priority` 字段随 priority 魔数废除而删除（§5.2）；
 * **alias 冲突规则**：项目级覆盖全局，冲突启动 WARNING；插件命令与内置子命令/HTTP 方法重名：内置 > 插件 > 方法名，安装期告警（§6.1）。
+
+### 3.1.1 插件三态状态机（v2.1.1 新增，借鉴 Cordis/dsh 的"缺失即显式状态"语义）
+
+跨语言插件的运行环境差异（堡垒机无 Python、版本过老、依赖库缺失）必须在**执行前**可见，而非执行时才炸。注册表为每个插件维护显式状态：
+
+| 状态 | 判定 | `plugin list` 可视化 | 执行行为 |
+| :--- | :--- | :--- | :--- |
+| **`ready`** | manifest 合法 + 预检通过（interpreter 在 PATH 或无 interpreter 声明） | `✓ ready` | 正常执行 |
+| **`pending`** | manifest 合法但预检未过（解释器未找到；`modules` 声明仅记录，不参与判定） | `⚠ pending（解释器 python3 未找到）` | 按 §2.1 降级语义处理（与缺失共享开关）；提示含处方（见下） |
+| **`failed`** | manifest 解析失败 / 路径白名单拒绝 / 版本不兼容 | `✗ failed（原因）` | 不可执行；发现期告警 |
+
+* 状态在每次发现/预检时**重算**（响应式语义，借鉴 dsh/Cordis 的"缺失即显式状态 + 就绪自动激活"）：解释器装好后下次运行自动转 `ready`，无需手动刷新；
+* `plugin list` 必须展示三态及原因——排障工程师上堡垒机先看清单即知哪些用例会降级，而非跑到一半看 WARN；
+* **降级处方提示模板**（pending/执行失败统一，三处 WARNING 同文）：
+
+```
+[WARN] 插件 'aws-sigv4' 运行环境不满足，已降级跳过（现场数据已记录至快照）
+  原因: 解释器 python3 未找到（PATH 搜索 N 个目录）
+  处方（三选一）:
+    ① 安装运行时/依赖（见 manifest runtime 声明）
+    ② 改用内置宏等价能力（如 {{$hmac_sha256}}，离线闭环）
+    ③ --allow-missing-plugins 显式降级（本次已自动生效）
+```
 
 ### 3.2 发现、复合键索引与极速轻量缓存机制 (<5ms 启动守护)
 
@@ -393,7 +426,7 @@ manifest 的 `name/description/usage` 与插件 `warnings` 渲染进终端前必
 2. **stderr 内核托管**：hook 调用时 stderr 一律 piped，由内核异步排空（**stderr 洪泛同样会触发管道缓冲死锁**，§10.1 的独立 Task 排水覆盖 stdout 与 stderr）；内容截断至 16KB 后并入 `warnings`；CI 模式下 stderr 不直通终端；
 3. **`plugin_args` 安全**：`plugin_args`（含内核解析的 `env.*` 值）永不序列化进快照/报告（02 §2.7）；`warnings`、`set_variables` 入库前过 redactor + 文本净化（§6.4）。
 
-### 8.3 失败分类学（默认行为唯一权威，v2.1.0 新增）
+### 8.3 失败分类学（默认行为唯一权威，v2.1.1 扩展）
 
 | kind | 判定 | 默认行为 |
 | :--- | :--- | :--- |
@@ -401,8 +434,10 @@ manifest 的 `name/description/usage` 与插件 `warnings` 渲染进终端前必
 | `invalid_output` | stdout 非单 JSON / 版本不兼容 / 失败信封 | 不注入 Patch，按降级语义处理 |
 | `crashed` | 子进程信号终止 | 同上，错误信息含信号编号 |
 | `exit_non_zero` | exit ≠ 0 且无合法输出 | 同上，错误信息含 stderr 摘要 |
+| `runtime_missing`（v2.1.1） | spawn ENOENT 且 manifest 声明 `interpreter`；或预检（§3.1.1）已判 pending | 处方提示指向 manifest `runtime` 声明（安装解释器）|
+| `dependency_missing`（v2.1.1） | 插件 exit≠0 且 stderr 命中依赖缺失特征（`ModuleNotFoundError` / `Cannot find module` / `ImportError` 等表驱动清单） | 处方提示缺失模块名（从 stderr 提取）与安装指引 |
 
-* **降级联动**：四类失败与"缺失"共享 `?optional` / `--allow-missing-plugins` 降级开关（§2.1）；
+* **降级联动**：六类失败与"缺失"共享 `?optional` / `--allow-missing-plugins` 降级开关（§2.1）；
 * **超时可配置**：默认 5s 硬熔断，可用 `--plugin-timeout <sec>` 覆盖（SigV4 STS 冷启动等慢插件场景）；
 * **时延隔离**：插件子进程耗时独立统计为 `plugin_duration_us`，落盘于快照 `ExecutionSnapshotEntry.plugin_duration_us`（02 §2），**绝不混入**物理网络的 `duration_us` 和 `ttfb`；
 * **Hook 结果缓存**：按 manifest `cache_scope` 复用 Patch（suite 级缓存使 OAuth2 类插件全套件仅 1~2 次子进程，量化验收见 06 §5）。

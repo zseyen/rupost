@@ -142,4 +142,20 @@
 
 > 汇总裁决：**全部 P0/P1 均已有明确解决方案并合入 v2.1.0 文档层；剩余工作全部是带 Milestone 的代码落地项**。本底账随实施推进更新状态列（🔧 → ✅），M5 结束时必须全表 ✅ 方可回标 Execution Ready。
 
+## 4. M6 工作项（v2.1.1 新增：插件运行时就绪 + 缺口收尾，03 §3.1.1/§8.3）
+
+| ID | 工作项 | 归属 |
+| :-- | :--- | :--- |
+| M6-1 | `runtime` manifest 声明解析 + readdir 预检 + 插件三态状态机（ready/pending/failed）+ `plugin list` 可视化与处方提示 | M6 |
+| M6-2 | 失败分类学扩展 `runtime_missing`/`dependency_missing`（stderr 表驱动特征，提取缺失模块名入处方） | M6 |
+| M6-3 | `requires_env` 声明未放行启动 WARNING | M6 |
+| M6-4 | `--max-snapshot-body-bytes` 旗标接线（冻结缺口 #4） | M6 |
+| M6-5 | exit 2 = AST 语法错误归位（P1-5 残尾） | M6 |
+| M6-6 | DoD 性能验证测试：时延隔离不变量 / suite cache_scope 进程数 ≤2 / fail-fast 组级 kill 传播 / 并发×插件组合 | M6 |
+| M6-7 | 04 套件 3 录制保真半落地 `tests/artifact_mining_test.rs` | M6 |
+| M6-8 | 掩码扩面表驱动单测（X-Sign/query token/Set-Cookie/body PII 全表） | M6 |
+| M6-9 | P1-9 CI grep 守护（`use rupost_ai` 边界） | M6 |
+
+> M6 完成后底账维持全 ✅ + M6 全 ✅，方可维持 Execution Ready。
+
 > 全量落地记录（2026-11-11，M2~M5 收官）：M2 registry/缓存硬化（bench registry_cache_read 0.58ms ≤5ms）→ M3 StdioDriver/失败分类学/统一降级/--strict-plugins（6-driver mock 矩阵 + 降级 6 用例 e2e 含正向对照组）→ M4 args[0] 裁决序 + TOFU/环境白名单/信号感知穿透（e2e exit7 原值穿透）→ M5 plugin list/schema + ai triage-snapshot（masking 感知）+ standalone/byte-fidelity 套件。三层门禁：workspace 1029 测试 0 失败 / verify_features.sh PASS / examples run_all 15 套 ALL PASS；clippy -D warnings + fmt 零漂移。release 二进制净增量 vs 审查基线 +141 KiB（预算 ≤500 KiB）。**P0/P1 底账全表 ✅，Execution Ready 回标条件达成。**

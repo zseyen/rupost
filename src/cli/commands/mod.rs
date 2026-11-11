@@ -84,6 +84,10 @@ pub enum Commands {
 
     /// Manage rupost plugins (registry inspection & IntelliSense schema export)
     Plugin {
+        /// Allow discovering plugins from workspace ./.rupost/plugins
+        #[arg(long, global = true)]
+        allow_project_plugins: bool,
+
         #[command(subcommand)]
         command: PluginCommands,
     },

@@ -249,64 +249,11 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::Import { command }) => match command {
             ImportCommands::Curl(args) => rupost::importer::run_curl_import(&args.into_request())?,
         },
-        Some(Commands::Plugin { command }) => {
-            // 03 §3.2 缓存快路径命中（≤5ms）；过期自动重建（新装插件即时可见）
-            let options = rupost::plugin::DiscoverOptions {
-                allow_project_plugins: cli.args.iter().any(|a| a == "--allow-project-plugins")
-                    || std::env::var("RUPOST_ALLOW_PROJECT_PLUGINS").is_ok(),
-                project_root: None,
-            };
-            let cache_path = dirs::home_dir()
-                .map(|h| h.join(".rupost").join("registry.json"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"));
-            let registry = rupost::plugin::PluginRegistry::load_or_discover(&options, &cache_path)?;
-            for warning in &registry.warnings {
-                eprintln!("[!] {warning}");
-            }
-            match command {
-                crate::cli::PluginCommands::List => {
-                    println!("Installed plugin commands:");
-                    if registry.commands.is_empty() {
-                        println!(
-                            "  (none) — 安装方式：将 rupost-plugin-<name> 二进制与同名 .json 静态 manifest 放入 $PATH、~/.rupost/plugins 或 ./.rupost/plugins（需 --allow-project-plugins）"
-                        );
-                    }
-                    for line in super::plugin_route::render_extensions(&registry) {
-                        println!("{line}");
-                    }
-                    println!("Lifecycle hooks:");
-                    let mut hook_names: Vec<_> = registry.hooks.keys().collect();
-                    hook_names.sort();
-                    if hook_names.is_empty() {
-                        println!("  (none)");
-                    }
-                    for name in hook_names {
-                        let (path, hook) = &registry.hooks[name];
-                        println!("  {:<14} stage={:?} @ {}", name, hook.stage, path.display());
-                    }
-                }
-                crate::cli::PluginCommands::Schema => {
-                    // 聚合所有 Hook 的 parameters_schema 输出标准 JSON Schema（M5，
-                    // 03 §4.2：VSCode/IntelliJ 加载后键入 @auth 自动补全插件名与必填参数）
-                    let mut defs = serde_json::Map::new();
-                    let mut aliases: Vec<_> = registry.hooks.keys().collect();
-                    aliases.sort();
-                    for alias in aliases {
-                        let (_, hook) = &registry.hooks[alias];
-                        defs.insert(
-                            format!("@{} {}", hook.directive, alias),
-                            hook.parameters_schema.clone(),
-                        );
-                    }
-                    let schema = serde_json::json!({
-                        "$schema": "https://json-schema.org/draft/2020-12/schema",
-                        "title": "rupost plugin directive parameters",
-                        "type": "object",
-                        "properties": defs,
-                    });
-                    println!("{}", serde_json::to_string_pretty(&schema)?);
-                }
-            }
+        Some(Commands::Plugin {
+            allow_project_plugins,
+            command,
+        }) => {
+            super::plugin_route::handle_plugin_command(command, allow_project_plugins)?;
         }
         Some(Commands::Tui(args)) => {
             rupost::tui::run(
@@ -347,25 +294,17 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 std::process::exit(1);
             } else {
                 // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
-                // 根命令 trailing_var_arg 使 clap 无"未知子命令"事件，主动查表是唯一入口。
+                // 先从 cli.args 剥离 rupost 路由旗标再查表，确保前置/后置均可达插件命令。
+                let parsed = super::plugin_route::parse_routing_args(&cli.args);
                 let builtins = super::plugin_route::builtin_subcommand_names();
-                let allow_project = cli.args.iter().any(|a| a == "--allow-project-plugins");
-                let registry = super::plugin_route::discover_for_routing(allow_project);
-                match super::plugin_route::route(&cli.args, &builtins, &registry) {
+                let registry =
+                    super::plugin_route::discover_for_routing(parsed.allow_project_plugins);
+                match super::plugin_route::route(&parsed.passthrough, &builtins, &registry) {
                     super::plugin_route::RoutingDecision::PluginCommand(exe_path, _name, rest) => {
-                        let allow_env: Vec<String> = rest
-                            .iter()
-                            .filter_map(|a| a.strip_prefix("--plugin-env=").map(String::from))
-                            .chain(
-                                cli.args
-                                    .iter()
-                                    .filter(|a| a.starts_with("--plugin-env="))
-                                    .cloned(),
-                            )
-                            .map(|s| s.trim_start_matches("--plugin-env=").to_string())
-                            .collect();
-                        let code = super::plugin_route::launch_plugin_command(
-                            &exe_path, &rest, &allow_env,
+                        let code = super::plugin_exec::launch_plugin_command(
+                            &exe_path,
+                            &rest,
+                            &parsed.allow_env,
                         )
                         .await;
                         std::process::exit(code);

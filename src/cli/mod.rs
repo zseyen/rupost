@@ -4,6 +4,7 @@
 mod commands;
 mod dispatch;
 mod parser;
+mod plugin_exec;
 mod plugin_route;
 mod runner;
 

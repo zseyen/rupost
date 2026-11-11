@@ -87,12 +87,12 @@ echo '{"protocol_version":"1.0","extra_headers":[["Authorization","Bearer stage1
         PluginDirective::new("auth", "prep", PluginStage::Prepare),
         PluginDirective::new("sign", "signer", PluginStage::Sign),
     ];
-    let mut cache = SuiteHookCache::new();
+    let cache = SuiteHookCache::new();
     let outcome = PluginPipeline::execute_for_request(
         &directives,
         &reg,
         &PluginRuntimeOptions::default(),
-        &mut cache,
+        &cache,
         "https://api.example.com/v1",
         "POST",
         &[("X-Orig".to_string(), "1".to_string())],
@@ -150,13 +150,13 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
     let mut d2 = PluginDirective::new("auth", "param-auth", PluginStage::Prepare);
     d2.params.insert("env".to_string(), "prod".to_string());
 
-    let mut cache = SuiteHookCache::new();
+    let cache = SuiteHookCache::new();
     let opts = PluginRuntimeOptions::default();
     let _ = PluginPipeline::execute_for_request(
         &[d1.clone()],
         &reg,
         &opts,
-        &mut cache,
+        &cache,
         "http://x",
         "GET",
         &[],
@@ -168,7 +168,7 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
         &[d1],
         &reg,
         &opts,
-        &mut cache,
+        &cache,
         "http://x",
         "GET",
         &[],
@@ -180,7 +180,7 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
         &[d2],
         &reg,
         &opts,
-        &mut cache,
+        &cache,
         "http://x",
         "GET",
         &[],
@@ -229,7 +229,7 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
             .unwrap();
     reg.register_manifest(exe2, m2);
 
-    let mut cache = SuiteHookCache::new();
+    let cache = SuiteHookCache::new();
     let out_env = PluginPipeline::execute_for_request(
         &[PluginDirective::new(
             "sign",
@@ -238,7 +238,7 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         )],
         &reg,
         &PluginRuntimeOptions::default(),
-        &mut cache,
+        &cache,
         "http://x",
         "GET",
         &[],
@@ -269,7 +269,7 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         )],
         &reg,
         &PluginRuntimeOptions::default(),
-        &mut cache,
+        &cache,
         "http://x",
         "GET",
         &[],
@@ -282,4 +282,189 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         "阻断错误不得误写“已降级跳过”告警: {:?}",
         out_block.warnings
     );
+}
+
+#[tokio::test]
+async fn test_pipeline_per_request_hooks_run_concurrently_without_global_lock() {
+    // 确定性并行门禁（无耗时抖动假阳/假阴性）：
+    // 若两个任务相互等待对方写出的启动标记文件，若被全局锁串行化则会死锁直至 2s 超时失败；
+    // 只有真正无锁并行时才能在数毫秒内双向会合通过。
+    let dir = tempfile::tempdir().unwrap();
+    let exe_a = install_script_plugin(
+        dir.path(),
+        "barrier-a",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\ntouch \"{0}/a.started\"\ni=0\nwhile [ ! -f \"{0}/b.started\" ]; do\n  sleep 0.02\n  i=$((i+1))\n  if [ $i -ge 100 ]; then exit 41; fi\ndone\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Side\",\"A\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            dir.path().display()
+        ),
+    );
+    let exe_b = install_script_plugin(
+        dir.path(),
+        "barrier-b",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\ntouch \"{0}/b.started\"\ni=0\nwhile [ ! -f \"{0}/a.started\" ]; do\n  sleep 0.02\n  i=$((i+1))\n  if [ $i -ge 100 ]; then exit 42; fi\ndone\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Side\",\"B\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            dir.path().display()
+        ),
+    );
+    let mut reg = PluginRegistry::new();
+    for exe in [exe_a, exe_b] {
+        let m: PluginManifest =
+            serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+                .unwrap();
+        reg.register_manifest(exe, m);
+    }
+    let reg = std::sync::Arc::new(reg);
+    let cache = std::sync::Arc::new(SuiteHookCache::new());
+    let opts = std::sync::Arc::new(PluginRuntimeOptions::default());
+
+    let reg1 = reg.clone();
+    let cache1 = cache.clone();
+    let opts1 = opts.clone();
+    let h1 = tokio::spawn(async move {
+        PluginPipeline::execute_for_request(
+            &[PluginDirective::new("sign", "barrier-a", PluginStage::Sign)],
+            &reg1,
+            &opts1,
+            &cache1,
+            "http://x",
+            "GET",
+            &[],
+            None,
+        )
+        .await
+    });
+    let h2 = tokio::spawn(async move {
+        PluginPipeline::execute_for_request(
+            &[PluginDirective::new("sign", "barrier-b", PluginStage::Sign)],
+            &reg,
+            &opts,
+            &cache,
+            "http://x",
+            "GET",
+            &[],
+            None,
+        )
+        .await
+    });
+
+    let (o1, o2) = tokio::join!(h1, h2);
+    let o1 = o1.unwrap();
+    let o2 = o2.unwrap();
+    assert!(o1.blocking_error.is_none(), "A 必须并行会合: {:?}", o1);
+    assert!(o2.blocking_error.is_none(), "B 必须并行会合: {:?}", o2);
+}
+
+#[tokio::test]
+async fn test_pipeline_suite_hook_cold_start_singleflight_dedup() {
+    let dir = tempfile::tempdir().unwrap();
+    let calls_file = dir.path().join("calls.txt");
+    let exe = install_script_plugin(
+        dir.path(),
+        "cold-auth",
+        PluginStage::Prepare,
+        PluginCacheScope::Suite,
+        vec![],
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nsleep 0.04\necho hit >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer singleflight\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            calls_file.display()
+        ),
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let reg = std::sync::Arc::new(reg);
+    let cache = std::sync::Arc::new(SuiteHookCache::new());
+    let opts = std::sync::Arc::new(PluginRuntimeOptions::default());
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let reg = reg.clone();
+        let cache = cache.clone();
+        let opts = opts.clone();
+        handles.push(tokio::spawn(async move {
+            PluginPipeline::execute_for_request(
+                &[PluginDirective::new(
+                    "auth",
+                    "cold-auth",
+                    PluginStage::Prepare,
+                )],
+                &reg,
+                &opts,
+                &cache,
+                "http://x",
+                "GET",
+                &[],
+                None,
+            )
+            .await
+        }));
+    }
+    for h in handles {
+        let out = h.await.unwrap();
+        assert!(out.blocking_error.is_none(), "{out:?}");
+        assert_eq!(
+            out.patch.unwrap().extra_headers,
+            vec![(
+                "Authorization".to_string(),
+                "Bearer singleflight".to_string()
+            )]
+        );
+    }
+    let count = std::fs::read_to_string(&calls_file)
+        .unwrap()
+        .lines()
+        .count();
+    assert_eq!(
+        count, 1,
+        "8 个冷启动并发请求对同一 Suite 插件仅允许拉起 1 次进程，实际: {count}"
+    );
+}
+
+#[test]
+fn test_parse_plugin_env_spec_supports_key_and_key_equals_value() {
+    use rupost::plugin::{parse_plugin_env_spec, parse_plugin_env_specs};
+
+    unsafe {
+        std::env::set_var("RUPOST_TEST_SPEC_KEY", "inherited_val");
+        std::env::remove_var("RUPOST_TEST_MISSING_KEY");
+    }
+    assert_eq!(
+        parse_plugin_env_spec("FOO=bar=baz"),
+        Some(("FOO".to_string(), "bar=baz".to_string()))
+    );
+    assert_eq!(
+        parse_plugin_env_spec("RUPOST_TEST_SPEC_KEY"),
+        Some((
+            "RUPOST_TEST_SPEC_KEY".to_string(),
+            "inherited_val".to_string()
+        ))
+    );
+    assert_eq!(parse_plugin_env_spec("RUPOST_TEST_MISSING_KEY"), None);
+    assert_eq!(parse_plugin_env_spec("=bad"), None);
+    assert_eq!(
+        parse_plugin_env_specs(&[
+            "RUPOST_TEST_SPEC_KEY".to_string(),
+            "EXPLICIT=1".to_string(),
+            "RUPOST_TEST_MISSING_KEY".to_string(),
+        ]),
+        vec![
+            (
+                "RUPOST_TEST_SPEC_KEY".to_string(),
+                "inherited_val".to_string()
+            ),
+            ("EXPLICIT".to_string(), "1".to_string()),
+        ]
+    );
+    unsafe {
+        std::env::remove_var("RUPOST_TEST_SPEC_KEY");
+    }
 }

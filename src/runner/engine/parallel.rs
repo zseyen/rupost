@@ -26,6 +26,42 @@ pub struct TaskOutput {
     pub cookie_state: Option<serde_json::Value>,
 }
 
+/// 工作线程共享的主执行器不可变配置（全 `Arc::clone` 轻量共享，零 Registry/Cache 拷贝）
+#[derive(Clone)]
+struct WorkerExecutorConfig {
+    has_cookies: bool,
+    debug: bool,
+    debug_on_failure: bool,
+    plugin_registry: Option<Arc<crate::plugin::PluginRegistry>>,
+    plugin_options: crate::plugin::pipeline::PluginRuntimeOptions,
+    suite_hook_cache: Arc<crate::plugin::pipeline::SuiteHookCache>,
+    stream_sender: Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
+}
+
+impl WorkerExecutorConfig {
+    fn from_executor(executor: &TestExecutor) -> Self {
+        Self {
+            has_cookies: executor.has_cookies(),
+            debug: executor.debug,
+            debug_on_failure: executor.debug_on_failure,
+            plugin_registry: executor.plugin_registry.clone(),
+            plugin_options: executor.plugin_options.clone(),
+            suite_hook_cache: Arc::clone(&executor.suite_hook_cache),
+            stream_sender: executor.stream_sender.clone(),
+        }
+    }
+}
+
+fn is_non_empty_cookie_state(state: &serde_json::Value) -> bool {
+    !matches!(state, serde_json::Value::Null) && !state.as_array().is_some_and(Vec::is_empty)
+}
+
+/// 并行调度产出：结果集 + 末位有效会话 Cookie 状态（仅供临时 `@teardown` 使用，绝不写入持久盘）
+pub struct ParallelRunOutput {
+    pub results: Vec<(PathBuf, Vec<TestResult>)>,
+    pub final_cookie_state: Option<serde_json::Value>,
+}
+
 /// 并行调度执行器
 pub struct ParallelScheduler<'a> {
     executor: &'a TestExecutor,
@@ -59,8 +95,17 @@ impl<'a> ParallelScheduler<'a> {
         }
     }
 
+    /// 根据主执行器插件配置与给定 Cookie 状态创建临时执行器（供 worker 与并行 `@teardown` 复用）。
+    pub(super) fn build_ephemeral_clone_with_cookies(
+        base: &TestExecutor,
+        cookie_state: Option<serde_json::Value>,
+    ) -> TestExecutor {
+        let cfg = WorkerExecutorConfig::from_executor(base);
+        Self::build_executor_with_state(&cfg, cookie_state)
+    }
+
     /// 执行并行调度
-    pub async fn run(self) -> Result<Vec<(PathBuf, Vec<TestResult>)>> {
+    pub async fn run(self) -> Result<ParallelRunOutput> {
         let mut results = Vec::new();
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(self.concurrency));
@@ -76,17 +121,14 @@ impl<'a> ParallelScheduler<'a> {
         }
 
         let mut files_map = self.files_map;
+        let base_worker_config = WorkerExecutorConfig::from_executor(self.executor);
 
         for file_path in &self.execution_order {
             if let Some(parsed_file) = files_map.remove(file_path) {
                 let file_path = file_path.clone();
                 let sem = Arc::clone(&semaphore);
                 let has_failed_clone = Arc::clone(&has_failed);
-
-                // 获取主执行器的配置
-                let has_cookies = self.executor.has_cookies();
-                let debug = self.executor.debug;
-                let debug_on_failure = self.executor.debug_on_failure;
+                let worker_config = base_worker_config.clone();
                 let fail_fast = self.fail_fast;
 
                 // 节点在进入线程前的基础 Context
@@ -130,13 +172,9 @@ impl<'a> ParallelScheduler<'a> {
                     let mut worker_context = base_context.clone();
                     worker_context.extend(dep_vars);
 
-                    // 5. 实例化当前的 Executor，并反序列化载入前置 Cookie 状态
-                    let worker_executor = Self::build_executor_with_state(
-                        has_cookies,
-                        debug,
-                        debug_on_failure,
-                        dep_cookie_state,
-                    );
+                    // 5. 实例化当前的 Executor，继承主插件体系并载入前置 Cookie 状态
+                    let worker_executor =
+                        Self::build_executor_with_state(&worker_config, dep_cookie_state);
 
                     // 6. 执行真正的测试
                     let res = worker_executor
@@ -194,8 +232,6 @@ impl<'a> ParallelScheduler<'a> {
             }
         }
 
-        let mut all_completed_vars = HashMap::new();
-
         while let Some(res) = join_set.join_next().await {
             match res {
                 Ok((path, run_results, aborted)) => {
@@ -224,16 +260,37 @@ impl<'a> ParallelScheduler<'a> {
             }
         }
 
-        // 我们在通道中也提取接收最终的各节点变量合并到 self.context
-        // 这一步在 run 结束时可以把并行的捕获写回主环境以保持环境变量干净
-        for rx in receivers.values() {
-            if let Some(output) = &*rx.borrow() {
+        // 按确定性 execution_order 合并各已完成节点捕获的变量，并将最终有效 Cookie 状态回灌
+        // 主执行器（避免 HashMap 无序迭代的随机性，同时支撑后续 @teardown 会话鉴权）。
+        let mut all_completed_vars = HashMap::new();
+        let mut non_empty_cookie_states: Vec<serde_json::Value> = Vec::new();
+        for file_path in &self.execution_order {
+            if let Some(rx) = receivers.get(file_path)
+                && let Some(output) = &*rx.borrow()
+            {
                 all_completed_vars.extend(output.captured_vars.clone());
+                if let Some(state) = &output.cookie_state
+                    && is_non_empty_cookie_state(state)
+                {
+                    non_empty_cookie_states.push(state.clone());
+                }
             }
         }
         self.context.extend(all_completed_vars);
 
-        Ok(results)
+        if non_empty_cookie_states.len() > 1
+            && non_empty_cookie_states.windows(2).any(|w| w[0] != w[1])
+        {
+            tracing::warn!(
+                "{} 个并行分支均捕获了不一致的 Cookie 状态：仅保留拓扑序末位分支的会话状态供后续 @teardown 临时使用",
+                non_empty_cookie_states.len()
+            );
+        }
+
+        Ok(ParallelRunOutput {
+            results,
+            final_cookie_state: non_empty_cookie_states.pop(),
+        })
     }
 
     /// 辅助函数 1：异步等待所有前置依赖项运行完毕
@@ -294,20 +351,26 @@ impl<'a> ParallelScheduler<'a> {
         Some((merged_vars, last_cookie_state))
     }
 
-    /// 辅助函数 2：根据前置 Cookie 状态实例化 TestExecutor
+    /// 辅助函数 2：根据主配置与前置 Cookie 状态实例化 Worker `TestExecutor`
     fn build_executor_with_state(
-        has_cookies: bool,
-        debug: bool,
-        debug_on_failure: bool,
+        config: &WorkerExecutorConfig,
         cookie_state: Option<serde_json::Value>,
     ) -> TestExecutor {
-        let mut executor = if has_cookies {
+        let mut executor = if config.has_cookies {
             TestExecutor::with_ephemeral_cookies()
         } else {
             TestExecutor::new()
-        };
-        executor.debug = debug;
-        executor.debug_on_failure = debug_on_failure;
+        }
+        .with_debug(config.debug)
+        .with_debug_on_failure(config.debug_on_failure)
+        .with_shared_plugins(
+            config.plugin_registry.clone(),
+            config.plugin_options.clone(),
+            Arc::clone(&config.suite_hook_cache),
+        );
+        if let Some(sender) = config.stream_sender.clone() {
+            executor = executor.with_stream_sender(sender);
+        }
 
         if let Some(state) = cookie_state
             && let Err(e) = executor.import_cookie_state(state)
@@ -334,111 +397,5 @@ impl<'a> ParallelScheduler<'a> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::variable::VariableContext;
-
-    /// 构造一个已完成的前置依赖通道；返回 sender 由调用方持有，保证通道存活
-    #[allow(clippy::type_complexity)]
-    fn ready_dep(
-        vars: &[(&str, &str)],
-        cookie_state: Option<serde_json::Value>,
-    ) -> (
-        watch::Sender<Option<TaskOutput>>,
-        watch::Receiver<Option<TaskOutput>>,
-    ) {
-        let (tx, rx) = watch::channel::<Option<TaskOutput>>(None);
-        let captured_vars = vars
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        tx.send(Some(TaskOutput {
-            success: true,
-            captured_vars,
-            cookie_state,
-        }))
-        .unwrap();
-        (tx, rx)
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_deps_merges_vars_but_keeps_last_cookie_state() {
-        // 钻石依赖：两个父节点都携带 Cookie 状态且不一致。变量合并；Cookie 只保留
-        // 依赖声明顺序中的最后一个（并打 warn，此前为静默覆盖）。
-        let (_tx_b, dep_b) =
-            ready_dep(&[("from_b", "1")], Some(serde_json::json!([{"name": "b"}])));
-        let (_tx_c, dep_c) =
-            ready_dep(&[("from_c", "2")], Some(serde_json::json!([{"name": "c"}])));
-        let (my_tx, _my_rx) = watch::channel::<Option<TaskOutput>>(None);
-
-        let (vars, cookie) = ParallelScheduler::wait_for_deps(vec![dep_b, dep_c], my_tx)
-            .await
-            .expect("deps succeeded");
-
-        assert_eq!(vars.get("from_b").map(String::as_str), Some("1"));
-        assert_eq!(vars.get("from_c").map(String::as_str), Some("2"));
-        assert_eq!(cookie, Some(serde_json::json!([{"name": "c"}])));
-    }
-
-    #[tokio::test]
-    async fn test_wait_for_deps_single_cookie_parent_passes_through() {
-        let (_tx_a, dep_a) = ready_dep(&[], Some(serde_json::json!([{"name": "a"}])));
-        let (_tx_n, dep_no_cookie) = ready_dep(&[("x", "y")], None);
-        let (my_tx, _my_rx) = watch::channel::<Option<TaskOutput>>(None);
-
-        let (_vars, cookie) = ParallelScheduler::wait_for_deps(vec![dep_a, dep_no_cookie], my_tx)
-            .await
-            .expect("deps succeeded");
-        // 无 Cookie 的父节点不应把已有状态覆盖成 None
-        assert_eq!(cookie, Some(serde_json::json!([{"name": "a"}])));
-    }
-
-    #[test]
-    fn test_extract_changed_vars() {
-        let mut before = VariableContext::new();
-        before.insert("a", "1");
-        before.insert("b", "2");
-
-        let mut after = before.clone();
-        after.insert("b", "modified"); // 修改的
-        after.insert("c", "3"); // 新加的
-
-        let diff = ParallelScheduler::extract_changed_vars(&before, &after);
-        assert_eq!(diff.len(), 2);
-        assert_eq!(diff.get("b").map(|s| s.as_str()), Some("modified"));
-        assert_eq!(diff.get("c").map(|s| s.as_str()), Some("3"));
-    }
-
-    #[test]
-    fn test_build_executor_with_cookie_state() {
-        let base_executor = TestExecutor::with_ephemeral_cookies();
-
-        // 模拟一个带 Cookie 的状态 Value
-        let middleware = crate::middleware::CookieMiddleware::new_ephemeral();
-        {
-            let store_arc = middleware.cookie_store();
-            let mut store = store_arc.lock().unwrap();
-            let cookie = cookie::Cookie::build(("session", "abcdef"))
-                .domain("api.example.com")
-                .path("/")
-                .build();
-            let url = url::Url::parse("https://api.example.com/").unwrap();
-            store.insert_raw(&cookie, &url).unwrap();
-        }
-        let cookie_state = middleware.export_cookie_state().unwrap();
-
-        // 载入
-        let executor = ParallelScheduler::build_executor_with_state(
-            true,
-            base_executor.debug,
-            base_executor.debug_on_failure,
-            Some(cookie_state),
-        );
-
-        assert!(executor.has_cookies());
-        let current_state = executor.export_cookie_state().unwrap().unwrap();
-        // 应该能重新导出来
-        assert!(current_state.to_string().contains("session"));
-        assert!(current_state.to_string().contains("abcdef"));
-    }
-}
+#[path = "parallel_tests.rs"]
+mod tests;

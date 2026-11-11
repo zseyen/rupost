@@ -145,15 +145,23 @@ impl CliRunner {
             .execute_one(parsed_request, 1, &mut context, Some("cli".to_string()))
             .await;
 
+        for warning in &result.warnings {
+            eprintln!("[!] {warning}");
+        }
+        self.executor.persist_cookies();
+
         if result.success {
             if let Some(response) = result.response {
                 self.format_response(response);
             }
+            Ok(())
         } else {
-            error!("Request failed: {}", result.error.unwrap_or_default());
+            let err_msg = result
+                .error
+                .unwrap_or_else(|| "Request execution failed".to_string());
+            error!("Request failed: {}", err_msg);
+            Err(rupost::RupostError::Other(err_msg))
         }
-
-        Ok(())
     }
 
     fn format_response(&self, response: Response) {

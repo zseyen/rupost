@@ -1,19 +1,17 @@
 use crate::Result;
 use crate::RupostError;
 use crate::history::save_batch_snapshot;
-use crate::middleware::resolve_cookie_path;
 use crate::runner::on_failure;
 use crate::runner::selector;
+use crate::runner::suite_setup::{build_suite_executor, load_suite_context};
 use crate::runner::{
-    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
-    TestReporter, TestResult, WorkflowGraph,
+    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestReporter,
+    TestResult, WorkflowGraph,
 };
-use crate::variable::ConfigLoader;
 use colored::Colorize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub struct TestSuiteOptions {
     pub paths: Vec<String>,
@@ -178,95 +176,9 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         (order, dependencies)
     };
 
-    // 4. 加载配置并构建变量上下文（配置/env 文件损坏或显式缺失的告警走 stderr，
-    //    保 `--report json` stdout 纯净——走查缺口 #6）
-    let (config, mut loader_warnings) = ConfigLoader::find_and_load();
-    let config = config.unwrap_or_default();
-
-    // 解析 CLI 变量覆盖
-    let cli_vars: Vec<(String, String)> = options
-        .var
-        .iter()
-        .filter_map(|s| ConfigLoader::parse_cli_var(s))
-        .collect();
-
-    // 如果指定了 env_file 则使用它（显式意图），否则默认自动寻找加载并合并本地 .env
-    let env_file_to_load = options
-        .env_file
-        .as_deref()
-        .map(|p| (p, true))
-        .or(Some((".env", false)));
-
-    let (mut var_context, env_warnings) =
-        ConfigLoader::build_context(&config, options.env.as_deref(), &cli_vars, env_file_to_load);
-    loader_warnings.extend(env_warnings);
-    for warning in &loader_warnings {
-        eprintln!("[!] {warning}");
-    }
-    var_context.insert("__default_scheme", &options.default_scheme);
-
-    // 5. 构建 TestExecutor
-    let mut executor = if options.no_cookies {
-        TestExecutor::new()
-    } else if let Some(cookie_path) = &options.cookie_file {
-        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref())?;
-        TestExecutor::with_cookies(resolved)?
-    } else {
-        // 默认为临时会话（运行内共享、进程退出即失），与 Postman 等的"默认持久化"
-        // 心智不同——不提示会让用户误以为会话已保存
-        if options.verbose {
-            println!(
-                "[i] 会话 Cookie 为临时模式（仅本次运行内共享）；加 --cookie-file <FILE> 可跨运行持久化"
-            );
-        }
-        tracing::debug!("Cookies are ephemeral for this run; pass --cookie-file to persist");
-        TestExecutor::with_ephemeral_cookies()
-    };
-
-    executor = executor
-        .with_debug(options.debug)
-        .with_debug_on_failure(options.debug_on_failure);
-
-    // 5.5 插件注册表装配（03 §3.0 静态 manifest 发现；缓存快路径命中 ≤5ms，
-    // 过期自动重建 → 新装插件无需手动 sync 即可路由，P1-4 闭环）
-    let plugin_runtime = crate::plugin::pipeline::PluginRuntimeOptions {
-        allow_missing_plugins: options.allow_missing_plugins,
-        strict_plugins: options.strict_plugins,
-        plugin_timeout: Duration::from_secs(options.plugin_timeout_secs),
-        plugin_env: options
-            .plugin_env
-            .iter()
-            .filter_map(|s| {
-                s.split_once('=')
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-            })
-            .collect(),
-    };
-    let discover_options = crate::plugin::DiscoverOptions {
-        allow_project_plugins: options.allow_project_plugins,
-        project_root: None,
-    };
-    let cache_path = dirs::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
-        .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
-    let plugin_registry =
-        match crate::plugin::PluginRegistry::load_or_discover(&discover_options, &cache_path) {
-            Ok(registry) => {
-                for warning in &registry.warnings {
-                    eprintln!("[!] {warning}");
-                }
-                Some(Arc::new(registry))
-            }
-            Err(e) => {
-                // 反静默：发现失败必须可见，但绝不阻塞无插件注解的主流程
-                eprintln!("[!] 插件注册表发现失败（插件注解将按缺失降级处理）: {e}");
-                None
-            }
-        };
-    if let Some(registry) = plugin_registry {
-        executor = executor.with_plugins(registry, plugin_runtime);
-    }
-
+    // 4 & 5. 加载配置上下文与构建 TestExecutor（含环境变量、Cookie 策略与插件装配）
+    let mut var_context = load_suite_context(&options);
+    let executor = build_suite_executor(&options)?;
     let batch_executor = BatchExecutor::new(executor);
 
     // 6. 执行批处理

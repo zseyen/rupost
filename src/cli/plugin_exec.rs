@@ -112,12 +112,8 @@ pub async fn launch_plugin_command(exe_path: &Path, args: &[String], allow_env: 
     for (key, value) in std::env::vars().filter(|(k, _)| k.starts_with("RUPOST_")) {
         cmd.env(key, value);
     }
-    for spec in allow_env {
-        if let Some((key, value)) = spec.split_once('=') {
-            cmd.env(key, value);
-        } else if let Ok(value) = std::env::var(spec) {
-            cmd.env(spec, value);
-        }
+    for (key, value) in rupost::plugin::parse_plugin_env_specs(allow_env) {
+        cmd.env(key, value);
     }
     cmd.env(
         "RUPOST_WORKSPACE",

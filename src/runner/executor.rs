@@ -95,11 +95,11 @@ pub struct TestExecutor {
     pub debug: bool,
     pub debug_on_failure: bool,
     pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
-    /// 插件注册表（M3：`--save-snapshot`/插件注解存在时由 app 层装配；None = 插件注解按
-    /// 未声明降级旗标路径报错）。suite 级 Hook 缓存随执行器生命周期共享（03 §8.3）。
+    /// 插件注册表（M3：`--save-snapshot`/插件注解存在时由 app 层装配；None 时由
+    /// `executor_plugin` 回退空注册表进入管线，防止绕过严格门禁）。
     pub plugin_registry: Option<Arc<crate::plugin::PluginRegistry>>,
     pub plugin_options: crate::plugin::pipeline::PluginRuntimeOptions,
-    pub suite_hook_cache: Arc<tokio::sync::Mutex<crate::plugin::pipeline::SuiteHookCache>>,
+    pub suite_hook_cache: Arc<crate::plugin::pipeline::SuiteHookCache>,
 }
 
 impl TestExecutor {
@@ -149,9 +149,7 @@ impl TestExecutor {
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
-            suite_hook_cache: Arc::new(tokio::sync::Mutex::new(
-                crate::plugin::pipeline::SuiteHookCache::new(),
-            )),
+            suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
         }
     }
 
@@ -163,6 +161,19 @@ impl TestExecutor {
     ) -> Self {
         self.plugin_registry = Some(registry);
         self.plugin_options = options;
+        self
+    }
+
+    /// 并行调度器共享插件注册表、运行配置与同一个 Suite 级并发缓存。
+    pub(crate) fn with_shared_plugins(
+        mut self,
+        registry: Option<Arc<crate::plugin::PluginRegistry>>,
+        options: crate::plugin::pipeline::PluginRuntimeOptions,
+        suite_hook_cache: Arc<crate::plugin::pipeline::SuiteHookCache>,
+    ) -> Self {
+        self.plugin_registry = registry;
+        self.plugin_options = options;
+        self.suite_hook_cache = suite_hook_cache;
         self
     }
 
@@ -215,9 +226,7 @@ impl TestExecutor {
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
-            suite_hook_cache: Arc::new(tokio::sync::Mutex::new(
-                crate::plugin::pipeline::SuiteHookCache::new(),
-            )),
+            suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
         })
     }
 
@@ -236,9 +245,7 @@ impl TestExecutor {
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
-            suite_hook_cache: Arc::new(tokio::sync::Mutex::new(
-                crate::plugin::pipeline::SuiteHookCache::new(),
-            )),
+            suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
         }
     }
 
@@ -387,87 +394,30 @@ impl TestExecutor {
         let name = parsed.name().map(|s| s.to_string());
 
         // 2.5 插件管线（03 §5.1 阶段不可逆流；03 §2 统一降级语义）：
-        // 变量解析后、发包前执行；Patch 折叠进请求形态；降级 = 原样外发 + 三处 WARNING
-        let mut degraded = false;
-        let mut plugin_duration_us: u64 = 0;
-        let mut plugin_warnings: Vec<String> = Vec::new();
-        let mut result_warnings_from_patch: Vec<String> = Vec::new();
-        if !parsed.metadata.plugins.is_empty() {
-            let (registry, plugin_options) = {
-                let reg = self.plugin_registry.clone();
-                let opts = self.plugin_options.clone();
-                (reg, opts)
-            };
-            if let Some(registry) = registry {
-                let headers: Vec<(String, String)> = parsed
-                    .headers
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                let stage = {
-                    let mut cache = self.suite_hook_cache.lock().await;
-                    crate::plugin::PluginPipeline::execute_for_request(
-                        &parsed.metadata.plugins,
-                        &registry,
-                        &plugin_options,
-                        &mut cache,
-                        &parsed.url,
-                        &method,
-                        &headers,
-                        parsed.body.as_deref(),
-                    )
-                    .await
-                };
-                if let Some(blocking) = stage.blocking_error {
-                    return TestResult::error(
-                        request_number,
-                        name,
-                        method,
-                        url,
-                        blocking,
-                        start.elapsed(),
-                    );
-                }
-                if let Some(patch) = &stage.patch {
-                    let mut header_pairs = std::mem::take(&mut parsed.headers);
-                    patch.apply_to(&mut header_pairs, &mut parsed.body);
-                    parsed.headers = header_pairs;
-                    for (key, value) in &patch.set_variables {
-                        context.insert(key, value);
-                    }
-                    result_warnings_from_patch = patch.warnings.clone();
-                }
-                degraded = stage.degraded;
-                plugin_duration_us = stage.plugin_duration_us;
-                plugin_warnings = stage.warnings;
-                // 终端通道（03 §2.1 三处 WARNING 之一；报告/快照由 result.warnings 承载）
-                if degraded {
-                    for warning in &plugin_warnings {
-                        eprintln!("[WARN] {warning}");
-                    }
-                }
-
-                // 03 §2.1 兜底缺失守卫：降级时含未解析 {{var}} 的 Header 不得把
-                // 字面量（如 {{DEBUG_FALLBACK_TOKEN}}）当 Bearer 发往生产 → 跳过请求。
-                // 仅约束降级路径的 Header；URL query 字面量行为由既有契约测试锁定不变。
-                if degraded
-                    && parsed
-                        .headers
-                        .iter()
-                        .any(|(_, v)| v.contains("{{") && v.contains("}}"))
-                {
-                    let mut skipped = TestResult::skipped(request_number, name, method, url);
-                    skipped.warnings.push(
-                        "降级请求的兜底 Header 含未解析 {{var}}（兜底缺失），已跳过外发（03 §2.1）"
-                            .to_string(),
-                    );
-                    skipped.degraded = true;
-                    return skipped;
-                }
+        // 变量解析后、发包前执行；即使注册表未装配也不旁路，早退路径共享统一诊断收口。
+        let (parsed, diag) = match crate::runner::executor_plugin::run_plugin_stage(
+            parsed,
+            request_number,
+            context,
+            crate::runner::executor_plugin::PluginContext {
+                registry: self.plugin_registry.as_ref(),
+                options: &self.plugin_options,
+                suite_hook_cache: &self.suite_hook_cache,
+            },
+            &unresolved,
+            start,
+        )
+        .await
+        {
+            crate::runner::executor_plugin::PluginDispatchOutcome::Proceed(req, diag) => {
+                (*req, diag)
             }
-        }
+            crate::runner::executor_plugin::PluginDispatchOutcome::EarlyReturn(early) => {
+                return *early;
+            }
+        };
 
-        let mut result = match runner
+        let result = match runner
             .run(
                 parsed,
                 request_number,
@@ -491,12 +441,7 @@ impl TestExecutor {
                 start.elapsed(),
             ),
         };
-        result.warnings.extend(unresolved);
-        result.warnings.extend(result_warnings_from_patch);
-        result.warnings.extend(plugin_warnings);
-        result.degraded = degraded;
-        result.plugin_duration_us = (plugin_duration_us > 0).then_some(plugin_duration_us);
-        result
+        crate::runner::executor_plugin::finalize_plugin_result(result, unresolved, diag)
     }
 }
 

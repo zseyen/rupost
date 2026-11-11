@@ -36,15 +36,51 @@ impl Default for PluginRuntimeOptions {
     }
 }
 
-/// suite 级 Hook 结果缓存（03 §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）
+/// 解析 CLI `--plugin-env` 单条规格：`KEY=VALUE` 直接取值；`KEY` 从父进程环境变量读取（缺失返回 None）。
+pub fn parse_plugin_env_spec(spec: &str) -> Option<(String, String)> {
+    if let Some((key, value)) = spec.split_once('=') {
+        let key = key.trim();
+        (!key.is_empty()).then(|| (key.to_string(), value.to_string()))
+    } else {
+        let key = spec.trim();
+        if key.is_empty() {
+            return None;
+        }
+        std::env::var(key).ok().map(|val| (key.to_string(), val))
+    }
+}
+
+/// 批量解析 `--plugin-env` 参数列表
+pub fn parse_plugin_env_specs(specs: &[String]) -> Vec<(String, String)> {
+    specs
+        .iter()
+        .filter_map(|s| parse_plugin_env_spec(s))
+        .collect()
+}
+
+/// suite 级 Hook 结果缓存（03 §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）。
+/// 外层使用极短同步锁获取独立槽位，各 `cache_key` 异步单飞隔离，避免阻塞无锁的 `PerRequest` 插件。
 #[derive(Debug, Default)]
 pub struct SuiteHookCache {
-    inner: HashMap<String, super::PluginPatch>,
+    slots: std::sync::Mutex<
+        HashMap<String, std::sync::Arc<tokio::sync::Mutex<Option<super::PluginPatch>>>>,
+    >,
 }
 
 impl SuiteHookCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 获取指定缓存键的独立单飞槽位（外层锁仅覆盖索引查找，不跨 `.await` 持有）。
+    pub fn slot_for(
+        &self,
+        key: &str,
+    ) -> std::sync::Arc<tokio::sync::Mutex<Option<super::PluginPatch>>> {
+        let mut map = self.slots.lock().unwrap_or_else(|p| p.into_inner());
+        map.entry(key.to_string())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(None)))
+            .clone()
     }
 }
 
@@ -108,6 +144,12 @@ fn apply_patch_to_view(
     acc.merge_with(patch.clone());
 }
 
+enum HookInvokeStep {
+    Patch(super::PluginPatch),
+    Continue,
+    Break,
+}
+
 /// 插件生命周期管线调度器 (Pipeline Dispatcher)
 #[derive(Debug, Clone, Default)]
 pub struct PluginPipeline;
@@ -134,7 +176,7 @@ impl PluginPipeline {
         directives: &[PluginDirective],
         registry: &PluginRegistry,
         options: &PluginRuntimeOptions,
-        suite_cache: &mut SuiteHookCache,
+        suite_cache: &SuiteHookCache,
         resolved_url: &str,
         resolved_method: &str,
         resolved_headers: &[(String, String)],
@@ -171,104 +213,76 @@ impl PluginPipeline {
                 continue;
             };
 
-            let cache_key = suite_cache_key(directive);
-            if matches!(hook.cache_scope, PluginCacheScope::Suite)
-                && let Some(cached) = suite_cache.inner.get(&cache_key).cloned()
-            {
-                apply_patch_to_view(
-                    &cached,
-                    &mut acc,
-                    &mut current_headers,
-                    &mut current_body,
-                    &mut current_vars,
-                );
-                continue;
-            }
-
-            let payload = json!({
-                "protocol_version": "1.0",
-                "stage": directive.stage,
-                "plugin": directive.name,
-                "request": {
-                    "method": resolved_method,
-                    "url": resolved_url,
-                    "headers": current_headers,
-                    "body": current_body,
-                },
-                "variables": current_vars,
-                "params": directive.params,
-            })
-            .to_string();
-
-            let env_overrides = build_plugin_env_overrides(&hook.requires_env, &options.plugin_env);
-            let invocation =
-                match invoke_plugin(exe_path, &payload, options.plugin_timeout, &env_overrides)
-                    .await
-                {
-                    Ok(inv) => inv,
-                    Err(e) => {
-                        let degraded_msg =
-                            format!("插件 '{}' 启动失败：{e}，已降级跳过", directive.name);
-                        let block_msg = format!("插件 '{}' 启动失败：{e}", directive.name);
-                        if Self::gate_degradation(
-                            &mut outcome,
-                            directive,
-                            options,
-                            &degraded_msg,
-                            &block_msg,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    }
-                };
-
-            outcome.plugin_duration_us += invocation.duration_us;
-            if !invocation.stderr_tail.is_empty() {
-                let tail: String = invocation
-                    .stderr_tail
-                    .chars()
-                    .rev()
-                    .take(16 * 1024)
-                    .collect();
-                outcome.warnings.push(format!(
-                    "插件 '{}' stderr 摘要: {}",
-                    directive.name,
-                    tail.chars().rev().collect::<String>()
-                ));
-            }
-            if let Some(failure) = &invocation.failure {
-                let detail = format!("{}: {}", failure.kind_label(), failure.describe());
-                let degraded_msg = format!(
-                    "插件 '{}' 失败（{detail}），已降级跳过（现场数据已记录至快照）",
-                    directive.name
-                );
-                let block_msg = format!("插件 '{}' 执行失败（{detail}）", directive.name);
-                if Self::gate_degradation(
-                    &mut outcome,
+            if matches!(hook.cache_scope, PluginCacheScope::Suite) {
+                let cache_key = suite_cache_key(directive);
+                let slot = suite_cache.slot_for(&cache_key);
+                let mut guard = slot.lock().await;
+                if let Some(cached) = guard.as_ref() {
+                    apply_patch_to_view(
+                        cached,
+                        &mut acc,
+                        &mut current_headers,
+                        &mut current_body,
+                        &mut current_vars,
+                    );
+                    continue;
+                }
+                match Self::invoke_hook_once(
                     directive,
+                    exe_path,
+                    &hook.requires_env,
                     options,
-                    &degraded_msg,
-                    &block_msg,
-                ) {
-                    break;
+                    &mut outcome,
+                    resolved_url,
+                    resolved_method,
+                    &current_headers,
+                    current_body.as_deref(),
+                    &current_vars,
+                )
+                .await
+                {
+                    HookInvokeStep::Patch(patch) => {
+                        *guard = Some(patch.clone());
+                        apply_patch_to_view(
+                            &patch,
+                            &mut acc,
+                            &mut current_headers,
+                            &mut current_body,
+                            &mut current_vars,
+                        );
+                    }
+                    HookInvokeStep::Continue => continue,
+                    HookInvokeStep::Break => break,
                 }
                 continue;
             }
-            let Some(output) = invocation.output else {
-                continue;
-            };
-            let patch = parse_patch_from_output(&output);
-            if matches!(hook.cache_scope, PluginCacheScope::Suite) {
-                suite_cache.inner.insert(cache_key, patch.clone());
+
+            match Self::invoke_hook_once(
+                directive,
+                exe_path,
+                &hook.requires_env,
+                options,
+                &mut outcome,
+                resolved_url,
+                resolved_method,
+                &current_headers,
+                current_body.as_deref(),
+                &current_vars,
+            )
+            .await
+            {
+                HookInvokeStep::Patch(patch) => {
+                    apply_patch_to_view(
+                        &patch,
+                        &mut acc,
+                        &mut current_headers,
+                        &mut current_body,
+                        &mut current_vars,
+                    );
+                }
+                HookInvokeStep::Continue => continue,
+                HookInvokeStep::Break => break,
             }
-            apply_patch_to_view(
-                &patch,
-                &mut acc,
-                &mut current_headers,
-                &mut current_body,
-                &mut current_vars,
-            );
         }
 
         if outcome.blocking_error.is_none() {
@@ -277,6 +291,90 @@ impl PluginPipeline {
             outcome.patch = None;
         }
         outcome
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn invoke_hook_once(
+        directive: &PluginDirective,
+        exe_path: &std::path::Path,
+        requires_env: &[String],
+        options: &PluginRuntimeOptions,
+        outcome: &mut PluginStageOutcome,
+        resolved_url: &str,
+        resolved_method: &str,
+        current_headers: &[(String, String)],
+        current_body: Option<&str>,
+        current_vars: &serde_json::Map<String, serde_json::Value>,
+    ) -> HookInvokeStep {
+        let payload = json!({
+            "protocol_version": "1.0",
+            "stage": directive.stage,
+            "plugin": directive.name,
+            "request": {
+                "method": resolved_method,
+                "url": resolved_url,
+                "headers": current_headers,
+                "body": current_body,
+            },
+            "variables": current_vars,
+            "params": directive.params,
+        })
+        .to_string();
+
+        let env_overrides = build_plugin_env_overrides(requires_env, &options.plugin_env);
+        let invocation =
+            match invoke_plugin(exe_path, &payload, options.plugin_timeout, &env_overrides).await {
+                Ok(inv) => inv,
+                Err(e) => {
+                    let degraded_msg =
+                        format!("插件 '{}' 启动失败：{e}，已降级跳过", directive.name);
+                    let block_msg = format!("插件 '{}' 启动失败：{e}", directive.name);
+                    return if Self::gate_degradation(
+                        outcome,
+                        directive,
+                        options,
+                        &degraded_msg,
+                        &block_msg,
+                    ) {
+                        HookInvokeStep::Break
+                    } else {
+                        HookInvokeStep::Continue
+                    };
+                }
+            };
+
+        outcome.plugin_duration_us += invocation.duration_us;
+        if !invocation.stderr_tail.is_empty() {
+            let tail: String = invocation
+                .stderr_tail
+                .chars()
+                .rev()
+                .take(16 * 1024)
+                .collect();
+            outcome.warnings.push(format!(
+                "插件 '{}' stderr 摘要: {}",
+                directive.name,
+                tail.chars().rev().collect::<String>()
+            ));
+        }
+        if let Some(failure) = &invocation.failure {
+            let detail = format!("{}: {}", failure.kind_label(), failure.describe());
+            let degraded_msg = format!(
+                "插件 '{}' 失败（{detail}），已降级跳过（现场数据已记录至快照）",
+                directive.name
+            );
+            let block_msg = format!("插件 '{}' 执行失败（{detail}）", directive.name);
+            return if Self::gate_degradation(outcome, directive, options, &degraded_msg, &block_msg)
+            {
+                HookInvokeStep::Break
+            } else {
+                HookInvokeStep::Continue
+            };
+        }
+        let Some(output) = invocation.output else {
+            return HookInvokeStep::Continue;
+        };
+        HookInvokeStep::Patch(parse_patch_from_output(&output))
     }
 
     /// 统一降级门（03 §2.1）：返回 `true` 表示必须阻断并中止后续管线。

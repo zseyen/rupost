@@ -2,6 +2,7 @@ use super::parallel::ParallelScheduler;
 use crate::Result;
 use crate::parser::ParsedFile;
 use crate::runner::executor::TestExecutor;
+use crate::runner::path::display_path;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
 use std::collections::HashMap;
@@ -90,6 +91,8 @@ impl BatchExecutor {
             );
         }
 
+        let mut parallel_cookie_state: Option<serde_json::Value> = None;
+
         match request.mode {
             BatchMode::Parallel => {
                 let scheduler = ParallelScheduler::new(
@@ -101,20 +104,32 @@ impl BatchExecutor {
                     request.concurrency,
                     request.fail_fast,
                 );
-                results = scheduler.run().await?;
+                let out = scheduler.run().await?;
+                results = out.results;
+                parallel_cookie_state = out.final_cookie_state;
             }
             BatchMode::Serial => {
                 'outer: for file_path in &request.execution_order {
                     if let Some(parsed_file) = request.files_map.remove(file_path) {
-                        let res = self
+                        let res = match self
                             .executor
                             .execute_all(parsed_file, request.context)
-                            .await?;
+                            .await
+                        {
+                            Ok(res_list) => res_list,
+                            Err(e) => vec![TestResult::error(
+                                1,
+                                None,
+                                "BATCH".to_string(),
+                                display_path(file_path),
+                                e.to_string(),
+                                std::time::Duration::from_secs(0),
+                            )],
+                        };
                         let has_failure = res.iter().any(|r| !r.success);
                         results.push((file_path.clone(), res));
 
-                        // 每个文件落盘一次：崩溃丢失窗口 = 单个文件（并行模式的
-                        // worker 均为临时仓库，不在其作用范围内）
+                        // 每个文件落盘一次：崩溃丢失窗口 = 单个文件
                         self.executor.persist_cookies();
 
                         if has_failure && request.fail_fast {
@@ -130,6 +145,22 @@ impl BatchExecutor {
         // serial 的 fail_fast break 已由 'outer 标签记录中断点。
         let started: Vec<PathBuf> = results.iter().map(|(p, _)| p.clone()).collect();
         let mut teardown_failure = false;
+        // 并行分支若带有捕获的会话 Cookie，只装配临时 teardown 执行器消费，
+        // 避免污染主执行器的持久化仓库（守护 cookie_persistence_test 契约 2a/2b）。
+        let ephemeral_teardown_executor = if !teardowns_map.is_empty()
+            && let Some(cookie_state) = parallel_cookie_state
+        {
+            Some(ParallelScheduler::build_ephemeral_clone_with_cookies(
+                &self.executor,
+                Some(cookie_state),
+            ))
+        } else {
+            None
+        };
+        let teardown_executor = ephemeral_teardown_executor
+            .as_ref()
+            .unwrap_or(&self.executor);
+
         for file_path in started.iter().rev() {
             if let Some(teardowns) = teardowns_map.remove(file_path) {
                 for (orig_number, req) in teardowns {
@@ -157,9 +188,13 @@ impl BatchExecutor {
                         ));
                         r
                     } else {
-                        let mut r = self
-                            .executor
-                            .execute_one(req, orig_number, request.context, None)
+                        let mut r = teardown_executor
+                            .execute_one(
+                                req,
+                                orig_number,
+                                request.context,
+                                Some(file_path.to_string_lossy().to_string()),
+                            )
                             .await;
                         r.is_teardown = true;
                         if !r.success {

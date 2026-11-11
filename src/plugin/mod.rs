@@ -12,7 +12,7 @@ pub mod types;
 
 pub use driver::invoke_plugin;
 pub use patch::PluginPatch;
-pub use pipeline::PluginPipeline;
+pub use pipeline::{PluginPipeline, parse_plugin_env_spec, parse_plugin_env_specs};
 pub use protocol::{PluginFailureKind, PluginInvocationOutcome};
 pub use registry::{DiscoverOptions, PluginRegistry, RegistryCacheFile};
 pub use types::{

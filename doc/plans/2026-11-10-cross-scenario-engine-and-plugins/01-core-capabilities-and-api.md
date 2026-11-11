@@ -37,9 +37,11 @@
 3. **确定性 DAG 拓扑与生命周期清理** `[已有]`：
    * 解析 `@depends-on` 自动编排调用依赖（`src/parser/types.rs:221`）；DAG 拓扑调度（`src/runner/engine/workflow.rs`、`resolver.rs`、`batch.rs`、`parallel.rs`）；
    * 在正向用例失败或熔断退出时，确定性执行 `@teardown` 清理步骤（`src/parser/metadata.rs:35`），确保在生产调试机不遗留垃圾数据。
-4. **底层 Socket 级时序探针 (`diagnose`)** `[已有，精度口径修正]`：
+4. **底层 Socket 级时序探针 (`diagnose`)** `[已有，v2.1.2 口径裁决]`：
    * 内核采集为纳秒级 `Duration`，拆分 DNS 解析、TCP 握手、TLS 握手、TTFB 首包耗时与证书链（`src/http/diagnose.rs:21-30`，`CertInfo` 含 issuer/days_remaining）；
-   * **口径声明**：现有展示与持久化层为毫秒（`src/reporter.rs:131-136` `as_millis()`；`src/report/types.rs:112-119` `TimingWaterfall *_ms`）；快照契约采用微秒 `_us` 字段（02 §2），采集链路 `[待建 M1]`；
+   * **M7 起双层采集**：默认路径 = TimingConnector 单连接真实测量（resolver/connector 双包装点，DNS/TCP 分段 `_us` 真实测量，连接复用为 None，见 `m7-timing-connector-design.md`）；`@diagnose`/`--debug` = 重档 Prober（TLS/证书/HTTP 版本，不变）；
+   * **口径锚定**：快照 `_us` 字段 = 真实测量值（非换算）；terminal/HTML 展示层保持 ms 一位小数（格式选择）；`timing_source`（connector/probe_degraded/none）与 `timing_attribution`（exact/approximate）随快照落盘供消费者判读；
+   * **并发归属声明**：串行（concurrency=1）精确；并发模式 authority 分桶内近似（ttfb/transfer 永远精确）——性能敏感时序分析建议串行跑；
    * **证书链为 best-effort**：reqwest+rustls 公开 API 不暴露对端证书，需自定义 connector 埋点，未采集时为 `None`，绝不阻塞主流程。
 5. **多源多维度断言系统** `[部分已有]`：
    * `[已有]` HTTP 状态码、响应头、JSONPath（`src/utils/jsonpath.rs`）、响应时长阈值（`timing.ttfb < 100`，`src/assertion/types.rs:90` `ValuePath::TimingTtfb`）；

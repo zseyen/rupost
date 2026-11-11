@@ -345,6 +345,12 @@
 7. **04 套件 3 落地**：`tests/artifact_mining_test.rs`（Schema 契约半已在 M1 交付于 lib 内，录制保真半补集成测试文件）；
 8. **掩码扩面表驱动单测**：X-Sign 类自定义签名头 / query token / Set-Cookie / body PII 全表（02 §4）。
 
+**M7 立项（v2.1.2 新增：单连接时序采集，兑现"微秒时序黑匣子"默认形态）**：
+* **任务**：`TimingResolver` + `TimingConnector` 双包装点（DNS/TCP 分段真实测量，与请求同连接零额外开销）+ `--timing off` + 快照 `timing_source`/`timing_attribution` 新字段；
+* **设计蓝本**：[`m7-timing-connector-design.md`](./m7-timing-connector-design.md)（完整示例代码 + 三条边界语义 + 使用场景矩阵）；
+* **验收**：守护 1 H2 存活断言先行（防 ALPN 静默降级）→ 默认快照时序存在性（R1 反转即红）→ DoD 时延隔离不变量 → authority 分桶防跨 host 错配；
+* **风险缓解**：reqwest 升级税 = 最小 trait 面（自建 TCP connect）+ 版本显式化 + 守护断言；并发归属 = authority 分桶 + `approximate` 标注 + 串行建议；Prober 轻量档作为 `probe_degraded` 回退（不并行维护）。
+
 **登记不做的裁决项（P2/生态期，非缺口）**：`@pipeline`/`@use` 语法、miners 路由化入口、TUI/Web 补全、`$md5`/`$random_string`/`$random_email`、正则断言、`plugin sync --regenerate`、doctor 自报健康协议（生态期，`plugin list --doctor` 聚合）、降级链 `fallback.builtin`（仅签名类开放）、RLIMIT 配额、全量 sha256 指纹、MCP Server、Windows shebang 透明代理（跨平台 CI 批次）。
 
 ---

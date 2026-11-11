@@ -131,6 +131,15 @@ pub struct ExecutionSnapshotEntry {
     /// 5. 底层物理网络连接诊断指纹
     pub socket_diagnostics: Option<SocketDiagnostics>,
 
+    /// 5.5 时序采集来源（v2.1.2，M7）：connector = 单连接真实测量；
+    /// probe_degraded = 探测连接降级形态；none = 未采集（--timing off）
+    #[serde(default)]
+    pub timing_source: TimingSource,
+
+    /// 5.6 时序归属精度（v2.1.2）：ttfb/transfer 永远精确，本字段仅描述 dns/tcp 两段
+    #[serde(default)]
+    pub timing_attribution: TimingAttribution,
+
     /// 6. 规则断言结果明细
     pub assertions: Vec<SnapshotAssertion>,
 
@@ -180,6 +189,28 @@ pub struct TimingWaterfallUs {
     /// 纯网络侧总耗时，恒等于 entry.duration_us 的口径（二者差值 = 插件耗时，已由
     /// plugin_duration_us 单列承载）
     pub total_us: u64,
+}
+
+/// 时序采集来源（v2.1.2 新增，M7）：消费者据此判断时序数据的测量口径
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimingSource {
+    /// TimingConnector 单连接真实测量（默认，M7 起生效）
+    Connector,
+    /// 探测连接降级形态（connector 不可用时回退，分布近似）
+    ProbeDegraded,
+    /// 未采集（--timing off）
+    None,
+}
+
+/// 时序归属精度（v2.1.2 新增）：ttfb/transfer 永远精确；本字段仅描述 dns/tcp 两段
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimingAttribution {
+    /// 串行模式（concurrency=1）精确归属
+    Exact,
+    /// 并发模式 authority 分桶内近似归属
+    Approximate,
 }
 
 /// 证书字段为 best-effort：reqwest+rustls 公开 API 不暴露对端证书链，

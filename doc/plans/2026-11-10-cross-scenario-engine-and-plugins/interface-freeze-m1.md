@@ -53,6 +53,7 @@
 8. ~~02 §3.3 消费侧 64MB 体积上限~~ ✅ M5 已在 `ai triage-snapshot` 消费者内置；`read_execution_snapshot` 通用入口的内置校验仍待 M6 补齐；
 9. **参数转义语义已统一**（M1 评审修复）：`\"` → `"`，反斜杠不进参数值；`$random_int` 无参历史形态继续可用（向后兼容，文档只承诺参数化形态）；
 10. **插件运行时声明契约（v2.1.1 新增，03 §3.1）**：manifest `runtime: {interpreter, min_version?, modules?}`——`interpreter` 存在性 = readdir 级 PATH 预检（**不 spawn 版本 probe**）；预检未过 → 插件 `pending` 状态（03 §3.1.1 三态机），与"缺失"共享降级开关；失败分类学新增 `runtime_missing` / `dependency_missing`（stderr 表驱动特征，03 §8.3）。**[待建 M6]**；
+10.5 **时序采集契约（v2.1.2 新增，M7 设计蓝本 m7-timing-connector-design.md）**：`TimingConnector`（自建 TCP connect，非 HttpConnector 包装）+ `TimingResolver`（GaiResolver 包装）双包装点；快照 `timing_source`（connector/probe_degraded/none）与 `timing_attribution`（exact/approximate）字段；`tls_handshake_us` 默认 None（TLS 在 reqwest 内部层，@diagnose 重档补）；代理场景 warnings 注明；**[待建 M7]**；
 11. **HeaderMap 采集链多值/顺序限制**（同 #7 根因）与 **M6 剩余缺口收尾**（exit 2 AST 归位、DoD 性能验证测试、并发×插件组合、fail-fast 传播测试）统一归属 M6（06 §4.5 缺口收尾清单）。
 
 ## 5. 二进制体积基线（06 M1 出口条件）

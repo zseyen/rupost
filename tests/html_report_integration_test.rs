@@ -52,6 +52,11 @@ GET http://example.com/api/test
         mask_snapshot: false,
         only: None,
         on_failure: None,
+        allow_missing_plugins: false,
+        strict_plugins: false,
+        plugin_timeout_secs: 5,
+        plugin_env: vec![],
+        allow_project_plugins: false,
     };
 
     // 执行套件并显式写出报告（报告落盘已上移至表现层门面）
@@ -164,6 +169,11 @@ Accept: text/event-stream
         mask_snapshot: false,
         only: None,
         on_failure: None,
+        allow_missing_plugins: false,
+        strict_plugins: false,
+        plugin_timeout_secs: 5,
+        plugin_env: vec![],
+        allow_project_plugins: false,
     };
 
     let outcome = run_test_suite(options).await.unwrap();

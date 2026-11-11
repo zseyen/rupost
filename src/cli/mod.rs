@@ -14,7 +14,7 @@ use clap::Parser;
 #[allow(unused_imports)]
 pub use commands::{
     AiCommands, Commands, DiagnoseArgs, ExportArgs, GenerateArgs, HistoryCommands, ImportCommands,
-    ImportCurlArgs, InitArgs, MockArgs, ReplayArgs, TestArgs, TuiArgs, WebArgs,
+    ImportCurlArgs, InitArgs, MockArgs, PluginCommands, ReplayArgs, TestArgs, TuiArgs, WebArgs,
 };
 pub use dispatch::dispatch;
 #[allow(unused_imports)]

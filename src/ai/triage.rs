@@ -174,3 +174,96 @@ pub async fn run_ai_triage_from_file(
     }
     Ok(())
 }
+
+/// 离线黑匣子挖掘入口（02 §3.2 / 05 ADR-D9：首个内置 miner 消费者，M5）。
+///
+/// 读取现场拷回的 incident snapshot（ExecutionSnapshotFile Schema v1.0），适配为
+/// `JsonFileReport` 后复用失败聚类 SSOT（确定性机械归因为 B1 基线；配置 AI Key 时
+/// 五阶段管线的 C 阶段自动增强——与 `ai triage` 同一判定路径）。消费前执行
+/// 02 §3.3 不可信输入校验：体积上限 64MB。
+pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool) -> Result<()> {
+    const MAX_CONSUME_BYTES: u64 = 64 * 1024 * 1024;
+    let meta = std::fs::metadata(snapshot_path).map_err(|e| {
+        crate::RupostError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("snapshot 打开失败: {e}"),
+        ))
+    })?;
+    if meta.len() > MAX_CONSUME_BYTES {
+        return Err(crate::RupostError::ParseError(format!(
+            "snapshot 体积 {} 超过消费上限 64MB（02 §3.3 不可信输入防线）",
+            meta.len()
+        )));
+    }
+    let snapshot = crate::history::read_execution_snapshot(snapshot_path)?;
+
+    // masking 感知（03 §7.2 AI 红线）：掩码产物上的结论必须显式声明数据不完整
+    let masking_note = match snapshot.masking {
+        crate::history::MaskingMode::Secrets => Some(
+            "该快照为掩码形态（masking=secrets）：凭据/PII 字段已 [REDACTED]，签名与 Diff 类结论按数据不完整降级",
+        ),
+        crate::history::MaskingMode::None => None,
+    };
+
+    // 适配：ExecutionSnapshotEntry -> JsonTestReport（聚类 SSOT 消费形态）
+    let results: Vec<crate::report::json::JsonTestReport> = snapshot
+        .entries
+        .iter()
+        .map(|e| crate::report::json::JsonTestReport {
+            request_number: e.request_number,
+            name: e.name.clone(),
+            method: e.request.method.clone(),
+            url: e.request.url.clone(),
+            status: e.status,
+            duration_ms: e.duration_us / 1000,
+            success: e.success,
+            error: e.error.as_ref().map(|err| err.message.clone()),
+            skipped: false,
+            assertions: e
+                .assertions
+                .iter()
+                .map(|a| crate::report::json::JsonAssertionReport {
+                    raw: a.expression.clone(),
+                    passed: a.passed,
+                    message: a.message.clone(),
+                    stream_event_index: None,
+                    expected: a.expected.clone(),
+                    actual: a.actual.clone(),
+                })
+                .collect(),
+            warnings: e.warnings.clone(),
+            diagnose_report: None,
+            response_body_snippet: None,
+        })
+        .collect();
+    let file_label = snapshot
+        .environment
+        .clone()
+        .unwrap_or_else(|| "incident".to_string());
+    let reports = vec![JsonFileReport {
+        file_path: file_label,
+        results,
+    }];
+
+    if let Some(note) = masking_note {
+        eprintln!("[!] {note}");
+    }
+    eprintln!(
+        "[i] 快照指纹: {} entries, schema {}, masking={:?}, runner {}/{} v{}",
+        snapshot.entries.len(),
+        snapshot.schema_version,
+        snapshot.masking,
+        snapshot.runner_fingerprint.os,
+        snapshot.runner_fingerprint.arch,
+        snapshot.runner_fingerprint.rupost_version
+    );
+
+    let triage = build_triage_report(&reports).await;
+    if json_flag {
+        let s = serde_json::to_string_pretty(&triage)?;
+        println!("{s}");
+    } else {
+        print!("{}", format_triage_markdown(&triage));
+    }
+    Ok(())
+}

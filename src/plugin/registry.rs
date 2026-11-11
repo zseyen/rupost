@@ -54,7 +54,7 @@ fn sibling_executables(manifest_path: &Path) -> Vec<PathBuf> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let mut out = vec![manifest_path.with_file_name(stem.to_string())];
+    let mut out = vec![manifest_path.with_file_name(stem)];
     if let Some(name) = stem.strip_prefix("rupost-plugin-") {
         out.push(manifest_path.with_file_name(format!("rupost-{name}")));
     }
@@ -286,7 +286,7 @@ impl PluginRegistry {
                 .collect();
             let disk_set: std::collections::BTreeSet<(String, u64, String)> = inventory
                 .into_iter()
-                .map(|(path, (mtime, hash))| (path.to_string_lossy().to_string(), mtime, hash))
+                .map(|(path, (mtime, hash))| (path.to_string_lossy().into_owned(), mtime, hash))
                 .collect();
             if cache_set == disk_set {
                 let mut registry = Self::new();
@@ -382,8 +382,8 @@ impl PluginRegistry {
                     && let Ok(manifest) = serde_json::from_str::<PluginManifest>(&content)
                 {
                     manifests.push(CachedPluginEntry {
-                        executable_path: exe_path.to_string_lossy().to_string(),
-                        manifest_path: manifest_path.to_string_lossy().to_string(),
+                        executable_path: exe_path.to_string_lossy().into_owned(),
+                        manifest_path: manifest_path.to_string_lossy().into_owned(),
                         mtime_secs: mtime,
                         fingerprint_hash: hash,
                         manifest,
@@ -504,9 +504,10 @@ mod tests {
         )
         .unwrap();
 
-        let mut options = DiscoverOptions::default();
-        options.project_root = Some(dir.path().to_path_buf());
-        options.allow_project_plugins = true;
+        let options = DiscoverOptions {
+            project_root: Some(dir.path().to_path_buf()),
+            allow_project_plugins: true,
+        };
         // 仅扫本根：临时改 PATH 注入（discover 读 PATH）
         unsafe {
             std::env::set_var("PATH", root.to_str().unwrap());

@@ -246,7 +246,7 @@ async fn test_r7_failure_switches_to_diagnose_tab() {
         warnings: vec![],
         is_teardown: false,
         degraded: false,
-        degraded: false,
+        plugin_duration_us: None,
     };
     state.handle_request_result(failed, std::collections::HashMap::new(), 1);
 

@@ -82,6 +82,23 @@ pub enum Commands {
         command: ImportCommands,
     },
 
+    /// Manage rupost plugins (registry inspection & IntelliSense schema export)
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
+    },
+
     /// Start interactive terminal UI mode
     Tui(TuiArgs),
+}
+
+/// 插件管理子命令（03 §2.3 / 06 M5；`plugin sync` 已裁撤——静态 manifest 的
+/// stat 新鲜度闭环使缓存自动重建，无需手动同步）
+#[derive(Debug, clap::Subcommand)]
+pub enum PluginCommands {
+    /// List installed plugin commands and lifecycle hooks
+    List,
+
+    /// Export aggregated JSON Schema of all hook parameters (IDE IntelliSense)
+    Schema,
 }

@@ -11,13 +11,25 @@ use std::process::Stdio;
 use rupost::plugin::{DiscoverOptions, PluginRegistry};
 
 /// HTTP 方法集合（03 §6.1 裁决序第 3 级；与 `src/http/types.rs::Method` 语义一致）
-pub const HTTP_METHODS: [&str; 7] = [
-    "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS",
-];
+pub const HTTP_METHODS: [&str; 7] = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
 
 /// `args[0]` 是否为 HTTP 方法（大小写不敏感）
 pub fn is_http_method_token(token: &str) -> bool {
     HTTP_METHODS.iter().any(|m| m.eq_ignore_ascii_case(token))
+}
+
+/// `args[0]` 是否为 URL 直接内联形态（curl 风格省略方法；既有 httpie parser 能力，
+/// http://-前缀或本地环回形态即视为请求 URL）
+pub fn is_url_token(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ws://")
+        || lower.starts_with("wss://")
+        || lower.starts_with("localhost")
+        || lower.starts_with("127.")
+        || lower.starts_with("0.0.0.0")
+        || lower.starts_with("[::1]")
 }
 
 /// 路由裁决（03 §6.1）：返回 `RoutedCommand` 表示命中插件命令需拉起子进程；
@@ -25,7 +37,7 @@ pub fn is_http_method_token(token: &str) -> bool {
 pub enum RoutingDecision {
     /// 插件命令命中：(可执行路径, 命令名, 剩余参数)
     PluginCommand(std::path::PathBuf, String, Vec<String>),
-    /// HTTP 方法 / 空 args → 内联模式
+    /// HTTP 方法 / URL / 空 args → 内联模式
     Inline,
     /// 未知命令（报错 exit 2）
     Unknown(String),
@@ -52,11 +64,11 @@ pub fn route(
             args[1..].to_vec(),
         );
     }
-    // 3. HTTP 方法名 → 内联请求模式
-    if is_http_method_token(first) {
+    // 3/4. HTTP 方法名或 URL 直接内联（curl 风格省略方法）→ 内联请求模式
+    if is_http_method_token(first) || is_url_token(first) {
         return RoutingDecision::Inline;
     }
-    // 4. 未知
+    // 5. 未知
     RoutingDecision::Unknown(first.clone())
 }
 
@@ -66,11 +78,7 @@ pub fn route(
 /// - 环境白名单：PATH/HOME/LANG/TERM/TMPDIR + RUPOST_* + requires_env 声明项 +
 ///   `--plugin-env` 显式放行（全量继承废除，防堡垒机凭据外泄）
 /// - 退出码信号感知穿透：`Some(code)` 原值；`None` → `128 + signal`
-pub async fn launch_plugin_command(
-    exe_path: &Path,
-    args: &[String],
-    allow_env: &[String],
-) -> i32 {
+pub async fn launch_plugin_command(exe_path: &Path, args: &[String], allow_env: &[String]) -> i32 {
     use std::io::Write;
 
     // TOFU：首次执行的 (路径, 哈希) 组合要求交互确认，缓存于 registry 旁路文件
@@ -130,7 +138,10 @@ pub async fn launch_plugin_command(
             cmd.env(key, value);
         }
     }
-    cmd.env("RUPOST_WORKSPACE", std::env::current_dir().unwrap_or_default());
+    cmd.env(
+        "RUPOST_WORKSPACE",
+        std::env::current_dir().unwrap_or_default(),
+    );
     if let Some(home) = dirs::home_dir() {
         cmd.env("RUPOST_CONFIG_DIR", home.join(".rupost"));
     }
@@ -143,10 +154,7 @@ pub async fn launch_plugin_command(
                 #[cfg(unix)]
                 {
                     use std::os::unix::process::ExitStatusExt;
-                    status
-                        .signal()
-                        .map(|s| 128 + s)
-                        .unwrap_or(1)
+                    status.signal().map(|s| 128 + s).unwrap_or(1)
                 }
                 #[cfg(not(unix))]
                 {
@@ -193,10 +201,13 @@ pub fn discover_for_routing(allow_project_plugins: bool) -> PluginRegistry {
 
 /// 内置子命令名集合（与 `Commands` 枚举变体一一对应；位置契约兜底用）
 pub fn builtin_subcommand_names() -> BTreeSet<String> {
-    ["test", "history", "generate", "diagnose", "mock", "init", "replay", "export", "web", "ai", "import", "tui"]
-        .into_iter()
-        .map(String::from)
-        .collect()
+    [
+        "test", "history", "generate", "diagnose", "mock", "init", "replay", "export", "web", "ai",
+        "import", "tui",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 /// EXTENSIONS 区块渲染（03 §6.3）：manifest 文本字段白名单净化后聚合展示
@@ -207,7 +218,12 @@ pub fn render_extensions(registry: &PluginRegistry) -> Vec<String> {
     for name in names {
         let (path, capability) = &registry.commands[name];
         let description = sanitize_manifest_text(&capability.description, 80);
-        lines.push(format!("  {:<14} {} ({})", name, description, path.display()));
+        lines.push(format!(
+            "  {:<14} {} ({})",
+            name,
+            description,
+            path.display()
+        ));
     }
     lines
 }
@@ -310,7 +326,11 @@ mod tests {
         ));
         // 插件命令命中
         let registry2 = registry_with_command("flamegraph");
-        match route(&["flamegraph".into(), "a.json".into()], &builtins, &registry2) {
+        match route(
+            &["flamegraph".into(), "a.json".into()],
+            &builtins,
+            &registry2,
+        ) {
             RoutingDecision::PluginCommand(path, name, rest) => {
                 assert!(path.ends_with("rupost-plugin-flamegraph"));
                 assert_eq!(name, "flamegraph");
@@ -323,6 +343,15 @@ mod tests {
             route(&["GET".into(), "http://x".into()], &builtins, &registry2),
             RoutingDecision::Inline
         ));
+        // URL 直接内联（curl 风格省略方法，既有 httpie parser 能力）
+        assert!(matches!(
+            route(&["http://x/login".into()], &builtins, &registry2),
+            RoutingDecision::Inline
+        ));
+        assert!(matches!(
+            route(&["localhost:8080/health".into()], &builtins, &registry2),
+            RoutingDecision::Inline
+        ));
         assert!(matches!(
             route(&["get".into(), "http://x".into()], &builtins, &registry2),
             RoutingDecision::Inline
@@ -333,7 +362,10 @@ mod tests {
             RoutingDecision::Unknown(_)
         ));
         // 空 args → 内联（保持既有报错语义）
-        assert!(matches!(route(&[], &builtins, &registry2), RoutingDecision::Inline));
+        assert!(matches!(
+            route(&[], &builtins, &registry2),
+            RoutingDecision::Inline
+        ));
     }
 
     /// 03 §6.4 净化契约：ANSI CSI/OSC 完整序列剥除 + 长度钳制

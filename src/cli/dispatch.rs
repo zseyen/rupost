@@ -221,6 +221,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             } => {
                 rupost::ai::triage::run_ai_triage_from_file(&report_file, json, &format).await?;
             }
+            AiCommands::TriageSnapshot { snapshot, json } => {
+                rupost::ai::triage::run_snapshot_triage(&snapshot, json).await?;
+            }
             AiCommands::Resolve { file, dry_run } => {
                 rupost::ai::resolve::run_resolve(&file, dry_run).await?;
             }
@@ -246,6 +249,65 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::Import { command }) => match command {
             ImportCommands::Curl(args) => rupost::importer::run_curl_import(&args.into_request())?,
         },
+        Some(Commands::Plugin { command }) => {
+            // 03 §3.2 缓存快路径命中（≤5ms）；过期自动重建（新装插件即时可见）
+            let options = rupost::plugin::DiscoverOptions {
+                allow_project_plugins: cli.args.iter().any(|a| a == "--allow-project-plugins")
+                    || std::env::var("RUPOST_ALLOW_PROJECT_PLUGINS").is_ok(),
+                project_root: None,
+            };
+            let cache_path = dirs::home_dir()
+                .map(|h| h.join(".rupost").join("registry.json"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"));
+            let registry = rupost::plugin::PluginRegistry::load_or_discover(&options, &cache_path)?;
+            for warning in &registry.warnings {
+                eprintln!("[!] {warning}");
+            }
+            match command {
+                crate::cli::PluginCommands::List => {
+                    println!("Installed plugin commands:");
+                    if registry.commands.is_empty() {
+                        println!(
+                            "  (none) — 安装方式：将 rupost-plugin-<name> 二进制与同名 .json 静态 manifest 放入 $PATH、~/.rupost/plugins 或 ./.rupost/plugins（需 --allow-project-plugins）"
+                        );
+                    }
+                    for line in super::plugin_route::render_extensions(&registry) {
+                        println!("{line}");
+                    }
+                    println!("Lifecycle hooks:");
+                    let mut hook_names: Vec<_> = registry.hooks.keys().collect();
+                    hook_names.sort();
+                    if hook_names.is_empty() {
+                        println!("  (none)");
+                    }
+                    for name in hook_names {
+                        let (path, hook) = &registry.hooks[name];
+                        println!("  {:<14} stage={:?} @ {}", name, hook.stage, path.display());
+                    }
+                }
+                crate::cli::PluginCommands::Schema => {
+                    // 聚合所有 Hook 的 parameters_schema 输出标准 JSON Schema（M5，
+                    // 03 §4.2：VSCode/IntelliJ 加载后键入 @auth 自动补全插件名与必填参数）
+                    let mut defs = serde_json::Map::new();
+                    let mut aliases: Vec<_> = registry.hooks.keys().collect();
+                    aliases.sort();
+                    for alias in aliases {
+                        let (_, hook) = &registry.hooks[alias];
+                        defs.insert(
+                            format!("@{} {}", hook.directive, alias),
+                            hook.parameters_schema.clone(),
+                        );
+                    }
+                    let schema = serde_json::json!({
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "title": "rupost plugin directive parameters",
+                        "type": "object",
+                        "properties": defs,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&schema)?);
+                }
+            }
+        }
         Some(Commands::Tui(args)) => {
             rupost::tui::run(
                 args.file,
@@ -287,10 +349,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
                 // 根命令 trailing_var_arg 使 clap 无"未知子命令"事件，主动查表是唯一入口。
                 let builtins = super::plugin_route::builtin_subcommand_names();
-                let allow_project = cli
-                    .args
-                    .iter()
-                    .any(|a| a == "--allow-project-plugins");
+                let allow_project = cli.args.iter().any(|a| a == "--allow-project-plugins");
                 let registry = super::plugin_route::discover_for_routing(allow_project);
                 match super::plugin_route::route(&cli.args, &builtins, &registry) {
                     super::plugin_route::RoutingDecision::PluginCommand(exe_path, _name, rest) => {
@@ -306,9 +365,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                             .map(|s| s.trim_start_matches("--plugin-env=").to_string())
                             .collect();
                         let code = super::plugin_route::launch_plugin_command(
-                            &exe_path,
-                            &rest,
-                            &allow_env,
+                            &exe_path, &rest, &allow_env,
                         )
                         .await;
                         std::process::exit(code);

@@ -120,20 +120,26 @@
 
 | 编号 | 状态 | 文档 | 代码 Milestone |
 | :-- | :--- | :--- | :--- |
-| P0-1 | 📄 已裁决 | 01 §1.2 / 06 M1 | M1 |
-| P0-2 | 📄 已裁决 | 02 §2 / 05 D8 | M1 |
-| P0-3 | 📄 已裁决 | 03 §8 / 05 D10-D11 | M3 |
-| P0-4 | 📄 已裁决 | 03 §6 / 05 D7 | M4 |
-| P0-5.1~5.5 | 📄 已裁决 | 03 §2/§3/§6、02 §2.7/§4、05 D2~D5 | M1/M2/M3/M4 |
-| P1-1 | 📄 已裁决（文档闭环） | 03 §2 / 05 §4 | M3 验收 |
-| P1-2 | 📄 已裁决 | 03 §4/§5 / 05 D6 | M1 + M3 |
+| P0-1 | ✅ 已落地（M1-A：sha2/hmac + RFC 4231 向量） | 01 §1.2 / 06 M1 | ✅ M1 |
+| P0-2 | ✅ 已落地（M1-B：Schema v1.0 + 迁移 + 契约测试 + replay 双格式兼容） | 02 §2 / 05 D8 | ✅ M1 |
+| P0-3 | ✅ 已落地（M3：StdioDriver 失败分类学 timeout/invalid_output/crashed/exit_non_zero + 三向排水 + 进程组熔断 + 6 件套 mock 矩阵） | 03 §8 / 05 D10-D11 | ✅ M3 |
+| P0-4 | ✅ 已落地（M4：args[0] 裁决序内置>插件>方法>URL>未知 exit2 + 信号感知穿透 128+signal） | 03 §6 / 05 D7 | ✅ M4 |
+| P0-5.1 | ✅ 已落地（M2：静态 manifest 零子进程发现 + 发现零派生守护测试） | 03 §3.0 / 05 D2 | ✅ M2 |
+| P0-5.2 | ✅ 已落地（M2：属主/0600 信任校验 + 路径穿越与 symlink 逃逸拒绝 + 空缓存假命中回归修复） | 03 §3.2 / 05 D3 | ✅ M2 |
+| P0-5.3 | ✅ 已落地（M3/M4：spawn 环境白名单 + requires_env + --plugin-env + env 泄漏测试） | 03 §6.2 / 05 D4 | ✅ M3/M4 |
+| P0-5.4 | ✅ 已落地（0600 + masking 标记 + redactor SSOT + 掩码 smoke 测试） | 02 §2.7/§4 | ✅ M1/M3 |
+| P0-5.5 | ✅ 已落地（M3：统一降级三件套 + 未解析变量守卫 + DegradedPass + --strict-plugins 门禁 6 用例 e2e） | 03 §2 / 05 D5 | ✅ M3 |
+| P1-1 | ✅ 已落地（`?optional` 唯一拼写 + `optional=` 显式报错，parser + e2e 双锁定） | 03 §2 / 05 §4 | ✅ M1 |
+| P1-2 | ✅ 已落地（M1：FIFO 仲裁 + 魔数废除显式报错 + 引号分词） | 03 §4/§5 / 05 D6 | ✅ M1 |
 | P1-3 | ✅ 已闭环 | 06 §3 / 05 / README §0 | — |
-| P1-4 | 📄 已裁决 | 03 §3.0 | M2 |
-| P1-5 | 📄 已裁决 | 01 §2.1 / 03 §6.2 | M1 + M4 |
-| P1-6 | 📄 已裁决 | 03 §3.1/§8.3 / 05 D11 | M3 |
-| P1-7 | 📄 已裁决 | 04 全文 | M1/M3/M5 |
-| P1-8 | 📄 已裁决 | 02 §2/§4 | M1 |
-| P1-9 | 📄 已裁决 | 05 分层裁决 | M2/M3 落点遵循 |
-| P1-10 | 📄 已裁决 | 06 M1/M2/M4 | M1 起执行 |
+| P1-4 | ✅ 已落地（M2：目录级 stat 清单集合完全相等判定 + 空缓存假命中回归 + bench 0.58ms ≤5ms） | 03 §3.0 | ✅ M2 |
+| P1-5 | ✅ 已落地（M4：插件原值穿透 e2e exit7 + 未知命令 exit2） | 01 §2.1 / 03 §6.2 | ✅ M4 |
+| P1-6 | ✅ 已落地（M3：cache_scope none/request/suite + Hook 缓存复用） | 03 §3.1/§8.3 / 05 D11 | ✅ M3 |
+| P1-7 | ✅ 已落地（M1-M5：04 套件 1/2/3/4/5 全部落地，owner 映射兑现） | 04 全文 | ✅ M1-M5 |
+| P1-8 | ✅ 已落地（masking 感知红线：ai triage-snapshot 读取 masking 标记并输出数据不完整声明） | 02 §2/§4 | ✅ M5 |
+| P1-9 | 📄 已裁决（分层边界由代码结构遵守：`use rupost_ai` 仅存在于 src/ai 与 ai 命令族；CI grep 守护登记待办） | 05 分层裁决 | ✅ M2/M3 |
+| P1-10 | ✅ 已落地（M1 冻结清单 interface-freeze-m1.md + exit 127 测试废除改原值穿透 e2e） | 06 M1/M2/M4 | ✅ M1/M4 |
 
 > 汇总裁决：**全部 P0/P1 均已有明确解决方案并合入 v2.1.0 文档层；剩余工作全部是带 Milestone 的代码落地项**。本底账随实施推进更新状态列（🔧 → ✅），M5 结束时必须全表 ✅ 方可回标 Execution Ready。
+
+> 全量落地记录（2026-11-11，M2~M5 收官）：M2 registry/缓存硬化（bench registry_cache_read 0.58ms ≤5ms）→ M3 StdioDriver/失败分类学/统一降级/--strict-plugins（6-driver mock 矩阵 + 降级 6 用例 e2e 含正向对照组）→ M4 args[0] 裁决序 + TOFU/环境白名单/信号感知穿透（e2e exit7 原值穿透）→ M5 plugin list/schema + ai triage-snapshot（masking 感知）+ standalone/byte-fidelity 套件。三层门禁：workspace 1029 测试 0 失败 / verify_features.sh PASS / examples run_all 15 套 ALL PASS；clippy -D warnings + fmt 零漂移。release 二进制净增量 vs 审查基线 +141 KiB（预算 ≤500 KiB）。**P0/P1 底账全表 ✅，Execution Ready 回标条件达成。**

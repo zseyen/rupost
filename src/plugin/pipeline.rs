@@ -91,6 +91,7 @@ impl PluginPipeline {
     /// - 命中 `cache_scope=suite` 的插件直接复用缓存 Patch，不启动子进程
     /// - 缺失/四类失败：`?optional` 或 `--allow-missing-plugins` → 降级三件套；
     ///   否则 `blocking_error`（含搜索路径清单）
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_for_request(
         directives: &[PluginDirective],
         registry: &PluginRegistry,

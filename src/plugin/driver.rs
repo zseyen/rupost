@@ -138,10 +138,10 @@ pub async fn invoke_plugin(
     let stdin_task = tokio::spawn(async move {
         let payload_bytes = payload_owned.into_bytes();
         if payload_bytes.len() > MAX_PLUGIN_PAYLOAD_BYTES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("输入载荷 {} 超过 10MB 硬上限", payload_bytes.len()),
-            ));
+            return Err(std::io::Error::other(format!(
+                "输入载荷 {} 超过 10MB 硬上限",
+                payload_bytes.len()
+            )));
         }
         stdin.write_all(&payload_bytes).await?;
         stdin.shutdown().await?;
@@ -209,12 +209,9 @@ pub async fn invoke_plugin(
         Ok(Ok(status)) => status,
     };
 
-    let payload_over = stdin_task.await.unwrap_or_else(|_| {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "stdin task panicked",
-        ))
-    });
+    let payload_over = stdin_task
+        .await
+        .unwrap_or_else(|_| Err(std::io::Error::other("stdin task panicked")));
     let (stdout_bytes, stdout_capped) = stdout_task.await.unwrap_or((Vec::new(), false));
     let stderr_bytes = stderr_task.await.unwrap_or_default();
     let stderr_tail = String::from_utf8_lossy(&stderr_bytes).into_owned();
@@ -244,9 +241,9 @@ pub async fn invoke_plugin(
     };
 
     Ok(PluginInvocationOutcome {
-        output: failure.is_none().then(|| {
-            serde_json::from_slice(&stdout_bytes).unwrap_or_else(|_| serde_json::Value::Null)
-        }),
+        output: failure
+            .is_none()
+            .then(|| serde_json::from_slice(&stdout_bytes).unwrap_or(serde_json::Value::Null)),
         failure,
         duration_us,
         stderr_tail,

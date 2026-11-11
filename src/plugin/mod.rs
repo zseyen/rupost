@@ -5,12 +5,15 @@
 pub mod driver;
 pub mod patch;
 pub mod pipeline;
+pub mod protocol;
 pub mod registry;
+pub mod registry_cache;
 pub mod types;
 
-pub use driver::{PluginFailureKind, PluginInvocationOutcome, invoke_plugin};
+pub use driver::invoke_plugin;
 pub use patch::PluginPatch;
 pub use pipeline::PluginPipeline;
+pub use protocol::{PluginFailureKind, PluginInvocationOutcome};
 pub use registry::{DiscoverOptions, PluginRegistry, RegistryCacheFile};
 pub use types::{
     CommandCapability, HookCapability, PLUGIN_ENV_ALLOWLIST, PluginCacheScope, PluginDirective,

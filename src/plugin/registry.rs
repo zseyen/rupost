@@ -1,26 +1,9 @@
+use super::registry_cache::{self};
+pub use super::registry_cache::{CachedPluginEntry, RegistryCacheFile, manifest_fingerprint};
 use super::types::{CommandCapability, HookCapability, PluginManifest};
 use crate::Result;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-
-/// 磁盘轻量注册表高速缓存结构 (位于 ~/.rupost/registry.json)。
-/// 定位 = 静态 manifest 的**可重建索引**（非权威数据源，03 §3.2）。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct RegistryCacheFile {
-    pub version: String,
-    pub updated_at_utc: String,
-    pub manifests: Vec<CachedPluginEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CachedPluginEntry {
-    pub executable_path: String,
-    pub manifest_path: String,
-    pub mtime_secs: u64,
-    pub fingerprint_hash: String,
-    pub manifest: PluginManifest,
-}
 
 /// 统一插件注册表 (PluginRegistry - DeepSeek Harness 架构模式)
 #[derive(Debug, Clone, Default)]
@@ -29,6 +12,8 @@ pub struct PluginRegistry {
     pub commands: HashMap<String, (PathBuf, CommandCapability)>,
     /// HTTP 钩子路由索引: 指令/别名 -> (所属插件路径, 钩子能力描述)
     pub hooks: HashMap<String, (PathBuf, HookCapability)>,
+    /// 已发现插件的可执行路径 -> 原始静态 manifest 路径（供回退名持久化写回缓存）
+    manifest_paths: HashMap<PathBuf, PathBuf>,
     /// 发现过程中的非致命告警（alias 冲突、越界路径拒绝等，调用方负责渲染）
     pub warnings: Vec<String>,
 }
@@ -61,25 +46,33 @@ fn sibling_executables(manifest_path: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// 极速指纹：mtime + 文件前 4KB FNV-1a 哈希（03 §10.3 防幽灵缓存命中）
-pub fn manifest_fingerprint(path: &Path) -> Option<(u64, String)> {
-    let meta = std::fs::metadata(path).ok()?;
-    let mtime = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut head = [0u8; 4096];
-    let read = file.read(&mut head).unwrap_or(0);
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in &head[..read] {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+/// 收集有序且去重的插件扫描根目录：
+/// `custom_path_roots` 为 `None` 时扫描 `$PATH` + `~/.rupost/plugins`；
+/// 再按 `allow_project_plugins` 追加工作区 `./.rupost/plugins`（后者优先级更高）。
+fn collect_plugin_roots(
+    options: &DiscoverOptions,
+    custom_path_roots: Option<&[PathBuf]>,
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    match custom_path_roots {
+        Some(injected) => roots.extend(injected.iter().cloned()),
+        None => {
+            if let Some(path_env) = std::env::var_os("PATH") {
+                roots.extend(std::env::split_paths(&path_env));
+            }
+            if let Some(home) = dirs::home_dir() {
+                roots.push(home.join(".rupost").join("plugins"));
+            }
+        }
     }
-    Some((mtime, format!("{hash:016x}")))
+    if options.allow_project_plugins {
+        let base = options
+            .project_root
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        roots.push(base.join(".rupost").join("plugins"));
+    }
+    roots
 }
 
 impl PluginRegistry {
@@ -121,6 +114,18 @@ impl PluginRegistry {
         }
     }
 
+    /// 带原始 manifest 路径注册（确保 `rupost-<name>` 回退二进制或带后缀二进制均可正确写回缓存）
+    pub fn register_manifest_with_source(
+        &mut self,
+        executable_path: PathBuf,
+        manifest_path: PathBuf,
+        manifest: PluginManifest,
+    ) {
+        self.manifest_paths
+            .insert(executable_path.clone(), manifest_path);
+        self.register_manifest(executable_path, manifest);
+    }
+
     /// 根据 CLI 子命令名查找插件入口
     pub fn find_command(&self, name: &str) -> Option<&(PathBuf, CommandCapability)> {
         self.commands.get(name)
@@ -132,28 +137,17 @@ impl PluginRegistry {
     }
 
     /// 静态 manifest 发现（03 §3.0 安全裁决：readdir + JSON 解析，**零子进程**）。
-    ///
-    /// 扫描根：`$PATH` 各目录 + `~/.rupost/plugins` + 工作区 `./.rupost/plugins`
-    /// （后者必须携带放行旗标）。可执行路径必须与 manifest 同目录且 canonicalize
-    /// 后不逃逸插件根（路径穿越/symlink 逃逸拒绝）。
     pub fn discover(options: &DiscoverOptions) -> Result<Self> {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        if let Some(path_env) = std::env::var_os("PATH") {
-            roots.extend(std::env::split_paths(&path_env));
-        }
-        if let Some(home) = dirs::home_dir() {
-            roots.push(home.join(".rupost").join("plugins"));
-        }
-        if options.allow_project_plugins {
-            let base = options
-                .project_root
-                .clone()
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            roots.push(base.join(".rupost").join("plugins"));
-        }
+        Self::discover_with_roots(options, None)
+    }
 
+    /// 允许显式注入基础搜索根目录的发现入口（供测试无全局 env 竞态隔离使用）。
+    pub fn discover_with_roots(
+        options: &DiscoverOptions,
+        custom_path_roots: Option<&[PathBuf]>,
+    ) -> Result<Self> {
         let mut registry = Self::new();
-        for root in roots {
+        for root in collect_plugin_roots(options, custom_path_roots) {
             if !root.is_dir() {
                 continue;
             }
@@ -199,8 +193,6 @@ impl PluginRegistry {
             ));
         }
 
-        // 可执行路径白名单：必须与 manifest 同目录、canonicalize 后落在插件根内
-        // （拒绝 `..` 与逃逸插件根的 symlink，03 §3.2 路径穿越防线）
         let candidates = sibling_executables(manifest_path);
         let executable = candidates
             .iter()
@@ -213,67 +205,35 @@ impl PluginRegistry {
             return Err("可执行路径逃逸插件根（symlink/.. 攻击拒绝）".to_string());
         }
 
-        registry.register_manifest(exe_canon, manifest);
+        let manifest_canon = manifest_path
+            .canonicalize()
+            .unwrap_or_else(|_| manifest_path.to_path_buf());
+        registry.register_manifest_with_source(exe_canon, manifest_canon, manifest);
         Ok(())
     }
 
-    // ==================== 缓存（可重建索引，03 §3.2） ====================
-
-    /// 缓存有效性校验：属主 uid == euid + 权限 0600（多用户机器防投毒）
-    fn cache_file_trustworthy(cache_path: &Path) -> bool {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            let Ok(meta) = std::fs::metadata(cache_path) else {
-                return false;
-            };
-            if meta.uid() != unsafe { libc_euid() } {
-                return false;
-            }
-            if meta.permissions().mode() & 0o077 != 0 {
-                return false;
-            }
-            true
-        }
-        #[cfg(not(unix))]
-        {
-            cache_path.is_file()
-        }
+    pub fn load_cache(cache_path: &Path) -> Option<RegistryCacheFile> {
+        registry_cache::load_cache(cache_path)
     }
 
-    /// 加载缓存（快路径）。命中条件：属主/权限可信 + mtime + 前 4KB 哈希指纹
-    /// 全部匹配（03 §10.3 防幽灵命中）。返回 None 表示缓存缺失/过期/不可信。
-    pub fn load_cache(cache_path: &Path) -> Option<RegistryCacheFile> {
-        if !Self::cache_file_trustworthy(cache_path) {
-            return None;
-        }
-        let content = std::fs::read_to_string(cache_path).ok()?;
-        let cache: RegistryCacheFile = serde_json::from_str(&content).ok()?;
-        // 逐条目指纹校验：任一 manifest 变化即视为整体过期（重建成本 = 一次 readdir 级扫描）
-        for entry in &cache.manifests {
-            let manifest_path = PathBuf::from(&entry.manifest_path);
-            match manifest_fingerprint(&manifest_path) {
-                Some((mtime, hash))
-                    if mtime == entry.mtime_secs && hash == entry.fingerprint_hash => {}
-                _ => return None,
-            }
-        }
-        Some(cache)
+    pub fn save_cache_atomic(cache: &RegistryCacheFile, target_file: &Path) -> Result<()> {
+        registry_cache::save_cache_atomic(cache, target_file)
     }
 
     /// 从磁盘缓存或重新发现构建注册表（`--allow-project-plugins` 由调用方透传）。
-    ///
-    /// stat 新鲜度闭环（03 §3.0）：缓存命中前必须对插件根做目录级 readdir 清单
-    /// 对比——缓存条目集合 ≠ 磁盘静态 manifest 集合（新装/删除插件）即失效重建。
-    /// 仅靠"缓存内逐条指纹"会漏掉**新增**插件（条目不在缓存里，逐条全过 → 假命中、
-    /// 假降级窗口），这正是 P1-4 要求消除的场景。清单扫描零子进程，≤5ms 预算内。
     pub fn load_or_discover(options: &DiscoverOptions, cache_path: &Path) -> Result<Self> {
+        Self::load_or_discover_with_roots(options, cache_path, None)
+    }
+
+    /// 带注入根目录的缓存/发现闭环入口（无全局 `PATH` 副作用）。
+    pub fn load_or_discover_with_roots(
+        options: &DiscoverOptions,
+        cache_path: &Path,
+        custom_path_roots: Option<&[PathBuf]>,
+    ) -> Result<Self> {
         if let Some(cache) = Self::load_cache(cache_path) {
-            let inventory = Self::scan_manifest_inventory(options);
-            // 集合完全相等判定（含空集边界）：磁盘有缓存无（新装插件）、缓存有磁盘无
-            // （已删除）、或指纹漂移——任一即失效重建。空缓存 + 磁盘有插件 →
-            // 0 != N → 必须重建（本边界曾造成"新装插件永远找不到"的假命中）。
-            let cache_set: std::collections::BTreeSet<(String, u64, String)> = cache
+            let inventory = Self::scan_manifest_inventory(options, custom_path_roots);
+            let cache_set: BTreeSet<(String, u64, String)> = cache
                 .manifests
                 .iter()
                 .map(|e| {
@@ -284,42 +244,34 @@ impl PluginRegistry {
                     )
                 })
                 .collect();
-            let disk_set: std::collections::BTreeSet<(String, u64, String)> = inventory
+            let disk_set: BTreeSet<(String, u64, String)> = inventory
                 .into_iter()
                 .map(|(path, (mtime, hash))| (path.to_string_lossy().into_owned(), mtime, hash))
                 .collect();
             if cache_set == disk_set {
                 let mut registry = Self::new();
                 for entry in cache.manifests {
-                    registry
-                        .register_manifest(PathBuf::from(entry.executable_path), entry.manifest);
+                    registry.register_manifest_with_source(
+                        PathBuf::from(entry.executable_path),
+                        PathBuf::from(entry.manifest_path),
+                        entry.manifest,
+                    );
                 }
                 return Ok(registry);
             }
         }
-        let mut registry = Self::discover(options)?;
+        let mut registry = Self::discover_with_roots(options, custom_path_roots)?;
         registry.persist_cache(cache_path);
         Ok(registry)
     }
 
     /// 插件根静态 manifest 清单扫描（零子进程：readdir + 指纹，供缓存新鲜度对比）
-    fn scan_manifest_inventory(options: &DiscoverOptions) -> Vec<(PathBuf, (u64, String))> {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        if let Some(path_env) = std::env::var_os("PATH") {
-            roots.extend(std::env::split_paths(&path_env));
-        }
-        if let Some(home) = dirs::home_dir() {
-            roots.push(home.join(".rupost").join("plugins"));
-        }
-        if options.allow_project_plugins {
-            let base = options
-                .project_root
-                .clone()
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            roots.push(base.join(".rupost").join("plugins"));
-        }
+    fn scan_manifest_inventory(
+        options: &DiscoverOptions,
+        custom_path_roots: Option<&[PathBuf]>,
+    ) -> Vec<(PathBuf, (u64, String))> {
         let mut inventory = Vec::new();
-        for root in roots {
+        for root in collect_plugin_roots(options, custom_path_roots) {
             let Ok(entries) = std::fs::read_dir(&root) else {
                 continue;
             };
@@ -331,64 +283,40 @@ impl PluginRegistry {
                 if is_manifest_file(file_name)
                     && let Some(fp) = manifest_fingerprint(&path)
                 {
-                    inventory.push((path, fp));
+                    let canon = path.canonicalize().unwrap_or(path);
+                    inventory.push((canon, fp));
                 }
             }
         }
         inventory
     }
 
-    /// 原子化持久化保存到磁盘缓存文件（临时文件 + rename；文件强制 0600）
-    pub fn save_cache_atomic(cache: &RegistryCacheFile, target_file: &Path) -> Result<()> {
-        if let Some(parent) = target_file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let json_str = serde_json::to_string_pretty(cache)?;
-        let tmp_file = target_file.with_extension(format!("tmp.{}", std::process::id()));
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp_file)?;
-            file.write_all(json_str.as_bytes())?;
-        }
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&tmp_file, json_str)?;
-        }
-        std::fs::rename(&tmp_file, target_file)?;
-        Ok(())
-    }
-
     /// 将当前注册表内容静默写回缓存（失败仅登记告警，绝不阻塞主流程）
     pub fn persist_cache(&mut self, cache_path: &Path) {
         let mut manifests: Vec<CachedPluginEntry> = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
+        let mut seen = BTreeSet::new();
         let command_exes = self.commands.values().map(|(p, _)| p);
         let hook_exes = self.hooks.values().map(|(p, _)| p);
         for exe_path in command_exes.chain(hook_exes) {
             if !seen.insert(exe_path.clone()) {
                 continue;
             }
-            let manifest_path = exe_path.with_extension("json");
-            if let Some((mtime, hash)) = manifest_fingerprint(&manifest_path) {
-                // 从同目录 manifest 重建完整清单快照
-                if let Ok(content) = std::fs::read_to_string(&manifest_path)
-                    && let Ok(manifest) = serde_json::from_str::<PluginManifest>(&content)
-                {
-                    manifests.push(CachedPluginEntry {
-                        executable_path: exe_path.to_string_lossy().into_owned(),
-                        manifest_path: manifest_path.to_string_lossy().into_owned(),
-                        mtime_secs: mtime,
-                        fingerprint_hash: hash,
-                        manifest,
-                    });
-                }
+            let manifest_path = self
+                .manifest_paths
+                .get(exe_path)
+                .cloned()
+                .unwrap_or_else(|| exe_path.with_extension("json"));
+            if let Some((mtime, hash)) = manifest_fingerprint(&manifest_path)
+                && let Ok(content) = std::fs::read_to_string(&manifest_path)
+                && let Ok(manifest) = serde_json::from_str::<PluginManifest>(&content)
+            {
+                manifests.push(CachedPluginEntry {
+                    executable_path: exe_path.to_string_lossy().into_owned(),
+                    manifest_path: manifest_path.to_string_lossy().into_owned(),
+                    mtime_secs: mtime,
+                    fingerprint_hash: hash,
+                    manifest,
+                });
             }
         }
         let cache = RegistryCacheFile {
@@ -400,354 +328,5 @@ impl PluginRegistry {
             self.warnings
                 .push(format!("注册表缓存写回失败（不影响本次执行）: {e}"));
         }
-    }
-}
-
-#[cfg(unix)]
-unsafe fn libc_euid() -> u32 {
-    unsafe { libc::geteuid() }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::plugin::types::PluginStage;
-    use std::io::Write;
-
-    fn demo_manifest(name: &str) -> PluginManifest {
-        PluginManifest {
-            manifest_version: "1.0".to_string(),
-            name: name.to_string(),
-            version: "0.1.0".to_string(),
-            description: "Demo plugin".to_string(),
-            commands: vec![CommandCapability {
-                name: name.to_string(),
-                usage: format!("rupost {name}"),
-                description: "Demo command".to_string(),
-                requires_tty: false,
-            }],
-            hooks: vec![HookCapability {
-                directive: "auth".to_string(),
-                alias: Some(name.to_string()),
-                stage: PluginStage::Prepare,
-                cache_scope: crate::plugin::types::PluginCacheScope::None,
-                requires_env: vec![],
-                parameters_schema: serde_json::json!({"type": "object"}),
-            }],
-        }
-    }
-
-    /// 固定一个假插件根：manifest JSON + 同目录可执行占位文件
-    fn fixture_plugin(root: &Path, plugin_name: &str, body: Option<&str>) -> PathBuf {
-        std::fs::create_dir_all(root).unwrap();
-        let bin = root.join(format!("rupost-plugin-{plugin_name}"));
-        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let manifest_path = root.join(format!("rupost-plugin-{plugin_name}.json"));
-        let manifest = match body {
-            Some(raw) => raw.to_string(),
-            None => serde_json::to_string(&demo_manifest(plugin_name)).unwrap(),
-        };
-        std::fs::write(&manifest_path, manifest).unwrap();
-        manifest_path
-    }
-
-    #[test]
-    fn test_registry_registration_and_lookup() {
-        let mut registry = PluginRegistry::new();
-        registry.register_manifest(
-            PathBuf::from("/usr/local/bin/rupost-plugin-aws-sigv4"),
-            demo_manifest("aws-sigv4"),
-        );
-
-        let found_cmd = registry.find_command("aws-sigv4").expect("command found");
-        assert_eq!(
-            found_cmd.0,
-            PathBuf::from("/usr/local/bin/rupost-plugin-aws-sigv4")
-        );
-        let found_hook = registry.find_hook("aws-sigv4").expect("hook found");
-        assert_eq!(found_hook.1.stage, PluginStage::Prepare);
-        assert_eq!(
-            found_hook.1.cache_scope,
-            crate::plugin::types::PluginCacheScope::None
-        );
-    }
-
-    /// 03 §3.0 安全根基：发现 = readdir + JSON 解析，路径穿越与 symlink 逃逸拒绝
-    #[test]
-    fn test_discovery_static_manifest_and_path_traversal_rejection() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("plugins");
-        let good = fixture_plugin(&root, "good", None);
-
-        // 攻击 1：manifest 携带 `..` 逃逸路径（二进制放在根外，工具找不到同目录二进制）
-        fixture_plugin(
-            &root,
-            "evil-dotdot",
-            Some(
-                r#"{"manifest_version":"1.0","name":"evil-dotdot","version":"1","description":"x","commands":[],"hooks":[]}"#,
-            ),
-        );
-
-        // 攻击 2：symlink 逃逸——二进制 link 指向根外目标
-        let outside = dir.path().join("outside.sh");
-        std::fs::write(&outside, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, root.join("rupost-plugin-evil-symlink")).unwrap();
-        std::fs::write(
-            root.join("rupost-plugin-evil-symlink.json"),
-            r#"{"manifest_version":"1.0","name":"evil-symlink","version":"1","description":"x","commands":[{"name":"boom","usage":"u","description":"d"}],"hooks":[]}"#,
-        )
-        .unwrap();
-
-        let options = DiscoverOptions {
-            project_root: Some(dir.path().to_path_buf()),
-            allow_project_plugins: true,
-        };
-        // 仅扫本根：临时改 PATH 注入（discover 读 PATH）
-        unsafe {
-            std::env::set_var("PATH", root.to_str().unwrap());
-        }
-        let registry = PluginRegistry::discover(&options).unwrap();
-        unsafe {
-            std::env::remove_var("PATH");
-        }
-
-        assert!(
-            registry.find_command("good").is_some(),
-            "合法插件必须被发现: {:?}",
-            registry.warnings
-        );
-        assert!(
-            registry.find_command("boom").is_none(),
-            "symlink 逃逸插件必须被拒绝"
-        );
-        let _ = good;
-        assert!(
-            registry.warnings.iter().any(|w| w.contains("evil-symlink")),
-            "拒绝原因必须登记为告警: {:?}",
-            registry.warnings
-        );
-    }
-
-    /// 缓存投毒防线：非属主 / 权限过宽的 registry.json 拒绝加载
-    #[cfg(unix)]
-    #[test]
-    fn test_cache_rejects_foreign_owner_and_loose_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let cache_path = dir.path().join("registry.json");
-        let cache = RegistryCacheFile {
-            version: "1.0".to_string(),
-            updated_at_utc: "2026-01-01T00:00:00Z".to_string(),
-            manifests: vec![],
-        };
-        PluginRegistry::save_cache_atomic(&cache, &cache_path).unwrap();
-
-        // 攻击 1：权限放宽到 0644 → 必须拒绝
-        std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(
-            PluginRegistry::load_cache(&cache_path).is_none(),
-            "权限过宽的缓存必须拒绝加载"
-        );
-
-        // 恢复 0600 后命中
-        std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert!(PluginRegistry::load_cache(&cache_path).is_some());
-    }
-
-    /// stat 新鲜度闭环（03 §3.0）：manifest 变更 → 缓存整体失效；
-    /// 新装插件在下一次发现即可路由（无需手动 sync）
-    #[test]
-    fn test_cache_staleness_on_manifest_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("plugins");
-        let manifest_path = fixture_plugin(&root, "fresh", None);
-
-        // 构建缓存
-        let mut registry = PluginRegistry::new();
-        let exe = root.join("rupost-plugin-fresh");
-        registry.register_manifest(exe, demo_manifest("fresh"));
-        let cache_path = dir.path().join("registry.json");
-        registry.persist_cache(&cache_path);
-        assert!(
-            PluginRegistry::load_cache(&cache_path).is_some(),
-            "首建缓存必须命中"
-        );
-
-        // 指纹漂移：改写 manifest 内容（cache_scope 变化模拟插件升级）
-        let mut updated = demo_manifest("fresh");
-        updated.hooks[0].cache_scope = crate::plugin::types::PluginCacheScope::Suite;
-        std::fs::write(&manifest_path, serde_json::to_string(&updated).unwrap()).unwrap();
-        assert!(
-            PluginRegistry::load_cache(&cache_path).is_none(),
-            "manifest 变更后旧缓存必须判定过期"
-        );
-
-        // 指纹未变但缓存文件被写投毒路径 → 由属主/权限校验挡（另一测试覆盖）
-        let _ = std::fs::File::create(&manifest_path)
-            .unwrap()
-            .write_all(b"");
-    }
-
-    /// P1-4 边界回归：空缓存 + 磁盘有新装插件 → 必须判过期重建（假命中曾致
-    /// "新装插件永远找不到"，jj M3 评审修复）
-    #[test]
-    fn test_empty_cache_with_new_disk_plugin_rebuilds() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache_path = dir.path().join("registry.json");
-        let empty = RegistryCacheFile {
-            version: "1.0".to_string(),
-            updated_at_utc: "2026-01-01T00:00:00Z".to_string(),
-            manifests: vec![],
-        };
-        PluginRegistry::save_cache_atomic(&empty, &cache_path).unwrap();
-        let plugin_dir = dir.path().join(".rupost").join("plugins");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        let bin = plugin_dir.join("rupost-plugin-newcomer");
-        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::write(
-            plugin_dir.join("rupost-plugin-newcomer.json"),
-            r#"{"manifest_version":"1.0","name":"newcomer","version":"1","description":"x","commands":[{"name":"new-cmd","usage":"u","description":"d"}],"hooks":[]}"#,
-        )
-        .unwrap();
-        let options = DiscoverOptions {
-            allow_project_plugins: true,
-            project_root: Some(dir.path().to_path_buf()),
-        };
-        unsafe {
-            std::env::set_var("PATH", "/nonexistent-empty-root");
-        }
-        let registry = PluginRegistry::load_or_discover(&options, &cache_path).unwrap();
-        unsafe {
-            std::env::remove_var("PATH");
-        }
-        assert!(
-            registry.find_command("new-cmd").is_some(),
-            "空缓存必须重建发现新装插件: warnings={:?}",
-            registry.warnings
-        );
-    }
-
-    /// 缓存数据文件本身被篡改指向根外二进制时：指纹校验失败（内容变了）→ 过期重建，
-    /// 重建走静态 manifest 白名单。此处锁定"缓存非权威，manifest 才是"的裁决。
-    #[test]
-    fn test_cache_is_rebuildable_index_not_authority() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache_path = dir.path().join("registry.json");
-        // 伪造缓存：指向 /tmp/evil 的"注册项"，manifest 指纹字段对不上任何真实文件
-        let poisoned = RegistryCacheFile {
-            version: "1.0".to_string(),
-            updated_at_utc: "2026-01-01T00:00:00Z".to_string(),
-            manifests: vec![CachedPluginEntry {
-                executable_path: "/tmp/evil".to_string(),
-                manifest_path: "/tmp/evil.json".to_string(),
-                mtime_secs: 0,
-                fingerprint_hash: "deadbeef".to_string(),
-                manifest: demo_manifest("evil"),
-            }],
-        };
-        PluginRegistry::save_cache_atomic(&poisoned, &cache_path).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&cache_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        assert!(
-            PluginRegistry::load_cache(&cache_path).is_none(),
-            "指向不存在 manifest 的投毒缓存必须判过期"
-        );
-    }
-
-    /// alias 冲突：同名双插件后注册覆盖 + 告警登记（03 §3.1）
-    #[test]
-    fn test_alias_conflict_warning() {
-        let mut registry = PluginRegistry::new();
-        registry.register_manifest(PathBuf::from("/a/rupost-plugin-dup"), demo_manifest("dup"));
-        registry.register_manifest(PathBuf::from("/b/rupost-plugin-dup"), demo_manifest("dup"));
-        assert_eq!(
-            registry.find_hook("dup").unwrap().0,
-            PathBuf::from("/b/rupost-plugin-dup"),
-            "后者覆盖前者"
-        );
-        assert!(
-            registry.warnings.iter().any(|w| w.contains("冲突")),
-            "覆盖必须告警: {:?}",
-            registry.warnings
-        );
-    }
-}
-
-#[cfg(test)]
-mod project_root_tests {
-    use super::*;
-
-    /// 工作区插件根分支：project_root 显式指定时必须扫到 ./.rupost/plugins
-    #[test]
-    fn test_discovery_project_root_branch() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join(".rupost").join("plugins");
-        std::fs::create_dir_all(&root).unwrap();
-        let bin = root.join("rupost-plugin-local");
-        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        std::fs::write(
-            root.join("rupost-plugin-local.json"),
-            r#"{"manifest_version":"1.0","name":"local","version":"1","description":"x","commands":[{"name":"local-cmd","usage":"u","description":"d"}],"hooks":[]}"#,
-        )
-        .unwrap();
-
-        let options = DiscoverOptions {
-            allow_project_plugins: true,
-            project_root: Some(dir.path().to_path_buf()),
-        };
-        unsafe {
-            std::env::set_var("PATH", "/nonexistent-empty-root");
-        }
-        let registry = PluginRegistry::discover(&options).unwrap();
-        unsafe {
-            std::env::remove_var("PATH");
-        }
-        assert!(
-            registry.find_command("local-cmd").is_some(),
-            "project_root 分支必须发现工作区插件: warnings={:?}",
-            registry.warnings
-        );
-    }
-
-    /// 闸门默认关闭：不传 --allow-project-plugins 时工作区插件严禁被发现（RCE 防线）
-    #[test]
-    fn test_project_root_gate_closed_by_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join(".rupost").join("plugins");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            root.join("rupost-plugin-local.json"),
-            r#"{"manifest_version":"1.0","name":"local","version":"1","description":"x","commands":[],"hooks":[]}"#,
-        )
-        .unwrap();
-        let options = DiscoverOptions {
-            allow_project_plugins: false,
-            project_root: Some(dir.path().to_path_buf()),
-        };
-        unsafe {
-            std::env::set_var("PATH", "/nonexistent-empty-root");
-        }
-        let registry = PluginRegistry::discover(&options).unwrap();
-        unsafe {
-            std::env::remove_var("PATH");
-        }
-        assert!(
-            registry.commands.is_empty(),
-            "闸门关闭时工作区插件不得被发现"
-        );
     }
 }

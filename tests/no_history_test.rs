@@ -146,3 +146,33 @@ async fn test_no_history_global_dispatch_level_enforcement() {
         "全局分发层 --no-history 不得生成 history.jsonl"
     );
 }
+
+/// #6 家族收尾：`--var` 非法格式（缺 '='）不得静默丢弃——stderr 告警，
+/// 且不污染 `--report json` 的 stdout 纯净性
+#[tokio::test]
+async fn test_malformed_var_flag_warns_on_stderr() {
+    let dir = tempdir().unwrap();
+    let (_server, case) = start_ok_server().await;
+    let case = write_case(dir.path(), &case);
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            case.as_str(),
+            "--var",
+            "no_equals_here",
+            "--report",
+            "json",
+        ],
+    );
+    assert!(out.status.success(), "非法 --var 仅告警，不中断执行");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no_equals_here") && stderr.contains("未生效"),
+        "非法 --var 必须在 stderr 告警: {stderr}"
+    );
+    // stdout 仍为纯 JSON
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str::<serde_json::Value>(stdout.trim()).expect("stdout 应为纯 JSON 报告");
+}

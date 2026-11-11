@@ -55,25 +55,12 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
     }
 
     // 3. 5层级联加载环境配置（配置/env 文件告警走 stderr，不污染导出 stdout——走查缺口 #6）
-    let (config, mut loader_warnings) = crate::variable::ConfigLoader::find_and_load();
-    let config = config.unwrap_or_default();
-    let cli_vars: Vec<(String, String)> = opts
-        .var
-        .iter()
-        .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
-        .collect();
-    let env_file_to_load = opts
-        .env_file
-        .as_deref()
-        .map(|p| (p, true))
-        .or(Some((".env", false)));
-    let (mut var_context, env_warnings) = crate::variable::ConfigLoader::build_context(
-        &config,
-        opts.env.as_deref(),
-        &cli_vars,
-        env_file_to_load,
-    );
-    loader_warnings.extend(env_warnings);
+    let (mut var_context, loader_warnings) =
+        crate::variable::ConfigLoader::load_context_with_var_specs(
+            opts.env.as_deref(),
+            &opts.var,
+            opts.env_file.as_deref(),
+        );
     for warning in &loader_warnings {
         eprintln!("[!] {warning}");
     }

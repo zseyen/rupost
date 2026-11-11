@@ -10,25 +10,12 @@ use std::time::Duration;
 
 /// 加载工作区配置、环境变量文件与 `--var` 覆盖，构造套件变量上下文。
 pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext {
-    let (config, mut loader_warnings) = ConfigLoader::find_and_load();
-    let config = config.unwrap_or_default();
-
-    let cli_vars: Vec<(String, String)> = options
-        .var
-        .iter()
-        .filter_map(|s| ConfigLoader::parse_cli_var(s))
-        .collect();
-
-    let env_file_to_load = options
-        .env_file
-        .as_deref()
-        .map(|p| (p, true))
-        .or(Some((".env", false)));
-
-    let (mut var_context, env_warnings) =
-        ConfigLoader::build_context(&config, options.env.as_deref(), &cli_vars, env_file_to_load);
-    loader_warnings.extend(env_warnings);
-    for warning in &loader_warnings {
+    let (mut var_context, warnings) = ConfigLoader::load_context_with_var_specs(
+        options.env.as_deref(),
+        &options.var,
+        options.env_file.as_deref(),
+    );
+    for warning in &warnings {
         eprintln!("[!] {warning}");
     }
     var_context.insert("__default_scheme", &options.default_scheme);

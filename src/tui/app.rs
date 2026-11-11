@@ -323,33 +323,18 @@ pub fn load_initial_file(state: &mut AppState, initial_file: Option<&str>) {
     }
 }
 
-/// 构建 TUI 启动时的变量上下文（与 CLI test 同一 `build_context` 入口，
-/// 级联顺序：rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖）。
+/// 构建 TUI 启动时的变量上下文（与 CLI test 同一装配入口
+/// `load_context_with_var_specs`，级联顺序：rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖）。
 /// 附带 loader 告警（配置/env 文件损坏或显式缺失）——TUI 已进备用屏，
 /// 告警由调用方放入状态栏而非 stderr（走查缺口 #6）。
 pub fn build_initial_context(
     options: &super::TuiOptions,
 ) -> (crate::variable::VariableContext, Vec<String>) {
-    let (config, mut loader_warnings) = crate::variable::ConfigLoader::find_and_load();
-    let config = config.unwrap_or_default();
-    let cli_vars: Vec<(String, String)> = options
-        .vars
-        .iter()
-        .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
-        .collect();
-    let env_file_to_load = options
-        .env_file
-        .as_deref()
-        .map(|p| (p, true))
-        .or(Some((".env", false)));
-    let (context, env_warnings) = crate::variable::ConfigLoader::build_context(
-        &config,
+    crate::variable::ConfigLoader::load_context_with_var_specs(
         options.env.as_deref(),
-        &cli_vars,
-        env_file_to_load,
-    );
-    loader_warnings.extend(env_warnings);
-    (context, loader_warnings)
+        &options.vars,
+        options.env_file.as_deref(),
+    )
 }
 
 /// 对 TUI 中扫描出的所有候选文件路径进行精细化过滤

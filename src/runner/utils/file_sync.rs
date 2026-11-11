@@ -97,8 +97,10 @@ pub async fn write_log_with_limit(
 
     let new_len = file_len + data.len();
     if new_len > max_bytes {
-        // 截断提示是 best-effort 附加信息，写失败不阻断主流程
+        // 截断提示是 best-effort 附加信息，写失败不阻断主流程；
+        // flush 恢复串行化——防止下一次 metadata 采样时 marker 未落盘导致重复写
         let _ = file.write_all(LOG_TRUNCATED_MARKER.as_bytes()).await;
+        let _ = file.flush().await;
     } else {
         // 数据写失败必须上抛——外层 SSE/WS 的 once 告警闸门依赖此 Err
         // （审查 P0-A：此前 let _ = 吞错返回 Ok，闸门只保护到 open 为止）

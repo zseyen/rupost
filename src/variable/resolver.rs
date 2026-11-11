@@ -163,16 +163,39 @@ impl VariableResolver {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
+    /// toml 配置值的系统变量展开正则（SSOT：`resolve_env_vars` 与
+    /// `resolve_env_vars_with_warnings` 共用同一 `OnceLock`，防止模式漂移）
+    fn env_regex() -> &'static Regex {
+        static ENV_REGEX: OnceLock<Regex> = OnceLock::new();
+        ENV_REGEX.get_or_init(|| Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap())
+    }
+
     /// 解析并替换系统环境变量 ${VAR}
     pub fn resolve_env_vars(text: &str) -> String {
-        static ENV_REGEX: OnceLock<Regex> = OnceLock::new();
-        let re = ENV_REGEX.get_or_init(|| Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap());
+        Self::env_regex()
+            .replace_all(text, |caps: &Captures| {
+                let env_name = &caps[1];
+                std::env::var(env_name).unwrap_or_else(|_| caps[0].to_string())
+            })
+            .to_string()
+    }
 
-        re.replace_all(text, |caps: &Captures| {
-            let env_name = &caps[1];
-            std::env::var(env_name).unwrap_or_else(|_| caps[0].to_string())
-        })
-        .to_string()
+    /// toml 配置值的系统变量展开（带未设置告警）——仅 build_context 路径使用；
+    /// 热路径 [`resolve_env_vars`]（每请求 URL/headers/body 三处调用）签名不变。
+    /// 正则保持 `[A-Z_]` 不变（保守裁决：小写 `${x}` 从不展开是既有行为，
+    /// 扩展会让 `${path}` 类突然命中进程 env——破坏性）
+    pub fn resolve_env_vars_with_warnings(text: &str) -> (String, Vec<String>) {
+        let mut warnings = Vec::new();
+        let out = Self::env_regex().replace_all(text, |caps: &Captures| {
+            std::env::var(&caps[1]).unwrap_or_else(|_| {
+                warnings.push(format!(
+                    "toml 引用的系统变量 ${{{}}} 未设置，已按字面量保留",
+                    &caps[1]
+                ));
+                caps[0].to_string()
+            })
+        });
+        (out.to_string(), warnings)
     }
 
     /// 完整的变量解析流程：先解析环境变量，再替换自定义变量
@@ -319,6 +342,38 @@ mod tests {
         let output = VariableResolver::resolve_env_vars(input);
         // 未找到的环境变量保持原样
         assert_eq!(output, "Value: ${NONEXISTENT_VAR}");
+    }
+
+    /// `${VAR}` 带告警变体决策表：命中展开 / 未命中保留+告警 / 小写不展开不告警
+    #[test]
+    fn test_resolve_env_vars_with_warnings_decision_table() {
+        unsafe {
+            std::env::set_var("RUPOST_GAP6_SET_PROBE", "resolved-val");
+        }
+        // 1. 命中 → 展开，零告警
+        let (out, warnings) =
+            VariableResolver::resolve_env_vars_with_warnings("x=${RUPOST_GAP6_SET_PROBE}");
+        assert_eq!(out, "x=resolved-val");
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // 2. 未命中 → 字面量保留 + 一条指名道姓的告警
+        let (out, warnings) =
+            VariableResolver::resolve_env_vars_with_warnings("y=${RUPOST_GAP6_NEVER_SET}");
+        assert_eq!(out, "y=${RUPOST_GAP6_NEVER_SET}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("RUPOST_GAP6_NEVER_SET"),
+            "{warnings:?}"
+        );
+
+        // 3. 小写 ${x} 不属于本机制：不展开、不告警（既有行为锁定，防 ${path} 误展开）
+        let (out, warnings) = VariableResolver::resolve_env_vars_with_warnings("z=${path}");
+        assert_eq!(out, "z=${path}");
+        assert!(warnings.is_empty(), "小写形态不得告警: {warnings:?}");
+
+        unsafe {
+            std::env::remove_var("RUPOST_GAP6_SET_PROBE");
+        }
     }
 
     #[test]

@@ -4,6 +4,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+/// `--var` 解析决策（#6 家族：显式意图落空 → Warn；合法 → Parsed）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CliVarOutcome {
+    Parsed(String, String),
+    /// 携带出站 warning 文本
+    Warn(String),
+}
+
 /// 配置文件加载器
 pub struct ConfigLoader;
 
@@ -112,8 +120,11 @@ impl ConfigLoader {
         let env_matched = env_name.and_then(|name| config.get_environment(name));
         if let Some(env) = env_matched {
             for (key, value) in &env.variables {
-                // 解析系统环境变量 ${VAR}
-                let resolved_value = VariableResolver::resolve_env_vars(value);
+                // 解析系统环境变量 ${VAR}；未设置的引用必须告警（此前静默
+                // 保留字面量外发，且 {{var}} 残留检查捕获不到 ${} 形态）
+                let (resolved_value, mut env_warnings) =
+                    VariableResolver::resolve_env_vars_with_warnings(value);
+                warnings.append(&mut env_warnings);
                 vars.insert(key.clone(), resolved_value);
             }
         }
@@ -166,14 +177,77 @@ impl ConfigLoader {
             vars.insert(key.clone(), value.clone());
         }
 
+        // 同一未设置变量可能在多个键中重复引用，告警去重（ws_runner sort+dedup 先例）
+        warnings.sort();
+        warnings.dedup();
         context.extend(vars);
         (context, warnings)
     }
 
     /// 解析 CLI 变量参数 "key=value"
     pub fn parse_cli_var(s: &str) -> Option<(String, String)> {
-        s.split_once('=')
-            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        match Self::parse_cli_var_outcome(s) {
+            CliVarOutcome::Parsed(k, v) => Some((k, v)),
+            CliVarOutcome::Warn(_) => None,
+        }
+    }
+
+    /// 解析 CLI 变量参数（走查缺口 #6 家族收尾：`--var no_equals` 此前经
+    /// filter_map 静默丢弃——用户显式传参落空必须告警，与 --env-file 同语义）
+    pub fn parse_cli_var_outcome(s: &str) -> CliVarOutcome {
+        match s.split_once('=') {
+            Some((k, v)) if !k.trim().is_empty() => {
+                CliVarOutcome::Parsed(k.trim().to_string(), v.trim().to_string())
+            }
+            // 值允许为空（`key=` → 空串，既有语义保留）
+            // 空键（`=v` / 纯 `=`）单独成文案：与"缺 '=' "是不同的笔误形态
+            Some((k, _)) if k.trim().is_empty() => {
+                CliVarOutcome::Warn(format!("--var '{s}': 变量名为空，变量未生效"))
+            }
+            _ => CliVarOutcome::Warn(format!("--var '{s}': 缺少 '=' 分隔，变量未生效")),
+        }
+    }
+
+    /// 解析多个 CLI `--var key=val` 参数；非法项不静默丢弃，收集到 warnings。
+    pub fn parse_cli_vars_with_warnings(specs: &[String]) -> (Vec<(String, String)>, Vec<String>) {
+        let mut parsed = Vec::new();
+        let mut warnings = Vec::new();
+        for s in specs {
+            match Self::parse_cli_var_outcome(s) {
+                CliVarOutcome::Parsed(k, v) => parsed.push((k, v)),
+                CliVarOutcome::Warn(msg) => warnings.push(msg),
+            }
+        }
+        (parsed, warnings)
+    }
+
+    /// 统一 5 层上下文装配入口（已具备 K-V 对的场景，如 Web `extra_variables`）。
+    /// `env_file`: `Some(path)` 为显式 `--env-file`（缺失/损坏必告警）；
+    /// `None` 为默认探测 `.env`（缺失是常态静默）。告警渲染权归调用方。
+    pub fn load_context(
+        env_name: Option<&str>,
+        cli_vars: &[(String, String)],
+        env_file: Option<&str>,
+    ) -> (VariableContext, Vec<String>) {
+        let (config, mut warnings) = Self::find_and_load();
+        let config = config.unwrap_or_default();
+        let env_file_to_load = env_file.map(|p| (p, true)).or(Some((".env", false)));
+        let (context, env_warnings) =
+            Self::build_context(&config, env_name, cli_vars, env_file_to_load);
+        warnings.extend(env_warnings);
+        (context, warnings)
+    }
+
+    /// 统一 5 层上下文装配入口（接收原始 `--var` 字符串切片，供 CLI Runner/Exporter/TUI 共用）。
+    pub fn load_context_with_var_specs(
+        env_name: Option<&str>,
+        var_specs: &[String],
+        env_file: Option<&str>,
+    ) -> (VariableContext, Vec<String>) {
+        let (cli_vars, mut warnings) = Self::parse_cli_vars_with_warnings(var_specs);
+        let (context, ctx_warnings) = Self::load_context(env_name, &cli_vars, env_file);
+        warnings.extend(ctx_warnings);
+        (context, warnings)
     }
 }
 
@@ -456,6 +530,129 @@ base_url = "http://localhost:8080"
         );
 
         assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
+    }
+
+    /// `--var` 决策表（#6 家族收尾）：显式传参落空必须告警，三调用点共用
+    #[test]
+    fn test_parse_cli_var_outcome_decision_table() {
+        let cases: Vec<(&str, Option<(&str, &str)>)> = vec![
+            ("key=value", Some(("key", "value"))),
+            // 值含 '=' → 仅按首个切分（既有语义保留）
+            ("a=b=c", Some(("a", "b=c"))),
+            // 空值合法（`key=` → 空串）
+            ("key=", Some(("key", ""))),
+            // 两侧空白 trim
+            ("  k  =  v  ", Some(("k", "v"))),
+            // 缺 '=' → Warn
+            ("no_equals", None),
+            // 空键 → Warn
+            ("=value", None),
+            // 空串 → Warn
+            ("", None),
+        ];
+        for (input, expected) in cases {
+            match (ConfigLoader::parse_cli_var_outcome(input), expected) {
+                (CliVarOutcome::Parsed(k, v), Some((ek, ev))) => {
+                    assert_eq!((k.as_str(), v.as_str()), (ek, ev), "input={input:?}");
+                }
+                (CliVarOutcome::Warn(msg), None) => {
+                    assert!(msg.contains("--var"), "告警应点名 --var: {msg}");
+                    assert!(msg.contains("未生效"), "告警应说明后果: {msg}");
+                }
+                (got, want) => panic!("input={input:?}: got {got:?}, want {want:?}"),
+            }
+        }
+        // 兼容入口委托同一决策（Option 语义不变）
+        assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
+        assert_eq!(
+            ConfigLoader::parse_cli_var("k=v"),
+            Some(("k".to_string(), "v".to_string()))
+        );
+    }
+
+    /// toml `${VAR}` 未设置告警 + 同变量多处引用去重
+    #[test]
+    fn test_build_context_unset_toml_env_ref_warns_once() {
+        let config_content = r#"
+[environments.dev]
+base_url = "${RUPOST_GAP6_UNSET_PROBE}/v1"
+api_host = "${RUPOST_GAP6_UNSET_PROBE}"
+plain = "no-ref"
+"#;
+        let config: VariableConfig = toml::from_str(config_content).unwrap();
+        let (context, warnings) = ConfigLoader::build_context(&config, Some("dev"), &[], None);
+
+        // 同一变量在两个键中引用 → 去重后恰好一条
+        let hits: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.contains("RUPOST_GAP6_UNSET_PROBE"))
+            .collect();
+        assert_eq!(hits.len(), 1, "同变量多处引用应去重: {warnings:?}");
+        assert!(hits[0].contains("未设置"), "{hits:?}");
+        // 字面量保留语义不变（既有行为）
+        assert_eq!(
+            context.get("base_url").as_deref(),
+            Some("${RUPOST_GAP6_UNSET_PROBE}/v1")
+        );
+        assert_eq!(context.get("plain").as_deref(), Some("no-ref"));
+    }
+
+    /// `load_context` / `load_context_with_var_specs` 等价契约：
+    /// 两条装配入口对同一输入产出一致上下文，且非法 `--var` 告警不静默。
+    /// 注意：本测试有意走真实级联（`find_and_load` 从 cwd 发现仓库根 rupost.toml）——
+    /// 断言均按探针键过滤，与宿主配置内容解耦，不因环境差异漂移。
+    #[test]
+    fn test_load_context_entry_points_equivalent() {
+        // SAFETY: 测试进程单线程访问该探针变量，无并发读写
+        unsafe {
+            std::env::set_var("RUPOST_STEP5_PROBE_SET", "v-set");
+        }
+
+        // 规格入口：合法 + 非法 --var 混合
+        let specs = vec![
+            "k1=v1".to_string(),
+            "bad_spec_no_equals".to_string(),
+            "RUPOST_STEP5_PROBE_SET=cli-overrides".to_string(),
+        ];
+        let (ctx_specs, warn_specs) = ConfigLoader::load_context_with_var_specs(None, &specs, None);
+
+        // 等价入口：手工解析出 K-V 对后走 load_context（Web extra_variables 形态）
+        let (pairs, mut warn_kv) = ConfigLoader::parse_cli_vars_with_warnings(&specs);
+        let (ctx_kv, warn_kv_rest) = ConfigLoader::load_context(None, &pairs, None);
+        warn_kv.extend(warn_kv_rest);
+
+        assert_eq!(
+            ctx_specs.get("k1").as_deref(),
+            ctx_kv.get("k1").as_deref(),
+            "两入口对合法变量必须等价"
+        );
+        // CLI 覆盖优先于系统环境变量（5 层级联第 4 层）
+        assert_eq!(
+            ctx_specs.get("RUPOST_STEP5_PROBE_SET").as_deref(),
+            Some("cli-overrides")
+        );
+        // 非法 spec 告警在两入口都可见且一致（反静默契约）
+        let bad_specs: Vec<_> = warn_specs
+            .iter()
+            .filter(|w| w.contains("bad_spec_no_equals"))
+            .collect();
+        let bad_kv: Vec<_> = warn_kv
+            .iter()
+            .filter(|w| w.contains("bad_spec_no_equals"))
+            .collect();
+        assert_eq!(bad_specs.len(), 1, "规格入口应告警: {warn_specs:?}");
+        assert_eq!(bad_kv.len(), 1, "K-V 入口应告警: {warn_kv:?}");
+        assert_eq!(bad_specs[0], bad_kv[0], "告警文本应逐字一致");
+        // 告警必须点名变量并说明后果（反静默文案契约，反转文案即红）
+        assert!(
+            bad_specs[0].contains("--var") && bad_specs[0].contains("未生效"),
+            "{bad_specs:?}"
+        );
+
+        // SAFETY: 与上方 set_var 成对清理
+        unsafe {
+            std::env::remove_var("RUPOST_STEP5_PROBE_SET");
+        }
     }
 
     #[test]

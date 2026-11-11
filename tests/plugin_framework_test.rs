@@ -85,6 +85,8 @@ fn test_plugin_registry_discovery_and_command_mapping() {
             directive: "auth".to_string(),
             alias: Some("echo-sign".to_string()),
             stage: PluginStage::Prepare,
+            cache_scope: rupost::plugin::PluginCacheScope::default(),
+            requires_env: vec![],
             parameters_schema: serde_json::json!({}),
         }],
     };

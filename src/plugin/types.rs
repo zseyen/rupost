@@ -76,6 +76,31 @@ pub struct HookCapability {
     pub directive: String,
     pub alias: Option<String>,
     pub stage: PluginStage,
+    /// Hook 结果缓存作用域 (03 §3.1)：`none` = 每请求执行；`request` = 请求内复用；
+    /// `suite` = 全套件复用（OAuth2 取 Token 类插件声明，消除子进程风暴）。
+    /// 缺省 `none`；`ttl` 为 P2 保留值，解析到即按 none + 告警处理。
+    #[serde(default)]
+    pub cache_scope: PluginCacheScope,
+    /// 环境变量白名单声明（03 §6.2）：子进程默认仅继承 PATH/HOME/LANG/TERM/TMPDIR +
+    /// RUPOST_*，声明外的变量需 manifest 声明或 --plugin-env 显式放行。
+    #[serde(default)]
+    pub requires_env: Vec<String>,
     #[serde(default)]
     pub parameters_schema: serde_json::Value,
 }
+
+/// Hook 结果缓存作用域（03 §3.1 唯一权威；`ttl` 为 P2 保留）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginCacheScope {
+    /// 每次请求都执行插件（默认）
+    #[default]
+    None,
+    /// 请求内复用（同一请求多个同 alias 指令共享一次执行）
+    Request,
+    /// 全套件复用（OAuth2 类插件声明，跨请求复用 Patch 结果）
+    Suite,
+}
+
+/// 插件执行时子进程的环境继承策略（03 §6.2 白名单裁决）
+pub const PLUGIN_ENV_ALLOWLIST: [&str; 6] = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "TZ"];

@@ -9,5 +9,8 @@ pub mod types;
 
 pub use patch::PluginPatch;
 pub use pipeline::PluginPipeline;
-pub use registry::PluginRegistry;
-pub use types::{CommandCapability, HookCapability, PluginDirective, PluginManifest, PluginStage};
+pub use registry::{DiscoverOptions, PluginRegistry, RegistryCacheFile};
+pub use types::{
+    CommandCapability, HookCapability, PLUGIN_ENV_ALLOWLIST, PluginCacheScope, PluginDirective,
+    PluginManifest, PluginStage,
+};

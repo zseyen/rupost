@@ -113,3 +113,7 @@ harness = false
 name = "load_generator"
 path = "benches/load_test/load_generator.rs"
 
+
+[[bench]]
+name = "registry_cache_bench"
+harness = false

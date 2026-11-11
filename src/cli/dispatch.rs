@@ -284,7 +284,51 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                runner::run(RunParams::from_cli(&cli)).await?;
+                // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
+                // 根命令 trailing_var_arg 使 clap 无"未知子命令"事件，主动查表是唯一入口。
+                let builtins = super::plugin_route::builtin_subcommand_names();
+                let allow_project = cli
+                    .args
+                    .iter()
+                    .any(|a| a == "--allow-project-plugins");
+                let registry = super::plugin_route::discover_for_routing(allow_project);
+                match super::plugin_route::route(&cli.args, &builtins, &registry) {
+                    super::plugin_route::RoutingDecision::PluginCommand(exe_path, _name, rest) => {
+                        let allow_env: Vec<String> = rest
+                            .iter()
+                            .filter_map(|a| a.strip_prefix("--plugin-env=").map(String::from))
+                            .chain(
+                                cli.args
+                                    .iter()
+                                    .filter(|a| a.starts_with("--plugin-env="))
+                                    .cloned(),
+                            )
+                            .map(|s| s.trim_start_matches("--plugin-env=").to_string())
+                            .collect();
+                        let code = super::plugin_route::launch_plugin_command(
+                            &exe_path,
+                            &rest,
+                            &allow_env,
+                        )
+                        .await;
+                        std::process::exit(code);
+                    }
+                    super::plugin_route::RoutingDecision::Unknown(command) => {
+                        eprintln!(
+                            "error: 未知命令 '{command}'（内置子命令见 --help；插件命令需先安装 rupost-plugin-<name> 静态 manifest）"
+                        );
+                        if !registry.commands.is_empty() {
+                            eprintln!("可用插件命令：");
+                            for line in super::plugin_route::render_extensions(&registry) {
+                                eprintln!("{line}");
+                            }
+                        }
+                        std::process::exit(2);
+                    }
+                    super::plugin_route::RoutingDecision::Inline => {
+                        runner::run(RunParams::from_cli(&cli)).await?;
+                    }
+                }
             }
         }
     }

@@ -197,53 +197,8 @@ pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool) -> Result
     }
     let snapshot = crate::history::read_execution_snapshot(snapshot_path)?;
 
-    // masking 感知（03 §7.2 AI 红线）：掩码产物上的结论必须显式声明数据不完整
-    let masking_note = match snapshot.masking {
-        crate::history::MaskingMode::Secrets => Some(
-            "该快照为掩码形态（masking=secrets）：凭据/PII 字段已 [REDACTED]，签名与 Diff 类结论按数据不完整降级",
-        ),
-        crate::history::MaskingMode::None => None,
-    };
-
-    // 适配：ExecutionSnapshotEntry -> JsonTestReport（聚类 SSOT 消费形态）
-    let results: Vec<crate::report::json::JsonTestReport> = snapshot
-        .entries
-        .iter()
-        .map(|e| crate::report::json::JsonTestReport {
-            request_number: e.request_number,
-            name: e.name.clone(),
-            method: e.request.method.clone(),
-            url: e.request.url.clone(),
-            status: e.status,
-            duration_ms: e.duration_us / 1000,
-            success: e.success,
-            error: e.error.as_ref().map(|err| err.message.clone()),
-            skipped: false,
-            assertions: e
-                .assertions
-                .iter()
-                .map(|a| crate::report::json::JsonAssertionReport {
-                    raw: a.expression.clone(),
-                    passed: a.passed,
-                    message: a.message.clone(),
-                    stream_event_index: None,
-                    expected: a.expected.clone(),
-                    actual: a.actual.clone(),
-                })
-                .collect(),
-            warnings: e.warnings.clone(),
-            diagnose_report: None,
-            response_body_snippet: None,
-        })
-        .collect();
-    let file_label = snapshot
-        .environment
-        .clone()
-        .unwrap_or_else(|| "incident".to_string());
-    let reports = vec![JsonFileReport {
-        file_path: file_label,
-        results,
-    }];
+    let masking_note = crate::ai::snapshot_adapter::snapshot_masking_notice(&snapshot);
+    let reports = crate::ai::snapshot_adapter::snapshot_to_json_reports(&snapshot);
 
     if let Some(note) = masking_note {
         eprintln!("[!] {note}");

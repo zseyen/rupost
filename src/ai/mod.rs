@@ -5,6 +5,7 @@ pub mod explain;
 pub mod redactor;
 pub mod resolve;
 pub mod rules;
+pub mod snapshot_adapter;
 pub mod triage;
 
 use crate::{Result, RupostError};

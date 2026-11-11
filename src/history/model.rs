@@ -157,7 +157,7 @@ impl RequestSnapshot {
                 HeaderName::from_bytes(k.as_bytes()),
                 HeaderValue::from_str(v),
             ) {
-                headers.insert(n, v);
+                headers.append(n, v);
             }
         }
 

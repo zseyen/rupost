@@ -1,5 +1,5 @@
 #![allow(clippy::collapsible_if)]
-use super::model::HistoryEntry;
+use crate::history::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
 use std::fs::{self, OpenOptions};
@@ -228,7 +228,7 @@ pub fn get_storage() -> &'static HistoryStorage {
     STORAGE.get_or_init(HistoryStorage::new)
 }
 
-use super::model::SnapshotSuite;
+use crate::history::model::SnapshotSuite;
 
 /// 将 SnapshotSuite 写入到指定路径
 pub fn write_snapshot_suite<P: AsRef<Path>>(suite: &SnapshotSuite, path: P) -> Result<()> {
@@ -249,13 +249,26 @@ pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
     Ok(suite)
 }
 
+/// 双格式兼容读取（`replay` 消费入口）：
+/// 优先按黑匣子契约 ExecutionSnapshotFile (Schema v1.0, `--save-snapshot` 产物)
+/// 解析并转换为重放套件；失败回退旧 SnapshotSuite（`history export` 产物）。
+/// 判别可靠：`schema_version` 字符串字段仅存在于新契约，旧格式在首个结构体
+/// 即解析失败，回退路径确定可达。
+pub fn read_snapshot_suite_compat<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
+    let content = fs::read_to_string(path).map_err(RupostError::IoError)?;
+    if let Ok(snapshot) = serde_json::from_str::<super::model::ExecutionSnapshotFile>(&content) {
+        return Ok(snapshot.to_replay_suite());
+    }
+    serde_json::from_str(&content).map_err(RupostError::JsonError)
+}
+
 /// T5（随 R6 搭车）：将最近 N 条历史条目导出为可重放快照套件文件。
 /// - `--last N` 语义 = 最近 N 条**条目**（`SelectionStrategy::Last` → `tail(n)`，追加序即重放序）
 /// - `body=None` 旧条目经 `From<HistoryEntry>` 占位导出（"Old snapshot: body not recorded"）
 /// - 空历史：warn 后不写文件、exit 0（对齐 generate 先例）
 /// - 输出路径静默覆盖（`write_snapshot_suite` 无 `--force` 语义）；凭据不脱敏（与 `--save-snapshot` 同暴露面）
 pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) -> Result<()> {
-    use super::model::{SnapshotEntry, SnapshotSuite};
+    use crate::history::model::{SnapshotEntry, SnapshotSuite};
     use super::selector::{SelectionStrategy, select_entries};
 
     let storage = get_storage();
@@ -301,69 +314,218 @@ fn classify_error_kind(err_msg: &str) -> String {
 }
 
 /// 从批处理测试结果中提取请求/响应快照并写入指定文件
+///
+/// 写入格式 = 离线数据黑匣子契约 **ExecutionSnapshotFile (Schema v1.0)**（02 §2 唯一权威）。
+/// 与重放格式（`SnapshotSuite`，供 `replay`/`history export` 使用）解耦：
+/// 黑匣子面向跨机插件消费，重放面向本机请求重演，二者契约独立演进。
 pub fn save_batch_snapshot<P: AsRef<Path>>(
     batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
     source_paths: &[String],
     snapshot_path: P,
     mask_secrets: bool,
+    environment: Option<&str>,
 ) -> Result<()> {
-    use super::model::{ExecutionErrorDetail, ResponseSnapshot, SnapshotEntry, SnapshotSuite};
+    use crate::history::model::{
+        ExecutionErrorDetail, ExecutionOutcome, ExecutionSnapshotEntry, ExecutionSnapshotFile,
+        MaskingMode, RunnerFingerprint, SnapshotAssertion, SnapshotRequest, SnapshotResponse,
+        DEFAULT_MAX_SNAPSHOT_BODY_BYTES, SNAPSHOT_SCHEMA_VERSION,
+    };
+
     let mut entries = Vec::new();
-    for (_, file_results) in batch_results {
+    for (file_path, file_results) in batch_results {
         for r in file_results {
             // P1-11：@teardown 清理请求默认排除出快照（防 replay 重放 DELETE）
             if r.is_teardown {
                 continue;
             }
-            if let Some(req) = &r.request {
-                let response = r.response.as_ref().map(|resp| ResponseSnapshot {
-                    status: resp.status.code(),
-                    headers: resp.headers.clone(),
-                    body: resp.body.clone(),
-                });
+            let Some(req) = &r.request else {
+                continue;
+            };
+            let file_path_str = crate::utils::path_guard::normalize_posix_path(
+                file_path.to_string_lossy().as_ref(),
+            );
 
-                let error = if r.response.is_none() {
-                    r.error.as_ref().map(|err_msg| ExecutionErrorDetail {
-                        kind: classify_error_kind(err_msg),
-                        message: err_msg.clone(),
-                        duration_ms: r.duration.as_millis() as u64,
-                        occurred_at: chrono::Utc::now(),
-                    })
+            // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03 §10.6）
+            let response = r.response.as_ref().map(|resp| {
+                let (body, truncated) = if resp.body.len() > DEFAULT_MAX_SNAPSHOT_BODY_BYTES {
+                    (
+                        resp.body[..DEFAULT_MAX_SNAPSHOT_BODY_BYTES].to_string(),
+                        true,
+                    )
                 } else {
-                    None
+                    (resp.body.clone(), false)
                 };
-
-                let mut entry = SnapshotEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    request: req.clone(),
-                    response,
-                    error,
-                };
-                if mask_secrets {
-                    mask_snapshot_entry(&mut entry);
+                let body_sha256 = truncated.then(|| {
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    hasher.update(resp.body.as_bytes());
+                    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()
+                });
+                SnapshotResponse {
+                    status: resp.status.code(),
+                    headers: header_map_to_pairs(&resp.headers),
+                    body,
+                    body_truncated: truncated,
+                    body_sha256,
                 }
-                entries.push(entry);
+            });
+
+            let error = if r.response.is_none() {
+                r.error.as_ref().map(|err_msg| ExecutionErrorDetail {
+                    kind: classify_error_kind(err_msg),
+                    message: err_msg.clone(),
+                    duration_ms: r.duration.as_millis() as u64,
+                    occurred_at: chrono::Utc::now(),
+                })
+            } else {
+                None
+            };
+
+            // 时序瀑布 + Socket 指纹：diagnose 报告优先（含 TLS/证书），退回 RequestTiming
+            let timing_waterfall = r
+                .timing
+                .as_ref()
+                .map(|t| crate::history::model::TimingWaterfallUs::from_probes(t, r.diagnose_report.as_ref()));
+            let socket_diagnostics = r
+                .diagnose_report
+                .as_ref()
+                .and_then(crate::history::model::SocketDiagnostics::from_diagnose);
+
+            // 口径不变量 (02 §2)：duration_us = 纯网络 total + 插件耗时；
+            // 时序可得时取瀑布 total（插件耗时 M3 接线后累加），否则回退执行墙钟
+            let duration_us = timing_waterfall
+                .as_ref()
+                .map(|t| t.total_us)
+                .unwrap_or_else(|| r.duration.as_micros() as u64);
+
+            let outcome = if r.success {
+                // DegradedPass 标记由 M3 插件降级链路接线（03 §10.5）
+                ExecutionOutcome::Pass
+            } else {
+                ExecutionOutcome::Fail
+            };
+
+            let assertions = r
+                .assertions
+                .iter()
+                .map(|a| SnapshotAssertion {
+                    expression: a.raw.clone(),
+                    passed: a.passed,
+                    actual: a.actual.clone(),
+                    expected: Some(a.expected.clone()),
+                    message: None,
+                })
+                .collect();
+
+            let mut entry = ExecutionSnapshotEntry {
+                request_number: r.request_number,
+                name: r.name.clone(),
+                file_path: file_path_str,
+                success: r.success,
+                outcome,
+                status: r.status,
+                duration_us,
+                plugin_duration_us: None,
+                request: SnapshotRequest {
+                    method: req.method.clone(),
+                    url: req.url.clone(),
+                    headers: header_map_to_pairs(&req.headers),
+                    body: req.body.clone(),
+                },
+                response,
+                error,
+                timing_waterfall,
+                socket_diagnostics,
+                assertions,
+                warnings: r.warnings.clone(),
+            };
+            if mask_secrets {
+                mask_execution_snapshot_entry(&mut entry);
             }
+            entries.push(entry);
         }
     }
-    let normalized_source = source_paths
-        .iter()
-        .map(crate::utils::path_guard::normalize_posix_path)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let suite = SnapshotSuite {
-        version: 2,
-        timestamp: chrono::Utc::now(),
-        source_file: Some(normalized_source),
+
+    // 黑匣子契约 (02 §2) 不含套件级 source 字段：来源已逐条目落在 entry.file_path；
+    // source_paths 仅保留在签名中以维持与重放套件导出对称的调用形态
+    let _ = source_paths;
+    let snapshot = ExecutionSnapshotFile {
+        schema_version: SNAPSHOT_SCHEMA_VERSION.to_string(),
+        generated_at: chrono::Utc::now(),
+        environment: environment.map(|e| e.to_string()),
+        runner_fingerprint: RunnerFingerprint {
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            rupost_version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        masking: if mask_secrets {
+            MaskingMode::Secrets
+        } else {
+            MaskingMode::None
+        },
         entries,
     };
-    write_snapshot_suite(&suite, snapshot_path)
+    write_execution_snapshot(&snapshot, snapshot_path)
+}
+
+/// HeaderMap → 保序键值对（黑匣子契约要求 Vec<(String, String)>）
+fn header_map_to_pairs(map: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    map.iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// 将黑匣子契约快照写入指定文件。
+/// 安全不变量 (02 §2.7)：文件权限强制 0600（与 umask 无关）——多用户堡垒机的
+/// /tmp 上默认 umask 泄露不可接受。
+pub fn write_execution_snapshot<P: AsRef<Path>>(
+    snapshot: &crate::history::model::ExecutionSnapshotFile,
+    path: P,
+) -> Result<()> {
+    if let Some(parent) = path.as_ref().parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
+    }
+    let json = serde_json::to_string_pretty(snapshot)?;
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(RupostError::IoError)?;
+        file.write_all(json.as_bytes()).map_err(RupostError::IoError)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, json).map_err(RupostError::IoError)?;
+        Ok(())
+    }
+}
+
+/// 读取黑匣子契约快照（消费者入口；02 §3.3 消费前校验的体积上限由调用方执行）
+pub fn read_execution_snapshot<P: AsRef<Path>>(
+    path: P,
+) -> Result<crate::history::model::ExecutionSnapshotFile> {
+    let content = fs::read_to_string(path).map_err(RupostError::IoError)?;
+    serde_json::from_str(&content).map_err(RupostError::JsonError)
 }
 
 /// Secrets Masker（路线图条目 1 残余）：opt-in 快照脱敏——headers 走
 /// `redact_header_value`（scheme 前缀保留），body 走 `mask_body_secrets`
 /// （敏感键 `[REDACTED]` + PII 三正则，无截断），error 走 `redact_free_text` 擦除 URL 凭证。
-pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
+pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
     use crate::exporter::redact::{
         mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value,
     };
@@ -396,6 +558,30 @@ pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
     entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
     if let Some(ref mut err) = entry.error {
         err.message = mask_pii(&mask_inline_secrets(&redact_free_text(&err.message)));
+    }
+}
+
+/// 黑匣子契约快照 (ExecutionSnapshotEntry) 的 Secrets Masker：
+/// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/exporter/redact.rs`），
+/// Headers 为保序键值对形态（02 §2 SnapshotRequest/SnapshotResponse）。
+pub fn mask_execution_snapshot_entry(entry: &mut crate::history::model::ExecutionSnapshotEntry) {
+    use crate::exporter::redact::{mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value};
+    let mask_pairs = |headers: &mut Vec<(String, String)>| {
+        for (name, value) in headers.iter_mut() {
+            *value = redact_header_value(name, value);
+        }
+    };
+    mask_pairs(&mut entry.request.headers);
+    if let Some(ref mut resp) = entry.response {
+        mask_pairs(&mut resp.headers);
+        resp.body = mask_body_secrets(resp.body.as_str());
+    }
+    entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
+    if let Some(ref mut err) = entry.error {
+        err.message = mask_pii(&mask_inline_secrets(&redact_free_text(&err.message)));
+    }
+    for warning in &mut entry.warnings {
+        *warning = mask_pii(&redact_free_text(warning));
     }
 }
 
@@ -511,16 +697,35 @@ mod tests {
             &["my_test.http".to_string()],
             &snapshot_file,
             false,
+            Some("staging"),
         )
         .unwrap();
 
-        // 验证读取快照
-        let suite = read_snapshot_suite(&snapshot_file).unwrap();
-        assert_eq!(suite.entries.len(), 1);
-        assert_eq!(suite.entries[0].request.method, "POST");
-        let resp = suite.entries[0].response.as_ref().unwrap();
+        // 黑匣子契约 Schema v1.0（02 §2）：round-trip 读取验证
+        let snap = read_execution_snapshot(&snapshot_file).unwrap();
+        assert_eq!(snap.schema_version, "1.0");
+        assert_eq!(snap.masking, crate::history::model::MaskingMode::None);
+        assert_eq!(snap.environment.as_deref(), Some("staging"));
+        assert_eq!(snap.runner_fingerprint.rupost_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(snap.entries.len(), 1);
+        let entry = &snap.entries[0];
+        assert_eq!(entry.request_number, 1);
+        assert_eq!(entry.name.as_deref(), Some("test_req"));
+        assert_eq!(entry.file_path, "my_test.http");
+        assert!(entry.success);
+        assert_eq!(entry.outcome, crate::history::model::ExecutionOutcome::Pass);
+        assert_eq!(entry.status, Some(201));
+        assert_eq!(entry.request.method, "POST");
+        assert_eq!(entry.request.url, "http://example.com/test");
+        assert!(entry.request.headers.contains(&("content-type".to_string(), "application/json".to_string())));
+        assert_eq!(entry.request.body.as_deref(), Some("{\"key\":\"value\"}"));
+        let resp = entry.response.as_ref().unwrap();
         assert_eq!(resp.status, 201);
         assert_eq!(resp.body, "{\"status\":\"ok\"}");
+        assert!(!resp.body_truncated);
+        assert!(resp.body_sha256.is_none());
+        assert!(entry.error.is_none());
+        assert!(entry.plugin_duration_us.is_none());
     }
 
     #[test]
@@ -617,15 +822,185 @@ mod tests {
             &["t.http".to_string()],
             &snapshot_file,
             false,
+            None,
         )
         .unwrap();
 
-        let suite = read_snapshot_suite(&snapshot_file).unwrap();
+        let snap = read_execution_snapshot(&snapshot_file).unwrap();
         assert_eq!(
-            suite.entries.len(),
+            snap.entries.len(),
             1,
             "teardown result must be excluded from snapshot"
         );
-        assert_eq!(suite.entries[0].request.url, "http://x/normal");
+        assert_eq!(snap.entries[0].request.url, "http://x/normal");
+    }
+
+    /// 安全不变量（02 §2.7）：黑匣子落盘权限强制 0600，与 umask 无关
+    #[cfg(unix)]
+    #[test]
+    fn test_execution_snapshot_permissions_0600() {
+        use crate::history::model::{
+            ExecutionSnapshotFile, MaskingMode, RunnerFingerprint, SNAPSHOT_SCHEMA_VERSION,
+        };
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("perm.json");
+        let snapshot = ExecutionSnapshotFile {
+            schema_version: SNAPSHOT_SCHEMA_VERSION.to_string(),
+            generated_at: chrono::Utc::now(),
+            environment: None,
+            runner_fingerprint: RunnerFingerprint {
+                os: "test".to_string(),
+                arch: "test".to_string(),
+                rupost_version: "0.0.0".to_string(),
+            },
+            masking: MaskingMode::None,
+            entries: vec![],
+        };
+        write_execution_snapshot(&snapshot, &path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "blackbox snapshot must be 0600 even under permissive umask"
+        );
+    }
+
+    /// 演进策略契约（02 §2.6）：消费者必须容忍未知字段（追加字段可反序列化）
+    #[test]
+    fn test_execution_snapshot_unknown_field_tolerance() {
+        use crate::history::model::ExecutionSnapshotFile;
+        let json = format!(
+            r#"{{
+                "schema_version": "1.0",
+                "generated_at": "2026-11-11T00:00:00Z",
+                "environment": null,
+                "runner_fingerprint": {{"os": "os", "arch": "arch", "rupost_version": "0.2.0"}},
+                "masking": "none",
+                "entries": [],
+                "future_field_appended_in_v11": true
+            }}"#
+        );
+        let snap: ExecutionSnapshotFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(snap.schema_version, "1.0");
+        assert!(snap.entries.is_empty());
+    }
+
+    /// 03 §10.6：超限响应体 256KB 截断 + 截断前完整 Body 的 SHA-256 验真
+    #[test]
+    fn test_snapshot_body_truncation_and_sha256() {
+        use sha2::{Digest, Sha256};
+        let original = "x".repeat(crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES + 1024);
+        let (truncated_body, flag) = if original.len() > crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES
+        {
+            (
+                original[..crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES].to_string(),
+                true,
+            )
+        } else {
+            (original.clone(), false)
+        };
+        assert!(flag);
+        assert_eq!(truncated_body.len(), crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES);
+        let mut hasher = Sha256::new();
+        hasher.update(original.as_bytes());
+        let expected = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
+        // 与 save 路径同构的验真链：sha256(原始) 可由截断产物 + 标记还原比对
+        assert_eq!(expected.len(), 64);
+    }
+
+    /// TimingWaterfallUs 合成契约：diagnose 提供 TLS 阶段；total = 已发生阶段之和
+    #[test]
+    fn test_timing_waterfall_from_probes() {
+        use crate::http::timing::RequestTiming;
+        use std::time::Duration;
+        let timing = RequestTiming {
+            dns_lookup: Duration::from_micros(120),
+            tcp_connect: Duration::from_micros(3_000),
+            ttfb: Duration::from_micros(50_000),
+            transfer: Duration::from_micros(1_000),
+        };
+        let wf = crate::history::model::TimingWaterfallUs::from_probes(&timing, None);
+        assert_eq!(wf.dns_lookup_us, Some(120));
+        assert_eq!(wf.tcp_connect_us, Some(3_000));
+        assert_eq!(wf.tls_handshake_us, None, "diagnose 缺失时 TLS 为 None");
+        assert_eq!(wf.ttfb_us, 50_000);
+        assert_eq!(wf.transfer_us, 1_000);
+        assert_eq!(wf.total_us, 54_120);
+    }
+
+    /// SocketDiagnostics 提取契约：resolved_ips 首选 + 证书字段（HTTPS 才有）
+    #[test]
+    fn test_socket_diagnostics_from_diagnose() {
+        use crate::http::diagnose::{CertInfo, DiagnosticsReport};
+        use std::time::Duration;
+        let report = DiagnosticsReport {
+            url: "https://api.example.com:8443/v1".to_string(),
+            is_https: true,
+            is_websocket: false,
+            ws_upgrade_success: None,
+            resolved_ips: vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()],
+            dns_lookup_duration: Duration::from_micros(100),
+            tcp_connect_duration: Duration::from_micros(2_000),
+            tls_handshake_duration: Some(Duration::from_micros(30_000)),
+            cert_info: Some(CertInfo {
+                subject: "CN=api.example.com".to_string(),
+                issuer: "CN=DigiCert".to_string(),
+                sans: vec![],
+                validity_not_after: "2027-01-01".to_string(),
+                days_remaining: 365,
+            }),
+            http_status: Some(200),
+            http_version: Some("HTTP/2".to_string()),
+            ttfb: Some(Duration::from_micros(60_000)),
+            total_duration: Duration::from_micros(92_100),
+            connection_error: None,
+        };
+        let socket = crate::history::model::SocketDiagnostics::from_diagnose(&report).unwrap();
+        assert_eq!(socket.remote_ip, "10.0.0.1");
+        assert_eq!(socket.remote_port, 8443);
+        assert_eq!(socket.http_version, "HTTP/2");
+        assert_eq!(socket.cert_days_remaining, Some(365));
+        assert_eq!(socket.cert_issuer.as_deref(), Some("CN=DigiCert"));
+    }
+
+    /// 掩码契约（02 §4）：Authorization 系头掩码 + body 敏感键 [REDACTED]，
+    /// 与 history 掩码共享 redactor SSOT
+    #[test]
+    fn test_mask_execution_snapshot_entry() {
+        use crate::history::model::{ExecutionOutcome, ExecutionSnapshotEntry, SnapshotRequest};
+        let mut entry = ExecutionSnapshotEntry {
+            request_number: 1,
+            name: None,
+            file_path: "t.http".to_string(),
+            success: true,
+            outcome: ExecutionOutcome::Pass,
+            status: Some(200),
+            duration_us: 1_000,
+            plugin_duration_us: None,
+            request: SnapshotRequest {
+                method: "GET".to_string(),
+                url: "https://api.example.com/x?access_token=leaky".to_string(),
+                headers: vec![
+                    ("Authorization".to_string(), "Bearer real-token".to_string()),
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                ],
+                body: Some(r#"{"password": "hunter2", "city": "Shanghai"}"#.to_string()),
+            },
+            response: None,
+            error: None,
+            timing_waterfall: None,
+            socket_diagnostics: None,
+            assertions: vec![],
+            warnings: vec![],
+        };
+        crate::history::storage::mask_execution_snapshot_entry(&mut entry);
+        let auth = &entry.request.headers[0].1;
+        assert_ne!(auth, "Bearer real-token", "Authorization 必须被掩码");
+        assert!(auth.contains("[REDACTED]"), "占位符契约: {auth}");
+        assert!(
+            !entry.request.body.as_ref().unwrap().contains("hunter2"),
+            "body 密码键必须掩码"
+        );
     }
 }

@@ -145,7 +145,7 @@ fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadat
     let mut tokens = tokenize_plugin_args(content).into_iter();
     let name = strip_surrounding_quotes(&tokens.next().unwrap()).to_string();
 
-    let mut stage = default_stage;
+    let stage = default_stage;
     let mut optional = false;
     let mut params = std::collections::HashMap::new();
 

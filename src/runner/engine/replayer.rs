@@ -116,7 +116,7 @@ impl ReplayExecutor {
 
     /// 执行快照重放并输出对比结果
     pub async fn replay_file<P: AsRef<Path>>(&self, path: P) -> Result<ReplayReport> {
-        let suite = crate::history::read_snapshot_suite(path)?;
+        let suite = crate::history::read_snapshot_suite_compat(path)?;
         println!(
             "{} Loaded snapshot containing {} requests.",
             "[*]".bold().blue(),

@@ -286,9 +286,15 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         }
     }
 
-    // 保存快照
+    // 保存快照（黑匣子契约 Schema v1.0，02 §2；--env 记入 environment 字段）
     if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(&batch_results, &paths, snapshot_path, options.mask_snapshot)?;
+        save_batch_snapshot(
+            &batch_results,
+            &paths,
+            snapshot_path,
+            options.mask_snapshot,
+            options.env.as_deref(),
+        )?;
     }
 
     Ok(TestSuiteOutcome {

@@ -191,4 +191,3 @@ pub fn install_mock_executable(dir: &Path, base_name: &str, directives: &str) ->
     std::fs::write(&cfg_path, directives).expect("write mock directives");
     exe_path
 }
-

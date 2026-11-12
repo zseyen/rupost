@@ -1,6 +1,6 @@
 # P0/P1 缺陷解决方案与落地追踪 (Remediation Plan)
 
-- **状态**: Draft (v1.0.0 — 方案已全部裁决并合入 v2.1.0 文档，代码落地待 M1~M5)
+- **状态**: Execution Ready (v1.1.0 — P0/P1 与 M6/M7 已全部落地并经全量门禁验收)
 - **关联**: [review-adversarial.md](./review-adversarial.md)（审查记录）、[README §0 权威矩阵](./README.md)
 - **用途**: 对审查报告 **P0 级发现（多路交叉证实）** 与 **P1 级发现（择要）** 逐项给出解决方案，登记文档落点、代码落点与验收标准，作为 M1~M5 施工期间的**缺陷追踪底账**（每个 P0/P1 必须走到"已落地"才允许回标 Execution Ready）。
 - **状态图例**: 📄 方案已合入 v2.1.0 文档 · 🔧 代码待落地（标注 Milestone） · ✅ 已验收
@@ -137,7 +137,7 @@
 | P1-6 | ✅ 已落地（M3：cache_scope none/request/suite + Hook 缓存复用） | 03 §3.1/§8.3 / 05 D11 | ✅ M3 |
 | P1-7 | ✅ 已落地（M1-M5：04 套件 1/2/3/4/5 全部落地，owner 映射兑现） | 04 全文 | ✅ M1-M5 |
 | P1-8 | ✅ 已落地（masking 感知红线：ai triage-snapshot 读取 masking 标记并输出数据不完整声明） | 02 §2/§4 | ✅ M5 |
-| P1-9 | 📄 已裁决（分层边界由代码结构遵守：`use rupost_ai` 仅存在于 src/ai 与 ai 命令族；CI grep 守护登记待办） | 05 分层裁决 | ✅ M2/M3 |
+| P1-9 | ✅ 已落地（`.github/workflows/ci.yml:40-43` `Guard rupost_ai crate boundary (P1-9/B0)` 守护 `rupost_ai` 仅存在于 `src/ai/`） | 05 分层裁决 | ✅ M2/M3/M6 |
 | P1-10 | ✅ 已落地（M1 冻结清单 interface-freeze-m1.md + exit 127 测试废除改原值穿透 e2e） | 06 M1/M2/M4 | ✅ M1/M4 |
 
 > 汇总裁决：**全部 P0/P1 均已有明确解决方案并合入 v2.1.0 文档层；剩余工作全部是带 Milestone 的代码落地项**。本底账随实施推进更新状态列（🔧 → ✅），M5 结束时必须全表 ✅ 方可回标 Execution Ready。
@@ -146,15 +146,15 @@
 
 | ID | 工作项 | 归属 |
 | :-- | :--- | :--- |
-| M6-1 | `runtime` manifest 声明解析 + readdir 预检 + 插件三态状态机（ready/pending/failed）+ `plugin list` 可视化与处方提示 | M6 |
-| M6-2 | 失败分类学扩展 `runtime_missing`/`dependency_missing`（stderr 表驱动特征，提取缺失模块名入处方） | M6 |
-| M6-3 | `requires_env` 声明未放行启动 WARNING | M6 |
+| M6-1 | ✅ 已落地（`runtime` manifest 解析 + readdir 预检 + 三态状态机 `ready/pending/failed` + `plugin list` 处方；`tests/plugin_registry_test.rs`, `tests/cli_plugin_route_test.rs`） | M6 |
+| M6-2 | ✅ 已落地（`RuntimeMissing`/`DependencyMissing` 失败分类与缺失模块提取处方；`tests/plugin_driver_test.rs`, `tests/plugin_pipeline_test.rs`） | M6 |
+| M6-3 | ✅ 已落地（`requires_env` 未放行启动 WARNING 与 `--plugin-env` 放行；`tests/plugin_registry_test.rs`, `tests/cli_plugin_route_test.rs`） | M6 |
 | M6-4 | ✅ 已落地（2026-11-12：`--max-snapshot-body-bytes` 旗标接线，`save_batch_snapshot` 参数化上限，截断 + SHA-256 验真守护测试 + verify_features 冒烟） | M6 |
 | M6-5 | ✅ 已落地（2026-11-12：main 入口 `RupostError::ParseError` → exit 2 归位，二进制级守护 `tests/ast_exit_code_test.rs` 含 exit 1 防假守护对照） | M6 |
-| M6-6 | DoD 性能验证测试：时延隔离不变量 / suite cache_scope 进程数 ≤2 / fail-fast 组级 kill 传播 / 并发×插件组合 | M6 |
-| M6-7 | 04 套件 3 录制保真半落地 `tests/artifact_mining_test.rs` | M6 |
-| M6-8 | 掩码扩面表驱动单测（X-Sign/query token/Set-Cookie/body PII 全表） | M6 |
-| M6-9 | P1-9 CI grep 守护（`use rupost_ai` 边界） | M6 |
+| M6-6 | ✅ 已落地（时延隔离、suite `cache_scope` 进程数 ≤2、parallel `fail_fast` 组级 kill 传播、并发×多阶段插件；`tests/plugin_dod_test.rs`） | M6 |
+| M6-7 | ✅ 已落地（04 套件 3 录制保真到离线 AI triage 闭环；`tests/artifact_mining_test.rs`） | M6 |
+| M6-8 | ✅ 已落地（掩码扩面表驱动单测：X-Sign/query token/Set-Cookie/body PII/AI 脱敏对齐；`tests/snapshot_contract_test.rs`） | M6 |
+| M6-9 | ✅ 已落地（P1-9/B0 CI grep 守护 `rupost_ai` 边界；`.github/workflows/ci.yml:40-43`） | M6 |
 
 > M6 完成后底账维持全 ✅ + M6 全 ✅，方可维持 Execution Ready。
 

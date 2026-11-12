@@ -3,6 +3,7 @@ pub mod config;
 pub mod env_file;
 pub mod resolver;
 pub mod types;
+pub mod var_state;
 
 pub use capture::{CaptureOutcome, CaptureSource, VariableCapture, capture_from_response};
 pub use config::ConfigLoader;

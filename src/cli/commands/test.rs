@@ -88,6 +88,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub with_deps: bool,
 
+    /// 捕获变量持久化文件（免重填：结束落盘 @capture/插件变量，下次运行回灌补缺；默认 .rupost/vars.json）
+    #[arg(long, value_name = "FILE", num_args = 0..=1, default_missing_value = ".rupost/vars.json")]
+    pub var_state: Option<String>,
+
     /// 插件缺失/失败时降级为警告跳过，请求按 .http 原样外发（03 §2；现场排障）
     #[arg(long)]
     pub allow_missing_plugins: bool,

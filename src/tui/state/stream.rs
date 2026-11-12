@@ -105,11 +105,15 @@ impl AppState {
         match result {
             Ok(resp) => {
                 self.last_response = Some(resp);
-                self.variables.extend(captured_vars);
             }
             Err(e) => {
                 self.last_response = Some(Response::error(e));
             }
+        }
+        // R-3（免重填）：响应到达即承接捕获变量——断言红/网络失败不影响变量承接，
+        // 登录接口 200 但断言写错时 token 仍可被下游请求复用（不必重跑登录）
+        if !captured_vars.is_empty() {
+            self.variables.extend(captured_vars);
         }
     }
 }

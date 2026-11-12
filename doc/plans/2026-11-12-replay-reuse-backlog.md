@@ -32,10 +32,10 @@
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
 | R-1 | ✅ 已落地（2026-11-13：`--with-deps` opt-in 旗标 + `WorkflowGraph::closure_execution_order` 祖先闭包拓扑序；传递依赖 e2e + 既有语义防假守护对照） | `src/runner/app.rs`、`src/runner/engine/workflow.rs` | selector 分支计算目标文件祖先闭包，按拓扑序先执行；`--with-deps` 显式开关（保护既有 `--only` 契约） | `--only @get_order --with-deps` 自动先跑登录文件，`{{auth_token}}` 有值；无依赖文件零行为变化 | ✅ |
-| R-2 | `--var-state` 捕获变量持久化 | `variable/types.rs:7-12`（零落盘）；对照 cookie-file 模式（`middleware/cookie.rs:144-197`） | 套件结束捕获变量落 `.rupost/vars.json`（0600 + 原子写），`load_suite_context` 回灌为最低优先级层（低于 CLI `--var`）；TUI 退出同路 | 第二次运行免重跑登录（token 型 API）；`--var` 仍可覆盖 | 🔧 |
-| R-3 | TUI 捕获合并移出 Ok 分支 | `tui/state/stream.rs:105-113` + `lifecycle.rs:31-41` | 响应存在即合并捕获变量，断言结论不影响变量承接 | 登录 200 但断言红，token 仍被下游复用 | 🔧 |
+| R-2 | ✅ 已落地（2026-11-13：`src/variable/var_state.rs`（0600 原子写 + 损坏可报告）+ `--var-state [FILE]`（默认 `.rupost/vars.json`）双向接线；回灌只补缺、显式值恒优先；TUI 落盘留批后续） | `src/variable/var_state.rs`、`src/runner/{app.rs,suite_setup.rs}` | 套件结束捕获变量落盘（0600 原子写），启动回灌最低优先级层 | 跨运行免重跑登录 e2e（`tests/var_state_test.rs`：删登录文件后凭回灌成功 + `--var` 优先级防假守护） | ✅ |
+| R-3 | ✅ 已落地（2026-11-13：`handle_request_finished` 捕获合并移出 Ok 分支——响应到达即承接；lib 层守护 `test_capture_merge_survives_failed_assertions`） | `src/tui/state/stream.rs` | 断言红/失败分支不影响捕获变量承接 | 登录 200 但断言红，token 仍被下游复用 | ✅ |
 | R-4 | Web 轨道会话/变量延续 | `web/handlers/run.rs:79-87`（每次 ephemeral） | cookie bridge + variables 挂 `AppState`，复用 TUI 机制 | Web 逐块调试带登录链文档可复用会话 | 🔧 |
-| R-5 | 会话过期引导提示 | `replayer.rs:314-346`、`cookie.rs:188` | actual==401 且 expected≠401 → 固定提示"疑似会话过期——重放登录条目或更新 cookie 文件"（replay + 套件汇总两处） | 过期不再是一串裸 mismatch | 🔧 |
+| R-5 | ✅ 已落地（2026-11-13：replay mismatch 分支 401 → "疑似会话过期"再获取指引（`test_replay_401_emits_session_expiry_hint`）+ 套件汇总 401 失败集中提示） | `src/runner/engine/replayer.rs`、`src/cli/suite_presenter.rs` | 两级提示（逐条 + 汇总） | 过期不再是一串裸 mismatch | ✅ |
 
 ## 2. P1 · 行为级正确性（错误行为/错误结论）
 

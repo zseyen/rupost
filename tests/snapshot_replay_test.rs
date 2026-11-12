@@ -1317,3 +1317,60 @@ async fn test_replay_target_with_path_prefix() {
     assert_eq!(report_trailing.passed, 1);
     assert_eq!(report_trailing.failed, 0);
 }
+
+/// R-5（免重填）：replay actual==401 且 expected≠401 → 必须输出"疑似会话过期"
+/// 再获取指引（重放登录/更新 cookie/变量文件），不再是裸 mismatch。
+#[tokio::test]
+async fn test_replay_401_emits_session_expiry_hint() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/guarded"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("hint_snapshot.json");
+    let suite = SnapshotSuite {
+        version: 1,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("hint_test".to_string()),
+        entries: vec![SnapshotEntry {
+            id: "id-1".to_string(),
+            request: RequestSnapshot {
+                timeout: None,
+                method: "GET".to_string(),
+                url: "http://original.example.com/guarded".to_string(),
+                headers: reqwest::header::HeaderMap::new(),
+                body: None,
+            },
+            response: Some(ResponseSnapshot {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: String::new(),
+            }),
+            error: None,
+        }],
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    let out = std::process::Command::new(rupost_bin())
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+        ])
+        .output()
+        .expect("run rupost replay");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("expected 200, got 401"),
+        "mismatch 基线：{stdout}"
+    );
+    assert!(
+        stdout.contains("疑似会话过期"),
+        "401 必须携带会话过期再获取指引: {stdout}"
+    );
+}

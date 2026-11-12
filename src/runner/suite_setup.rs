@@ -5,7 +5,7 @@ use crate::plugin::{DiscoverOptions, PluginRegistry, parse_plugin_env_specs};
 use crate::runner::{TestExecutor, TestSuiteOptions};
 use crate::variable::{ConfigLoader, VariableContext};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,6 +34,23 @@ pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext 
         eprintln!("[!] {warning}");
     }
     var_context.insert("__default_scheme", &options.default_scheme);
+    // R-2 免重填：--var-state 回灌为最低优先级层（只补缺；缺失静默、损坏指名告警）
+    if let Some(state_path) = &options.var_state {
+        match crate::variable::var_state::load_var_state(Path::new(state_path)) {
+            None => {}
+            Some(Ok(vars)) => {
+                let filled = crate::variable::var_state::backfill_missing(&mut var_context, &vars);
+                if filled > 0 {
+                    eprintln!(
+                        "[i] 已从 {state_path} 回灌 {filled} 个捕获变量（仅补缺，显式值优先）"
+                    );
+                }
+            }
+            Some(Err(e)) => {
+                eprintln!("[!] --var-state 文件损坏，已忽略回灌: {state_path} ({e})");
+            }
+        }
+    }
     var_context
 }
 

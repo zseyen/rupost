@@ -60,6 +60,7 @@ GET http://example.com/api/test
         plugin_env: vec![],
         allow_project_plugins: false,
         with_deps: false,
+        var_state: None,
     };
 
     // 执行套件并显式写出报告（报告落盘已上移至表现层门面）
@@ -180,6 +181,7 @@ Accept: text/event-stream
         plugin_env: vec![],
         allow_project_plugins: false,
         with_deps: false,
+        var_state: None,
     };
 
     let outcome = run_test_suite(options).await.unwrap();

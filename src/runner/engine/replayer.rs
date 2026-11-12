@@ -343,6 +343,13 @@ impl ReplayExecutor {
                 expected_status.to_string().green(),
                 actual_status.to_string().red()
             );
+            // R-5（免重填）：actual==401 且 expected≠401 → 疑似会话过期，给出再获取指引
+            if actual_status == 401 {
+                println!(
+                    "  {} 疑似会话过期：录制的登录态/token 已失效——可先重放登录条目，或更新 cookie 文件（--cookie-file）/捕获变量（--var-state）后重录",
+                    "[i]".yellow()
+                );
+            }
         }
         // T4 第四形态内联呈现：状态匹配但 body 失败（差异摘要已脱敏）
         if let Some(diff) = &body_diff {

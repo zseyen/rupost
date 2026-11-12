@@ -69,6 +69,20 @@ pub async fn present_suite_outcome(
                 }
             }
         }
+        // R-5（免重填）：疑似会话过期汇总——401 失败集中出现时给出再获取指引
+        let unauthorized_failed = outcome
+            .batch_results
+            .iter()
+            .flat_map(|(_, results)| results.iter())
+            .filter(|r| !r.success && r.status == Some(401))
+            .count();
+        if unauthorized_failed > 0 {
+            eprintln!(
+                "[i] {} 个请求以 401 失败——疑似登录态/token 过期：可重放登录请求，或更新 --cookie-file / --var-state 后重试",
+                unauthorized_failed
+            );
+        }
+
         TestReporter::print_batch_summary(&outcome.batch_results, outcome.duration);
         if options.triage {
             rupost::ai::triage::run_inline_triage(&outcome.batch_results).await;

@@ -1,3 +1,0 @@
-[*] Loading configuration from: ./tests_temp_dir/mock_config.json
-[✓] Mock engine initialized with 3 routes.
-[*] Mock server starting on: http://localhost:9000

@@ -57,6 +57,8 @@ pub struct TestSuiteOptions {
     /// `--with-deps`（R-1 免重填）：`--only` 时按拓扑序先执行目标文件的
     /// `@depends-on` 依赖闭包（上游登录/取号自动先跑）
     pub with_deps: bool,
+    /// `--var-state`（R-2 免重填）：捕获变量持久化文件；结束落盘、启动回灌（最低优先级层）
+    pub var_state: Option<String>,
 }
 
 impl Default for TestSuiteOptions {
@@ -92,6 +94,7 @@ impl Default for TestSuiteOptions {
             plugin_env: Vec::new(),
             allow_project_plugins: false,
             with_deps: false,
+            var_state: None,
         }
     }
 }
@@ -256,6 +259,21 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
         .iter()
         .any(|(_, res_list)| res_list.iter().any(|r| !r.success))
         || (options.strict_plugins && any_degraded);
+
+    // R-2 免重填：捕获变量落盘（0600；@capture/插件 set_variables 的运行期产物）
+    if let Some(state_path) = &options.var_state {
+        let captured: std::collections::HashMap<String, String> = var_context
+            .variables()
+            .iter()
+            .filter(|(k, _)| k.as_str() != "__default_scheme")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        crate::variable::var_state::save_var_state(Path::new(state_path), &captured)?;
+        eprintln!(
+            "[i] 捕获变量已持久化至 {state_path}（{} 项，0600）",
+            captured.len()
+        );
+    }
 
     Ok(TestSuiteOutcome {
         has_failure,

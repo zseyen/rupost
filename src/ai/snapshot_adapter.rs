@@ -4,19 +4,15 @@ use crate::history::model::{ExecutionSnapshotEntry, ExecutionSnapshotFile, Maski
 use crate::report::json::{JsonAssertionReport, JsonFileReport, JsonTestReport};
 
 /// 将离线事件快照（Schema v1.0）适配为聚合聚类消费的 `JsonFileReport` 列表。
-/// 若快照尚未脱敏（`MaskingMode::None`），在映射前就地副本执行全链路脱敏（脱敏先于 AI）。
+/// 对所有条目无条件执行就地副本全链路幂等脱敏（不信任外部输入声明的 `masking` 标记，脱敏先于 AI）。
 pub fn snapshot_to_json_reports(snapshot: &ExecutionSnapshotFile) -> Vec<JsonFileReport> {
     let results: Vec<JsonTestReport> = snapshot
         .entries
         .iter()
         .map(|entry| {
-            if matches!(snapshot.masking, MaskingMode::None) {
-                let mut masked = entry.clone();
-                crate::history::snapshot_mask::mask_execution_snapshot_entry(&mut masked);
-                adapt_entry_to_json_report(&masked)
-            } else {
-                adapt_entry_to_json_report(entry)
-            }
+            let mut masked = entry.clone();
+            crate::history::snapshot_mask::mask_execution_snapshot_entry(&mut masked);
+            adapt_entry_to_json_report(&masked)
         })
         .collect();
     let file_label = snapshot
@@ -29,7 +25,57 @@ pub fn snapshot_to_json_reports(snapshot: &ExecutionSnapshotFile) -> Vec<JsonFil
     }]
 }
 
+const HIGH_TTFB_THRESHOLD_US: u64 = 500_000;
+const CERT_EXPIRY_WARN_DAYS: i64 = 7;
+
 fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
+    let response_body_snippet = if !e.success {
+        e.response
+            .as_ref()
+            .map(|resp| {
+                crate::ai::redactor::redact_and_truncate_body(
+                    &resp.body,
+                    crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                )
+            })
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+
+    let mut warnings = e.warnings.clone();
+    if let Some(wf) = &e.timing_waterfall
+        && wf.ttfb_us >= HIGH_TTFB_THRESHOLD_US
+    {
+        warnings.push(format!(
+            "高 TTFB 时延: {}ms (total={}ms)",
+            wf.ttfb_us / 1000,
+            wf.total_us / 1000
+        ));
+    }
+    if let Some(sock) = &e.socket_diagnostics {
+        if let Some(days) = sock.cert_days_remaining
+            && days <= CERT_EXPIRY_WARN_DAYS
+        {
+            let issuer = sock
+                .cert_issuer
+                .as_deref()
+                .map(crate::ai::redactor::redact_free_text)
+                .unwrap_or_else(|| "unknown".to_string());
+            warnings.push(format!(
+                "TLS 证书临近过期或已过期: 剩余 {days} 天 (issuer={issuer})"
+            ));
+        }
+        if !e.success && !sock.remote_ip.is_empty() {
+            warnings.push(format!(
+                "连接诊断: {}:{} ({})",
+                crate::ai::redactor::redact_free_text(&sock.remote_ip),
+                sock.remote_port,
+                crate::ai::redactor::redact_free_text(&sock.http_version)
+            ));
+        }
+    }
+
     JsonTestReport {
         request_number: e.request_number,
         name: e.name.clone(),
@@ -52,9 +98,9 @@ fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
                 actual: a.actual.clone(),
             })
             .collect(),
-        warnings: e.warnings.clone(),
+        warnings,
         diagnose_report: None,
-        response_body_snippet: None,
+        response_body_snippet,
     }
 }
 
@@ -132,5 +178,95 @@ mod tests {
         let actual = item.assertions[0].actual.as_deref().unwrap();
         assert!(!actual.contains("sk_live_raw_actual"), "actual: {actual}");
         assert!(!item.warnings.join("\n").contains("warn_raw_secret"));
+    }
+
+    #[test]
+    fn test_snapshot_adapter_always_masks_even_if_claimed_secrets_and_surfaces_diagnostics() {
+        use crate::history::model::{SnapshotResponse, SocketDiagnostics, TimingWaterfallUs};
+
+        let snap = ExecutionSnapshotFile {
+            schema_version: SNAPSHOT_SCHEMA_VERSION.to_string(),
+            generated_at: chrono::Utc::now(),
+            environment: Some("prod".to_string()),
+            runner_fingerprint: RunnerFingerprint {
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                rupost_version: "0.2.0".to_string(),
+            },
+            // 恶意或外部手写快照谎称已脱敏
+            masking: MaskingMode::Secrets,
+            entries: vec![ExecutionSnapshotEntry {
+                request_number: 1,
+                name: Some("gateway".to_string()),
+                file_path: "gw.http".to_string(),
+                success: false,
+                outcome: ExecutionOutcome::Fail,
+                status: Some(504),
+                duration_us: 620_000,
+                plugin_duration_us: None,
+                request: SnapshotRequest {
+                    method: "POST".to_string(),
+                    url: "https://api.example.com/gw?token=forged_mask_secret".to_string(),
+                    headers: vec![],
+                    body: None,
+                },
+                response: Some(SnapshotResponse {
+                    status: 504,
+                    headers: vec![],
+                    body: r#"{"error":"upstream timeout","access_token":"raw_resp_secret"}"#
+                        .to_string(),
+                    body_truncated: false,
+                    body_sha256: None,
+                }),
+                error: None,
+                timing_waterfall: Some(TimingWaterfallUs {
+                    dns_lookup_us: Some(1_000),
+                    tcp_connect_us: Some(2_000),
+                    tls_handshake_us: Some(5_000),
+                    ttfb_us: 610_000,
+                    transfer_us: 2_000,
+                    total_us: 620_000,
+                }),
+                socket_diagnostics: Some(SocketDiagnostics {
+                    remote_ip: "10.0.0.9".to_string(),
+                    remote_port: 443,
+                    http_version: "HTTP/2".to_string(),
+                    tls_cipher_suite: None,
+                    tls_version: None,
+                    cert_days_remaining: Some(3),
+                    cert_issuer: Some("CN=InternalCA".to_string()),
+                }),
+                assertions: vec![],
+                warnings: vec![],
+            }],
+        };
+
+        assert!(
+            snapshot_masking_notice(&snap).is_some(),
+            "masking_notice 仍应读取原始 masking 标记"
+        );
+        let reports = snapshot_to_json_reports(&snap);
+        let item = &reports[0].results[0];
+        assert!(
+            !item.url.contains("forged_mask_secret"),
+            "即使 masking=secrets 也必须强制幂等脱敏: {}",
+            item.url
+        );
+        let snippet = item
+            .response_body_snippet
+            .as_deref()
+            .expect("失败条目应填充 response_body_snippet");
+        assert!(snippet.contains("upstream timeout"), "snippet: {snippet}");
+        assert!(
+            !snippet.contains("raw_resp_secret"),
+            "snippet 必须脱敏: {snippet}"
+        );
+        let joined_warnings = item.warnings.join("\n");
+        assert!(joined_warnings.contains("TTFB"), "{joined_warnings}");
+        assert!(joined_warnings.contains("3 天"), "{joined_warnings}");
+        assert!(
+            joined_warnings.contains("10.0.0.9:443"),
+            "{joined_warnings}"
+        );
     }
 }

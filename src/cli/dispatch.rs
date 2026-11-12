@@ -216,13 +216,23 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             }
             AiCommands::Triage {
                 report_file,
+                snapshot,
                 json,
                 format,
             } => {
-                rupost::ai::triage::run_ai_triage_from_file(&report_file, json, &format).await?;
+                if let Some(snapshot_path) = snapshot {
+                    rupost::ai::triage::run_snapshot_triage(&snapshot_path, json, &format).await?;
+                } else if let Some(report_path) = report_file {
+                    rupost::ai::triage::run_ai_triage_from_file(&report_path, json, &format)
+                        .await?;
+                }
             }
-            AiCommands::TriageSnapshot { snapshot, json } => {
-                rupost::ai::triage::run_snapshot_triage(&snapshot, json).await?;
+            AiCommands::TriageSnapshot {
+                snapshot,
+                json,
+                format,
+            } => {
+                rupost::ai::triage::run_snapshot_triage(&snapshot, json, &format).await?;
             }
             AiCommands::Resolve { file, dry_run } => {
                 rupost::ai::resolve::run_resolve(&file, dry_run).await?;
@@ -300,8 +310,10 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 let registry =
                     super::plugin_route::discover_for_routing(parsed.allow_project_plugins);
                 match super::plugin_route::route(&parsed.passthrough, &builtins, &registry) {
-                    super::plugin_route::RoutingDecision::PluginCommand(exe_path, _name, rest) => {
+                    super::plugin_route::RoutingDecision::PluginCommand(exe_path, name, rest) => {
                         let code = super::plugin_exec::launch_plugin_command(
+                            &registry,
+                            &name,
                             &exe_path,
                             &rest,
                             &parsed.allow_env,

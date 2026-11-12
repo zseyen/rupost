@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 use rupost::Result;
 use rupost::http::Method;
+use rupost::plugin::types::PluginHealthStatus;
 use rupost::plugin::{DiscoverOptions, PluginRegistry};
 
 /// 解析后的动态 CLI 路由参数（剥离 rupost 自有插件旗标，保留纯净业务参数传给插件）
@@ -135,6 +136,16 @@ pub fn discover_for_routing(allow_project_plugins: bool) -> PluginRegistry {
     }
 }
 
+/// 静默发现插件注册表（`--help` Extensions 区块用，命中缓存且绝不向 stderr 输出告警）。
+pub fn discover_for_help_silent(allow_project_plugins: bool) -> PluginRegistry {
+    let options = DiscoverOptions {
+        allow_project_plugins,
+        project_root: None,
+    };
+    let cache_path = registry_cache_path();
+    PluginRegistry::load_or_discover(&options, &cache_path).unwrap_or_default()
+}
+
 /// 处理 `rupost plugin list|schema` 子命令
 pub fn handle_plugin_command(
     command: crate::cli::PluginCommands,
@@ -145,13 +156,12 @@ pub fn handle_plugin_command(
             || rupost::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
-    let cache_path = registry_cache_path();
-    let registry = PluginRegistry::load_or_discover(&options, &cache_path)?;
-    for warning in &registry.warnings {
-        eprintln!("[!] {warning}");
-    }
     match command {
         crate::cli::PluginCommands::List => {
+            let registry = PluginRegistry::discover_with_diagnostics(&options)?;
+            for warning in &registry.warnings {
+                eprintln!("[!] {}", sanitize_manifest_text(warning, 200));
+            }
             println!("Installed plugin commands:");
             if registry.commands.is_empty() {
                 println!(
@@ -169,10 +179,79 @@ pub fn handle_plugin_command(
             }
             for name in hook_names {
                 let (path, hook) = &registry.hooks[name];
-                println!("  {:<14} stage={:?} @ {}", name, hook.stage, path.display());
+                let safe_name = sanitize_manifest_text(name, 64);
+                let safe_path = sanitize_manifest_text(&path.display().to_string(), 256);
+                println!("  {:<14} stage={:?} @ {}", safe_name, hook.stage, safe_path);
+            }
+            println!("Plugin status:");
+            let statuses = registry.evaluate_statuses(std::env::var_os("PATH").as_deref());
+            if statuses.is_empty() {
+                println!("  (none)");
+            } else {
+                for entry in statuses {
+                    let safe_name = sanitize_manifest_text(&entry.name, 64);
+                    match &entry.status {
+                        PluginHealthStatus::Ready => {
+                            let safe_ver = sanitize_manifest_text(&entry.version, 32);
+                            let safe_desc = sanitize_manifest_text(&entry.description, 80);
+                            if safe_ver.is_empty() {
+                                println!("  {:<14} ✓ ready {}", safe_name, safe_desc);
+                            } else {
+                                println!(
+                                    "  {:<14} ✓ ready (v{}) {}",
+                                    safe_name, safe_ver, safe_desc
+                                );
+                            }
+                        }
+                        PluginHealthStatus::Pending {
+                            interpreter,
+                            min_version,
+                            modules,
+                            searched_dirs,
+                        } => {
+                            let safe_interp = sanitize_manifest_text(interpreter, 64);
+                            let ver_hint = min_version
+                                .as_deref()
+                                .map(|v| format!(" >= {}", sanitize_manifest_text(v, 32)))
+                                .unwrap_or_default();
+                            println!(
+                                "  {:<14} ⚠ pending (解释器 {safe_interp}{ver_hint} 未找到，已搜索 {searched_dirs} 个 PATH 目录)",
+                                safe_name
+                            );
+                            if !modules.is_empty() {
+                                let safe_mods: Vec<String> = modules
+                                    .iter()
+                                    .map(|m| sanitize_manifest_text(m, 64))
+                                    .collect();
+                                println!("    声明依赖模块: {}", safe_mods.join(", "));
+                            }
+                            let mod_hint = if modules.is_empty() {
+                                ""
+                            } else {
+                                " 及所需模块"
+                            };
+                            println!(
+                                "    处方: ① 安装 {safe_interp}{ver_hint}{mod_hint}  ② 或改用内置宏（如 {{{{$hmac_sha256}}}}）  ③ 或传入 --allow-missing-plugins 显式降级"
+                            );
+                        }
+                        PluginHealthStatus::Failed { reason } => {
+                            let safe_reason = sanitize_manifest_text(reason, 200);
+                            let safe_path = sanitize_manifest_text(
+                                &entry.manifest_path.display().to_string(),
+                                256,
+                            );
+                            println!("  {:<14} ✗ failed ({safe_reason}) [{safe_path}]", safe_name);
+                        }
+                    }
+                }
             }
         }
         crate::cli::PluginCommands::Schema => {
+            let cache_path = registry_cache_path();
+            let registry = PluginRegistry::load_or_discover(&options, &cache_path)?;
+            for warning in &registry.warnings {
+                eprintln!("[!] {}", sanitize_manifest_text(warning, 200));
+            }
             let mut defs = serde_json::Map::new();
             let mut aliases: Vec<_> = registry.hooks.keys().collect();
             aliases.sort();
@@ -213,12 +292,12 @@ pub fn render_extensions(registry: &PluginRegistry) -> Vec<String> {
     names.sort();
     for name in names {
         let (path, capability) = &registry.commands[name];
+        let safe_name = sanitize_manifest_text(name, 64);
         let description = sanitize_manifest_text(&capability.description, 80);
+        let safe_path = sanitize_manifest_text(&path.display().to_string(), 256);
         lines.push(format!(
             "  {:<14} {} ({})",
-            name,
-            description,
-            path.display()
+            safe_name, description, safe_path
         ));
     }
     lines
@@ -288,8 +367,10 @@ mod tests {
                     usage: format!("rupost {name}"),
                     description: "demo".to_string(),
                     requires_tty: false,
+                    requires_env: vec![],
                 }],
                 hooks: vec![],
+                runtime: None,
             },
         );
         registry
@@ -389,5 +470,31 @@ mod tests {
                 "a=b".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_render_extensions_sanitizes_name_description_and_path() {
+        let mut reg = PluginRegistry::new();
+        reg.commands.insert(
+            "\u{1b}[2Jevil-cmd\u{1b}]8;;http://bad\u{7}".into(),
+            (
+                std::path::PathBuf::from("/tmp/\u{1b}[2Jpwn/rupost-plugin-evil"),
+                CommandCapability {
+                    name: "evil-cmd".into(),
+                    usage: "rupost evil-cmd".into(),
+                    description: "\u{1b}[31mcmd-desc\u{1b}[0m".into(),
+                    requires_tty: false,
+                    requires_env: vec![],
+                },
+            ),
+        );
+        let rendered = render_extensions(&reg).join("\n");
+        assert!(
+            !rendered.contains('\u{1b}'),
+            "Extensions 渲染必须清洗 name/description/path 中的 ANSI ESC: {rendered}"
+        );
+        assert!(rendered.contains("evil-cmd"));
+        assert!(rendered.contains("cmd-desc"));
+        assert!(rendered.contains("/tmp/pwn/rupost-plugin-evil"));
     }
 }

@@ -48,6 +48,7 @@ fn install_hook_plugin(
             requires_env,
             parameters_schema: serde_json::json!({}),
         }],
+        runtime: None,
     };
     let manifest_path = dir.join(format!("rupost-plugin-{name}.json"));
     std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();

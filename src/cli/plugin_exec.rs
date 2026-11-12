@@ -135,12 +135,31 @@ fn verify_or_prompt_tofu(
     Ok(())
 }
 
+fn extract_authorized_env_keys(specs: &[String]) -> std::collections::HashSet<String> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let key = match spec.split_once('=') {
+                Some((k, _)) => k.trim(),
+                None => spec.trim(),
+            };
+            (!key.is_empty()).then(|| key.to_string())
+        })
+        .collect()
+}
+
 /// 拉起插件命令子进程（03 §6.2）：
 /// - TTY 独占直通（inherit 三向）
 /// - 来源横幅（路径 + sha256 前 16 位）+ 首次 TOFU 确认
 /// - 环境白名单：基础允许集 + RUPOST_* + 显式 `--plugin-env`
 /// - 退出码信号感知穿透
-pub async fn launch_plugin_command(exe_path: &Path, args: &[String], allow_env: &[String]) -> i32 {
+pub async fn launch_plugin_command(
+    registry: &rupost::plugin::PluginRegistry,
+    command_name: &str,
+    exe_path: &Path,
+    args: &[String],
+    allow_env: &[String],
+) -> i32 {
     let exe_path_owned = exe_path.to_path_buf();
     let tofu_cache = cache_dir().join("tofu-commands.txt");
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
@@ -158,6 +177,13 @@ pub async fn launch_plugin_command(exe_path: &Path, args: &[String], allow_env: 
             eprintln!("[!] 插件 TOFU 校验任务异常终止: {e}");
             return 1;
         }
+    }
+
+    let authorized_env_keys = extract_authorized_env_keys(allow_env);
+    for warning in
+        registry.collect_missing_env_warnings(&[command_name.to_string()], &authorized_env_keys)
+    {
+        eprintln!("[WARN] {warning}");
     }
 
     let mut cmd = tokio::process::Command::new(exe_path);

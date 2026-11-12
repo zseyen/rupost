@@ -181,7 +181,7 @@ pub async fn run_ai_triage_from_file(
 /// `JsonFileReport` 后复用失败聚类 SSOT（确定性机械归因为 B1 基线；配置 AI Key 时
 /// 五阶段管线的 C 阶段自动增强——与 `ai triage` 同一判定路径）。消费前执行
 /// 02 §3.3 不可信输入校验：体积上限 64MB。
-pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool) -> Result<()> {
+pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool, format: &str) -> Result<()> {
     const MAX_CONSUME_BYTES: u64 = 64 * 1024 * 1024;
     let meta = std::fs::metadata(snapshot_path).map_err(|e| {
         crate::RupostError::IoError(std::io::Error::new(
@@ -214,7 +214,7 @@ pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool) -> Result
     );
 
     let triage = build_triage_report(&reports).await;
-    if json_flag {
+    if json_flag || format.eq_ignore_ascii_case("json") {
         let s = serde_json::to_string_pretty(&triage)?;
         println!("{s}");
     } else {

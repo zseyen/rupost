@@ -4,9 +4,24 @@ use crate::plugin::pipeline::PluginRuntimeOptions;
 use crate::plugin::{DiscoverOptions, PluginRegistry, parse_plugin_env_specs};
 use crate::runner::{TestExecutor, TestSuiteOptions};
 use crate::variable::{ConfigLoader, VariableContext};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// 从原始 `--plugin-env` 参数列表提取已放行的环境变量名集合（保留未在宿主机设值的裸 `KEY`）。
+pub(crate) fn extract_authorized_env_keys(specs: &[String]) -> HashSet<String> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let key = match spec.split_once('=') {
+                Some((k, _)) => k.trim(),
+                None => spec.trim(),
+            };
+            (!key.is_empty()).then(|| key.to_string())
+        })
+        .collect()
+}
 
 /// 加载工作区配置、环境变量文件与 `--var` 覆盖，构造套件变量上下文。
 pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext {
@@ -47,6 +62,13 @@ pub(crate) fn assemble_plugin_runtime(
             for warning in &reg.warnings {
                 eprintln!("[!] {warning}");
             }
+            let mut directives: Vec<String> = reg.hooks.keys().cloned().collect();
+            directives.sort();
+            directives.dedup();
+            let authorized_env_keys = extract_authorized_env_keys(&options.plugin_env);
+            for warning in reg.collect_missing_env_warnings(&directives, &authorized_env_keys) {
+                eprintln!("[WARN] {warning}");
+            }
             Arc::new(reg)
         }
         Err(e) => {
@@ -80,4 +102,57 @@ pub(crate) fn build_suite_executor(options: &TestSuiteOptions) -> Result<TestExe
         .with_debug(options.debug)
         .with_debug_on_failure(options.debug_on_failure)
         .with_plugins(registry, plugin_runtime))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::types::{HookCapability, PluginManifest, PluginStage};
+
+    #[test]
+    fn test_extract_authorized_env_keys_preserves_bare_and_kv_specs() {
+        let specs = vec![
+            "UNSET_BARE_KEY".to_string(),
+            "  TRIMMED_KEY = value=with=eq ".to_string(),
+            "   ".to_string(),
+            "=empty_key".to_string(),
+        ];
+        let keys = extract_authorized_env_keys(&specs);
+        assert!(keys.contains("UNSET_BARE_KEY"));
+        assert!(keys.contains("TRIMMED_KEY"));
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn test_registry_missing_env_warnings_respects_bare_plugin_env_key() {
+        let mut reg = PluginRegistry::new();
+        reg.register_manifest(
+            PathBuf::from("/tmp/vault/rupost-plugin-vault"),
+            PluginManifest {
+                manifest_version: "1.0".to_string(),
+                name: "vault-plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "vault".to_string(),
+                runtime: None,
+                hooks: vec![HookCapability {
+                    directive: "vault".to_string(),
+                    alias: None,
+                    stage: PluginStage::Prepare,
+                    cache_scope: Default::default(),
+                    requires_env: vec!["VAULT_TOKEN".to_string()],
+                    parameters_schema: serde_json::json!({}),
+                }],
+                commands: vec![],
+            },
+        );
+
+        let directives = vec!["vault".to_string()];
+        let warnings_missing = reg.collect_missing_env_warnings(&directives, &HashSet::new());
+        assert_eq!(warnings_missing.len(), 1);
+        assert!(warnings_missing[0].contains("VAULT_TOKEN"));
+
+        let authorized = extract_authorized_env_keys(&["VAULT_TOKEN".to_string()]);
+        let warnings_allowed = reg.collect_missing_env_warnings(&directives, &authorized);
+        assert!(warnings_allowed.is_empty());
+    }
 }

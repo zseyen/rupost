@@ -306,3 +306,140 @@ async fn test_explain_signature_dedup_calls_ai_at_most_once_per_signature() {
     assert_eq!(combined.matches("[AI Explanation]").count(), 1);
     assert_eq!(combined.matches("[Possible Causes]").count(), 2);
 }
+
+#[test]
+fn test_cli_ai_triage_accepts_snapshot_and_hidden_legacy_alias_and_rejects_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let snap_path = dir.path().join("exec.snapshot.json");
+    let snapshot = rupost::history::model::ExecutionSnapshotFile {
+        schema_version: rupost::history::model::SNAPSHOT_SCHEMA_VERSION.to_string(),
+        generated_at: chrono::Utc::now(),
+        environment: None,
+        runner_fingerprint: rupost::history::model::RunnerFingerprint {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            rupost_version: "0.2.0".to_string(),
+        },
+        masking: rupost::history::model::MaskingMode::None,
+        entries: vec![rupost::history::model::ExecutionSnapshotEntry {
+            request_number: 1,
+            name: Some("GetOrder".to_string()),
+            file_path: "smoke.http".to_string(),
+            success: false,
+            outcome: rupost::history::model::ExecutionOutcome::Fail,
+            status: Some(504),
+            duration_us: 527_000,
+            plugin_duration_us: None,
+            request: rupost::history::model::SnapshotRequest {
+                method: "GET".to_string(),
+                url: "https://api.example.com/v1/orders/42".to_string(),
+                headers: vec![],
+                body: None,
+            },
+            response: Some(rupost::history::model::SnapshotResponse {
+                status: 504,
+                headers: vec![],
+                body: "{\"error\":\"upstream timeout\",\"token\":\"Bearer supersecret999\"}"
+                    .to_string(),
+                body_truncated: false,
+                body_sha256: None,
+            }),
+            error: None,
+            timing_waterfall: Some(rupost::history::model::TimingWaterfallUs {
+                dns_lookup_us: Some(1_000),
+                tcp_connect_us: Some(2_000),
+                tls_handshake_us: Some(3_000),
+                ttfb_us: 520_000,
+                transfer_us: 1_000,
+                total_us: 527_000,
+            }),
+            socket_diagnostics: None,
+            assertions: vec![],
+            warnings: vec![],
+        }],
+    };
+    std::fs::write(&snap_path, serde_json::to_string_pretty(&snapshot).unwrap()).unwrap();
+
+    // 1. 新主路径：`rupost ai triage --snapshot <file> --json`
+    let out_cmd = Command::new(rupost_bin())
+        .args([
+            "ai",
+            "triage",
+            "--snapshot",
+            snap_path.to_str().unwrap(),
+            "--json",
+        ])
+        .env_remove("RUPOST_AI_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("RUPOST_AI_BASE_URL")
+        .env_remove("RUPOST_AI_MODEL")
+        .env("RUPOST_AI_PROBE_URL", "http://127.0.0.1:1")
+        .output()
+        .expect("failed to run rupost");
+    assert_eq!(
+        out_cmd.status.code(),
+        Some(0),
+        "ai triage --snapshot 失败: stderr={}",
+        String::from_utf8_lossy(&out_cmd.stderr)
+    );
+    let out = String::from_utf8_lossy(&out_cmd.stdout);
+    let err_out = String::from_utf8_lossy(&out_cmd.stderr);
+    assert!(!out.contains("supersecret999"), "响应片段必须被脱敏: {out}");
+    assert!(
+        !err_out.contains("supersecret999"),
+        "stderr 不得泄露密钥: {err_out}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&out).expect("stdout 必须输出纯合法 JSON");
+    assert_eq!(parsed["failed_requests"], 1);
+    assert_eq!(parsed["cluster_count"], 1);
+    assert!(
+        parsed["clusters"][0]["title"]
+            .as_str()
+            .unwrap_or("")
+            .contains("504"),
+        "triage JSON 必须包含 504 签名聚类: {parsed}"
+    );
+    let adapted = rupost::ai::snapshot_adapter::snapshot_to_json_reports(&snapshot);
+    let snippet = adapted[0].results[0]
+        .response_body_snippet
+        .as_deref()
+        .unwrap_or("");
+    assert!(snippet.contains("upstream timeout"), "snippet: {snippet}");
+    assert!(
+        !snippet.contains("supersecret999"),
+        "snippet 必须脱敏: {snippet}"
+    );
+
+    // 2. 旧别名：`rupost ai triage-snapshot --snapshot <file> --json` 仍可用且不在 `ai --help` 公开列表
+    let (legacy_code, legacy_out) = run_rupost_clean_env(&[
+        "ai",
+        "triage-snapshot",
+        "--snapshot",
+        snap_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(
+        legacy_code, 0,
+        "隐藏别名 triage-snapshot 必须继续工作: {legacy_out}"
+    );
+
+    let (help_code, help_out) = run_rupost_clean_env(&["ai", "--help"]);
+    assert_eq!(help_code, 0);
+    assert!(
+        !help_out.contains("triage-snapshot"),
+        "triage-snapshot 必须标记 #[command(hide = true)]: {help_out}"
+    );
+
+    // 3. 参数契约：同时传 report_file 与 --snapshot，或两者都缺，均以 clap exit 2 拒绝
+    let (both_code, _) = run_rupost_clean_env(&[
+        "ai",
+        "triage",
+        snap_path.to_str().unwrap(),
+        "--snapshot",
+        snap_path.to_str().unwrap(),
+    ]);
+    assert_eq!(both_code, 2);
+
+    let (neither_code, _) = run_rupost_clean_env(&["ai", "triage"]);
+    assert_eq!(neither_code, 2);
+}

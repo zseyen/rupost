@@ -8,7 +8,7 @@ mod plugin_exec;
 mod plugin_route;
 mod runner;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 // 路径稳定重导出：crate::cli::{Commands, XxxArgs} 与迁移前一致（bin crate 内
 // 未被 mod.rs 直接消费的类型会触发 unused_imports，显式豁免）
@@ -59,6 +59,79 @@ pub struct Cli {
     /// to an environment-suffixed file for inline requests, mirroring `test`
     #[arg(long, global = true, value_name = "NAME")]
     pub env: Option<String>,
+}
+
+/// 判定当前参数向量是否为根帮助请求（仅无前置子命令/内联/插件命令的 `--help`/`-h`
+/// 或无子命令参数跟后的裸 `rupost help`）。
+fn is_root_help_invocation(args: &[std::ffi::OsString]) -> bool {
+    let mut iter = args.iter().skip(1);
+    let mut expect_value = false;
+    while let Some(raw) = iter.next() {
+        let s = raw.to_string_lossy();
+        if expect_value {
+            expect_value = false;
+            continue;
+        }
+        if matches!(s.as_ref(), "--cookie-file" | "--default-scheme" | "--env") {
+            expect_value = true;
+            continue;
+        }
+        if s.starts_with("--cookie-file=")
+            || s.starts_with("--default-scheme=")
+            || s.starts_with("--env=")
+        {
+            continue;
+        }
+        if matches!(
+            s.as_ref(),
+            "--no-cookies" | "--debug" | "--debug-on-failure" | "--no-history"
+        ) {
+            continue;
+        }
+        if s == "--help" || s == "-h" {
+            return true;
+        }
+        if s == "help" {
+            return iter.next().is_none();
+        }
+        return false;
+    }
+    false
+}
+
+/// 解析 CLI 参数，仅在根帮助（`rupost --help` / `rupost -h` / 裸 `rupost help`）时
+/// 静默注入 `Extensions:` 区块；子命令帮助、内联 `GET url --help` 与插件 `--help` 原样透传。
+pub fn parse_cli_from<I, T>(itr: I) -> std::result::Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let args: Vec<std::ffi::OsString> = itr.into_iter().map(Into::into).collect();
+    match Cli::try_parse_from(&args) {
+        Ok(cli) => Ok(cli),
+        Err(err) => {
+            if err.kind() == clap::error::ErrorKind::DisplayHelp && is_root_help_invocation(&args) {
+                let allow_project =
+                    rupost::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS");
+                let registry = plugin_route::discover_for_help_silent(allow_project);
+                let ext_lines = plugin_route::render_extensions(&registry);
+                if !ext_lines.is_empty() {
+                    let after = format!("Extensions:\n{}", ext_lines.join("\n"));
+                    let cmd = Cli::command().after_help(after);
+                    cmd.try_get_matches_from(&args)?;
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+/// 解析进程命令行参数（等价于 `Cli::parse()`，附加根帮助 `Extensions:` 注入）
+pub fn parse_cli() -> Cli {
+    match parse_cli_from(std::env::args_os()) {
+        Ok(cli) => cli,
+        Err(err) => err.exit(),
+    }
 }
 
 #[cfg(test)]
@@ -530,5 +603,42 @@ mod tests {
             panic!("expected Web subcommand");
         };
         assert!(!args.dev);
+    }
+
+    #[test]
+    fn test_is_root_help_invocation_scope() {
+        let os = |items: &[&str]| -> Vec<std::ffi::OsString> {
+            items.iter().map(std::ffi::OsString::from).collect()
+        };
+        assert!(is_root_help_invocation(&os(&["rupost", "--help"])));
+        assert!(is_root_help_invocation(&os(&["rupost", "-h"])));
+        assert!(is_root_help_invocation(&os(&["rupost", "help"])));
+        assert!(!is_root_help_invocation(&os(&["rupost", "test", "--help"])));
+        assert!(!is_root_help_invocation(&os(&["rupost", "help", "test"])));
+        assert!(!is_root_help_invocation(&os(&[
+            "rupost",
+            "GET",
+            "http://example.com",
+            "--help"
+        ])));
+        assert!(!is_root_help_invocation(&os(&[
+            "rupost",
+            "flamegraph",
+            "--help"
+        ])));
+    }
+
+    #[test]
+    fn test_parse_cli_from_leaves_subcommand_and_inline_help_untouched() {
+        let Err(sub_err) = parse_cli_from(["rupost", "test", "--help"]) else {
+            panic!("expected subcommand help error");
+        };
+        assert_eq!(sub_err.kind(), clap::error::ErrorKind::DisplayHelp);
+        assert!(!sub_err.to_string().contains("Extensions:"));
+
+        let inline = parse_cli_from(["rupost", "GET", "http://example.com", "--help"])
+            .expect("inline trailing --help is captured into args");
+        assert!(inline.command.is_none());
+        assert!(inline.args.contains(&"--help".to_string()));
     }
 }

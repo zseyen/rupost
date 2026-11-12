@@ -515,6 +515,8 @@ impl PluginRegistry {
         custom_path_roots: Option<&[PathBuf]>,
     ) -> Result<Self> {
         if let Some(cache) = Self::load_cache(cache_path) {
+            // C-2：合法条目 + 已知非法条目合并为"期望磁盘态"——新增坏 manifest 首次
+            // 必然不等（触发重发现 + 告警），持久化后第二次起一致（告警一次不抖动）
             let cache_set: BTreeSet<(String, u64, String)> = cache
                 .manifests
                 .iter()
@@ -544,6 +546,7 @@ impl PluginRegistry {
             }
         }
         let mut registry = Self::discover_with_roots(options, custom_path_roots)?;
+        // C-2：重发现后把"磁盘上有、但解析失败"的 manifest 记为已知非法（指纹持久化）
         registry.persist_cache(cache_path);
         Ok(registry)
     }

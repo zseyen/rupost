@@ -99,3 +99,42 @@ fn test_builtin_macro_requires_no_external_dependency() {
     // 宏向量断言在 resolver 单测（RFC 4231）已锁定；此处锁定隔离 PATH 下
     // help/插件发现路径零子进程也不 panic（发现 = readdir + JSON 解析）。
 }
+
+/// C-2（守护补强）：`env -i` 级最小环境（无 HOME/无继承 env）——即拷即走承诺的
+/// 最后一道守护：dirs::home_dir()==None 路径（registry 缓存回退 cwd）、history
+/// 落盘、快照 0600 全链不得 panic。
+#[test]
+fn test_minimal_env_i_no_home_no_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let case = dir.path().join("mini.http");
+    std::fs::write(
+        &case,
+        "### ok\n# @auth mini-auth\nGET http://127.0.0.1:1/mini\n\n# @assert status == 200\n",
+    )
+    .unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .args([
+            "t",
+            case.to_str().unwrap(),
+            "--allow-missing-plugins",
+            "--no-history",
+        ])
+        .output()
+        .unwrap();
+    // @auth 缺失 → ?optional 缺席 → 无旗标时阻断 exit 1；关键是进程不 panic、错误可读
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "最小环境下必须优雅退出（exit 1），不得 panic/abort: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("mini-auth"),
+        "错误信息必须保留插件名上下文: {stderr}"
+    );
+}

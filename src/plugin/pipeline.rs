@@ -492,7 +492,9 @@ impl PluginPipeline {
             };
 
         outcome.plugin_duration_us += invocation.duration_us;
-        if !invocation.stderr_tail.is_empty() {
+        // C-2（审查收口）：stderr 摘要仅在插件失败时入 warnings（诊断现场）；
+        // 成功路径的 stderr 是话唠插件日志，不污染"三处同文"的 warnings 语义
+        if invocation.failure.is_some() && !invocation.stderr_tail.is_empty() {
             let tail: String = invocation
                 .stderr_tail
                 .chars()

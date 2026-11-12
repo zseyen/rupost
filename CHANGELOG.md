@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **TLS 后端统一切换纯 Rust rustls（replay-reuse C-1，容器叙事工程事实化）**：reqwest `default-tls`(openssl-sys)→`rustls`(ring)——消除 musl 静态链接的结构性阻塞；tokio-tungstenite `rustls-tls-native-roots`→`rustls-tls-webpki-roots`——scratch/Alpine 无 `/etc/ssl/certs` 也可 WSS；CI 新增 `musl-static` job（静态链接断言 + ≤20MB 体积预算 DoD 断言）。rustls 后端下全量 70 套件 + examples/run_all.sh 外网用例全绿验证（原 load-bearing 风险注释保留为风险记忆：TLS 后端变更必须跑外网用例）。
+
 - **免重填主线批 5（replay-reuse E-3/E-4/E-5，开发者体验）**：①`--keep-credentials`（generate/ai bootstrap）——T2 链式溯源不命中时保留字面凭据，免"翻 history 抄 token 填 .env"；②`--strict-vars`——未解析 `{{var}}` 拒绝外发（可读错误指名变量），默认语义（警告+字面量发送）不回退防假守护对照；③JSON 报告 `timing` 分段（恒序列化键集稳定）+ 终端 `plugin +Xms` 渲染——插件冷启动占比可见、离线 HTML 复渲染不退化。
 
 - **免重填主线批 4（replay-reuse S-1/S-2/S-3，安全对齐）**：①history.jsonl 权限对齐快照防线（首建 0600 + 宽松旧文件 append 前收紧）——共享账号堡垒机的最大凭据明文外带面收窄；②掩码后重算 `body_sha256`（摘要对掩码后记录形态，掩码快照离线可验真）；③`--mask-secret-value <VAL>` 按值掩码（可多次、独立于 `--mask-secrets` 生效、全表面替换 [REDACTED]、masking 标记联动）——词表外自定义 header 密钥不再明文落盘。

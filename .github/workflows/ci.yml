@@ -87,3 +87,35 @@ jobs:
           path: ${{ matrix.bin_path }}
           retention-days: 7
           if-no-files-found: ignore
+
+  # Job 4: C-1 容器叙事守护——musl 静态链接 + 体积预算断言（scratch/Alpine 可用的工程事实化）
+  musl-static:
+    name: musl Static Build & Size Budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust with musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: musl
+      - name: Install musl-gcc
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build Static Release Binary
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin rupost
+      - name: Verify Static Linking (no dynamic deps)
+        run: |
+          file target/x86_64-unknown-linux-musl/release/rupost | grep -q "statically linked" || {
+            echo "::error::binary is not statically linked"; exit 1
+          }
+      - name: Size Budget Assertion (≤20MB, 01 §1 DoD)
+        run: |
+          SIZE=$(stat -c%s target/x86_64-unknown-linux-musl/release/rupost)
+          echo "release binary: $SIZE bytes"
+          if [ "$SIZE" -gt 20971520 ]; then
+            echo "::error::size budget exceeded: $SIZE > 20971520 (20MB)"
+            exit 1
+          fi

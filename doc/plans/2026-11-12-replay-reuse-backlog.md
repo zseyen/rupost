@@ -72,7 +72,7 @@
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
 | C-1 | rustls 切换 + musl job + 体积断言 | `Cargo.toml:26`（default-tls→openssl-sys）；`ci.yml` 无 musl job；`release.yml:27-33` 仅 gnu | reqwest 切 `rustls` feature（评估 tokio-tungstenite webpki-roots 兜底）；CI 加 musl target job + ≤20MB 断言 | Alpine/scratch 容器叙事成为工程事实 | 🔧 |
-| C-2 | 守护补强三件 | `standalone_portable_test.rs:51,92-101`（仅清 PATH）；`pipeline.rs:477-489`（stderr 成功也入 warnings）；`registry.rs:581-585`（坏 manifest 缓存盲区） | env -i 级最小环境测试（含无 HOME）；stderr 成功过滤；`t` 缓存路径对坏 manifest 与 `plugin list` 行为一致 | 即拷即走承诺最后一道守护；warnings 语义纯净 | 🔧 |
+| C-2 | 守护补强三件 | `standalone_portable_test.rs:51,92-101`（仅清 PATH）；`pipeline.rs:477-489`（stderr 成功也入 warnings）；`registry.rs:581-585`（坏 manifest 缓存盲区） | env -i 级最小环境测试（含无 HOME）；stderr 成功过滤；`t` 缓存路径对坏 manifest 与 `plugin list` 行为一致 | 即拷即走承诺最后一道守护；warnings 语义纯净 | ◐ 部分落地（2026-11-13：env -i 最小环境测试 ✅ `test_minimal_env_i_no_home_no_panic`（env_clear+无 HOME 全链优雅退出）；插件 stderr 成功过滤 ✅（失败才入 warnings）；**缓存一致性子项回滚登记**——known_invalid 融合方案与既有"防抖动"裁决冲突且有盲区（orphan 补齐二进制后仍被 known 遮蔽），尊重既有裁决回滚，"t 路径坏 manifest 不可见"登记为已知取舍（用 plugin list 查看）） |
 
 ## 6. 方向性登记（生态期，不排期）
 

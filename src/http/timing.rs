@@ -190,10 +190,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_staged_probe_tcp_failure_preserves_dns_stage() {
+        // Windows 回环连接未监听端口会经过 ~2s SYN 重传才返回 WSAECONNREFUSED，
+        // 若超时仅设 2s 会先触发 timeout；放宽至 10s 确保跨平台稳定落入 ConnectionRefused。
         let probe = DiagnosticsProber::connect_tcp_staged(
             "127.0.0.1",
             closed_port(),
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         )
         .await;
         assert!(probe.stream.is_none(), "连接失败不得产出流");
@@ -222,7 +224,7 @@ mod tests {
         let err = DiagnosticsProber::connect_tcp_with_timeout(
             "127.0.0.1",
             closed_port(),
-            Duration::from_secs(2),
+            Duration::from_secs(10),
         )
         .await
         .unwrap_err();

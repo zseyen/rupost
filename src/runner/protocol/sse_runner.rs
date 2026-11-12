@@ -1,7 +1,6 @@
 #![allow(clippy::collapsible_if)]
 use crate::history::model::RequestSnapshot;
 use crate::http::{Response, SseEvent, SseParser};
-use crate::middleware::Middleware;
 use crate::runner::types::TestResult;
 use crate::runner::utils::file_sync::write_log_with_limit;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
@@ -170,7 +169,7 @@ impl SseRunner {
         source: Option<String>,
         request_snapshot: RequestSnapshot,
         probe_result: Option<(Duration, Duration)>,
-        middlewares: Vec<crate::runner::executor::ExecutorMiddleware>,
+        middlewares: crate::middleware::MiddlewarePipeline,
     ) -> TestResult {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let default_log_name = format!("sse_{}.log", timestamp);
@@ -206,14 +205,12 @@ impl SseRunner {
             Duration::from_millis(0),
         )
         .unwrap();
-        for mw in &middlewares {
-            let _ = mw
-                .after_response(&handshake_response_tmp)
-                .await
-                .map_err(|e| {
-                    error!("Middleware error: {}", e);
-                });
-        }
+        let _ = middlewares
+            .run_after_response(&handshake_response_tmp)
+            .await
+            .map_err(|e| {
+                error!("Middleware error: {}", e);
+            });
 
         let mut assertion_results = Vec::new();
         // 逐事件捕获的失败信息；同一 capture 在每个事件上重复失败时去重后再呈现

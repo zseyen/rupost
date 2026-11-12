@@ -2,9 +2,8 @@ use crate::Result;
 use crate::RupostError;
 use crate::history::model::RequestSnapshot;
 use crate::http::Client;
-use crate::middleware::Middleware;
+use crate::middleware::MiddlewarePipeline;
 use crate::parser::types::ParsedRequest;
-use crate::runner::executor::ExecutorMiddleware;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
 use std::time::{Duration, Instant};
@@ -19,7 +18,7 @@ impl HttpRunner {
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
-        middlewares: &[ExecutorMiddleware],
+        middlewares: &MiddlewarePipeline,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -41,7 +40,12 @@ impl HttpRunner {
         let stream_to_append = parsed.metadata.stream_to_append;
 
         let assertions_to_eval = parsed.metadata.assertions.clone();
-        let captures_to_eval = parsed.metadata.captures.clone();
+        let captures_to_eval: Vec<VariableCapture> = parsed
+            .metadata
+            .captures
+            .iter()
+            .map(VariableCapture::from)
+            .collect();
         let enable_diagnose = parsed.metadata.diagnose;
 
         // [History] 创建请求快照 (在 parsed 被 move 之前)
@@ -65,17 +69,15 @@ impl HttpRunner {
         };
 
         // 遍历调用中间件的 before_request 钩子
-        for mw in middlewares {
-            if let Err(e) = mw.before_request(&mut request).await {
-                return Ok(TestResult::error(
-                    request_number,
-                    name,
-                    method,
-                    url,
-                    format!("Middleware before_request error: {}", e),
-                    start.elapsed(),
-                ));
-            }
+        if let Err(e) = middlewares.run_before_request(&mut request).await {
+            return Ok(TestResult::error(
+                request_number,
+                name,
+                method,
+                url,
+                format!("Middleware before_request error: {}", e),
+                start.elapsed(),
+            ));
         }
 
         // 1. 进行 Pre-flight 探测 (带容错，不干扰主流程)
@@ -125,7 +127,7 @@ impl HttpRunner {
                         source,
                         request_snapshot,
                         probe_result,
-                        middlewares.to_vec(),
+                        middlewares.clone(),
                     )
                     .await);
                 }
@@ -166,11 +168,12 @@ impl HttpRunner {
                 }
 
                 // 遍历调用中间件的 after_response 钩子
-                for mw in middlewares {
-                    let _ = mw.after_response(&response_obj).await.map_err(|e| {
+                let _ = middlewares
+                    .run_after_response(&response_obj)
+                    .await
+                    .map_err(|e| {
                         error!("Middleware after_response error: {}", e);
                     });
-                }
 
                 // [History] 异步保存历史记录 (Best Effort)
                 use crate::history::recorder::record_history;

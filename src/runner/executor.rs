@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if)]
+use crate::http::Client;
 use crate::http::url::resolve_final_url;
-use crate::http::{Client, Request, Response};
-use crate::middleware::{CookieMiddleware, Middleware};
+use crate::middleware::{CookieMiddleware, MiddlewarePipeline};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::WsRunner;
 use crate::runner::types::TestResult;
@@ -10,28 +10,6 @@ use crate::{Result, RupostError};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-
-#[derive(Clone)]
-pub enum ExecutorMiddleware {
-    Cookie(Arc<CookieMiddleware>),
-    Routing(Arc<crate::middleware::routing::RoutingMiddleware>),
-}
-
-impl Middleware for ExecutorMiddleware {
-    async fn before_request(&self, req: &mut Request) -> Result<()> {
-        match self {
-            Self::Cookie(mw) => mw.before_request(req).await,
-            Self::Routing(mw) => mw.before_request(req).await,
-        }
-    }
-
-    async fn after_response(&self, resp: &Response) -> Result<()> {
-        match self {
-            Self::Cookie(mw) => mw.after_response(resp).await,
-            Self::Routing(mw) => mw.after_response(resp).await,
-        }
-    }
-}
 
 pub enum Runner {
     Http(crate::runner::HttpRunner),
@@ -45,7 +23,7 @@ impl Runner {
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
-        middlewares: &[ExecutorMiddleware],
+        middlewares: &MiddlewarePipeline,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -91,7 +69,7 @@ pub struct TestExecutor {
     client: Client,
     cookie_middleware: Option<Arc<CookieMiddleware>>,
     routing_middleware: Option<Arc<crate::middleware::routing::RoutingMiddleware>>,
-    middlewares: Vec<ExecutorMiddleware>,
+    middlewares: MiddlewarePipeline,
     pub debug: bool,
     pub debug_on_failure: bool,
     pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
@@ -143,7 +121,7 @@ impl TestExecutor {
             client: Client::new(None),
             cookie_middleware: None,
             routing_middleware: None,
-            middlewares: Vec::new(),
+            middlewares: MiddlewarePipeline::new(),
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
@@ -182,8 +160,7 @@ impl TestExecutor {
         middleware: Arc<crate::middleware::routing::RoutingMiddleware>,
     ) -> Self {
         self.routing_middleware = Some(middleware.clone());
-        self.middlewares
-            .push(ExecutorMiddleware::Routing(middleware));
+        self.middlewares.push_arc(middleware);
         self
     }
 
@@ -220,7 +197,11 @@ impl TestExecutor {
             client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(cookie_middleware.clone()),
             routing_middleware: None,
-            middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
+            middlewares: {
+                let mut pipeline = MiddlewarePipeline::new();
+                pipeline.push_arc(cookie_middleware);
+                pipeline
+            },
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
@@ -239,7 +220,11 @@ impl TestExecutor {
             client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(cookie_middleware.clone()),
             routing_middleware: None,
-            middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
+            middlewares: {
+                let mut pipeline = MiddlewarePipeline::new();
+                pipeline.push_arc(cookie_middleware);
+                pipeline
+            },
             debug: false,
             debug_on_failure: false,
             stream_sender: None,

@@ -5,7 +5,7 @@
 use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
-use crate::middleware::Middleware;
+use crate::middleware::{BoxFuture, Middleware};
 use cookie_store::CookieStore;
 use cookie_store::serde::json::{load_all, save_incl_expired_and_nonpersistent};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -223,18 +223,22 @@ impl CookieMiddleware {
 }
 
 impl Middleware for CookieMiddleware {
-    async fn before_request(&self, _req: &mut Request) -> Result<()> {
-        // Cookie injection is handled by reqwest's cookie_provider.
-        // This hook is reserved for future manual header manipulation if needed.
-        Ok(())
+    fn before_request<'a>(&'a self, _req: &'a mut Request) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            // Cookie injection is handled by reqwest's cookie_provider.
+            // This hook is reserved for future manual header manipulation if needed.
+            Ok(())
+        })
     }
 
-    async fn after_response(&self, _resp: &Response) -> Result<()> {
-        // Cookie 注入/提取由 reqwest 的 cookie_provider 完成；落盘不再在此处
-        // 逐响应触发（每个响应全量重写文件且阻塞 async 线程），改由
-        // BatchExecutor 在每个测试文件执行完后调用 `persist` 统一落盘，
-        // Drop 时兜底。并行模式的 worker 全部使用临时仓库，不落盘。
-        Ok(())
+    fn after_response<'a>(&'a self, _resp: &'a Response) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            // Cookie 注入/提取由 reqwest 的 cookie_provider 完成；落盘不再在此处
+            // 逐响应触发（每个响应全量重写文件且阻塞 async 线程），改由
+            // BatchExecutor 在每个测试文件执行完后调用 `persist` 统一落盘，
+            // Drop 时兜底。并行模式的 worker 全部使用临时仓库，不落盘。
+            Ok(())
+        })
     }
 }
 

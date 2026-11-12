@@ -5,7 +5,10 @@
 //! - 超时进程组 SIGKILL（Unix PGID / Windows kill_on_drop 兜底）
 //! - 时延隔离：`plugin_duration_us` 单独计时，绝不混入物理网络秒表
 
+use std::collections::VecDeque;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -14,6 +17,8 @@ pub use super::protocol::{
     MAX_PLUGIN_PAYLOAD_BYTES, PluginFailureKind, PluginInvocationOutcome, parse_plugin_output,
 };
 use crate::Result;
+
+const MAX_STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 /// 以独立进程组启动插件子进程（03 §10.2 进程树清剿）
 #[cfg(unix)]
@@ -28,7 +33,7 @@ fn configure_process_group(_std_cmd: &mut std::process::Command) {}
 /// 杀死整个进程组（Unix PGID 组级 SIGKILL；Windows 由 kill_on_drop 兜底）
 #[cfg(unix)]
 fn kill_process_group(child: &mut tokio::process::Child) {
-    if let Some(id) = child.id() {
+    if let Some(id) = child.id().filter(|&id| id > 0) {
         unsafe {
             libc::kill(-(id as i32), libc::SIGKILL);
         }
@@ -38,6 +43,95 @@ fn kill_process_group(child: &mut tokio::process::Child) {
 #[cfg(not(unix))]
 fn kill_process_group(child: &mut tokio::process::Child) {
     let _ = child.start_kill();
+}
+
+/// 取消/早退/异常路径清理守卫：确保子进程组与三个并发 IO 任务绝不泄漏
+struct PluginInvocationGuard {
+    child: Option<tokio::process::Child>,
+    stdin_task: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
+    stdout_task: Option<tokio::task::JoinHandle<(Vec<u8>, bool)>>,
+    stderr_task: Option<tokio::task::JoinHandle<Vec<u8>>>,
+}
+
+impl Drop for PluginInvocationGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.stdin_task.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.stdout_task.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.stderr_task.take() {
+            handle.abort();
+        }
+        if let Some(mut child) = self.child.take() {
+            kill_process_group(&mut child);
+            let _ = child.start_kill();
+        }
+    }
+}
+
+/// 净化不可信插件 stderr：剥除 ANSI CSI/OSC/DCS/ESC 转义序列与控制字符，仅保留可打印文本与 `\n`/`\t`
+fn sanitize_plugin_stderr(bytes: &[u8]) -> String {
+    let lossy = String::from_utf8_lossy(bytes);
+    let mut cleaned = String::with_capacity(lossy.len());
+    let mut chars = lossy.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.peek().copied() {
+                // CSI: ESC [ ... final_byte (@..=~)
+                Some('[') => {
+                    chars.next();
+                    for n in chars.by_ref() {
+                        if n.is_ascii() && ('@'..='~').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: ESC ] ... (BEL or ST)
+                Some(']') => {
+                    chars.next();
+                    while let Some(n) = chars.next() {
+                        if n == '\u{7}' {
+                            break;
+                        }
+                        if n == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                // DCS / SOS / PM / APC: ESC (P|X|^|_) ... ST
+                Some('P' | 'X' | '^' | '_') => {
+                    chars.next();
+                    while let Some(n) = chars.next() {
+                        if n == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                // nF escape sequence (e.g. ESC ( B) or 2-byte Fe/Fp/Fs
+                Some(next) if next.is_ascii() && (' '..='/').contains(&next) => {
+                    chars.next();
+                    for n in chars.by_ref() {
+                        if n.is_ascii() && ('0'..='~').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            }
+            continue;
+        }
+        if c == '\n' || c == '\t' || !c.is_control() {
+            cleaned.push(c);
+        }
+    }
+    cleaned
 }
 
 /// 带限时的任务收尾：防止遗留后台句柄阻塞超时返回路径
@@ -122,6 +216,8 @@ pub async fn invoke_plugin(
         Ok::<(), std::io::Error>(())
     });
 
+    let stdout_capped_flag = Arc::new(AtomicBool::new(false));
+    let stdout_capped_writer = Arc::clone(&stdout_capped_flag);
     let stdout_task = tokio::spawn(async move {
         let mut buf = Vec::with_capacity(8 * 1024);
         let mut chunk = [0u8; 16 * 1024];
@@ -131,6 +227,7 @@ pub async fn invoke_plugin(
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     if buf.len() + n > MAX_PLUGIN_PAYLOAD_BYTES {
+                        stdout_capped_writer.store(true, Ordering::Release);
                         return (buf, true);
                     }
                     buf.extend_from_slice(&chunk[..n]);
@@ -141,40 +238,64 @@ pub async fn invoke_plugin(
     });
 
     let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::with_capacity(4 * 1024);
+        let mut ring: VecDeque<u8> = VecDeque::with_capacity(4 * 1024);
         let mut chunk = [0u8; 8 * 1024];
         loop {
             match stderr.read(&mut chunk).await {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if buf.len() < 64 * 1024 {
-                        buf.extend_from_slice(&chunk[..n]);
+                    if n >= MAX_STDERR_TAIL_BYTES {
+                        ring.clear();
+                        ring.extend(&chunk[n - MAX_STDERR_TAIL_BYTES..n]);
+                    } else {
+                        let overflow = (ring.len() + n).saturating_sub(MAX_STDERR_TAIL_BYTES);
+                        if overflow > 0 {
+                            ring.drain(..overflow);
+                        }
+                        ring.extend(&chunk[..n]);
                     }
                 }
             }
         }
-        buf
+        Vec::from(ring)
     });
 
+    let mut guard = PluginInvocationGuard {
+        child: Some(child),
+        stdin_task: Some(stdin_task),
+        stdout_task: Some(stdout_task),
+        stderr_task: Some(stderr_task),
+    };
+
     // 超时硬熔断：整个进程组 SIGKILL（03 §8.3）
-    let wait_result = tokio::time::timeout(timeout, child.wait()).await;
+    let wait_result = match guard.child.as_mut() {
+        Some(child_ref) => tokio::time::timeout(timeout, child_ref.wait()).await,
+        None => unreachable!(),
+    };
     let duration_us = started.elapsed().as_micros() as u64;
 
     let status = match wait_result {
         Err(_elapsed) => {
-            kill_process_group(&mut child);
-            let _ = tokio::time::timeout(Duration::from_millis(300), child.wait()).await;
+            if let Some(mut child_owned) = guard.child.take() {
+                kill_process_group(&mut child_owned);
+                let _ = tokio::time::timeout(Duration::from_millis(300), child_owned.wait()).await;
+            }
             let grace = Duration::from_millis(200);
-            stdin_task.abort();
-            let _ = join_with_grace(stdout_task, grace).await;
-            let stderr_bytes = join_with_grace(stderr_task, grace)
-                .await
-                .unwrap_or_default();
+            if let Some(h) = guard.stdin_task.take() {
+                h.abort();
+            }
+            if let Some(h) = guard.stdout_task.take() {
+                let _ = join_with_grace(h, grace).await;
+            }
+            let stderr_bytes = match guard.stderr_task.take() {
+                Some(h) => join_with_grace(h, grace).await.unwrap_or_default(),
+                None => Vec::new(),
+            };
             return Ok(PluginInvocationOutcome {
                 output: None,
                 failure: Some(PluginFailureKind::Timeout),
                 duration_us,
-                stderr_tail: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+                stderr_tail: sanitize_plugin_stderr(&stderr_bytes),
             });
         }
         Ok(Err(e)) => {
@@ -182,15 +303,27 @@ pub async fn invoke_plugin(
                 "进程等待失败: {e}"
             )));
         }
-        Ok(Ok(status)) => status,
+        Ok(Ok(status)) => {
+            guard.child = None;
+            status
+        }
     };
 
-    let stdin_res = stdin_task
-        .await
-        .unwrap_or_else(|e| Err(std::io::Error::other(format!("stdin task panicked: {e}"))));
-    let (stdout_bytes, stdout_capped) = stdout_task.await.unwrap_or((Vec::new(), false));
-    let stderr_bytes = stderr_task.await.unwrap_or_default();
-    let stderr_tail = String::from_utf8_lossy(&stderr_bytes).into_owned();
+    let stdin_res = match guard.stdin_task.take() {
+        Some(h) => h
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(format!("stdin task panicked: {e}")))),
+        None => Ok(()),
+    };
+    let (stdout_bytes, task_capped) = match guard.stdout_task.take() {
+        Some(h) => h.await.unwrap_or((Vec::new(), false)),
+        None => (Vec::new(), false),
+    };
+    let stderr_bytes = match guard.stderr_task.take() {
+        Some(h) => h.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let stderr_tail = sanitize_plugin_stderr(&stderr_bytes);
 
     if let Err(e) = stdin_res {
         return Ok(PluginInvocationOutcome {
@@ -203,16 +336,21 @@ pub async fn invoke_plugin(
         });
     }
 
+    if stdout_capped_flag.load(Ordering::Acquire) || task_capped {
+        return Ok(PluginInvocationOutcome {
+            output: None,
+            failure: Some(PluginFailureKind::InvalidOutput(
+                "stdout 超过 10MB 载荷上限".to_string(),
+            )),
+            duration_us,
+            stderr_tail,
+        });
+    }
+
     let (output, failure) = match status.code() {
         Some(code) if code != 0 => (
             None,
             Some(PluginFailureKind::ExitNonZero(code, stderr_tail.clone())),
-        ),
-        Some(_) if stdout_capped => (
-            None,
-            Some(PluginFailureKind::InvalidOutput(
-                "stdout 超过 10MB 载荷上限".to_string(),
-            )),
         ),
         Some(_) => match parse_plugin_output(&stdout_bytes) {
             Ok(val) => (Some(val), None),

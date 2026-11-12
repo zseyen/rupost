@@ -367,3 +367,321 @@ fn test_manifest_ttl_reserved_value_warns_and_falls_back_to_none() {
         reg.warnings
     );
 }
+
+#[test]
+fn test_manifest_ttl_cache_roundtrip_persists_normalized_manifests() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join(".rupost").join("plugins");
+    let raw_ttl = serde_json::json!({
+        "manifest_version": "1.0",
+        "name": "ttl-cached",
+        "version": "0.1.0",
+        "description": "ttl normalized cache roundtrip",
+        "commands": [],
+        "hooks": [{
+            "directive": "auth",
+            "alias": "ttl-cached",
+            "stage": "prepare",
+            "cache_scope": {"scope": "suite", "ttl": 120},
+            "requires_env": [],
+            "parameters_schema": {}
+        }]
+    })
+    .to_string();
+    fixture_plugin(&plugin_dir, "ttl-cached", Some(&raw_ttl));
+
+    let cache_path = dir.path().join("rupost_home").join("registry.json");
+    let opts = DiscoverOptions {
+        allow_project_plugins: true,
+        project_root: Some(dir.path().to_path_buf()),
+    };
+
+    let reg1 = PluginRegistry::load_or_discover_with_roots(&opts, &cache_path, Some(&[])).unwrap();
+    assert!(reg1.find_hook("ttl-cached").is_some());
+
+    let cached =
+        PluginRegistry::load_cache(&cache_path).expect("normalized ttl plugin must persist");
+    assert_eq!(cached.manifests.len(), 1);
+    assert_eq!(cached.manifests[0].manifest.name, "ttl-cached");
+    assert_eq!(
+        cached.manifests[0].manifest.hooks[0].cache_scope,
+        PluginCacheScope::None
+    );
+
+    let reg2 = PluginRegistry::load_or_discover_with_roots(&opts, &cache_path, Some(&[])).unwrap();
+    assert!(
+        reg2.warnings.is_empty(),
+        "二次加载应直接命中缓存: {:?}",
+        reg2.warnings
+    );
+    assert_eq!(
+        reg2.find_hook("ttl-cached").unwrap().1.cache_scope,
+        PluginCacheScope::None
+    );
+}
+
+#[test]
+fn test_orphaned_and_invalid_manifests_do_not_cause_cache_thrashing() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join("plugins");
+    fixture_plugin(&plugin_dir, "healthy", None);
+    // 孤儿 manifest（无同目录二进制）与损坏 JSON
+    std::fs::write(
+        plugin_dir.join("rupost-plugin-orphan.json"),
+        serde_json::to_string(&demo_manifest("orphan")).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin_dir.join("rupost-plugin-broken.json"),
+        "{not-valid-json",
+    )
+    .unwrap();
+
+    let cache_path = dir.path().join("rupost_home").join("registry.json");
+    let opts = DiscoverOptions::default();
+
+    let reg1 = PluginRegistry::load_or_discover_with_roots(
+        &opts,
+        &cache_path,
+        Some(std::slice::from_ref(&plugin_dir)),
+    )
+    .unwrap();
+    assert!(reg1.find_command("healthy").is_some());
+    assert!(reg1.warnings.iter().any(|w| w.contains("orphan")));
+    let first_cache_json = std::fs::read_to_string(&cache_path).unwrap();
+
+    // 第二次加载应命中缓存（不重写 cache，也不重复扫描告警）
+    let reg2 = PluginRegistry::load_or_discover_with_roots(
+        &opts,
+        &cache_path,
+        Some(std::slice::from_ref(&plugin_dir)),
+    )
+    .unwrap();
+    assert!(reg2.find_command("healthy").is_some());
+    assert!(
+        reg2.warnings.is_empty(),
+        "存在孤儿/损坏 manifest 时不得每次抖动重建缓存: {:?}",
+        reg2.warnings
+    );
+    assert_eq!(
+        std::fs::read_to_string(&cache_path).unwrap(),
+        first_cache_json
+    );
+
+    // 当孤儿 manifest 补齐同目录二进制后，必须立即发现并更新缓存
+    let orphan_bin = plugin_dir.join("rupost-plugin-orphan");
+    std::fs::write(&orphan_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&orphan_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let reg3 = PluginRegistry::load_or_discover_with_roots(&opts, &cache_path, Some(&[plugin_dir]))
+        .unwrap();
+    assert!(
+        reg3.find_command("orphan").is_some(),
+        "补齐二进制后必须触发缓存刷新并发现 orphan"
+    );
+}
+
+#[test]
+fn test_fingerprint_detects_changes_beyond_4kb_and_subsecond_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("plugins");
+    let mut big_manifest = demo_manifest("big");
+    big_manifest.description = "A".repeat(8192);
+    let manifest_path = fixture_plugin(
+        &root,
+        "big",
+        Some(&serde_json::to_string(&big_manifest).unwrap()),
+    );
+
+    let mut reg = PluginRegistry::new();
+    reg.register_manifest_with_source(
+        root.join("rupost-plugin-big"),
+        manifest_path.clone(),
+        big_manifest.clone(),
+    );
+    let cache_path = dir.path().join("rupost_home").join("registry.json");
+    reg.persist_cache(&cache_path);
+    assert!(PluginRegistry::load_cache(&cache_path).is_some());
+
+    // 1. 保持精确相同的 mtime（秒与纳秒均不变），仅篡改 4KB 之后的 1 个字节 -> 必须失效
+    let orig_meta = std::fs::metadata(&manifest_path).unwrap();
+    let orig_mtime = filetime::FileTime::from_last_modification_time(&orig_meta);
+    let mut modified_manifest = big_manifest.clone();
+    modified_manifest.description.replace_range(7000..7001, "B");
+    let modified_json = serde_json::to_string(&modified_manifest).unwrap();
+    std::fs::write(&manifest_path, &modified_json).unwrap();
+    filetime::set_file_mtime(&manifest_path, orig_mtime).unwrap();
+    assert!(
+        PluginRegistry::load_cache(&cache_path).is_none(),
+        "超过 4KB 处的单字节修改即使 mtime 相同也必须失效"
+    );
+
+    // 2. 恢复原内容并保持 mtime 秒数不变、仅改变亚秒纳秒 -> 也必须失效
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string(&big_manifest).unwrap(),
+    )
+    .unwrap();
+    let shifted_nanos = if orig_mtime.nanoseconds() >= 500_000_000 {
+        orig_mtime.nanoseconds() - 100_000_000
+    } else {
+        orig_mtime.nanoseconds() + 100_000_000
+    };
+    let subsec_mtime = filetime::FileTime::from_unix_time(orig_mtime.unix_seconds(), shifted_nanos);
+    filetime::set_file_mtime(&manifest_path, subsec_mtime).unwrap();
+    assert!(
+        PluginRegistry::load_cache(&cache_path).is_none(),
+        "亚秒级 mtime 变化必须导致缓存失效"
+    );
+}
+
+#[test]
+fn test_cache_hit_revalidates_executable_confinement_and_reserved_stages() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("plugins");
+    let manifest_path = fixture_plugin(&root, "victim", None);
+    let manifest_canon = manifest_path.canonicalize().unwrap();
+    let (mtime_secs, fingerprint_hash) =
+        rupost::plugin::registry::manifest_fingerprint(&manifest_canon).unwrap();
+
+    // 构造外部逃逸可执行路径的投毒缓存
+    let outside_exe = dir.path().join("evil-outside");
+    std::fs::write(&outside_exe, "#!/bin/sh\nexit 0\n").unwrap();
+    let cache_path = dir.path().join("rupost_home").join("poison.json");
+    let poisoned_escape = RegistryCacheFile {
+        version: "1.0".to_string(),
+        updated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        manifests: vec![CachedPluginEntry {
+            executable_path: outside_exe.to_string_lossy().into_owned(),
+            manifest_path: manifest_canon.to_string_lossy().into_owned(),
+            mtime_secs,
+            fingerprint_hash: fingerprint_hash.clone(),
+            manifest: demo_manifest("victim"),
+        }],
+    };
+    PluginRegistry::save_cache_atomic(&poisoned_escape, &cache_path).unwrap();
+
+    let reg = PluginRegistry::load_or_discover_with_roots(
+        &DiscoverOptions::default(),
+        &cache_path,
+        Some(std::slice::from_ref(&root)),
+    )
+    .unwrap();
+    let (resolved_exe, _) = reg.find_command("victim").unwrap();
+    assert_ne!(
+        resolved_exe, &outside_exe,
+        "缓存命中复核必须拒绝逃逸插件根的可执行路径"
+    );
+
+    // 构造包含 P2 保留阶段钩子的投毒缓存
+    let mut bad_manifest = demo_manifest("victim");
+    bad_manifest.hooks[0].stage = PluginStage::PostResponse;
+    let poisoned_stage = RegistryCacheFile {
+        version: "1.0".to_string(),
+        updated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+        manifests: vec![CachedPluginEntry {
+            executable_path: root
+                .join("rupost-plugin-victim")
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            manifest_path: manifest_canon.to_string_lossy().into_owned(),
+            mtime_secs,
+            fingerprint_hash,
+            manifest: bad_manifest,
+        }],
+    };
+    PluginRegistry::save_cache_atomic(&poisoned_stage, &cache_path).unwrap();
+
+    let reg2 = PluginRegistry::load_or_discover_with_roots(
+        &DiscoverOptions::default(),
+        &cache_path,
+        Some(&[root]),
+    )
+    .unwrap();
+    assert_eq!(
+        reg2.find_hook("victim").unwrap().1.stage,
+        PluginStage::Prepare,
+        "缓存命中复核必须拒绝保留字阶段并回退重新发现"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_untrusted_world_writable_plugin_dir_rejected() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let untrusted_root = dir.path().join("world_writable");
+    fixture_plugin(&untrusted_root, "sneaky", None);
+    std::fs::set_permissions(&untrusted_root, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+    let reg = PluginRegistry::discover_with_roots(
+        &DiscoverOptions::default(),
+        Some(std::slice::from_ref(&untrusted_root)),
+    )
+    .unwrap();
+    assert!(
+        reg.find_command("sneaky").is_none(),
+        "全局可写插件目录必须被拒绝加载"
+    );
+    assert!(
+        reg.warnings.iter().any(|w| w.contains("不可信")),
+        "拒绝不可信目录必须产生告警: {:?}",
+        reg.warnings
+    );
+
+    // 还原权限以免 tempdir 清理或后续检查受影响
+    let _ = std::fs::set_permissions(&untrusted_root, std::fs::Permissions::from_mode(0o755));
+}
+
+#[test]
+fn test_multistage_hooks_same_plugin_do_not_collide() {
+    let mut reg = PluginRegistry::new();
+    let manifest = PluginManifest {
+        manifest_version: "1.0".to_string(),
+        name: "dual-stage".to_string(),
+        version: "0.1.0".to_string(),
+        description: "Multi-stage hooks on one plugin".to_string(),
+        commands: vec![],
+        hooks: vec![
+            HookCapability {
+                directive: "auth".to_string(),
+                alias: Some("dual-stage".to_string()),
+                stage: PluginStage::Prepare,
+                cache_scope: PluginCacheScope::Suite,
+                requires_env: vec![],
+                parameters_schema: serde_json::json!({"phase": "prepare"}),
+            },
+            HookCapability {
+                directive: "sign".to_string(),
+                alias: Some("dual-stage".to_string()),
+                stage: PluginStage::Sign,
+                cache_scope: PluginCacheScope::None,
+                requires_env: vec![],
+                parameters_schema: serde_json::json!({"phase": "sign"}),
+            },
+        ],
+    };
+    reg.register_manifest(PathBuf::from("/usr/local/bin/rupost-plugin-dual"), manifest);
+
+    assert!(
+        reg.warnings.is_empty(),
+        "同插件不同阶段钩子不得触发冲突告警: {:?}",
+        reg.warnings
+    );
+    let (_, prep) = reg
+        .find_hook_for_stage("dual-stage", PluginStage::Prepare)
+        .expect("prepare hook");
+    assert_eq!(prep.cache_scope, PluginCacheScope::Suite);
+    assert_eq!(prep.directive, "auth");
+
+    let (_, sign) = reg
+        .find_hook_for_stage("dual-stage", PluginStage::Sign)
+        .expect("sign hook");
+    assert_eq!(sign.cache_scope, PluginCacheScope::None);
+    assert_eq!(sign.directive, "sign");
+}

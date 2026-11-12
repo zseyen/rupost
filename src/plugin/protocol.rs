@@ -91,33 +91,17 @@ pub fn parse_plugin_output(
     Ok(value)
 }
 
-/// 从已校验的插件输出对象提取强类型 `PluginPatch`
-pub fn parse_patch_from_output(output: &serde_json::Value) -> PluginPatch {
-    PluginPatch {
-        extra_headers: output
-            .get("extra_headers")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
-        remove_headers: output
-            .get("remove_headers")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
-        mutated_body: output.get("mutated_body").and_then(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_str().map(|s| s.to_string())
-            }
-        }),
-        set_variables: output
-            .get("set_variables")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
-        warnings: output
-            .get("warnings")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
+/// 从已校验的插件输出对象提取强类型 `PluginPatch`（字段类型非法时显式返回 `InvalidOutput`，绝不静默丢弃）
+pub fn parse_patch_from_output(
+    output: &serde_json::Value,
+) -> std::result::Result<PluginPatch, PluginFailureKind> {
+    if !output.is_object() {
+        return Err(PluginFailureKind::InvalidOutput(
+            "插件输出顶层必须是 JSON 对象".to_string(),
+        ));
     }
+    serde_json::from_value::<PluginPatch>(output.clone())
+        .map_err(|e| PluginFailureKind::InvalidOutput(format!("插件输出 Patch 字段类型非法: {e}")))
 }
 
 #[cfg(test)]
@@ -154,11 +138,32 @@ mod tests {
             "set_variables": {"K": "V"},
             "warnings": ["w1"]
         });
-        let patch = parse_patch_from_output(&val);
+        let patch = parse_patch_from_output(&val).expect("valid patch");
         assert_eq!(patch.extra_headers, vec![("X-A".into(), "1".into())]);
         assert_eq!(patch.remove_headers, vec!["X-Old"]);
         assert_eq!(patch.mutated_body.as_deref(), Some("new-body"));
         assert_eq!(patch.set_variables.get("K").unwrap(), "V");
         assert_eq!(patch.warnings, vec!["w1"]);
+    }
+
+    #[test]
+    fn test_parse_patch_from_output_rejects_malformed_field_types() {
+        let cases = [
+            serde_json::json!(["not-an-object"]),
+            serde_json::json!({"protocol_version": "1.0", "extra_headers": "bad"}),
+            serde_json::json!({"protocol_version": "1.0", "remove_headers": 42}),
+            serde_json::json!({"protocol_version": "1.0", "mutated_body": 123}),
+            serde_json::json!({"protocol_version": "1.0", "set_variables": ["K"]}),
+            serde_json::json!({"protocol_version": "1.0", "warnings": {"a": 1}}),
+        ];
+        for case in cases {
+            assert!(
+                matches!(
+                    parse_patch_from_output(&case),
+                    Err(PluginFailureKind::InvalidOutput(_))
+                ),
+                "malformed patch payload must yield InvalidOutput: {case}"
+            );
+        }
     }
 }

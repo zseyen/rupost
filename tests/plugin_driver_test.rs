@@ -146,3 +146,114 @@ async fn test_invoke_env_allowlist() {
     }
     assert!(outcome.failure.is_none(), "父级凭据不得进入插件环境");
 }
+
+#[cfg(unix)]
+fn sh_plugin(dir: &tempfile::TempDir, name: &str, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.path().join(name);
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_invoke_stdout_over_10mb_returns_invalid_output_not_sigpipe() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = sh_plugin(
+        &dir,
+        "flood_stdout.sh",
+        "#!/bin/sh\ncat > /dev/null\nhead -c 11534336 /dev/zero | tr '\\0' 'a'\n",
+    );
+    let outcome = invoke_plugin(&plugin, payload().as_str(), Duration::from_secs(5), &[])
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            outcome.failure,
+            Some(PluginFailureKind::InvalidOutput(ref msg)) if msg.contains("10MB")
+        ),
+        "stdout 超 10MB 必须返回 InvalidOutput 而非 Crashed(SIG13): {:?}",
+        outcome.failure
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_invoke_stderr_keeps_tail_64kb_and_strips_ansi_controls() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = sh_plugin(
+        &dir,
+        "stderr_tail.sh",
+        "#!/bin/sh\ncat > /dev/null\nprintf 'HEAD_MARKER' >&2\nhead -c 131072 /dev/zero | tr '\\0' 'x' >&2\nprintf '\\033[31mRED_TAIL\\033[0m\\tTAB\\n\\033]8;;http://evil\\007OSC_TAIL\\000CTRL\\n' >&2\necho '{\"protocol_version\":\"1.0\"}'\n",
+    );
+    let outcome = invoke_plugin(&plugin, payload().as_str(), Duration::from_secs(5), &[])
+        .await
+        .unwrap();
+    assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+    assert!(
+        !outcome.stderr_tail.contains("HEAD_MARKER"),
+        "stderr 超过 64KB 时必须丢弃头部并保留尾部"
+    );
+    assert!(
+        outcome.stderr_tail.contains("RED_TAIL\tTAB\nOSC_TAILCTRL"),
+        "必须保留尾部文本及 \\n/\\t 并剥离 ANSI CSI/OSC 与 NUL: {:?}",
+        &outcome.stderr_tail[outcome.stderr_tail.len().saturating_sub(128)..]
+    );
+    assert!(!outcome.stderr_tail.contains('\u{1b}'));
+    assert!(!outcome.stderr_tail.contains('\0'));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_invoke_drop_guard_kills_process_group_on_early_cancel() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("grandchild.pid");
+    let plugin = sh_plugin(
+        &dir,
+        "cancel_group.sh",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nsleep 30 &\necho $! > \"{}\"\nwait\n",
+            pid_file.display()
+        ),
+    );
+
+    let p_str = payload();
+    let handle = tokio::spawn(async move {
+        let _ = invoke_plugin(&plugin, &p_str, Duration::from_secs(10), &[]).await;
+    });
+
+    // 等待孙进程 PID 落盘后主动取消外层 Future
+    let mut grandchild_pid: Option<i32> = None;
+    for _ in 0..100 {
+        if let Ok(content) = std::fs::read_to_string(&pid_file)
+            && let Ok(pid) = content.trim().parse::<i32>()
+        {
+            grandchild_pid = Some(pid);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pid = grandchild_pid.expect("grandchild pid should be recorded");
+    handle.abort();
+    let _ = handle.await;
+
+    let mut exited = false;
+    for _ in 0..50 {
+        let rc = unsafe { libc::kill(pid, 0) };
+        if rc != 0 {
+            exited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    if !exited {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    assert!(
+        exited,
+        "取消 invoke_plugin Future 后 Drop 守卫必须终结整个进程组（含孙进程 {pid}）"
+    );
+}

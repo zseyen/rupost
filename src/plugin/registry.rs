@@ -1,6 +1,6 @@
 use super::registry_cache::{self};
 pub use super::registry_cache::{CachedPluginEntry, RegistryCacheFile, manifest_fingerprint};
-use super::types::{CommandCapability, HookCapability, PluginManifest};
+use super::types::{CommandCapability, HookCapability, PluginManifest, PluginStage};
 use crate::Result;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -10,10 +10,12 @@ use std::path::{Path, PathBuf};
 pub struct PluginRegistry {
     /// CLI 子命令路由索引: 命令名称 -> (所属插件路径, 命令能力描述)
     pub commands: HashMap<String, (PathBuf, CommandCapability)>,
-    /// HTTP 钩子路由索引: 指令/别名 -> (所属插件路径, 钩子能力描述)
+    /// HTTP 钩子路由索引（兼容性扁平视图）: 指令/别名 -> (所属插件路径, 钩子能力描述)
     pub hooks: HashMap<String, (PathBuf, HookCapability)>,
-    /// 已发现插件的可执行路径 -> 原始静态 manifest 路径（供回退名持久化写回缓存）
-    manifest_paths: HashMap<PathBuf, PathBuf>,
+    /// HTTP 钩子复合键索引（03 §3.2 #1 SSOT）: (指令/别名, 阶段) -> (所属插件路径, 钩子能力描述)
+    hooks_by_stage: HashMap<(String, PluginStage), (PathBuf, HookCapability)>,
+    /// 已发现插件的可执行路径 -> (原始静态 manifest 路径, 已归一化 Manifest 实体)
+    discovered_manifests: HashMap<PathBuf, (PathBuf, PluginManifest)>,
     /// 发现过程中的非致命告警（alias 冲突、越界路径拒绝等，调用方负责渲染）
     pub warnings: Vec<String>,
 }
@@ -91,6 +93,120 @@ fn collect_plugin_roots(
     roots
 }
 
+struct ValidatedManifest {
+    exe_canon: PathBuf,
+    manifest_canon: PathBuf,
+    manifest: PluginManifest,
+    warnings: Vec<String>,
+}
+
+fn has_reserved_stage(manifest: &PluginManifest) -> bool {
+    manifest
+        .hooks
+        .iter()
+        .any(|h| matches!(h.stage, PluginStage::PostResponse | PluginStage::OnFailure))
+}
+
+fn parse_and_validate_manifest(
+    root_canon: &Path,
+    manifest_path: &Path,
+) -> std::result::Result<ValidatedManifest, String> {
+    let content = std::fs::read_to_string(manifest_path).map_err(|e| format!("读取失败: {e}"))?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("JSON 解析失败: {e}"))?;
+    let mut warnings = Vec::new();
+    // interface-freeze-m1 §1 裁决：post_response/on_failure/harvest 为 P2 保留字阶段，
+    // manifest 中出现即拒绝注册（绝不静默注册永不调用的死钩子）。
+    if let Some(hooks) = value.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+        for hook in hooks {
+            let Some(obj) = hook.as_object_mut() else {
+                continue;
+            };
+            let directive_label = obj
+                .get("directive")
+                .and_then(|d| d.as_str())
+                .unwrap_or("?")
+                .to_string();
+            // types.rs cache_scope 裁决：P2 保留值 ttl → 告警 + 按 none 归位（不解析失败）
+            let ttl_declared = obj.contains_key("ttl")
+                || matches!(obj.get("cache_scope"), Some(serde_json::Value::Object(_)));
+            if ttl_declared {
+                warnings.push(format!(
+                    "manifest hook '{directive_label}' 声明了 P2 保留值 ttl，已忽略并按 cache_scope=none 处理"
+                ));
+                obj.remove("ttl");
+                obj.insert(
+                    "cache_scope".to_string(),
+                    serde_json::Value::String("none".to_string()),
+                );
+            }
+            if let Some(stage_str) = obj.get("stage").and_then(|s| s.as_str())
+                && matches!(stage_str, "post_response" | "on_failure" | "harvest")
+            {
+                return Err(format!(
+                    "hook '{directive_label}' 声明了未放行的保留字阶段 '{stage_str}'（P2 保留字，MVP 注册面仅 prepare/transform/sign）"
+                ));
+            }
+        }
+    }
+    let manifest: PluginManifest =
+        serde_json::from_value(value).map_err(|e| format!("JSON 解析失败: {e}"))?;
+    if manifest.manifest_version != "1.0" {
+        return Err(format!(
+            "不支持的 manifest_version: {}",
+            manifest.manifest_version
+        ));
+    }
+    if has_reserved_stage(&manifest) {
+        return Err("manifest 包含未放行的 P2 保留字阶段钩子".to_string());
+    }
+
+    let candidates = sibling_executables(manifest_path);
+    let executable = candidates
+        .iter()
+        .find(|c| c.exists())
+        .ok_or_else(|| "同目录插件二进制不存在".to_string())?;
+    let exe_canon = executable
+        .canonicalize()
+        .map_err(|e| format!("canonicalize 失败: {e}"))?;
+    if !exe_canon.is_file() {
+        return Err("插件可执行入口不是普通文件".to_string());
+    }
+    if !exe_canon.starts_with(root_canon) {
+        return Err("可执行路径逃逸插件根（symlink/.. 攻击拒绝）".to_string());
+    }
+
+    let manifest_canon = manifest_path
+        .canonicalize()
+        .unwrap_or_else(|_| manifest_path.to_path_buf());
+    Ok(ValidatedManifest {
+        exe_canon,
+        manifest_canon,
+        manifest,
+        warnings,
+    })
+}
+
+fn validate_cached_entry(entry: &CachedPluginEntry) -> bool {
+    if entry.manifest.manifest_version != "1.0" || has_reserved_stage(&entry.manifest) {
+        return false;
+    }
+    let manifest_path = Path::new(&entry.manifest_path);
+    let Some(manifest_parent) = manifest_path.parent() else {
+        return false;
+    };
+    if !crate::security::fs::is_trusted_dir(manifest_parent) {
+        return false;
+    }
+    let Ok(root_canon) = manifest_parent.canonicalize() else {
+        return false;
+    };
+    let Ok(exe_canon) = Path::new(&entry.executable_path).canonicalize() else {
+        return false;
+    };
+    exe_canon.is_file() && exe_canon.starts_with(&root_canon)
+}
+
 impl PluginRegistry {
     /// 创建空注册表
     pub fn new() -> Self {
@@ -114,17 +230,25 @@ impl PluginRegistry {
         }
         for hook in manifest.hooks {
             if let Some(alias) = &hook.alias {
-                if let Some(prev) = self.hooks.get(alias) {
+                let stage_key = (alias.clone(), hook.stage);
+                if let Some(prev) = self.hooks_by_stage.get(&stage_key) {
                     self.warnings.push(format!(
-                        "插件别名 '{}' 冲突：'{}' 覆盖 '{}' 的注册",
+                        "插件别名 '{}' (stage={:?}) 冲突：'{}' 覆盖 '{}' 的注册",
                         alias,
+                        hook.stage,
                         plugin_name,
                         prev.0.display()
                     ));
                 }
+                self.hooks_by_stage
+                    .insert(stage_key, (executable_path.clone(), hook.clone()));
                 self.hooks
                     .insert(alias.clone(), (executable_path.clone(), hook.clone()));
             }
+            self.hooks_by_stage.insert(
+                (hook.directive.clone(), hook.stage),
+                (executable_path.clone(), hook.clone()),
+            );
             self.hooks
                 .insert(hook.directive.clone(), (executable_path.clone(), hook));
         }
@@ -137,8 +261,8 @@ impl PluginRegistry {
         manifest_path: PathBuf,
         manifest: PluginManifest,
     ) {
-        self.manifest_paths
-            .insert(executable_path.clone(), manifest_path);
+        self.discovered_manifests
+            .insert(executable_path.clone(), (manifest_path, manifest.clone()));
         self.register_manifest(executable_path, manifest);
     }
 
@@ -147,9 +271,19 @@ impl PluginRegistry {
         self.commands.get(name)
     }
 
-    /// 根据指令名或插件别名查找 Hook 入口
+    /// 根据指令名或插件别名查找 Hook 入口（无阶段限定时的兼容入口）
     pub fn find_hook(&self, directive_or_alias: &str) -> Option<&(PathBuf, HookCapability)> {
         self.hooks.get(directive_or_alias)
+    }
+
+    /// 根据指令名/别名与生命周期阶段精确查找 Hook 入口（消除多阶段钩子键冲突）
+    pub fn find_hook_for_stage(
+        &self,
+        directive_or_alias: &str,
+        stage: PluginStage,
+    ) -> Option<&(PathBuf, HookCapability)> {
+        self.hooks_by_stage
+            .get(&(directive_or_alias.to_string(), stage))
     }
 
     /// 静态 manifest 发现（03 §3.0 安全裁决：readdir + JSON 解析，**零子进程**）。
@@ -164,7 +298,14 @@ impl PluginRegistry {
     ) -> Result<Self> {
         let mut registry = Self::new();
         for root in collect_plugin_roots(options, custom_path_roots) {
-            if !root.is_dir() {
+            if !root.exists() || !root.is_dir() {
+                continue;
+            }
+            if !crate::security::fs::is_trusted_dir(&root) {
+                registry.warnings.push(format!(
+                    "跳过不可信插件目录 {}: 属主或权限不安全",
+                    root.display()
+                ));
                 continue;
             }
             let Ok(root_canon) = root.canonicalize() else {
@@ -181,87 +322,24 @@ impl PluginRegistry {
                 if !is_manifest_file(file_name) {
                     continue;
                 }
-                if let Err(reason) = Self::register_from_manifest(&mut registry, &root_canon, &path)
-                {
-                    registry
-                        .warnings
-                        .push(format!("跳过 manifest {}: {reason}", path.display()));
+                match parse_and_validate_manifest(&root_canon, &path) {
+                    Ok(validated) => {
+                        registry.warnings.extend(validated.warnings);
+                        registry.register_manifest_with_source(
+                            validated.exe_canon,
+                            validated.manifest_canon,
+                            validated.manifest,
+                        );
+                    }
+                    Err(reason) => {
+                        registry
+                            .warnings
+                            .push(format!("跳过 manifest {}: {reason}", path.display()));
+                    }
                 }
             }
         }
         Ok(registry)
-    }
-
-    /// 注册单个静态 manifest：解析 JSON + 同目录二进制白名单校验
-    fn register_from_manifest(
-        registry: &mut Self,
-        root_canon: &Path,
-        manifest_path: &Path,
-    ) -> std::result::Result<(), String> {
-        let content =
-            std::fs::read_to_string(manifest_path).map_err(|e| format!("读取失败: {e}"))?;
-        let mut value: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| format!("JSON 解析失败: {e}"))?;
-        // interface-freeze-m1 §1 裁决：post_response/on_failure/harvest 为 P2 保留字阶段，
-        // manifest 中出现即拒绝注册（绝不静默注册永不调用的死钩子）。
-        if let Some(hooks) = value.get_mut("hooks").and_then(|h| h.as_array_mut()) {
-            for hook in hooks {
-                let Some(obj) = hook.as_object_mut() else {
-                    continue;
-                };
-                let directive_label = obj
-                    .get("directive")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                // types.rs cache_scope 裁决：P2 保留值 ttl → 告警 + 按 none 归位（不解析失败）
-                let ttl_declared = obj.contains_key("ttl")
-                    || matches!(obj.get("cache_scope"), Some(serde_json::Value::Object(_)));
-                if ttl_declared {
-                    registry.warnings.push(format!(
-                        "manifest hook '{directive_label}' 声明了 P2 保留值 ttl，已忽略并按 cache_scope=none 处理"
-                    ));
-                    obj.remove("ttl");
-                    obj.insert(
-                        "cache_scope".to_string(),
-                        serde_json::Value::String("none".to_string()),
-                    );
-                }
-                if let Some(stage_str) = obj.get("stage").and_then(|s| s.as_str())
-                    && matches!(stage_str, "post_response" | "on_failure" | "harvest")
-                {
-                    return Err(format!(
-                        "hook '{directive_label}' 声明了未放行的保留字阶段 '{stage_str}'（P2 保留字，MVP 注册面仅 prepare/transform/sign）"
-                    ));
-                }
-            }
-        }
-        let manifest: PluginManifest =
-            serde_json::from_value(value).map_err(|e| format!("JSON 解析失败: {e}"))?;
-        if manifest.manifest_version != "1.0" {
-            return Err(format!(
-                "不支持的 manifest_version: {}",
-                manifest.manifest_version
-            ));
-        }
-
-        let candidates = sibling_executables(manifest_path);
-        let executable = candidates
-            .iter()
-            .find(|c| c.exists())
-            .ok_or_else(|| "同目录插件二进制不存在".to_string())?;
-        let exe_canon = executable
-            .canonicalize()
-            .map_err(|e| format!("canonicalize 失败: {e}"))?;
-        if !exe_canon.starts_with(root_canon) {
-            return Err("可执行路径逃逸插件根（symlink/.. 攻击拒绝）".to_string());
-        }
-
-        let manifest_canon = manifest_path
-            .canonicalize()
-            .unwrap_or_else(|_| manifest_path.to_path_buf());
-        registry.register_manifest_with_source(exe_canon, manifest_canon, manifest);
-        Ok(())
     }
 
     pub fn load_cache(cache_path: &Path) -> Option<RegistryCacheFile> {
@@ -284,7 +362,6 @@ impl PluginRegistry {
         custom_path_roots: Option<&[PathBuf]>,
     ) -> Result<Self> {
         if let Some(cache) = Self::load_cache(cache_path) {
-            let inventory = Self::scan_manifest_inventory(options, custom_path_roots);
             let cache_set: BTreeSet<(String, u64, String)> = cache
                 .manifests
                 .iter()
@@ -296,11 +373,12 @@ impl PluginRegistry {
                     )
                 })
                 .collect();
+            let inventory = Self::scan_manifest_inventory(options, custom_path_roots, &cache_set);
             let disk_set: BTreeSet<(String, u64, String)> = inventory
                 .into_iter()
                 .map(|(path, (mtime, hash))| (path.to_string_lossy().into_owned(), mtime, hash))
                 .collect();
-            if cache_set == disk_set {
+            if cache_set == disk_set && cache.manifests.iter().all(validate_cached_entry) {
                 let mut registry = Self::new();
                 for entry in cache.manifests {
                     registry.register_manifest_with_source(
@@ -317,13 +395,20 @@ impl PluginRegistry {
         Ok(registry)
     }
 
-    /// 插件根静态 manifest 清单扫描（零子进程：readdir + 指纹，供缓存新鲜度对比）
+    /// 插件根静态 manifest 清单扫描（仅纳入合法可发现的 manifest，防止孤儿/非法 manifest 引发永久缓存抖动）
     fn scan_manifest_inventory(
         options: &DiscoverOptions,
         custom_path_roots: Option<&[PathBuf]>,
+        cached_entries: &BTreeSet<(String, u64, String)>,
     ) -> Vec<(PathBuf, (u64, String))> {
         let mut inventory = Vec::new();
         for root in collect_plugin_roots(options, custom_path_roots) {
+            if !root.exists() || !root.is_dir() || !crate::security::fs::is_trusted_dir(&root) {
+                continue;
+            }
+            let Ok(root_canon) = root.canonicalize() else {
+                continue;
+            };
             let Ok(entries) = std::fs::read_dir(&root) else {
                 continue;
             };
@@ -332,10 +417,17 @@ impl PluginRegistry {
                 let Some(file_name) = path.file_name().and_then(|f| f.to_str()) else {
                     continue;
                 };
-                if is_manifest_file(file_name)
-                    && let Some(fp) = manifest_fingerprint(&path)
+                if !is_manifest_file(file_name) {
+                    continue;
+                }
+                let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                let Some(fp) = manifest_fingerprint(&canon) else {
+                    continue;
+                };
+                let key = (canon.to_string_lossy().into_owned(), fp.0, fp.1.clone());
+                if cached_entries.contains(&key)
+                    || parse_and_validate_manifest(&root_canon, &path).is_ok()
                 {
-                    let canon = path.canonicalize().unwrap_or(path);
                     inventory.push((canon, fp));
                 }
             }
@@ -343,34 +435,21 @@ impl PluginRegistry {
         inventory
     }
 
-    /// 将当前注册表内容静默写回缓存（失败仅登记告警，绝不阻塞主流程）
+    /// 将当前注册表内容静默写回缓存（持久化内存已归一化的 Manifest，失败仅登记告警，绝不阻塞主流程）
     pub fn persist_cache(&mut self, cache_path: &Path) {
         let mut manifests: Vec<CachedPluginEntry> = Vec::new();
-        let mut seen = BTreeSet::new();
-        let command_exes = self.commands.values().map(|(p, _)| p);
-        let hook_exes = self.hooks.values().map(|(p, _)| p);
-        for exe_path in command_exes.chain(hook_exes) {
-            if !seen.insert(exe_path.clone()) {
-                continue;
-            }
-            let manifest_path = self
-                .manifest_paths
-                .get(exe_path)
-                .cloned()
-                .unwrap_or_else(|| exe_path.with_extension("json"));
-            if let Some((mtime, hash)) = manifest_fingerprint(&manifest_path)
-                && let Ok(content) = std::fs::read_to_string(&manifest_path)
-                && let Ok(manifest) = serde_json::from_str::<PluginManifest>(&content)
-            {
+        for (exe_path, (manifest_path, manifest)) in &self.discovered_manifests {
+            if let Some((mtime, hash)) = manifest_fingerprint(manifest_path) {
                 manifests.push(CachedPluginEntry {
                     executable_path: exe_path.to_string_lossy().into_owned(),
                     manifest_path: manifest_path.to_string_lossy().into_owned(),
                     mtime_secs: mtime,
                     fingerprint_hash: hash,
-                    manifest,
+                    manifest: manifest.clone(),
                 });
             }
         }
+        manifests.sort_by(|a, b| a.manifest_path.cmp(&b.manifest_path));
         let cache = RegistryCacheFile {
             version: "1.0".to_string(),
             updated_at_utc: chrono::Utc::now().to_rfc3339(),

@@ -196,7 +196,14 @@ impl PluginPipeline {
         let mut request_cache: HashMap<String, super::PluginPatch> = HashMap::new();
 
         for directive in &ordered {
-            let Some((exe_path, hook)) = registry.find_hook(&directive.name) else {
+            let Some((exe_path, hook)) = registry
+                .find_hook_for_stage(&directive.name, directive.stage)
+                .or_else(|| {
+                    (directive.directive == "plugin")
+                        .then(|| registry.find_hook(&directive.name))
+                        .flatten()
+                })
+            else {
                 let degraded_msg = format!(
                     "插件 '{}' 未安装，已降级跳过（现场数据已记录至快照）。搜索路径: $PATH 各目录、~/.rupost/plugins、./.rupost/plugins（需 --allow-project-plugins）",
                     directive.name
@@ -403,7 +410,18 @@ impl PluginPipeline {
                 tail.chars().rev().collect::<String>()
             ));
         }
-        if let Some(failure) = &invocation.failure {
+        let failure = if let Some(failure) = invocation.failure {
+            Some(failure)
+        } else if let Some(output) = invocation.output {
+            match parse_patch_from_output(&output) {
+                Ok(patch) => return HookInvokeStep::Patch(patch),
+                Err(err) => Some(err),
+            }
+        } else {
+            return HookInvokeStep::Continue;
+        };
+
+        if let Some(failure) = failure {
             let detail = format!("{}: {}", failure.kind_label(), failure.describe());
             let degraded_msg = format!(
                 "插件 '{}' 失败（{detail}），已降级跳过（现场数据已记录至快照）",
@@ -417,10 +435,7 @@ impl PluginPipeline {
                 HookInvokeStep::Continue
             };
         }
-        let Some(output) = invocation.output else {
-            return HookInvokeStep::Continue;
-        };
-        HookInvokeStep::Patch(parse_patch_from_output(&output))
+        HookInvokeStep::Continue
     }
 
     /// 统一降级门（03 §2.1）：返回 `true` 表示必须阻断并中止后续管线。
@@ -434,7 +449,6 @@ impl PluginPipeline {
         if directive.optional || options.allow_missing_plugins {
             outcome.degraded = true;
             outcome.warnings.push(degraded_message.to_string());
-            outcome.patch = None;
             false
         } else {
             outcome.blocking_error = Some(blocking_message.to_string());

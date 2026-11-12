@@ -537,3 +537,155 @@ async fn test_pipeline_request_scope_reuses_patch_within_request_only() {
         "request 作用域：请求内去重（1 次）+ 跨请求重调（1 次），实际子进程调用:\n{lines}"
     );
 }
+
+#[tokio::test]
+async fn test_pipeline_malformed_patch_field_fails_with_invalid_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install_script_plugin(
+        dir.path(),
+        "bad-patch",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        "#!/bin/sh\ncat > /dev/null\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":\"not-an-array\"}'\n",
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let cache = SuiteHookCache::new();
+    let directive = PluginDirective::new("sign", "bad-patch", PluginStage::Sign);
+
+    let blocked = PluginPipeline::execute_for_request(
+        std::slice::from_ref(&directive),
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(
+        blocked
+            .blocking_error
+            .as_deref()
+            .is_some_and(|e| e.contains("invalid_output")),
+        "畸形 Patch 字段必须触发 invalid_output 阻断: {blocked:?}"
+    );
+
+    let degraded = PluginPipeline::execute_for_request(
+        &[directive],
+        &reg,
+        &PluginRuntimeOptions {
+            allow_missing_plugins: true,
+            ..Default::default()
+        },
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(degraded.blocking_error.is_none());
+    assert!(degraded.degraded);
+    assert!(degraded.patch.is_some());
+}
+
+#[tokio::test]
+async fn test_pipeline_multistage_same_plugin_executes_distinct_stage_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let prep_calls = dir.path().join("prep_calls.txt");
+    let sign_calls = dir.path().join("sign_calls.txt");
+    let exe = dir.path().join("rupost-plugin-dual-hook");
+    std::fs::write(
+        &exe,
+        format!(
+            "#!/bin/sh\ninput=$(cat)\nif echo \"$input\" | grep -q '\"stage\":\"prepare\"'; then\n  echo prep >> \"{}\"\n  echo '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer dual\"]]}}'\nelse\n  echo sign >> \"{}\"\n  echo '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Dual-Sig\",\"ok\"]]}}'\nfi\n",
+            prep_calls.display(),
+            sign_calls.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let manifest = PluginManifest {
+        manifest_version: "1.0".to_string(),
+        name: "dual-hook".to_string(),
+        version: "0.1.0".to_string(),
+        description: "dual stage".to_string(),
+        commands: vec![],
+        hooks: vec![
+            HookCapability {
+                directive: "auth".to_string(),
+                alias: Some("dual-hook".to_string()),
+                stage: PluginStage::Prepare,
+                cache_scope: PluginCacheScope::Suite,
+                requires_env: vec![],
+                parameters_schema: serde_json::json!({}),
+            },
+            HookCapability {
+                directive: "sign".to_string(),
+                alias: Some("dual-hook".to_string()),
+                stage: PluginStage::Sign,
+                cache_scope: PluginCacheScope::None,
+                requires_env: vec![],
+                parameters_schema: serde_json::json!({}),
+            },
+        ],
+    };
+    let mut reg = PluginRegistry::new();
+    reg.register_manifest(exe, manifest);
+    assert!(reg.warnings.is_empty(), "{:?}", reg.warnings);
+
+    let directives = vec![
+        PluginDirective::new("auth", "dual-hook", PluginStage::Prepare),
+        PluginDirective::new("sign", "dual-hook", PluginStage::Sign),
+    ];
+    let cache = SuiteHookCache::new();
+    let opts = PluginRuntimeOptions::default();
+
+    for _ in 0..2 {
+        let out = PluginPipeline::execute_for_request(
+            &directives,
+            &reg,
+            &opts,
+            &cache,
+            "http://x",
+            "GET",
+            &[],
+            None,
+        )
+        .await;
+        assert!(out.blocking_error.is_none(), "{:?}", out.blocking_error);
+        let headers = out.patch.unwrap().extra_headers;
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer dual")
+        );
+        assert!(headers.iter().any(|(k, v)| k == "X-Dual-Sig" && v == "ok"));
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&prep_calls)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sign_calls)
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}

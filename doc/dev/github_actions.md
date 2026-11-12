@@ -16,10 +16,10 @@ RuPost 项目使用 GitHub Actions 来实现持续集成（CI）和持续交付�
 文件路径: `.github/workflows/ci.yml`
 
 ### 触发条件与并发控制
-* **分支推送**: 推送到所有分支 (`branches: ['**']`)，自动忽略以 `v*` 开头的发布标签。
-* **Pull Request**: 针对 `main` 分支的 PR 请求。
+* **主干推送**: 仅在合入/推送到 `main` 分支 (`branches: [main]`) 时触发，避免与开放 PR 重复执行。
+* **Pull Request**: 针对 `main` 分支的 PR 请求（`pull_request` 在合并预览上下文中执行全平台校验）。
 * **手动调度**: 支持通过 GitHub Actions 控制台手动派发 (`workflow_dispatch`)。
-* **并发控制 (Concurrency)**: 当同一分支或 PR 连续推送提交时，自动取消上一次未执行完成的任务，避免无意义的算力排队。
+* **并发控制 (Concurrency)**: 当同一分支或 PR 连续推送提交时（`group: ${{ github.workflow }}-${{ github.ref }}`），自动取消上一次未执行完成的任务，避免无意义的算力排队。
 
 ### 包含的任务 (Jobs)
 1. **Rustfmt**: 检查代码格式是否完全符合 Rust 官方规范。

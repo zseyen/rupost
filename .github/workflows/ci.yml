@@ -2,15 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [ '**' ]
-    tags-ignore: [ 'v*' ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 # 同一分支或 PR 连续推送时，自动中止上一次未跑完的任务，节省计算资源与排队时间
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

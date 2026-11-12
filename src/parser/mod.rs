@@ -34,12 +34,7 @@ pub fn parse_document_by_path<P: AsRef<std::path::Path>>(
     path: P,
     content: &str,
 ) -> ParseResult<ParsedFile> {
-    let ext = path
-        .as_ref()
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") {
+    if crate::utils::path_guard::is_markdown_doc(path.as_ref()) {
         MarkdownFileParser::parse_content(content)
     } else {
         HttpFileParser::parse_content(content)

@@ -99,12 +99,10 @@ impl HttpFileParser {
     /// 判定是否是合法的请求行 (如 "GET http://example.com")
     fn is_valid_request_line(line: &str) -> bool {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.is_empty() {
+        if parts.len() < 2 {
             return false;
         }
-        let method = parts[0].to_uppercase();
-        let valid_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
-        valid_methods.contains(&method.as_str()) && parts.len() >= 2
+        crate::http::Method::is_standard(parts[0])
     }
 
     /// 启发式自适应请求块拆分
@@ -348,8 +346,7 @@ impl HttpFileParser {
             2 => {
                 // 方法 + URL
                 let method = parts[0].to_uppercase();
-                let valid_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
-                if !valid_methods.contains(&method.as_str()) {
+                if !crate::http::Method::is_standard(&method) {
                     return Err(ParseError::InvalidMethod {
                         method,
                         line: line_number,

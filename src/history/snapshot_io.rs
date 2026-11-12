@@ -206,16 +206,10 @@ pub(crate) fn header_map_to_pairs(map: &reqwest::header::HeaderMap) -> Vec<(Stri
         .collect()
 }
 
-/// 响应体截断（UTF-8 边界安全）：多字节字符中点绝不 panic。
+/// 响应体截断（UTF-8 边界安全）：多字节字符中点绝不 panic（SSOT 委托给 `utils::text::truncate_utf8_prefix`）。
 pub(crate) fn truncate_response_body(body: &str, max_bytes: usize) -> (String, bool) {
-    if body.len() <= max_bytes {
-        return (body.to_string(), false);
-    }
-    let mut end = max_bytes;
-    while !body.is_char_boundary(end) {
-        end -= 1;
-    }
-    (body[..end].to_string(), true)
+    let (prefix, truncated) = crate::utils::text::truncate_utf8_prefix(body, max_bytes);
+    (prefix.to_string(), truncated)
 }
 
 /// 将黑匣子契约快照写入指定文件（Unix 下权限强制 0600，原子写入且不跟随符号链接）。

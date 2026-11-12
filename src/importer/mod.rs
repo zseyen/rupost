@@ -98,8 +98,7 @@ impl MultiFormatImporter {
     /// 检测是否是 Raw HTTP 1.1 / RFC 7230 报文
     pub fn is_raw_http(text: &str) -> bool {
         let first_line = text.lines().next().unwrap_or("").trim();
-        let methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
-        for m in &methods {
+        for m in crate::http::Method::STANDARD_METHODS {
             if first_line.starts_with(m)
                 && (first_line.contains("HTTP/1.") || first_line.contains("HTTP/2"))
             {

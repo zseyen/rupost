@@ -16,26 +16,29 @@ pub fn normalize_posix_path(path: impl AsRef<Path>) -> String {
 /// 支持的活文档扩展名白名单（大小写不敏感）
 pub const LIVE_DOC_EXTENSIONS: &[&str] = &["http", "md", "markdown"];
 
+/// 支持的 Markdown 活文档扩展名白名单（大小写不敏感）
+pub const MARKDOWN_DOC_EXTENSIONS: &[&str] = &["md", "markdown"];
+
+fn has_any_extension(path: &Path, exts: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| exts.iter().any(|&e| e.eq_ignore_ascii_case(ext)))
+        .unwrap_or(false)
+}
+
 /// 判定给定路径或文件名是否为受支持的活文档（.http / .md，大小写不敏感）。
 pub fn is_live_doc(path: impl AsRef<Path>) -> bool {
-    path.as_ref()
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            LIVE_DOC_EXTENSIONS
-                .iter()
-                .any(|&e| e.eq_ignore_ascii_case(ext))
-        })
-        .unwrap_or(false)
+    has_any_extension(path.as_ref(), LIVE_DOC_EXTENSIONS)
+}
+
+/// 判定给定路径是否为 Markdown 活文档（.md / .markdown，大小写不敏感）。
+pub fn is_markdown_doc(path: impl AsRef<Path>) -> bool {
+    has_any_extension(path.as_ref(), MARKDOWN_DOC_EXTENSIONS)
 }
 
 /// 判定给定路径是否为 .http 文件（大小写不敏感）。
 pub fn is_http_doc(path: impl AsRef<Path>) -> bool {
-    path.as_ref()
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("http"))
-        .unwrap_or(false)
+    has_any_extension(path.as_ref(), &["http"])
 }
 
 #[cfg(test)]
@@ -90,6 +93,23 @@ mod tests {
 
         for (input, expected) in cases {
             assert_eq!(is_live_doc(Path::new(input)), expected, "case: {input}");
+        }
+    }
+
+    #[test]
+    fn test_is_markdown_doc_table() {
+        let cases = [
+            ("README.md", true),
+            ("spec.MD", true),
+            ("guide.markdown", true),
+            ("GUIDE.MARKDOWN", true),
+            ("api.http", false),
+            ("notes.txt", false),
+            ("noext", false),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(is_markdown_doc(Path::new(input)), expected, "case: {input}");
         }
     }
 }

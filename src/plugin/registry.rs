@@ -1,8 +1,12 @@
 use super::registry_cache::{self};
 pub use super::registry_cache::{CachedPluginEntry, RegistryCacheFile, manifest_fingerprint};
-use super::types::{CommandCapability, HookCapability, PluginManifest, PluginStage};
+use super::types::{
+    CommandCapability, FailedPluginRecord, HookCapability, PLUGIN_ENV_ALLOWLIST,
+    PluginHealthStatus, PluginManifest, PluginRuntime, PluginStage, PluginStatusEntry,
+};
 use crate::Result;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// 统一插件注册表 (PluginRegistry - DeepSeek Harness 架构模式)
@@ -16,6 +20,10 @@ pub struct PluginRegistry {
     hooks_by_stage: HashMap<(String, PluginStage), (PathBuf, HookCapability)>,
     /// 已发现插件的可执行路径 -> (原始静态 manifest 路径, 已归一化 Manifest 实体)
     discovered_manifests: HashMap<PathBuf, (PathBuf, PluginManifest)>,
+    /// 直接通过 `register_manifest` 注册的 Manifest 实体（测试/内联构造路径）
+    registered_manifests: HashMap<PathBuf, PluginManifest>,
+    /// 发现期解析失败或被安全策略拒绝的插件清单记录（仅内存诊断，绝不写入缓存）
+    failed_plugins: Vec<FailedPluginRecord>,
     /// 发现过程中的非致命告警（alias 冲突、越界路径拒绝等，调用方负责渲染）
     pub warnings: Vec<String>,
 }
@@ -110,10 +118,15 @@ fn has_reserved_stage(manifest: &PluginManifest) -> bool {
 fn parse_and_validate_manifest(
     root_canon: &Path,
     manifest_path: &Path,
-) -> std::result::Result<ValidatedManifest, String> {
-    let content = std::fs::read_to_string(manifest_path).map_err(|e| format!("读取失败: {e}"))?;
+) -> std::result::Result<ValidatedManifest, (Option<String>, String)> {
+    let content =
+        std::fs::read_to_string(manifest_path).map_err(|e| (None, format!("读取失败: {e}")))?;
     let mut value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("JSON 解析失败: {e}"))?;
+        serde_json::from_str(&content).map_err(|e| (None, format!("JSON 解析失败: {e}")))?;
+    let parsed_name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let mut warnings = Vec::new();
     // interface-freeze-m1 §1 裁决：post_response/on_failure/harvest 为 P2 保留字阶段，
     // manifest 中出现即拒绝注册（绝不静默注册永不调用的死钩子）。
@@ -143,37 +156,54 @@ fn parse_and_validate_manifest(
             if let Some(stage_str) = obj.get("stage").and_then(|s| s.as_str())
                 && matches!(stage_str, "post_response" | "on_failure" | "harvest")
             {
-                return Err(format!(
-                    "hook '{directive_label}' 声明了未放行的保留字阶段 '{stage_str}'（P2 保留字，MVP 注册面仅 prepare/transform/sign）"
+                return Err((
+                    parsed_name,
+                    format!(
+                        "hook '{directive_label}' 声明了未放行的保留字阶段 '{stage_str}'（P2 保留字，MVP 注册面仅 prepare/transform/sign）"
+                    ),
                 ));
             }
         }
     }
-    let manifest: PluginManifest =
-        serde_json::from_value(value).map_err(|e| format!("JSON 解析失败: {e}"))?;
+    let manifest: PluginManifest = serde_json::from_value(value)
+        .map_err(|e| (parsed_name.clone(), format!("JSON 解析失败: {e}")))?;
     if manifest.manifest_version != "1.0" {
-        return Err(format!(
-            "不支持的 manifest_version: {}",
-            manifest.manifest_version
+        return Err((
+            Some(manifest.name),
+            format!("不支持的 manifest_version: {}", manifest.manifest_version),
         ));
     }
     if has_reserved_stage(&manifest) {
-        return Err("manifest 包含未放行的 P2 保留字阶段钩子".to_string());
+        return Err((
+            Some(manifest.name),
+            "manifest 包含未放行的 P2 保留字阶段钩子".to_string(),
+        ));
     }
 
     let candidates = sibling_executables(manifest_path);
-    let executable = candidates
-        .iter()
-        .find(|c| c.exists())
-        .ok_or_else(|| "同目录插件二进制不存在".to_string())?;
-    let exe_canon = executable
-        .canonicalize()
-        .map_err(|e| format!("canonicalize 失败: {e}"))?;
+    let executable = candidates.iter().find(|c| c.exists()).ok_or_else(|| {
+        (
+            Some(manifest.name.clone()),
+            "同目录插件二进制不存在".to_string(),
+        )
+    })?;
+    let exe_canon = executable.canonicalize().map_err(|e| {
+        (
+            Some(manifest.name.clone()),
+            format!("canonicalize 失败: {e}"),
+        )
+    })?;
     if !exe_canon.is_file() {
-        return Err("插件可执行入口不是普通文件".to_string());
+        return Err((
+            Some(manifest.name.clone()),
+            "插件可执行入口不是普通文件".to_string(),
+        ));
     }
     if !exe_canon.starts_with(root_canon) {
-        return Err("可执行路径逃逸插件根（symlink/.. 攻击拒绝）".to_string());
+        return Err((
+            Some(manifest.name.clone()),
+            "可执行路径逃逸插件根（symlink/.. 攻击拒绝）".to_string(),
+        ));
     }
 
     let manifest_canon = manifest_path
@@ -215,6 +245,8 @@ impl PluginRegistry {
 
     /// 注册一个插件 Manifest 实体到内存索引中（后注册覆盖先注册 + 冲突告警）
     pub fn register_manifest(&mut self, executable_path: PathBuf, manifest: PluginManifest) {
+        self.registered_manifests
+            .insert(executable_path.clone(), manifest.clone());
         let plugin_name = manifest.name.clone();
         for cmd in manifest.commands {
             if let Some(prev) = self.commands.get(&cmd.name) {
@@ -291,6 +323,25 @@ impl PluginRegistry {
         Self::discover_with_roots(options, None)
     }
 
+    /// 带完整诊断信息的全量扫描发现（绕过缓存，收集 `failed_plugins` 供 `plugin list` 展示三态）。
+    pub fn discover_with_diagnostics(options: &DiscoverOptions) -> Result<Self> {
+        Self::discover_with_roots(options, None)
+    }
+
+    /// 返回发现期解析失败或被拒绝的插件清单记录
+    pub fn failed_plugins(&self) -> &[FailedPluginRecord] {
+        &self.failed_plugins
+    }
+
+    /// 查询指定可执行路径对应的插件运行时声明
+    pub fn runtime_for_executable(&self, exe_path: &Path) -> Option<&PluginRuntime> {
+        self.discovered_manifests
+            .get(exe_path)
+            .map(|(_, m)| m)
+            .or_else(|| self.registered_manifests.get(exe_path))
+            .and_then(|m| m.runtime.as_ref())
+    }
+
     /// 允许显式注入基础搜索根目录的发现入口（供测试无全局 env 竞态隔离使用）。
     pub fn discover_with_roots(
         options: &DiscoverOptions,
@@ -331,15 +382,117 @@ impl PluginRegistry {
                             validated.manifest,
                         );
                     }
-                    Err(reason) => {
+                    Err((name, reason)) => {
                         registry
                             .warnings
                             .push(format!("跳过 manifest {}: {reason}", path.display()));
+                        registry.failed_plugins.push(FailedPluginRecord {
+                            manifest_path: path.canonicalize().unwrap_or(path),
+                            name,
+                            reason,
+                        });
                     }
                 }
             }
         }
         Ok(registry)
+    }
+
+    /// 响应式计算所有已发现/失败插件的三态健康状态（Ready / Pending / Failed），绝不持久化。
+    pub fn evaluate_statuses(&self, path_env: Option<&OsStr>) -> Vec<PluginStatusEntry> {
+        let mut entries = Vec::new();
+        for (exe_path, (manifest_path, manifest)) in &self.discovered_manifests {
+            entries.push(build_status_entry(
+                exe_path.clone(),
+                manifest_path.clone(),
+                manifest,
+                path_env,
+            ));
+        }
+        for (exe_path, manifest) in &self.registered_manifests {
+            if self.discovered_manifests.contains_key(exe_path) {
+                continue;
+            }
+            entries.push(build_status_entry(
+                exe_path.clone(),
+                exe_path.with_extension("json"),
+                manifest,
+                path_env,
+            ));
+        }
+        for rec in &self.failed_plugins {
+            let fallback_name = rec
+                .manifest_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            entries.push(PluginStatusEntry {
+                name: rec.name.clone().unwrap_or(fallback_name),
+                version: String::new(),
+                description: String::new(),
+                manifest_path: rec.manifest_path.clone(),
+                executable_path: None,
+                status: PluginHealthStatus::Failed {
+                    reason: rec.reason.clone(),
+                },
+            });
+        }
+        entries.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.manifest_path.cmp(&b.manifest_path))
+        });
+        entries
+    }
+
+    /// 收集已使用插件指令/命令的 `requires_env` 未放行告警（去重；放行 `RUPOST_*`、`PLUGIN_ENV_ALLOWLIST` 与 `--plugin-env`）。
+    pub fn collect_missing_env_warnings(
+        &self,
+        used_directives: &[String],
+        authorized_env_keys: &HashSet<String>,
+    ) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
+
+        for directive in used_directives {
+            let mut hook_matches: Vec<(PluginStage, &[String])> = self
+                .hooks_by_stage
+                .iter()
+                .filter(|((key, _), _)| key == directive)
+                .map(|((_, stage), (_, hook))| (*stage, hook.requires_env.as_slice()))
+                .collect();
+            hook_matches.sort_by_key(|(stage, _)| *stage);
+
+            let cmd_reqs: &[String] = self
+                .commands
+                .get(directive)
+                .map(|(_, cmd)| cmd.requires_env.as_slice())
+                .unwrap_or(&[]);
+
+            for key in hook_matches
+                .into_iter()
+                .flat_map(|(_, reqs)| reqs.iter())
+                .chain(cmd_reqs.iter())
+            {
+                let key = key.trim();
+                if key.is_empty() {
+                    continue;
+                }
+                if key.starts_with("RUPOST_")
+                    || PLUGIN_ENV_ALLOWLIST.contains(&key)
+                    || authorized_env_keys.contains(key)
+                {
+                    continue;
+                }
+                if seen_pairs.insert((directive.clone(), key.to_string())) {
+                    warnings.push(format!(
+                        "插件 '{directive}' 声明需要环境变量 '{key}'，但运行时未通过 --plugin-env {key} 显式放行，子进程将无法读取该变量"
+                    ));
+                }
+            }
+        }
+        warnings
     }
 
     pub fn load_cache(cache_path: &Path) -> Option<RegistryCacheFile> {
@@ -460,4 +613,88 @@ impl PluginRegistry {
                 .push(format!("注册表缓存写回失败（不影响本次执行）: {e}"));
         }
     }
+}
+
+fn build_status_entry(
+    exe_path: PathBuf,
+    manifest_path: PathBuf,
+    manifest: &PluginManifest,
+    path_env: Option<&OsStr>,
+) -> PluginStatusEntry {
+    let status = match preflight_runtime(manifest.runtime.as_ref(), path_env) {
+        Ok(()) => PluginHealthStatus::Ready,
+        Err((interpreter, searched_dirs)) => {
+            let rt = manifest.runtime.as_ref();
+            PluginHealthStatus::Pending {
+                interpreter,
+                min_version: rt.and_then(|r| r.min_version.clone()),
+                modules: rt.map(|r| r.modules.clone()).unwrap_or_default(),
+                searched_dirs,
+            }
+        }
+    };
+    PluginStatusEntry {
+        name: manifest.name.clone(),
+        version: manifest.version.clone(),
+        description: manifest.description.clone(),
+        manifest_path,
+        executable_path: Some(exe_path),
+        status,
+    }
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// 零子进程运行时解释器预检（03 §3.1.1：仅对 PATH 目录做 stat + Unix `mode & 0o111 != 0` 校验，绝不 spawn `--version`）。
+pub fn preflight_runtime(
+    runtime: Option<&PluginRuntime>,
+    path_env: Option<&OsStr>,
+) -> std::result::Result<(), (String, usize)> {
+    let Some(interp) = runtime
+        .and_then(|r| r.interpreter.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Ok(());
+    };
+
+    if interp.contains('/') || interp.contains('\\') || Path::new(interp).components().count() > 1 {
+        return if is_executable_file(Path::new(interp)) {
+            Ok(())
+        } else {
+            Err((interp.to_string(), 1))
+        };
+    }
+
+    let Some(raw_path) = path_env.filter(|p| !p.is_empty()) else {
+        return Err((interp.to_string(), 0));
+    };
+
+    let mut searched_dirs = 0usize;
+    for dir in std::env::split_paths(raw_path) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        searched_dirs += 1;
+        if is_executable_file(&dir.join(interp)) {
+            return Ok(());
+        }
+    }
+    Err((interp.to_string(), searched_dirs))
 }

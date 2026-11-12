@@ -16,6 +16,13 @@ pub enum PluginFailureKind {
     Crashed(String),
     /// exit ≠ 0 且无合法输出
     ExitNonZero(i32, String),
+    /// 运行时解释器缺失（预检未过 / spawn ENOENT / env 127）
+    RuntimeMissing { interpreter: String, detail: String },
+    /// 解释器依赖模块缺失（stderr 表驱动命中）
+    DependencyMissing {
+        module: Option<String>,
+        detail: String,
+    },
 }
 
 impl PluginFailureKind {
@@ -25,6 +32,8 @@ impl PluginFailureKind {
             Self::InvalidOutput(_) => "invalid_output",
             Self::Crashed(_) => "crashed",
             Self::ExitNonZero(_, _) => "exit_non_zero",
+            Self::RuntimeMissing { .. } => "runtime_missing",
+            Self::DependencyMissing { .. } => "dependency_missing",
         }
     }
 
@@ -38,6 +47,14 @@ impl PluginFailureKind {
                 let brief: String = stderr.chars().take(200).collect();
                 format!("插件退出码 {code}：{brief}")
             }
+            Self::RuntimeMissing {
+                interpreter,
+                detail,
+            } => format!("插件运行时解释器 '{interpreter}' 缺失（{detail}）"),
+            Self::DependencyMissing { module, detail } => match module {
+                Some(m) => format!("插件依赖模块 '{m}' 缺失（{detail}）"),
+                None => format!("插件依赖模块缺失（{detail}）"),
+            },
         }
     }
 }
@@ -165,5 +182,29 @@ mod tests {
                 "malformed patch payload must yield InvalidOutput: {case}"
             );
         }
+    }
+
+    #[test]
+    fn test_runtime_and_dependency_missing_labels_and_descriptions() {
+        let rt = PluginFailureKind::RuntimeMissing {
+            interpreter: "python3".to_string(),
+            detail: "not found".to_string(),
+        };
+        assert_eq!(rt.kind_label(), "runtime_missing");
+        assert!(rt.describe().contains("python3"));
+
+        let dep = PluginFailureKind::DependencyMissing {
+            module: Some("boto3".to_string()),
+            detail: "ModuleNotFoundError".to_string(),
+        };
+        assert_eq!(dep.kind_label(), "dependency_missing");
+        assert!(dep.describe().contains("boto3"));
+
+        let dep_unknown = PluginFailureKind::DependencyMissing {
+            module: None,
+            detail: "ERR_MODULE_NOT_FOUND".to_string(),
+        };
+        assert_eq!(dep_unknown.kind_label(), "dependency_missing");
+        assert!(dep_unknown.describe().contains("ERR_MODULE_NOT_FOUND"));
     }
 }

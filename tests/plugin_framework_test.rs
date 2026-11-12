@@ -82,6 +82,7 @@ fn test_plugin_registry_discovery_and_command_mapping() {
             usage: "rupost echo-sign --test".to_string(),
             description: "Self test".to_string(),
             requires_tty: false,
+            requires_env: vec![],
         }],
         hooks: vec![rupost::plugin::HookCapability {
             directive: "auth".to_string(),
@@ -91,6 +92,7 @@ fn test_plugin_registry_discovery_and_command_mapping() {
             requires_env: vec![],
             parameters_schema: serde_json::json!({}),
         }],
+        runtime: None,
     };
 
     let fake_path = PathBuf::from("/usr/local/bin/rupost-plugin-echo-sign");

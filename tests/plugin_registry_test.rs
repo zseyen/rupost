@@ -18,6 +18,7 @@ fn demo_manifest(name: &str) -> PluginManifest {
             usage: format!("rupost {name}"),
             description: "Demo command".to_string(),
             requires_tty: false,
+            requires_env: vec![],
         }],
         hooks: vec![HookCapability {
             directive: "auth".to_string(),
@@ -27,6 +28,7 @@ fn demo_manifest(name: &str) -> PluginManifest {
             requires_env: vec![],
             parameters_schema: serde_json::json!({"type": "object"}),
         }],
+        runtime: None,
     }
 }
 
@@ -665,6 +667,7 @@ fn test_multistage_hooks_same_plugin_do_not_collide() {
                 parameters_schema: serde_json::json!({"phase": "sign"}),
             },
         ],
+        runtime: None,
     };
     reg.register_manifest(PathBuf::from("/usr/local/bin/rupost-plugin-dual"), manifest);
 
@@ -684,4 +687,225 @@ fn test_multistage_hooks_same_plugin_do_not_collide() {
         .expect("sign hook");
     assert_eq!(sign.cache_scope, PluginCacheScope::None);
     assert_eq!(sign.directive, "sign");
+}
+
+#[test]
+fn test_preflight_runtime_zero_subprocess_and_unix_exec_bit() {
+    use rupost::plugin::registry::preflight_runtime;
+    use rupost::plugin::types::PluginRuntime;
+    use std::ffi::OsStr;
+
+    // 1. None 或无 interpreter 声明视为原生二进制，直接 Ready
+    assert!(preflight_runtime(None, None).is_ok());
+    let native_rt = PluginRuntime::default();
+    assert!(preflight_runtime(Some(&native_rt), None).is_ok());
+
+    // 2. 空/缺失 PATH
+    let py_rt = PluginRuntime {
+        interpreter: Some("fake-py3".to_string()),
+        min_version: Some("3.9".to_string()),
+        modules: vec!["boto3".to_string()],
+    };
+    assert_eq!(
+        preflight_runtime(Some(&py_rt), None),
+        Err(("fake-py3".to_string(), 0))
+    );
+    assert_eq!(
+        preflight_runtime(Some(&py_rt), Some(OsStr::new(""))),
+        Err(("fake-py3".to_string(), 0))
+    );
+
+    // 3. PATH 目录中存在同名普通文件但无执行权限（Unix mode & 0o111 == 0）必须判 Pending
+    let dir = tempfile::tempdir().unwrap();
+    let bin1 = dir.path().join("bin1");
+    let bin2 = dir.path().join("bin2");
+    std::fs::create_dir_all(&bin1).unwrap();
+    std::fs::create_dir_all(&bin2).unwrap();
+    let fake_bin = bin1.join("fake-py3");
+    // 写入若被执行就会创建标记文件或退出 99 的脚本，校验零子进程预检绝不执行它
+    let probe_marker = dir.path().join("spawned.marker");
+    std::fs::write(
+        &fake_bin,
+        format!("#!/bin/sh\ntouch \"{}\"\nexit 99\n", probe_marker.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_bin, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let joined_path = std::env::join_paths([&bin1, &bin2]).unwrap();
+    #[cfg(unix)]
+    assert_eq!(
+        preflight_runtime(Some(&py_rt), Some(joined_path.as_os_str())),
+        Err(("fake-py3".to_string(), 2))
+    );
+
+    // 4. 加上 +x 后立即可用，且绝不 spawn --version
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(preflight_runtime(Some(&py_rt), Some(joined_path.as_os_str())).is_ok());
+    assert!(
+        !probe_marker.exists(),
+        "preflight_runtime 绝不能 spawn 解释器子进程"
+    );
+}
+
+#[test]
+fn test_evaluate_statuses_three_states_reactive_and_no_cache_status_leak() {
+    use rupost::plugin::types::{PluginHealthStatus, PluginRuntime};
+
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join(".rupost").join("plugins");
+    let fake_bin_dir = dir.path().join("fake_path");
+    std::fs::create_dir_all(&fake_bin_dir).unwrap();
+
+    // 1. Ready 原生插件
+    fixture_plugin(&plugin_dir, "native-ok", None);
+
+    // 2. Pending 解释器插件
+    let mut py_manifest = demo_manifest("py-pending");
+    py_manifest.runtime = Some(PluginRuntime {
+        interpreter: Some("missing-interp-m6".to_string()),
+        min_version: Some("3.11".to_string()),
+        modules: vec!["requests".to_string(), "boto3".to_string()],
+    });
+    fixture_plugin(
+        &plugin_dir,
+        "py-pending",
+        Some(&serde_json::to_string(&py_manifest).unwrap()),
+    );
+
+    // 3. Failed 损坏 manifest
+    std::fs::write(plugin_dir.join("rupost-plugin-broken-m6.json"), "{bad json").unwrap();
+
+    let opts = DiscoverOptions {
+        allow_project_plugins: true,
+        project_root: Some(dir.path().to_path_buf()),
+    };
+    let cache_path = dir.path().join("rupost_home").join("registry.json");
+
+    let mut reg = PluginRegistry::discover_with_roots(&opts, Some(&[])).unwrap();
+    assert_eq!(reg.failed_plugins().len(), 1);
+    reg.persist_cache(&cache_path);
+
+    let cache_raw = std::fs::read_to_string(&cache_path).unwrap();
+    assert!(
+        !cache_raw.contains("\"ready\"")
+            && !cache_raw.contains("\"pending\"")
+            && !cache_raw.contains("\"status\""),
+        "registry.json 绝不能持久化 ready/pending 状态字段: {cache_raw}"
+    );
+
+    let statuses_before = reg.evaluate_statuses(Some(fake_bin_dir.as_os_str()));
+    assert_eq!(statuses_before.len(), 3);
+    assert!(
+        statuses_before
+            .iter()
+            .any(|e| e.name == "native-ok" && e.status == PluginHealthStatus::Ready)
+    );
+    assert!(statuses_before.iter().any(|e| {
+        e.name == "py-pending"
+            && matches!(
+                &e.status,
+                PluginHealthStatus::Pending {
+                    interpreter,
+                    min_version,
+                    modules,
+                    searched_dirs: 1,
+                } if interpreter == "missing-interp-m6"
+                    && min_version.as_deref() == Some("3.11")
+                    && modules == &vec!["requests".to_string(), "boto3".to_string()]
+            )
+    }));
+    assert!(
+        statuses_before
+            .iter()
+            .any(|e| matches!(e.status, PluginHealthStatus::Failed { .. }))
+    );
+
+    // 响应式重算：安装解释器后，同一注册表（或缓存加载后的注册表）无需重建即自动转 Ready
+    let interp_path = fake_bin_dir.join("missing-interp-m6");
+    std::fs::write(&interp_path, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&interp_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let statuses_after = reg.evaluate_statuses(Some(fake_bin_dir.as_os_str()));
+    assert!(
+        statuses_after
+            .iter()
+            .any(|e| e.name == "py-pending" && e.status == PluginHealthStatus::Ready),
+        "解释器安装后 evaluate_statuses 必须响应式转为 Ready: {statuses_after:?}"
+    );
+}
+
+#[test]
+fn test_collect_missing_env_warnings_deduplicated_and_respects_allowlists() {
+    use std::collections::HashSet;
+
+    let mut reg = PluginRegistry::new();
+    let manifest = PluginManifest {
+        manifest_version: "1.0".to_string(),
+        name: "aws-sigv4".to_string(),
+        version: "0.1.0".to_string(),
+        description: "signer".to_string(),
+        commands: vec![CommandCapability {
+            name: "aws-cmd".to_string(),
+            usage: "rupost aws-cmd".to_string(),
+            description: "cmd".to_string(),
+            requires_tty: false,
+            requires_env: vec!["CMD_SECRET".to_string(), "PATH".to_string()],
+        }],
+        hooks: vec![
+            HookCapability {
+                directive: "sign".to_string(),
+                alias: Some("aws-sigv4".to_string()),
+                stage: PluginStage::Sign,
+                cache_scope: PluginCacheScope::None,
+                requires_env: vec![
+                    "AWS_PROFILE".to_string(),
+                    "AWS_REGION".to_string(),
+                    "RUPOST_ENV".to_string(),
+                    "HOME".to_string(),
+                ],
+                parameters_schema: serde_json::json!({}),
+            },
+            HookCapability {
+                directive: "auth".to_string(),
+                alias: Some("unused-hook".to_string()),
+                stage: PluginStage::Prepare,
+                cache_scope: PluginCacheScope::None,
+                requires_env: vec!["UNUSED_SECRET".to_string()],
+                parameters_schema: serde_json::json!({}),
+            },
+        ],
+        runtime: None,
+    };
+    reg.register_manifest(PathBuf::from("/bin/rupost-plugin-aws-sigv4"), manifest);
+
+    let used = vec![
+        "aws-sigv4".to_string(),
+        "aws-sigv4".to_string(),
+        "aws-cmd".to_string(),
+    ];
+    let mut auth = HashSet::from(["AWS_REGION".to_string()]);
+    let warnings = reg.collect_missing_env_warnings(&used, &auth);
+    assert_eq!(warnings.len(), 2, "应去重且仅告警未放行键: {warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("AWS_PROFILE")));
+    assert!(warnings.iter().any(|w| w.contains("CMD_SECRET")));
+    assert!(!warnings.iter().any(|w| w.contains("AWS_REGION")));
+    assert!(!warnings.iter().any(|w| w.contains("RUPOST_ENV")));
+    assert!(!warnings.iter().any(|w| w.contains("HOME")));
+    assert!(!warnings.iter().any(|w| w.contains("PATH")));
+    assert!(!warnings.iter().any(|w| w.contains("UNUSED_SECRET")));
+
+    auth.insert("AWS_PROFILE".to_string());
+    auth.insert("CMD_SECRET".to_string());
+    assert!(reg.collect_missing_env_warnings(&used, &auth).is_empty());
 }

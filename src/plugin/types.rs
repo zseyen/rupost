@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// 插件执行所属的不可逆生命周期阶段 (Stage)
 #[derive(
@@ -47,8 +48,17 @@ impl PluginDirective {
     }
 }
 
+/// 插件跨语言运行时依赖声明（03 §3.1 v2.1.1：零额外探针，仅 PATH stat 预检）
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PluginRuntime {
+    pub interpreter: Option<String>,
+    pub min_version: Option<String>,
+    #[serde(default)]
+    pub modules: Vec<String>,
+}
+
 /// 插件元数据清单 (Plugin Manifest)，遵循 DeepSeek Harness 规范
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginManifest {
     pub manifest_version: String,
     pub name: String,
@@ -58,16 +68,20 @@ pub struct PluginManifest {
     pub commands: Vec<CommandCapability>,
     #[serde(default)]
     pub hooks: Vec<HookCapability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<PluginRuntime>,
 }
 
 /// 插件暴露给系统的 CLI 子命令扩展能力
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CommandCapability {
     pub name: String,
     pub usage: String,
     pub description: String,
     #[serde(default)]
     pub requires_tty: bool,
+    #[serde(default)]
+    pub requires_env: Vec<String>,
 }
 
 /// 插件暴露给系统的 HTTP 请求生命周期钩子能力
@@ -123,3 +137,37 @@ pub const PLUGIN_ENV_ALLOWLIST: [&str; 13] = [
     "COMSPEC",
     "PATHEXT",
 ];
+
+/// 插件三态健康状态（03 §3.1.1：响应性重算，绝不持久化进 registry.json）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginHealthStatus {
+    Ready,
+    Pending {
+        interpreter: String,
+        min_version: Option<String>,
+        modules: Vec<String>,
+        searched_dirs: usize,
+    },
+    Failed {
+        reason: String,
+    },
+}
+
+/// 单个插件的状态视图（供 `plugin list` 与诊断消费）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginStatusEntry {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub manifest_path: PathBuf,
+    pub executable_path: Option<PathBuf>,
+    pub status: PluginHealthStatus,
+}
+
+/// 发现期被拒绝或解析失败的插件清单记录
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedPluginRecord {
+    pub manifest_path: PathBuf,
+    pub name: Option<String>,
+    pub reason: String,
+}

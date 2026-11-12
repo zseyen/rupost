@@ -188,9 +188,27 @@ pub async fn invoke_plugin(
         cmd.env(key, value);
     }
 
-    let mut child = cmd.spawn().map_err(|e| {
-        crate::RupostError::PluginError(format!("插件 {} 启动失败: {e}", executable.display()))
-    })?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let interpreter = infer_missing_interpreter(executable);
+            return Ok(PluginInvocationOutcome {
+                output: None,
+                failure: Some(PluginFailureKind::RuntimeMissing {
+                    interpreter,
+                    detail: format!("启动失败（ENOENT）: {e}"),
+                }),
+                duration_us: started.elapsed().as_micros() as u64,
+                stderr_tail: String::new(),
+            });
+        }
+        Err(e) => {
+            return Err(crate::RupostError::PluginError(format!(
+                "插件 {} 启动失败: {e}",
+                executable.display()
+            )));
+        }
+    };
     let mut stdin = child
         .stdin
         .take()
@@ -348,10 +366,7 @@ pub async fn invoke_plugin(
     }
 
     let (output, failure) = match status.code() {
-        Some(code) if code != 0 => (
-            None,
-            Some(PluginFailureKind::ExitNonZero(code, stderr_tail.clone())),
-        ),
+        Some(code) if code != 0 => (None, Some(classify_nonzero_exit(code, &stderr_tail))),
         Some(_) => match parse_plugin_output(&stdout_bytes) {
             Ok(val) => (Some(val), None),
             Err(kind) => (None, Some(kind)),
@@ -379,4 +394,157 @@ fn crashed_failure(status: std::process::ExitStatus) -> PluginFailureKind {
         let _ = status;
         PluginFailureKind::Crashed("terminated".to_string())
     }
+}
+
+fn sanitize_extracted_token(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|c: char| matches!(c, '\'' | '"' | '`' | '‘' | '’' | '“' | '”'))
+        .trim();
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(128)
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+fn infer_missing_interpreter(executable: &std::path::Path) -> String {
+    use std::io::Read;
+    if let Ok(mut file) = std::fs::File::open(executable) {
+        let mut buf = [0u8; 256];
+        if let Ok(n) = file.read(&mut buf) {
+            let head = String::from_utf8_lossy(&buf[..n]);
+            if let Some(first_line) = head.lines().next()
+                && let Some(rest) = first_line.strip_prefix("#!")
+            {
+                let mut parts = rest.split_whitespace();
+                if let Some(first) = parts.next() {
+                    let is_env = first == "env" || first.ends_with("/env");
+                    let candidate = if is_env {
+                        parts.find(|p| !p.starts_with('-')).unwrap_or(first)
+                    } else {
+                        std::path::Path::new(first)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(first)
+                    };
+                    if let Some(tok) = sanitize_extracted_token(candidate) {
+                        return tok;
+                    }
+                }
+            }
+        }
+    }
+    executable
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(sanitize_extracted_token)
+        .unwrap_or_else(|| executable.display().to_string())
+}
+
+fn is_local_module_path(module: &str) -> bool {
+    module.starts_with("./")
+        || module.starts_with("../")
+        || module.starts_with(".\\")
+        || module.starts_with("..\\")
+}
+
+fn extract_after_marker(line: &str, marker: &str) -> Option<String> {
+    let idx = line.find(marker)?;
+    let rest = line[idx + marker.len()..].trim_start();
+    let token = if let Some(quote) = rest.chars().next().filter(|&c| c == '\'' || c == '"') {
+        rest[1..].split(quote).next().unwrap_or("")
+    } else {
+        rest.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(['.', ',', ':', ';', ')'])
+    };
+    sanitize_extracted_token(token)
+}
+
+enum DepPatternKind {
+    Python,
+    Node,
+}
+
+struct DepPattern {
+    needle: &'static str,
+    extractor_marker: &'static str,
+    kind: DepPatternKind,
+}
+
+const DEPENDENCY_MISSING_PATTERNS: &[DepPattern] = &[
+    DepPattern {
+        needle: "ModuleNotFoundError:",
+        extractor_marker: "No module named ",
+        kind: DepPatternKind::Python,
+    },
+    DepPattern {
+        needle: "ImportError:",
+        extractor_marker: "No module named ",
+        kind: DepPatternKind::Python,
+    },
+    DepPattern {
+        needle: "Cannot find module ",
+        extractor_marker: "Cannot find module ",
+        kind: DepPatternKind::Node,
+    },
+    DepPattern {
+        needle: "Cannot find package ",
+        extractor_marker: "Cannot find package ",
+        kind: DepPatternKind::Node,
+    },
+];
+
+fn classify_nonzero_exit(code: i32, stderr_tail: &str) -> PluginFailureKind {
+    if code == 127 {
+        for line in stderr_tail.lines() {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("env:")
+                && (lower.contains("no such file") || lower.contains("not found"))
+                && let Some(idx) = lower.find("env:")
+            {
+                let after = &line[idx + 4..];
+                let raw_interp = after.split(':').next().unwrap_or("");
+                let interpreter =
+                    sanitize_extracted_token(raw_interp).unwrap_or_else(|| "unknown".to_string());
+                let detail: String = line.trim().chars().take(200).collect();
+                return PluginFailureKind::RuntimeMissing {
+                    interpreter,
+                    detail,
+                };
+            }
+        }
+    }
+
+    for line in stderr_tail.lines() {
+        let trimmed = line.trim();
+        for pat in DEPENDENCY_MISSING_PATTERNS {
+            if trimmed.contains(pat.needle) {
+                let extracted = extract_after_marker(trimmed, pat.extractor_marker);
+                if matches!(pat.kind, DepPatternKind::Node)
+                    && let Some(ref m) = extracted
+                    && is_local_module_path(m)
+                {
+                    return PluginFailureKind::ExitNonZero(code, stderr_tail.to_string());
+                }
+                let detail: String = trimmed.chars().take(200).collect();
+                return PluginFailureKind::DependencyMissing {
+                    module: extracted,
+                    detail,
+                };
+            }
+        }
+        if trimmed.contains("ERR_MODULE_NOT_FOUND") {
+            let detail: String = trimmed.chars().take(200).collect();
+            return PluginFailureKind::DependencyMissing {
+                module: None,
+                detail,
+            };
+        }
+    }
+
+    PluginFailureKind::ExitNonZero(code, stderr_tail.to_string())
 }

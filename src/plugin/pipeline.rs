@@ -5,9 +5,9 @@ use serde_json::json;
 
 use super::driver::invoke_plugin;
 pub use super::protocol::MAX_PLUGIN_PAYLOAD_BYTES;
-use super::protocol::parse_patch_from_output;
-use super::registry::PluginRegistry;
-use super::types::{PluginCacheScope, PluginDirective, PluginStage};
+use super::protocol::{PluginFailureKind, parse_patch_from_output};
+use super::registry::{PluginRegistry, preflight_runtime};
+use super::types::{PluginCacheScope, PluginDirective, PluginRuntime, PluginStage};
 
 /// 插件外部子进程默认执行超时 (5 秒硬熔断，`--plugin-timeout` 可覆盖)
 pub const DEFAULT_PLUGIN_TIMEOUT_SECS: u64 = 5;
@@ -114,21 +114,76 @@ fn hook_cache_key(directive: &PluginDirective) -> String {
     .to_string()
 }
 
-/// 合并 manifest `requires_env` 声明与 `--plugin-env` 覆盖列表（CLI 覆盖优先级更高）
-fn build_plugin_env_overrides(
-    requires_env: &[String],
-    cli_env: &[(String, String)],
-) -> Vec<(String, String)> {
+/// 仅透传 `--plugin-env` 显式放行的环境变量（03 §6.2 最小权限原则：严禁静默读取宿主机 `requires_env`）
+fn build_plugin_env_overrides(cli_env: &[(String, String)]) -> Vec<(String, String)> {
     let mut merged: BTreeMap<String, String> = BTreeMap::new();
-    for key in requires_env {
-        if let Ok(val) = std::env::var(key) {
-            merged.insert(key.clone(), val);
-        }
-    }
     for (k, v) in cli_env {
         merged.insert(k.clone(), v.clone());
     }
     merged.into_iter().collect()
+}
+
+fn build_install_prescription_hint(
+    failure: &PluginFailureKind,
+    manifest_runtime: Option<&PluginRuntime>,
+) -> String {
+    match failure {
+        PluginFailureKind::DependencyMissing {
+            module: Some(m), ..
+        } => format!("安装运行时/依赖：缺少模块 '{m}'（见 manifest runtime 声明）"),
+        PluginFailureKind::DependencyMissing { module: None, .. } => {
+            "安装运行时/依赖（见 manifest runtime 声明）".to_string()
+        }
+        PluginFailureKind::RuntimeMissing { interpreter, .. } => {
+            let mut extras = Vec::new();
+            if let Some(rt) = manifest_runtime {
+                if let Some(ver) = rt.min_version.as_deref().filter(|v| !v.is_empty()) {
+                    extras.push(format!("min_version>={ver}"));
+                }
+                if !rt.modules.is_empty() {
+                    extras.push(format!("modules=[{}]", rt.modules.join(", ")));
+                }
+            }
+            if extras.is_empty() {
+                format!("安装运行时/依赖：需要解释器 '{interpreter}'（见 manifest runtime 声明）")
+            } else {
+                format!(
+                    "安装运行时/依赖：需要解释器 '{interpreter}'（{}；见 manifest runtime 声明）",
+                    extras.join(", ")
+                )
+            }
+        }
+        _ => "安装运行时/依赖（见 manifest runtime 声明）".to_string(),
+    }
+}
+
+fn format_failure_messages(
+    plugin_name: &str,
+    failure: &PluginFailureKind,
+    manifest_runtime: Option<&PluginRuntime>,
+) -> (String, String) {
+    match failure {
+        PluginFailureKind::RuntimeMissing { .. } | PluginFailureKind::DependencyMissing { .. } => {
+            let reason = failure.describe();
+            let install_hint = build_install_prescription_hint(failure, manifest_runtime);
+            let degraded = format!(
+                "插件 '{plugin_name}' 运行环境不满足，已降级跳过（现场数据已记录至快照）\n  原因: {reason}\n  处方（三选一）:\n    ① {install_hint}\n    ② 改用内置宏等价能力（如 {{{{$hmac_sha256}}}}，离线闭环）\n    ③ --allow-missing-plugins 显式降级（本次已自动生效）"
+            );
+            let blocking = format!(
+                "插件 '{plugin_name}' 运行环境不满足（{}）\n  原因: {reason}\n  处方（三选一）:\n    ① {install_hint}\n    ② 改用内置宏等价能力（如 {{{{$hmac_sha256}}}}，离线闭环）\n    ③ --allow-missing-plugins 显式降级",
+                failure.kind_label()
+            );
+            (degraded, blocking)
+        }
+        _ => {
+            let detail = format!("{}: {}", failure.kind_label(), failure.describe());
+            let degraded = format!(
+                "插件 '{plugin_name}' 失败（{detail}），已降级跳过（现场数据已记录至快照）"
+            );
+            let blocking = format!("插件 '{plugin_name}' 执行失败（{detail}）");
+            (degraded, blocking)
+        }
+    }
 }
 
 fn apply_patch_to_view(
@@ -224,6 +279,28 @@ impl PluginPipeline {
                 continue;
             };
 
+            let manifest_runtime = registry.runtime_for_executable(exe_path);
+            if let Err((interpreter, searched_dirs)) =
+                preflight_runtime(manifest_runtime, std::env::var_os("PATH").as_deref())
+            {
+                let failure = PluginFailureKind::RuntimeMissing {
+                    interpreter,
+                    detail: format!("解释器未找到（PATH 搜索 {searched_dirs} 个目录）"),
+                };
+                let (degraded_msg, block_msg) =
+                    format_failure_messages(&directive.name, &failure, manifest_runtime);
+                if Self::gate_degradation(
+                    &mut outcome,
+                    directive,
+                    options,
+                    &degraded_msg,
+                    &block_msg,
+                ) {
+                    break;
+                }
+                continue;
+            }
+
             match hook.cache_scope {
                 PluginCacheScope::Suite => {
                     let cache_key = hook_cache_key(directive);
@@ -242,7 +319,7 @@ impl PluginPipeline {
                     match Self::invoke_hook_once(
                         directive,
                         exe_path,
-                        &hook.requires_env,
+                        manifest_runtime,
                         options,
                         &mut outcome,
                         resolved_url,
@@ -282,7 +359,7 @@ impl PluginPipeline {
                     match Self::invoke_hook_once(
                         directive,
                         exe_path,
-                        &hook.requires_env,
+                        manifest_runtime,
                         options,
                         &mut outcome,
                         resolved_url,
@@ -311,7 +388,7 @@ impl PluginPipeline {
                     match Self::invoke_hook_once(
                         directive,
                         exe_path,
-                        &hook.requires_env,
+                        manifest_runtime,
                         options,
                         &mut outcome,
                         resolved_url,
@@ -350,7 +427,7 @@ impl PluginPipeline {
     async fn invoke_hook_once(
         directive: &PluginDirective,
         exe_path: &std::path::Path,
-        requires_env: &[String],
+        manifest_runtime: Option<&PluginRuntime>,
         options: &PluginRuntimeOptions,
         outcome: &mut PluginStageOutcome,
         resolved_url: &str,
@@ -374,7 +451,7 @@ impl PluginPipeline {
         })
         .to_string();
 
-        let env_overrides = build_plugin_env_overrides(requires_env, &options.plugin_env);
+        let env_overrides = build_plugin_env_overrides(&options.plugin_env);
         let invocation =
             match invoke_plugin(exe_path, &payload, options.plugin_timeout, &env_overrides).await {
                 Ok(inv) => inv,
@@ -422,12 +499,8 @@ impl PluginPipeline {
         };
 
         if let Some(failure) = failure {
-            let detail = format!("{}: {}", failure.kind_label(), failure.describe());
-            let degraded_msg = format!(
-                "插件 '{}' 失败（{detail}），已降级跳过（现场数据已记录至快照）",
-                directive.name
-            );
-            let block_msg = format!("插件 '{}' 执行失败（{detail}）", directive.name);
+            let (degraded_msg, block_msg) =
+                format_failure_messages(&directive.name, &failure, manifest_runtime);
             return if Self::gate_degradation(outcome, directive, options, &degraded_msg, &block_msg)
             {
                 HookInvokeStep::Break

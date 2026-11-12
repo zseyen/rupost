@@ -53,15 +53,15 @@ impl ConfigLoader {
     /// 从指定路径加载脱敏策略，区分“文件不存在”（静默回退）与“读取/解析失败”（返回告警并回退内置默认策略）。
     fn load_redaction_policy_from_path(
         path: &Path,
-    ) -> (crate::exporter::redact::RedactionPolicy, Option<String>) {
+    ) -> (crate::security::redact::RedactionPolicy, Option<String>) {
         if !path.exists() {
-            return (crate::exporter::redact::RedactionPolicy::builtin(), None);
+            return (crate::security::redact::RedactionPolicy::builtin(), None);
         }
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
                 return (
-                    crate::exporter::redact::RedactionPolicy::builtin(),
+                    crate::security::redact::RedactionPolicy::builtin(),
                     Some(format!(
                         "[!] 读取 {} 失败: {e}，已回退到内置默认脱敏策略",
                         path.display()
@@ -69,10 +69,10 @@ impl ConfigLoader {
                 );
             }
         };
-        match crate::exporter::redact::RedactionPolicy::from_toml_str(&content) {
+        match crate::security::redact::RedactionPolicy::from_toml_str(&content) {
             Ok(policy) => (policy, None),
             Err(e) => (
-                crate::exporter::redact::RedactionPolicy::builtin(),
+                crate::security::redact::RedactionPolicy::builtin(),
                 Some(format!(
                     "[!] 解析 {} 脱敏策略失败: {e}，已回退到内置默认脱敏策略",
                     path.display()
@@ -82,9 +82,9 @@ impl ConfigLoader {
     }
 
     /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
-    pub fn find_and_load_redaction_policy() -> crate::exporter::redact::RedactionPolicy {
+    pub fn find_and_load_redaction_policy() -> crate::security::redact::RedactionPolicy {
         let Some(path) = Self::find_config_path() else {
-            return crate::exporter::redact::RedactionPolicy::builtin();
+            return crate::security::redact::RedactionPolicy::builtin();
         };
         let (policy, warning) = Self::load_redaction_policy_from_path(&path);
         if let Some(w) = warning {

@@ -140,11 +140,11 @@ fn capture_name_from_source(source: &str) -> String {
     }
 }
 
-fn is_key_sensitive(key: &str, policy: Option<&crate::exporter::redact::RedactionPolicy>) -> bool {
+fn is_key_sensitive(key: &str, policy: Option<&crate::security::redact::RedactionPolicy>) -> bool {
     if let Some(p) = policy {
         p.is_sensitive(key)
     } else {
-        crate::exporter::redact::is_sensitive_key(key)
+        crate::security::redact::is_sensitive_key(key)
     }
 }
 
@@ -157,7 +157,7 @@ pub fn build_trace_plan(entries: &[HistoryEntry]) -> TracePlan {
 /// 接受显式脱敏策略的溯源计划构建入口
 pub fn build_trace_plan_with_policy(
     entries: &[HistoryEntry],
-    policy: Option<&crate::exporter::redact::RedactionPolicy>,
+    policy: Option<&crate::security::redact::RedactionPolicy>,
 ) -> TracePlan {
     let mut plan = TracePlan::default();
 
@@ -480,7 +480,7 @@ mod tests {
     /// URL query 中的溯源值末尾带 #fragment 时不应被锚点污染；自定义脱敏键不进溯源候选
     #[test]
     fn test_trace_query_with_fragment_and_custom_policy() {
-        use crate::exporter::redact::RedactionPolicy;
+        use crate::security::redact::RedactionPolicy;
 
         let entries = vec![
             entry(

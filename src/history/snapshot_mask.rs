@@ -1,6 +1,6 @@
 //! 黑匣子契约快照与重放快照脱敏（02 §4 凭据掩码 SSOT）。
 
-use crate::exporter::redact::{
+use crate::security::redact::{
     is_sensitive_key, mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text,
     redact_header_value, redact_url,
 };

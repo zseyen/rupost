@@ -1,10 +1,10 @@
 use crate::Result;
-use crate::exporter::redact::is_sensitive_key;
 use crate::history::model::HistoryEntry;
+use crate::security::redact::is_sensitive_key;
 use colored::Colorize;
 use std::collections::{BTreeSet, HashMap};
 
-fn is_key_sensitive(key: &str, policy: Option<&crate::exporter::redact::RedactionPolicy>) -> bool {
+fn is_key_sensitive(key: &str, policy: Option<&crate::security::redact::RedactionPolicy>) -> bool {
     if let Some(p) = policy {
         p.is_sensitive(key)
     } else {
@@ -36,7 +36,7 @@ impl HttpGenerator {
     pub fn generate_with_policy(
         entries: &[HistoryEntry],
         templatize_host: bool,
-        policy: Option<&crate::exporter::redact::RedactionPolicy>,
+        policy: Option<&crate::security::redact::RedactionPolicy>,
     ) -> Result<(String, Vec<String>)> {
         let mut output = String::new();
         let mut variables = BTreeSet::new();
@@ -93,7 +93,7 @@ impl HttpGenerator {
         used_names: &mut HashMap<String, usize>,
         captures: Option<&[&super::trace::TracedLink]>,
         traced: Option<&super::trace::TracePlan>,
-        policy: Option<&crate::exporter::redact::RedactionPolicy>,
+        policy: Option<&crate::security::redact::RedactionPolicy>,
     ) -> String {
         let mut block = String::new();
 
@@ -330,7 +330,7 @@ impl HttpGenerator {
         value: &serde_json::Value,
         key: Option<&str>,
         traced: Option<&super::trace::TracePlan>,
-        policy: Option<&crate::exporter::redact::RedactionPolicy>,
+        policy: Option<&crate::security::redact::RedactionPolicy>,
     ) -> serde_json::Value {
         use serde_json::Value;
         if let Value::String(s) = value
@@ -385,7 +385,7 @@ impl HttpGenerator {
         raw: &str,
         variables: &mut BTreeSet<String>,
         traced: Option<&super::trace::TracePlan>,
-        policy: Option<&crate::exporter::redact::RedactionPolicy>,
+        policy: Option<&crate::security::redact::RedactionPolicy>,
     ) -> String {
         let (before_hash, after_hash) = match raw.split_once('#') {
             Some((bh, ah)) => (bh, Some(ah)),
@@ -440,7 +440,7 @@ impl HttpGenerator {
         query: &str,
         variables: &mut BTreeSet<String>,
         traced: Option<&super::trace::TracePlan>,
-        policy: Option<&crate::exporter::redact::RedactionPolicy>,
+        policy: Option<&crate::security::redact::RedactionPolicy>,
     ) -> (String, bool) {
         let mut templated = false;
         let rebuilt: Vec<String> = query
@@ -502,8 +502,8 @@ mod tests {
 
     #[test]
     fn test_generator_with_custom_redaction_policy() {
-        use crate::exporter::redact::RedactionPolicy;
         use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
+        use crate::security::redact::RedactionPolicy;
         use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
         let mut headers = HeaderMap::new();

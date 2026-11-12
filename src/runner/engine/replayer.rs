@@ -416,7 +416,7 @@ impl ReplayExecutor {
                         diffs.join("; ")
                     };
                     let summary = crate::ai::redactor::redact_free_text(&summary);
-                    let summary = crate::exporter::redact::mask_pii(&summary);
+                    let summary = crate::security::redact::mask_pii(&summary);
                     let summary = crate::ai::redactor::truncate_utf8_safe(&summary, 512);
                     (Some(false), Some(summary))
                 }

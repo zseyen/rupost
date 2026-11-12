@@ -1,4 +1,4 @@
-pub use crate::exporter::redact::{
+pub use crate::security::redact::{
     is_sensitive_key, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value,
     redact_url,
 };
@@ -14,7 +14,7 @@ fn url_regex() -> &'static Regex {
     URL_RE.get_or_init(|| Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("valid url regex"))
 }
 
-/// 自由文本脱敏与内联凭据掩码下沉至 `exporter::redact`（B0 掩码原语统一归位，顶部 re-export）。
+/// 自由文本脱敏与内联凭据掩码下沉至 `security::redact`（B0 掩码原语统一归位，顶部 re-export）。
 /// 将文本中的 URL 整体替换为 `<url>` 占位符（用于去重签名：同端点不同实例同签名）
 pub fn mask_urls(text: &str) -> String {
     url_regex().replace_all(text, "<url>").to_string()
@@ -51,7 +51,7 @@ pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
 /// 递归遍历 JSON Value，将命中 `is_sensitive_key` 的对象字段值替换为 `"[REDACTED]"`，
 /// 对 `phone`/`mobile`/`id_card` 数值叶子及普通字符串叶子中的 PII 统一打码 `***`（结构保留）
 pub fn redact_json_value(val: &mut Value) {
-    crate::exporter::redact::mask_json_pii_value_in_place(val);
+    crate::security::redact::mask_json_pii_value_in_place(val);
 }
 
 /// 对响应体进行结构化脱敏并安全截断至 `max_bytes`：
@@ -272,7 +272,7 @@ mod tests {
             }
         }"#;
         let ai_out = redact_and_truncate_body(raw, 4096);
-        let exp_out = crate::exporter::redact::mask_body_secrets(raw);
+        let exp_out = crate::security::redact::mask_body_secrets(raw);
         let ai_val: Value = serde_json::from_str(&ai_out).unwrap();
         let exp_val: Value = serde_json::from_str(&exp_out).unwrap();
         assert_eq!(

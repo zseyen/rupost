@@ -47,10 +47,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             } = args;
 
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
-            let explain_enabled = explain
-                || std::env::var("RUPOST_AI_EXPLAIN").is_ok_and(|v| {
-                    matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
-                });
+            let explain_enabled =
+                explain || rupost::security::fs::env_flag_enabled("RUPOST_AI_EXPLAIN");
             let env_label = env.clone();
             let options = rupost::runner::TestSuiteOptions {
                 paths,
@@ -297,7 +295,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             } else {
                 // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
                 // 先从 cli.args 剥离 rupost 路由旗标再查表，确保前置/后置均可达插件命令。
-                let parsed = super::plugin_route::parse_routing_args(&cli.args);
+                let parsed = super::plugin_route::parse_routing_args(&cli.args)?;
                 let builtins = super::plugin_route::builtin_subcommand_names();
                 let registry =
                     super::plugin_route::discover_for_routing(parsed.allow_project_plugins);
@@ -324,7 +322,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                         std::process::exit(2);
                     }
                     super::plugin_route::RoutingDecision::Inline => {
-                        runner::run(RunParams::from_cli(&cli)).await?;
+                        let mut params = RunParams::from_cli(&cli);
+                        params.args = parsed.passthrough;
+                        runner::run(params).await?;
                     }
                 }
             }

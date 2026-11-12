@@ -612,3 +612,183 @@ async fn test_run_test_suite_empty_dir_smoke() {
     assert!(!outcome.has_failure);
     assert!(outcome.batch_results.is_empty());
 }
+
+#[tokio::test]
+async fn test_suite_setup_respects_allow_project_plugins_env_flag() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/proj-env"))
+        .and(header("X-Proj-Plug", "yes"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let work = tempfile::tempdir().unwrap();
+    let fake_home = work.path().join("home");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    let plugin_dir = work.path().join(".rupost").join("plugins");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let _ = install_hook_plugin(
+        &plugin_dir,
+        "proj-sign",
+        "sign",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Proj-Plug\",\"yes\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
+    );
+
+    let suite = work.path().join("suite.http");
+    std::fs::write(
+        &suite,
+        format!(
+            "### check\nGET {}/proj-env\n@sign proj-sign\n\n# @assert status == 200\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    // RUPOST_ALLOW_PROJECT_PLUGINS=0 不得放行项目级插件
+    let denied = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(work.path())
+        .env("HOME", &fake_home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("RUPOST_HISTORY_DIR", work.path().join("hist_denied"))
+        .env("RUPOST_ALLOW_PROJECT_PLUGINS", "0")
+        .args(["test"])
+        .arg(&suite)
+        .output()
+        .unwrap();
+    assert!(
+        !denied.status.success(),
+        "RUPOST_ALLOW_PROJECT_PLUGINS=0 不得放行工作区插件"
+    );
+
+    // RUPOST_ALLOW_PROJECT_PLUGINS=1 必须放行工作区插件
+    let allowed = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(work.path())
+        .env("HOME", &fake_home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("RUPOST_HISTORY_DIR", work.path().join("hist_allowed"))
+        .env("RUPOST_ALLOW_PROJECT_PLUGINS", "1")
+        .args(["test"])
+        .arg(&suite)
+        .output()
+        .unwrap();
+    assert!(
+        allowed.status.success(),
+        "RUPOST_ALLOW_PROJECT_PLUGINS=1 应放行工作区插件，stderr: {}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn test_parallel_fail_fast_runs_teardown_for_aborted_in_flight_file() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/slow-work"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(500)))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/fast-fail"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/cleanup-slow"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/cleanup-fail"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/never-run"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/cleanup-never"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let f_slow = dir.path().join("01_slow.http");
+    let f_fail = dir.path().join("02_fail.http");
+    let f_dep = dir.path().join("03_dep.http");
+
+    std::fs::write(
+        &f_slow,
+        format!(
+            "### slow\nGET {0}/slow-work\n\n# @assert status == 200\n\n### slow-td\n# @teardown\nDELETE {0}/cleanup-slow\n\n# @assert status == 204\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &f_fail,
+        format!(
+            "### fail\nGET {0}/fast-fail\n\n# @assert status == 200\n\n### fail-td\n# @teardown\nDELETE {0}/cleanup-fail\n\n# @assert status == 204\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &f_dep,
+        format!(
+            "### dep\n# @depends-on 02_fail.http\nGET {0}/never-run\n\n### dep-td\n# @teardown\nDELETE {0}/cleanup-never\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let mut files_map = HashMap::new();
+    files_map.insert(f_slow.clone(), HttpFileParser::parse_file(&f_slow).unwrap());
+    files_map.insert(f_fail.clone(), HttpFileParser::parse_file(&f_fail).unwrap());
+    files_map.insert(f_dep.clone(), HttpFileParser::parse_file(&f_dep).unwrap());
+
+    let mut deps = HashMap::new();
+    deps.insert(f_dep.clone(), vec![f_fail.clone()]);
+
+    let batch_executor = BatchExecutor::new(TestExecutor::new());
+    let mut context = VariableContext::new();
+    let results = batch_executor
+        .execute_batch(BatchRunRequest {
+            execution_order: vec![f_slow.clone(), f_fail.clone(), f_dep.clone()],
+            dependencies: deps,
+            files_map,
+            context: &mut context,
+            mode: BatchMode::Parallel,
+            concurrency: 2,
+            fail_fast: true,
+        })
+        .await
+        .expect("parallel fail_fast must return Ok");
+
+    server.verify().await;
+
+    let slow_teardowns: Vec<_> = results
+        .iter()
+        .find(|(p, _)| p == &f_slow)
+        .map(|(_, rs)| rs.iter().filter(|r| r.is_teardown && r.success).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        slow_teardowns.len(),
+        1,
+        "已启动但被 fail_fast 中断的 in-flight 文件必须执行 @teardown 并保留结果: {results:?}"
+    );
+    assert!(
+        results.iter().all(|(p, _)| p != &f_dep),
+        "未启动的后继依赖文件不得触发 @teardown: {results:?}"
+    );
+}

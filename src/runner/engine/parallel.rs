@@ -8,7 +8,7 @@ use crate::runner::executor::TestExecutor;
 use crate::runner::path::display_path;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -56,9 +56,10 @@ fn is_non_empty_cookie_state(state: &serde_json::Value) -> bool {
     !matches!(state, serde_json::Value::Null) && !state.as_array().is_some_and(Vec::is_empty)
 }
 
-/// 并行调度产出：结果集 + 末位有效会话 Cookie 状态（仅供临时 `@teardown` 使用，绝不写入持久盘）
+/// 并行调度产出：结果集 + 已启动文件路径（按拓扑序，含被 fail_fast 中断的在途文件）+ 末位有效会话 Cookie 状态
 pub struct ParallelRunOutput {
     pub results: Vec<(PathBuf, Vec<TestResult>)>,
+    pub started_files: Vec<PathBuf>,
     pub final_cookie_state: Option<serde_json::Value>,
 }
 
@@ -110,11 +111,19 @@ impl<'a> ParallelScheduler<'a> {
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(self.concurrency));
         let has_failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started_files = Arc::new(std::sync::Mutex::new(HashSet::<PathBuf>::new()));
+
+        let mut seen_order = HashSet::new();
+        let execution_order: Vec<PathBuf> = self
+            .execution_order
+            .into_iter()
+            .filter(|p| seen_order.insert(p.clone()))
+            .collect();
 
         // 1. 为每个节点建立一个 watch 通道以传递完成状态。初始化为 None (未完成)
         let mut senders = HashMap::new();
         let mut receivers = HashMap::new();
-        for file_path in &self.execution_order {
+        for file_path in &execution_order {
             let (tx, rx) = watch::channel::<Option<TaskOutput>>(None);
             senders.insert(file_path.clone(), tx);
             receivers.insert(file_path.clone(), rx);
@@ -123,11 +132,12 @@ impl<'a> ParallelScheduler<'a> {
         let mut files_map = self.files_map;
         let base_worker_config = WorkerExecutorConfig::from_executor(self.executor);
 
-        for file_path in &self.execution_order {
+        for file_path in &execution_order {
             if let Some(parsed_file) = files_map.remove(file_path) {
                 let file_path = file_path.clone();
                 let sem = Arc::clone(&semaphore);
                 let has_failed_clone = Arc::clone(&has_failed);
+                let started_files_clone = Arc::clone(&started_files);
                 let worker_config = base_worker_config.clone();
                 let fail_fast = self.fail_fast;
 
@@ -145,7 +155,12 @@ impl<'a> ParallelScheduler<'a> {
                 }
 
                 // 获取自己的 Sender，以广播结果状态给后续节点
-                let my_sender = senders.remove(&file_path).unwrap();
+                let my_sender = senders.remove(&file_path).ok_or_else(|| {
+                    crate::error::RupostError::Other(format!(
+                        "并行调度内部错误：缺少节点 {} 的状态通道",
+                        display_path(&file_path)
+                    ))
+                })?;
 
                 join_set.spawn(async move {
                     // 2. 异步等待所有前置依赖项成功运行完成，并获取其传来的变量和 Cookie 状态
@@ -166,7 +181,27 @@ impl<'a> ParallelScheduler<'a> {
                     }
 
                     // 获取并发信号量许可
-                    let _permit = sem.acquire().await.unwrap();
+                    let Ok(_permit) = sem.acquire().await else {
+                        return (file_path, Vec::new(), true);
+                    };
+
+                    // 获取许可后再次检查 fail_fast（避免排队后在已中断情况下启动）
+                    if fail_fast && has_failed_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                        let _ = my_sender.send(Some(TaskOutput {
+                            success: false,
+                            captured_vars: HashMap::new(),
+                            cookie_state: None,
+                        }));
+                        return (file_path, Vec::new(), true);
+                    }
+
+                    // 记录已实际启动执行的文件（供 fail_fast abort_all 后仍触发 @teardown）
+                    {
+                        let mut started = started_files_clone
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        started.insert(file_path.clone());
+                    }
 
                     // 4. 构建合并了前置变量的局部 Context
                     let mut worker_context = base_context.clone();
@@ -264,7 +299,7 @@ impl<'a> ParallelScheduler<'a> {
         // 主执行器（避免 HashMap 无序迭代的随机性，同时支撑后续 @teardown 会话鉴权）。
         let mut all_completed_vars = HashMap::new();
         let mut non_empty_cookie_states: Vec<serde_json::Value> = Vec::new();
-        for file_path in &self.execution_order {
+        for file_path in &execution_order {
             if let Some(rx) = receivers.get(file_path)
                 && let Some(output) = &*rx.borrow()
             {
@@ -287,8 +322,16 @@ impl<'a> ParallelScheduler<'a> {
             );
         }
 
+        let started_set = started_files.lock().unwrap_or_else(|e| e.into_inner());
+        let started_files: Vec<PathBuf> = execution_order
+            .iter()
+            .filter(|p| started_set.contains(*p) || results.iter().any(|(rp, _)| rp == *p))
+            .cloned()
+            .collect();
+
         Ok(ParallelRunOutput {
             results,
+            started_files,
             final_cookie_state: non_empty_cookie_states.pop(),
         })
     }

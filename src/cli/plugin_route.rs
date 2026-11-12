@@ -17,9 +17,11 @@ pub struct ParsedRouteArgs {
 }
 
 /// 从 `cli.args` 任意位置提取 `--allow-project-plugins` 与 `--plugin-env[=...]`
-pub fn parse_routing_args(args: &[String]) -> ParsedRouteArgs {
+pub fn parse_routing_args(args: &[String]) -> Result<ParsedRouteArgs> {
     let mut parsed = ParsedRouteArgs {
-        allow_project_plugins: std::env::var("RUPOST_ALLOW_PROJECT_PLUGINS").is_ok(),
+        allow_project_plugins: rupost::security::fs::env_flag_enabled(
+            "RUPOST_ALLOW_PROJECT_PLUGINS",
+        ),
         ..Default::default()
     };
     let mut iter = args.iter();
@@ -27,16 +29,30 @@ pub fn parse_routing_args(args: &[String]) -> ParsedRouteArgs {
         if arg == "--allow-project-plugins" {
             parsed.allow_project_plugins = true;
         } else if let Some(spec) = arg.strip_prefix("--plugin-env=") {
+            if spec.is_empty() {
+                return Err(rupost::RupostError::Other(
+                    "--plugin-env= 缺少环境变量名".to_string(),
+                ));
+            }
             parsed.allow_env.push(spec.to_string());
         } else if arg == "--plugin-env" {
-            if let Some(spec) = iter.next() {
-                parsed.allow_env.push(spec.clone());
+            let Some(spec) = iter.next() else {
+                return Err(rupost::RupostError::Other(
+                    "--plugin-env 缺少环境变量名参数（用法：--plugin-env KEY 或 --plugin-env KEY=VALUE）"
+                        .to_string(),
+                ));
+            };
+            if spec.is_empty() {
+                return Err(rupost::RupostError::Other(
+                    "--plugin-env 环境变量名不能为空".to_string(),
+                ));
             }
+            parsed.allow_env.push(spec.clone());
         } else {
             parsed.passthrough.push(arg.clone());
         }
     }
-    parsed
+    Ok(parsed)
 }
 
 /// `args[0]` 是否为标准 HTTP 方法（复用 `rupost::http::Method` SSOT）
@@ -92,13 +108,20 @@ pub fn route(
     RoutingDecision::Unknown(first.clone())
 }
 
-/// 发现插件注册表（路由兜底用）。发现失败/冲突告警可见输出，不静默吞掉。
+fn registry_cache_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".rupost").join("registry.json"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"))
+}
+
+/// 发现插件注册表（路由兜底用）。优先命中磁盘缓存（<5ms），发现失败/冲突告警可见输出。
 pub fn discover_for_routing(allow_project_plugins: bool) -> PluginRegistry {
     let options = DiscoverOptions {
         allow_project_plugins,
         project_root: None,
     };
-    match PluginRegistry::discover(&options) {
+    let cache_path = registry_cache_path();
+    match PluginRegistry::load_or_discover(&options, &cache_path) {
         Ok(reg) => {
             for warning in &reg.warnings {
                 eprintln!("[!] {warning}");
@@ -119,12 +142,10 @@ pub fn handle_plugin_command(
 ) -> Result<()> {
     let options = DiscoverOptions {
         allow_project_plugins: allow_project_plugins
-            || std::env::var("RUPOST_ALLOW_PROJECT_PLUGINS").is_ok(),
+            || rupost::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
-    let cache_path = dirs::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"));
+    let cache_path = registry_cache_path();
     let registry = PluginRegistry::load_or_discover(&options, &cache_path)?;
     for warning in &registry.warnings {
         eprintln!("[!] {warning}");
@@ -342,5 +363,31 @@ mod tests {
         let out = sanitize_manifest_text(&"x".repeat(100), 80);
         assert_eq!(out.chars().count(), 81);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn test_parse_routing_args_dangling_plugin_env_errors_and_strips_flags() {
+        let err = parse_routing_args(&["GET".into(), "http://x".into(), "--plugin-env".into()])
+            .expect_err("缺少值的 --plugin-env 必须返回错误");
+        assert!(err.to_string().contains("--plugin-env"));
+
+        let parsed = parse_routing_args(&[
+            "POST".into(),
+            "http://x".into(),
+            "--allow-project-plugins".into(),
+            "--plugin-env=FOO=1".into(),
+            "a=b".into(),
+        ])
+        .unwrap();
+        assert!(parsed.allow_project_plugins);
+        assert_eq!(parsed.allow_env, vec!["FOO=1".to_string()]);
+        assert_eq!(
+            parsed.passthrough,
+            vec![
+                "POST".to_string(),
+                "http://x".to_string(),
+                "a=b".to_string()
+            ]
+        );
     }
 }

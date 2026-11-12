@@ -34,7 +34,8 @@ pub(crate) fn assemble_plugin_runtime(
         plugin_env: parse_plugin_env_specs(&options.plugin_env),
     };
     let discover_options = DiscoverOptions {
-        allow_project_plugins: options.allow_project_plugins,
+        allow_project_plugins: options.allow_project_plugins
+            || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
     let cache_path = dirs::home_dir()

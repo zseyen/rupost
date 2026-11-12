@@ -103,4 +103,23 @@ pub enum PluginCacheScope {
 }
 
 /// 插件执行时子进程的环境继承策略（03 §6.2 白名单裁决）
+#[cfg(not(windows))]
 pub const PLUGIN_ENV_ALLOWLIST: [&str; 6] = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "TZ"];
+
+/// Windows 子进程额外需要系统根路径与临时目录变量，否则 CreateProcess/Runtime 初始化可能失败
+#[cfg(windows)]
+pub const PLUGIN_ENV_ALLOWLIST: [&str; 13] = [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "LANG",
+    "TERM",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TZ",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+];

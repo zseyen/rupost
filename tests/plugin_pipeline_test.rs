@@ -1,6 +1,8 @@
 //! Step 2 TDD 守护测试：PluginPipeline 阶段上下文串联、SuiteHookCache 键隔离、
 //! requires_env 环境变量放行与阻断错误文案一致性。
 
+mod common;
+
 use rupost::plugin::pipeline::{PluginRuntimeOptions, SuiteHookCache};
 use rupost::plugin::types::{
     HookCapability, PluginCacheScope, PluginDirective, PluginManifest, PluginStage,
@@ -13,16 +15,13 @@ fn install_script_plugin(
     stage: PluginStage,
     cache_scope: PluginCacheScope,
     requires_env: Vec<String>,
-    script_body: &str,
+    directives: &str,
 ) -> std::path::PathBuf {
-    std::fs::create_dir_all(root).unwrap();
-    let exe = root.join(format!("rupost-plugin-{name}"));
-    std::fs::write(&exe, script_body).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let exe = common::mock_plugin::install_mock_executable(
+        root,
+        &format!("rupost-plugin-{name}"),
+        directives,
+    );
     let manifest = PluginManifest {
         manifest_version: "1.0".to_string(),
         name: name.to_string(),
@@ -56,10 +55,7 @@ async fn test_pipeline_chains_headers_body_and_variables_across_stages() {
         PluginStage::Prepare,
         PluginCacheScope::None,
         vec![],
-        r#"#!/bin/sh
-cat > /dev/null
-echo '{"protocol_version":"1.0","extra_headers":[["Authorization","Bearer stage1"]],"remove_headers":[],"mutated_body":"{\"signed_payload\":1}","set_variables":{"TOKEN":"tok-1"},"warnings":[]}'
-"#,
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer stage1\"]],\"remove_headers\":[],\"mutated_body\":\"{\\\"signed_payload\\\":1}\",\"set_variables\":{\"TOKEN\":\"tok-1\"},\"warnings\":[]}\n",
     );
     let sign_dump = dir.path().join("sign_stdin.json");
     let sign_exe = install_script_plugin(
@@ -69,7 +65,7 @@ echo '{"protocol_version":"1.0","extra_headers":[["Authorization","Bearer stage1
         PluginCacheScope::None,
         vec![],
         &format!(
-            "#!/bin/sh\ncat > \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Sig\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "CAPTURE_STDIN={}\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Sig\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             sign_dump.display()
         ),
     );
@@ -135,7 +131,7 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
         PluginCacheScope::Suite,
         vec![],
         &format!(
-            "#!/bin/sh\ninput=$(cat)\necho \"$input\" >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Env\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "APPEND_STDIN={}\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Env\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             counter_file.display()
         ),
     );
@@ -208,7 +204,7 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         PluginStage::Sign,
         PluginCacheScope::None,
         vec!["RUPOST_TEST_REQ_TOKEN".to_string()],
-        "#!/bin/sh\ncat > /dev/null\necho \"{\\\"protocol_version\\\":\\\"1.0\\\",\\\"extra_headers\\\":[[\\\"X-Tok\\\",\\\"$RUPOST_TEST_REQ_TOKEN\\\"]],\\\"remove_headers\\\":[],\\\"mutated_body\\\":null,\\\"set_variables\\\":{},\\\"warnings\\\":[]}\"\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Tok\",\"$ENV{RUPOST_TEST_REQ_TOKEN}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
     // 也测非 RUPOST_ 前缀的普通 env 名（验证 manifest requires_env 本身生效）
     unsafe {
@@ -220,7 +216,7 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         PluginStage::Sign,
         PluginCacheScope::None,
         vec!["CUSTOM_SIGN_SECRET_STEP2".to_string()],
-        "#!/bin/sh\ncat > /dev/null\nif [ -z \"$CUSTOM_SIGN_SECRET_STEP2\" ]; then exit 2; fi\necho \"{\\\"protocol_version\\\":\\\"1.0\\\",\\\"extra_headers\\\":[[\\\"X-Custom\\\",\\\"$CUSTOM_SIGN_SECRET_STEP2\\\"]],\\\"remove_headers\\\":[],\\\"mutated_body\\\":null,\\\"set_variables\\\":{},\\\"warnings\\\":[]}\"\n",
+        "READ_STDIN=\nCHECK_ENV_PRESENT=CUSTOM_SIGN_SECRET_STEP2\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Custom\",\"$ENV{CUSTOM_SIGN_SECRET_STEP2}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
     let _ = exe;
     let mut reg = PluginRegistry::new();
@@ -297,7 +293,7 @@ async fn test_pipeline_per_request_hooks_run_concurrently_without_global_lock() 
         PluginCacheScope::None,
         vec![],
         &format!(
-            "#!/bin/sh\ncat > /dev/null\ntouch \"{0}/a.started\"\ni=0\nwhile [ ! -f \"{0}/b.started\" ]; do\n  sleep 0.02\n  i=$((i+1))\n  if [ $i -ge 100 ]; then exit 41; fi\ndone\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Side\",\"A\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "READ_STDIN=\nTOUCH={0}/a.started\nWAIT_FILE={0}/b.started|2000|41\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Side\",\"A\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             dir.path().display()
         ),
     );
@@ -308,7 +304,7 @@ async fn test_pipeline_per_request_hooks_run_concurrently_without_global_lock() 
         PluginCacheScope::None,
         vec![],
         &format!(
-            "#!/bin/sh\ncat > /dev/null\ntouch \"{0}/b.started\"\ni=0\nwhile [ ! -f \"{0}/a.started\" ]; do\n  sleep 0.02\n  i=$((i+1))\n  if [ $i -ge 100 ]; then exit 42; fi\ndone\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Side\",\"B\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "READ_STDIN=\nTOUCH={0}/b.started\nWAIT_FILE={0}/a.started|2000|42\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Side\",\"B\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             dir.path().display()
         ),
     );
@@ -371,7 +367,7 @@ async fn test_pipeline_suite_hook_cold_start_singleflight_dedup() {
         PluginCacheScope::Suite,
         vec![],
         &format!(
-            "#!/bin/sh\ncat > /dev/null\nsleep 0.04\necho hit >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer singleflight\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "READ_STDIN=\nSLEEP_MS=40\nAPPEND_LINE={}|hit\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer singleflight\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             calls_file.display()
         ),
     );
@@ -483,7 +479,7 @@ async fn test_pipeline_request_scope_reuses_patch_within_request_only() {
         PluginCacheScope::Request,
         vec![],
         &format!(
-            "#!/bin/sh\ninput=$(cat)\necho \"$input\" >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Req\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "APPEND_STDIN={}\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Req\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             counter_file.display()
         ),
     );

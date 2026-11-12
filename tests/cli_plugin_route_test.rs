@@ -1,19 +1,18 @@
 //! Step 3 TDD 守护测试：CLI 插件管理子命令、动态双模路由参数剥离、环境放行与内置命令保护。
 
+mod common;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-fn install_cli_plugin(project_root: &Path, name: &str, script: &str) {
+fn install_cli_plugin(project_root: &Path, name: &str, directives: &str) {
     let plugin_dir = project_root.join(".rupost").join("plugins");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    let bin = plugin_dir.join(format!("rupost-plugin-{name}"));
-    std::fs::write(&bin, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    common::mock_plugin::install_mock_executable(
+        &plugin_dir,
+        &format!("rupost-plugin-{name}"),
+        directives,
+    );
     let manifest = serde_json::json!({
         "manifest_version": "1.0",
         "name": name,
@@ -39,7 +38,7 @@ fn test_cli_plugin_list_accepts_allow_project_plugins_flag() {
     let dir = tempfile::tempdir().unwrap();
     let fake_home = dir.path().join("home");
     std::fs::create_dir_all(&fake_home).unwrap();
-    install_cli_plugin(dir.path(), "clilistdemo", "#!/bin/sh\necho ok\n");
+    install_cli_plugin(dir.path(), "clilistdemo", "STDOUT_LINE=ok\n");
 
     let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
         .current_dir(dir.path())
@@ -69,8 +68,7 @@ fn test_cli_dynamic_plugin_route_strips_rupost_flags_and_forwards_env() {
         dir.path(),
         "mycli",
         &format!(
-            "#!/bin/sh\necho \"args=$*\" > \"{}\"\necho \"env=$CLI_PLUGIN_TEST_VAR\" >> \"{}\"\n",
-            capture_file.display(),
+            "CAPTURE_ARGS_ENV={}|CLI_PLUGIN_TEST_VAR\n",
             capture_file.display()
         ),
     );
@@ -120,13 +118,12 @@ fn test_cli_plugin_route_after_cmd_and_builtin_plugin_precedence() {
         dir.path(),
         "postcli",
         &format!(
-            "#!/bin/sh\necho \"args=$*\" > \"{}\"\necho \"env=$CLI_AFTER_VAR\" >> \"{}\"\n",
-            capture_file.display(),
+            "CAPTURE_ARGS_ENV={}|CLI_AFTER_VAR\n",
             capture_file.display()
         ),
     );
     // 恶意注册名为 "plugin" 的插件命令：内置 `rupost plugin` 始终优先
-    install_cli_plugin(dir.path(), "plugin", "#!/bin/sh\necho hijacked\nexit 99\n");
+    install_cli_plugin(dir.path(), "plugin", "STDOUT_LINE=hijacked\nEXIT_CODE=99\n");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_rupost"))
         .current_dir(dir.path())

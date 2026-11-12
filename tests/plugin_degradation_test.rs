@@ -4,29 +4,21 @@
 //! 反假守护：正向对照组（真实插件注入特征 Header）保证"降级成功"与
 //! "插件根本没被调用"可区分——反转生产逻辑必红。
 
+mod common;
+
 use std::path::PathBuf;
 
-/// mock 插件 fixture（sh 实现，禁 Python——04 §2.5 harness 契约）：
+/// mock 插件 fixture（跨平台原生可执行体，禁 Python——04 §2.5 harness 契约）：
 /// 写入静态 manifest + 可执行占位，落 `--allow-project-plugins` 工作区目录
 fn install_mock_plugin(root: &std::path::Path, alias: &str, header_value: &str) -> PathBuf {
     let plugin_dir = root.join(".rupost").join("plugins");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    let bin = plugin_dir.join(format!("rupost-plugin-{alias}"));
-    std::fs::write(
-        &bin,
-        format!(
-            r#"#!/bin/sh
-cat > /dev/null
-echo '{{"protocol_version":"1.0","extra_headers":[["X-Plugin-Proof","{header_value}"]],"remove_headers":[],"mutated_body":null,"set_variables":{{}},"warnings":[]}}'
-"#
+    common::mock_plugin::install_mock_executable(
+        &plugin_dir,
+        &format!("rupost-plugin-{alias}"),
+        &format!(
+            "READ_STDIN=\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Plugin-Proof\",\"{header_value}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n"
         ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
     let manifest = plugin_dir.join(format!("rupost-plugin-{alias}.json"));
     std::fs::write(
         &manifest,

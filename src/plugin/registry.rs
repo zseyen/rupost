@@ -33,17 +33,33 @@ pub fn is_manifest_file(file_name: &str) -> bool {
 }
 
 /// 由 manifest 文件名推导同目录插件二进制名（`rupost-plugin-<name>.json` →
-/// `rupost-plugin-<name>`；兼容 `rupost-<name>`）
+/// `rupost-plugin-<name>`；兼容 `rupost-<name>`；Windows 额外探测 `.exe`/`.cmd`/`.bat`）
 fn sibling_executables(manifest_path: &Path) -> Vec<PathBuf> {
     let stem = manifest_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let mut out = vec![manifest_path.with_file_name(stem)];
+    let mut bases = vec![manifest_path.with_file_name(stem)];
     if let Some(name) = stem.strip_prefix("rupost-plugin-") {
-        out.push(manifest_path.with_file_name(format!("rupost-{name}")));
+        bases.push(manifest_path.with_file_name(format!("rupost-{name}")));
     }
-    out
+    #[cfg(windows)]
+    {
+        let mut out = Vec::with_capacity(bases.len() * 4);
+        for base in &bases {
+            for ext in ["exe", "cmd", "bat"] {
+                let mut os = base.as_os_str().to_os_string();
+                os.push(format!(".{ext}"));
+                out.push(PathBuf::from(os));
+            }
+            out.push(base.clone());
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        bases
+    }
 }
 
 /// 收集有序且去重的插件扫描根目录：

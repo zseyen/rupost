@@ -1,6 +1,8 @@
 //! Step 4 守护测试：Runner 全场景插件装配、并行并发与 Cookie/变量回流、
 //! 无注册表/早退诊断防丢失、`--plugin-env KEY`、串行 @teardown source 传递及内联失败退出码。
 
+mod common;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,15 +20,8 @@ use rupost::variable::VariableContext;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn write_exec_script(dir: &Path, file_name: &str, body: &str) -> PathBuf {
-    let exe = dir.join(file_name);
-    std::fs::write(&exe, body).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    exe
+fn write_exec_script(dir: &Path, file_name: &str, directives: &str) -> PathBuf {
+    common::mock_plugin::install_mock_executable(dir, file_name, directives)
 }
 
 fn install_hook_plugin(
@@ -81,7 +76,7 @@ async fn test_parallel_batch_runs_plugins_and_shares_suite_cache() {
         PluginCacheScope::Suite,
         vec![],
         &format!(
-            "#!/bin/sh\ncat > /dev/null\nsleep 0.03\necho call >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer suite-tok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "READ_STDIN=\nSLEEP_MS=30\nAPPEND_LINE={}|call\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer suite-tok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             auth_calls.display()
         ),
     );
@@ -92,7 +87,7 @@ async fn test_parallel_batch_runs_plugins_and_shares_suite_cache() {
         PluginStage::Sign,
         PluginCacheScope::None,
         vec![],
-        "#!/bin/sh\ncat > /dev/null\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Signed\",\"sig-ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Signed\",\"sig-ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
 
     let mut reg = PluginRegistry::new();
@@ -307,7 +302,7 @@ async fn test_early_return_paths_preserve_diagnostics_and_duration() {
         PluginStage::Sign,
         PluginCacheScope::None,
         vec![],
-        "#!/bin/sh\ncat > /dev/null\necho 'stderr-trace-info' 1>&2\nexit 7\n",
+        "READ_STDIN=\nSTDERR_LINE=stderr-trace-info\nEXIT_CODE=7\n",
     );
     let mut reg = PluginRegistry::new();
     reg.register_manifest(fail_exe, fail_manifest);
@@ -402,7 +397,7 @@ async fn test_run_test_suite_supports_plugin_env_key_without_value_via_binary() 
         PluginStage::Sign,
         PluginCacheScope::None,
         vec![], // manifest 未声明 requires_env，专测 --plugin-env KEY 放行
-        "#!/bin/sh\ncat > /dev/null\necho \"{\\\"protocol_version\\\":\\\"1.0\\\",\\\"extra_headers\\\":[[\\\"X-Inherited\\\",\\\"$RUPOST_TEST_INHERIT_ENV\\\"]],\\\"remove_headers\\\":[],\\\"mutated_body\\\":null,\\\"set_variables\\\":{},\\\"warnings\\\":[]}\"\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Inherited\",\"$ENV{RUPOST_TEST_INHERIT_ENV}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
 
     let suite = work.path().join("suite.http");

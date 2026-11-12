@@ -9,16 +9,10 @@ use crate::history::storage::get_storage;
 use std::fs;
 use std::path::Path;
 
-/// 将 SnapshotSuite 写入到指定路径
+/// 将 SnapshotSuite 写入到指定路径（Unix 下权限强制 0600，原子写入且不跟随符号链接）。
 pub fn write_snapshot_suite<P: AsRef<Path>>(suite: &SnapshotSuite, path: P) -> Result<()> {
-    if let Some(parent) = path.as_ref().parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-    }
     let json = serde_json::to_string_pretty(suite)?;
-    fs::write(path, json).map_err(RupostError::IoError)?;
-    Ok(())
+    crate::security::fs::write_private_file_atomic(path.as_ref(), json.as_bytes())
 }
 
 /// 从指定路径读取 SnapshotSuite

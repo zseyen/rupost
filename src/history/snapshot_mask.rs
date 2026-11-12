@@ -98,9 +98,15 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
     // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
     // 非 UTF-8 值原样保留（掩码通道不损伤结构）
     let mask_headers = |map: &mut reqwest::header::HeaderMap| {
+        let mut last_name: Option<reqwest::header::HeaderName> = None;
         let drained: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> = map
             .drain()
-            .map(|(name, value)| (name.expect("valid header name"), value))
+            .filter_map(|(name, value)| {
+                if let Some(n) = name {
+                    last_name = Some(n);
+                }
+                last_name.clone().map(|n| (n, value))
+            })
             .collect();
         for (name, value) in drained {
             match value.to_str() {

@@ -1,12 +1,13 @@
 //! 黑匣子快照契约与领域模型守护测试（拆分自超长存储文件，保持单文件轻量可维护）。
 
 use rupost::history::model::{
-    ExecutionSnapshotFile, MaskingMode, RequestSnapshot, RunnerFingerprint,
-    SNAPSHOT_SCHEMA_VERSION, SocketDiagnostics, TimingWaterfallUs,
+    ExecutionSnapshotFile, MaskingMode, RequestSnapshot, ResponseSnapshot, RunnerFingerprint,
+    SNAPSHOT_SCHEMA_VERSION, SnapshotEntry, SnapshotSuite, SocketDiagnostics, TimingWaterfallUs,
 };
 use rupost::history::storage::{
     read_execution_snapshot, save_batch_snapshot, write_execution_snapshot,
 };
+use rupost::history::{mask_snapshot_entry, read_snapshot_suite, write_snapshot_suite};
 use rupost::http::Response;
 use rupost::http::diagnose::{CertInfo, DiagnosticsReport};
 use rupost::http::timing::RequestTiming;
@@ -339,4 +340,161 @@ fn test_save_batch_snapshot_honors_custom_body_limit() {
     let body2 = snap2.entries[0].response.as_ref().unwrap();
     assert!(!body2.body_truncated);
     assert!(body2.body_sha256.is_none());
+}
+
+#[test]
+fn test_mask_snapshot_entry_preserves_and_masks_multi_value_set_cookie_headers() {
+    let mut req_headers = reqwest::header::HeaderMap::new();
+    req_headers.append("cookie", "session=s1".parse().unwrap());
+    req_headers.append("cookie", "csrf=c2".parse().unwrap());
+    req_headers.append("x-trace", "trace-1".parse().unwrap());
+    req_headers.append("x-trace", "trace-2".parse().unwrap());
+
+    let mut resp_headers = reqwest::header::HeaderMap::new();
+    resp_headers.append("set-cookie", "sid=secret_one; HttpOnly".parse().unwrap());
+    resp_headers.append("set-cookie", "refresh=secret_two; Path=/".parse().unwrap());
+    resp_headers.append("set-cookie", "prefs=secret_three".parse().unwrap());
+    resp_headers.append("x-tag", "alpha".parse().unwrap());
+    resp_headers.append("x-tag", "beta".parse().unwrap());
+
+    let mut entry = SnapshotEntry::new_success(
+        "multi-cookie".to_string(),
+        RequestSnapshot {
+            method: "POST".to_string(),
+            url: "https://api.example.com/login".to_string(),
+            headers: req_headers,
+            body: None,
+            timeout: None,
+        },
+        ResponseSnapshot {
+            status: 200,
+            headers: resp_headers,
+            body: "ok".to_string(),
+        },
+    );
+
+    mask_snapshot_entry(&mut entry);
+
+    let cookies: Vec<&str> = entry
+        .request
+        .headers
+        .get_all("cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(cookies, vec!["[REDACTED]", "[REDACTED]"]);
+
+    let traces: Vec<&str> = entry
+        .request
+        .headers
+        .get_all("x-trace")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(traces, vec!["trace-1", "trace-2"]);
+
+    let resp = entry.response.as_ref().unwrap();
+    let set_cookies: Vec<&str> = resp
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(
+        set_cookies,
+        vec!["[REDACTED]", "[REDACTED]", "[REDACTED]"],
+        "多值 Set-Cookie 必须全部保留数量且逐条脱敏"
+    );
+
+    let tags: Vec<&str> = resp
+        .headers
+        .get_all("x-tag")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(tags, vec!["alpha", "beta"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_snapshot_writes_protect_symlinks_and_enforce_0600_permissions() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let dir = tempfile::TempDir::new().unwrap();
+
+    // 1. write_execution_snapshot: 不跟随符号链接且强约束 0600
+    let victim_exec = dir.path().join("victim_exec.txt");
+    std::fs::write(&victim_exec, "precious-exec-target").unwrap();
+    let link_exec = dir.path().join("exec_snap.json");
+    symlink(&victim_exec, &link_exec).unwrap();
+
+    let exec_snap = ExecutionSnapshotFile {
+        schema_version: SNAPSHOT_SCHEMA_VERSION.to_string(),
+        generated_at: chrono::Utc::now(),
+        environment: None,
+        runner_fingerprint: RunnerFingerprint {
+            os: "test".to_string(),
+            arch: "test".to_string(),
+            rupost_version: "0.0.0".to_string(),
+        },
+        masking: MaskingMode::None,
+        entries: vec![],
+    };
+    write_execution_snapshot(&exec_snap, &link_exec).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&victim_exec).unwrap(),
+        "precious-exec-target",
+        "write_execution_snapshot 不得跟随符号链接覆写目标文件"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&link_exec)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let exec_mode = std::fs::metadata(&link_exec).unwrap().permissions().mode() & 0o777;
+    assert_eq!(exec_mode, 0o600);
+    assert_eq!(
+        read_execution_snapshot(&link_exec).unwrap().schema_version,
+        "1.0"
+    );
+
+    // 2. write_snapshot_suite: 不跟随符号链接且强约束 0600（含新建文件）
+    let victim_suite = dir.path().join("victim_suite.txt");
+    std::fs::write(&victim_suite, "precious-suite-target").unwrap();
+    let link_suite = dir.path().join("legacy_suite.json");
+    symlink(&victim_suite, &link_suite).unwrap();
+
+    let suite = SnapshotSuite {
+        version: 2,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("contract_test".to_string()),
+        entries: vec![],
+    };
+    write_snapshot_suite(&suite, &link_suite).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&victim_suite).unwrap(),
+        "precious-suite-target",
+        "write_snapshot_suite 不得跟随符号链接覆写目标文件"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&link_suite)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let suite_mode = std::fs::metadata(&link_suite).unwrap().permissions().mode() & 0o777;
+    assert_eq!(suite_mode, 0o600);
+    assert_eq!(read_snapshot_suite(&link_suite).unwrap().version, 2);
+
+    let fresh_suite = dir.path().join("fresh_suite.json");
+    write_snapshot_suite(&suite, &fresh_suite).unwrap();
+    let fresh_mode = std::fs::metadata(&fresh_suite)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(fresh_mode, 0o600);
 }

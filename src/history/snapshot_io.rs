@@ -204,39 +204,13 @@ pub(crate) fn truncate_response_body(body: &str, max_bytes: usize) -> (String, b
     (body[..end].to_string(), true)
 }
 
-/// 将黑匣子契约快照写入指定文件（Unix 下权限强制 0600）。
+/// 将黑匣子契约快照写入指定文件（Unix 下权限强制 0600，原子写入且不跟随符号链接）。
 pub fn write_execution_snapshot<P: AsRef<Path>>(
     snapshot: &ExecutionSnapshotFile,
     path: P,
 ) -> Result<()> {
-    if let Some(parent) = path.as_ref().parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-    }
     let json = serde_json::to_string_pretty(snapshot)?;
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(RupostError::IoError)?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(RupostError::IoError)?;
-        file.write_all(json.as_bytes())
-            .map_err(RupostError::IoError)?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, json).map_err(RupostError::IoError)?;
-        Ok(())
-    }
+    crate::security::fs::write_private_file_atomic(path.as_ref(), json.as_bytes())
 }
 
 /// 读取黑匣子契约快照

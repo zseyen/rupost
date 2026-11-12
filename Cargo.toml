@@ -117,3 +117,11 @@ path = "benches/load_test/load_generator.rs"
 [[bench]]
 name = "registry_cache_bench"
 harness = false
+
+# 仅对第三方依赖关闭调试符号，显著降低本地与 CI 的编译耗时、链接内存与 target 体积；
+# 本仓 crate 仍保留完整调试信息，不影响本地排障与 CI 符号产物。
+[profile.dev.package."*"]
+debug = 0
+
+[profile.test.package."*"]
+debug = 0

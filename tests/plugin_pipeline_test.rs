@@ -468,3 +468,76 @@ fn test_parse_plugin_env_spec_supports_key_and_key_equals_value() {
         std::env::remove_var("RUPOST_TEST_SPEC_KEY");
     }
 }
+
+/// C1（M6 差距收口）：`cache_scope=request` 必须在单请求内复用 Patch（同一请求内
+/// 重复声明相同指令只拉起一次子进程），且跨请求必须重新执行（与 suite 作用域对照，
+/// 防止请求级缓存被错误升级为套件级——反假守护对照组为 suite 缓存测试）。
+#[tokio::test]
+async fn test_pipeline_request_scope_reuses_patch_within_request_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter_file = dir.path().join("req_calls.txt");
+    let exe = install_script_plugin(
+        dir.path(),
+        "req-auth",
+        PluginStage::Prepare,
+        PluginCacheScope::Request,
+        vec![],
+        &format!(
+            "#!/bin/sh\ninput=$(cat)\necho \"$input\" >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Req\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            counter_file.display()
+        ),
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let directive = PluginDirective::new("auth", "req-auth", PluginStage::Prepare);
+    let cache = SuiteHookCache::new();
+    let opts = PluginRuntimeOptions::default();
+
+    // 同一请求内重复声明相同指令 → 仅 1 次子进程（请求内复用）
+    let _ = PluginPipeline::execute_for_request(
+        &[directive.clone(), directive.clone()],
+        &reg,
+        &opts,
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    // 跨请求 → 必须重新拉起子进程（request 作用域严禁套件级复用）
+    let out2 = PluginPipeline::execute_for_request(
+        &[directive],
+        &reg,
+        &opts,
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+
+    assert!(out2.blocking_error.is_none(), "{:?}", out2.blocking_error);
+    let patch = out2
+        .patch
+        .expect("request 作用域跨请求重调后必须产出 Patch");
+    assert!(
+        patch
+            .extra_headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("X-Req") && v == "ok"),
+        "跨请求重调后 Patch 必须含插件真实注入的 Header: {:?}",
+        patch.extra_headers
+    );
+    let lines = std::fs::read_to_string(&counter_file).unwrap();
+    assert_eq!(
+        lines.lines().count(),
+        2,
+        "request 作用域：请求内去重（1 次）+ 跨请求重调（1 次），实际子进程调用:\n{lines}"
+    );
+}

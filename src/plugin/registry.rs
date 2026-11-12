@@ -184,8 +184,44 @@ impl PluginRegistry {
     ) -> std::result::Result<(), String> {
         let content =
             std::fs::read_to_string(manifest_path).map_err(|e| format!("读取失败: {e}"))?;
-        let manifest: PluginManifest =
+        let mut value: serde_json::Value =
             serde_json::from_str(&content).map_err(|e| format!("JSON 解析失败: {e}"))?;
+        // interface-freeze-m1 §1 裁决：post_response/on_failure/harvest 为 P2 保留字阶段，
+        // manifest 中出现即拒绝注册（绝不静默注册永不调用的死钩子）。
+        if let Some(hooks) = value.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+            for hook in hooks {
+                let Some(obj) = hook.as_object_mut() else {
+                    continue;
+                };
+                let directive_label = obj
+                    .get("directive")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                // types.rs cache_scope 裁决：P2 保留值 ttl → 告警 + 按 none 归位（不解析失败）
+                let ttl_declared = obj.contains_key("ttl")
+                    || matches!(obj.get("cache_scope"), Some(serde_json::Value::Object(_)));
+                if ttl_declared {
+                    registry.warnings.push(format!(
+                        "manifest hook '{directive_label}' 声明了 P2 保留值 ttl，已忽略并按 cache_scope=none 处理"
+                    ));
+                    obj.remove("ttl");
+                    obj.insert(
+                        "cache_scope".to_string(),
+                        serde_json::Value::String("none".to_string()),
+                    );
+                }
+                if let Some(stage_str) = obj.get("stage").and_then(|s| s.as_str())
+                    && matches!(stage_str, "post_response" | "on_failure" | "harvest")
+                {
+                    return Err(format!(
+                        "hook '{directive_label}' 声明了未放行的保留字阶段 '{stage_str}'（P2 保留字，MVP 注册面仅 prepare/transform/sign）"
+                    ));
+                }
+            }
+        }
+        let manifest: PluginManifest =
+            serde_json::from_value(value).map_err(|e| format!("JSON 解析失败: {e}"))?;
         if manifest.manifest_version != "1.0" {
             return Err(format!(
                 "不支持的 manifest_version: {}",

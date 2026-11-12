@@ -91,6 +91,7 @@ fn test_save_batch_snapshot_excludes_teardown_results() {
         &snapshot_file,
         false,
         None,
+        rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )
     .unwrap();
 
@@ -206,6 +207,7 @@ fn test_save_batch_snapshot_roundtrip_fields() {
         &snapshot_file,
         false,
         Some("staging"),
+        rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )
     .unwrap();
 
@@ -244,4 +246,97 @@ fn test_write_execution_snapshot_tightens_existing_0644_permissions() {
     write_execution_snapshot(&snap, &path).unwrap();
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "覆写已有 0644 文件后权限必须收紧至 0600");
+}
+
+/// M6-4（冻结清单缺口 #4）：`--max-snapshot-body-bytes` 旗标接线。
+/// 自定义上限必须真实生效：body 截断 + `body_truncated` 标记 + 截断前完整 Body 的
+/// SHA-256 验真摘要（03 §10.6）；默认 256KB 路径行为不变（防回归对照）。
+#[test]
+fn test_save_batch_snapshot_honors_custom_body_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let snapshot_file = dir.path().join("snap_limit.json");
+
+    let big_body = "A".repeat(64);
+    let resp = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        big_body.clone(),
+        Duration::from_millis(5),
+        Duration::from_millis(5),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let result = TestResult::success(
+        1,
+        Some("big".to_string()),
+        "GET".to_string(),
+        "http://x/big".to_string(),
+        resp,
+    );
+    let batch_results = vec![(PathBuf::from("t.http"), vec![result])];
+
+    // 自定义上限 8 字节 → 截断 + 摘要
+    save_batch_snapshot(
+        &batch_results,
+        &["t.http".to_string()],
+        &snapshot_file,
+        false,
+        None,
+        8,
+    )
+    .unwrap();
+    let snap = read_execution_snapshot(&snapshot_file).unwrap();
+    let body = snap.entries[0]
+        .response
+        .as_ref()
+        .expect("response recorded");
+    assert_eq!(body.body.len(), 8, "body 必须按自定义上限 8 字节截断");
+    assert!(body.body_truncated, "截断必须如实标记 body_truncated=true");
+    let expected_sha = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(big_body.as_bytes());
+        h.finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    assert_eq!(
+        body.body_sha256.as_deref(),
+        Some(expected_sha.as_str()),
+        "body_sha256 必须为截断前完整 Body 的摘要（离线验真）"
+    );
+
+    // 默认上限（256KB）路径：64 字节 body 不截断、无摘要
+    let snapshot_file_default = dir.path().join("snap_default.json");
+    let resp2 = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        big_body,
+        Duration::from_millis(5),
+        Duration::from_millis(5),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let result2 = TestResult::success(
+        1,
+        Some("big".to_string()),
+        "GET".to_string(),
+        "http://x/big".to_string(),
+        resp2,
+    );
+    let batch2 = vec![(PathBuf::from("t.http"), vec![result2])];
+    save_batch_snapshot(
+        &batch2,
+        &["t.http".to_string()],
+        &snapshot_file_default,
+        false,
+        None,
+        rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+    )
+    .unwrap();
+    let snap2 = read_execution_snapshot(&snapshot_file_default).unwrap();
+    let body2 = snap2.entries[0].response.as_ref().unwrap();
+    assert!(!body2.body_truncated);
+    assert!(body2.body_sha256.is_none());
 }

@@ -68,6 +68,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub mask_secrets: bool,
 
+    /// 单响应体录入快照的上限字节（默认 262144=256KB；防 OOM，截断部分以 SHA-256 摘要验真）
+    #[arg(long, value_name = "BYTES")]
+    pub max_snapshot_body_bytes: Option<usize>,
+
     /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
     #[arg(long, value_name = "N|@NAME")]
     pub only: Option<String>,

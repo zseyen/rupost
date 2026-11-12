@@ -3,9 +3,9 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::history::model::{
-    DEFAULT_MAX_SNAPSHOT_BODY_BYTES, ExecutionErrorDetail, ExecutionOutcome,
-    ExecutionSnapshotEntry, ExecutionSnapshotFile, MaskingMode, RunnerFingerprint,
-    SNAPSHOT_SCHEMA_VERSION, SnapshotAssertion, SnapshotRequest, SnapshotResponse,
+    ExecutionErrorDetail, ExecutionOutcome, ExecutionSnapshotEntry, ExecutionSnapshotFile,
+    MaskingMode, RunnerFingerprint, SNAPSHOT_SCHEMA_VERSION, SnapshotAssertion, SnapshotRequest,
+    SnapshotResponse,
 };
 use crate::history::snapshot_mask::mask_execution_snapshot_entry;
 use std::fs;
@@ -32,12 +32,14 @@ fn classify_error_kind(err_msg: &str) -> String {
 /// 从批处理测试结果中提取请求/响应快照并写入指定文件
 ///
 /// 写入格式 = 离线数据黑匣子契约 **ExecutionSnapshotFile (Schema v1.0)**（02 §2 唯一权威）。
+#[allow(clippy::too_many_arguments)]
 pub fn save_batch_snapshot<P: AsRef<Path>>(
     batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
     source_paths: &[String],
     snapshot_path: P,
     mask_secrets: bool,
     environment: Option<&str>,
+    max_body_bytes: usize,
 ) -> Result<()> {
     let mut entries = Vec::new();
     for (file_path, file_results) in batch_results {
@@ -66,8 +68,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
 
             // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03 §10.6）
             let response = r.response.as_ref().map(|resp| {
-                let (body, truncated) =
-                    truncate_response_body(&resp.body, DEFAULT_MAX_SNAPSHOT_BODY_BYTES);
+                let (body, truncated) = truncate_response_body(&resp.body, max_body_bytes);
                 let body_sha256 = truncated.then(|| {
                     use sha2::{Digest, Sha256};
                     let mut hasher = Sha256::new();
@@ -247,7 +248,7 @@ pub fn read_execution_snapshot<P: AsRef<Path>>(path: P) -> Result<ExecutionSnaps
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::model::RequestSnapshot;
+    use crate::history::model::{DEFAULT_MAX_SNAPSHOT_BODY_BYTES, RequestSnapshot};
     use crate::http::{RequestTiming, Response};
     use crate::runner::types::TestResult;
     use reqwest::header::{HeaderMap, HeaderValue};
@@ -302,7 +303,15 @@ mod tests {
         ok_res.plugin_duration_us = Some(30_000);
 
         let batch = vec![(PathBuf::from("case.http"), vec![blocked, ok_res])];
-        save_batch_snapshot(&batch, &[], &snap_path, false, None).unwrap();
+        save_batch_snapshot(
+            &batch,
+            &[],
+            &snap_path,
+            false,
+            None,
+            DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+        )
+        .unwrap();
 
         let snap = read_execution_snapshot(&snap_path).unwrap();
         assert_eq!(snap.entries.len(), 2, "request=None 的失败条目必须保留");

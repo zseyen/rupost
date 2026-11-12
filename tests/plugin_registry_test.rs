@@ -265,3 +265,105 @@ fn test_registry_registration_and_lookup() {
         PluginStage::Prepare
     );
 }
+
+/// C2（interface-freeze-m1 §1 裁决）：`post_response`/`on_failure`/`harvest` 为 P2
+/// 保留字阶段——manifest 中出现即拒绝注册（跳过 + 可见告警），绝不静默注册
+/// "永不被调用的死钩子"伪装成可用能力。
+#[test]
+fn test_manifest_rejects_reserved_stage_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join(".rupost").join("plugins");
+    let raw = serde_json::json!({
+        "manifest_version": "1.0",
+        "name": "reserved-stage",
+        "version": "0.1.0",
+        "description": "declares reserved stage",
+        "commands": [],
+        "hooks": [{
+            "directive": "harvest",
+            "alias": "reserved-stage",
+            "stage": "post_response",
+            "cache_scope": "none",
+            "requires_env": [],
+            "parameters_schema": {}
+        }]
+    });
+    fixture_plugin(&plugin_dir, "reserved-stage", Some(&raw.to_string()));
+    let opts = DiscoverOptions {
+        allow_project_plugins: true,
+        project_root: Some(dir.path().to_path_buf()),
+    };
+    let reg = PluginRegistry::discover_with_roots(&opts, Some(&[])).unwrap();
+    assert!(
+        reg.find_hook("reserved-stage").is_none() && reg.find_hook("harvest").is_none(),
+        "保留字阶段钩子必须被拒绝注册"
+    );
+    assert!(
+        reg.warnings.iter().any(|w| w.contains("保留字")),
+        "拒绝注册必须产生含'保留字'的可见告警: {:?}",
+        reg.warnings
+    );
+}
+
+/// C3（types.rs cache_scope 注释裁决）：manifest 声明 P2 保留值 `ttl` →
+/// 不得解析失败，注册成功但 cache_scope 按 none 处理，且必须产生可见告警。
+/// 覆盖两种形态：hook 顶层 ttl 字段、cache_scope 内嵌对象（P2 潜在 schema）。
+#[test]
+fn test_manifest_ttl_reserved_value_warns_and_falls_back_to_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join(".rupost").join("plugins");
+    let mk_raw = |name: &str, cache_scope: serde_json::Value, ttl: serde_json::Value| {
+        serde_json::json!({
+            "manifest_version": "1.0",
+            "name": name,
+            "version": "0.1.0",
+            "description": "declares reserved ttl",
+            "commands": [],
+            "hooks": [{
+                "directive": "auth",
+                "alias": name,
+                "stage": "prepare",
+                "cache_scope": cache_scope,
+                "ttl": ttl,
+                "requires_env": [],
+                "parameters_schema": {}
+            }]
+        })
+    };
+    let raw_ttl_hook = mk_raw(
+        "ttl-hook",
+        serde_json::json!("suite"),
+        serde_json::json!(300),
+    )
+    .to_string();
+    fixture_plugin(&plugin_dir, "ttl-hook", Some(raw_ttl_hook.as_str()));
+    let raw_ttl_nested = mk_raw(
+        "ttl-nested",
+        serde_json::json!({"scope": "suite", "ttl": 120}),
+        serde_json::json!(null),
+    )
+    .to_string();
+    fixture_plugin(&plugin_dir, "ttl-nested", Some(raw_ttl_nested.as_str()));
+    let opts = DiscoverOptions {
+        allow_project_plugins: true,
+        project_root: Some(dir.path().to_path_buf()),
+    };
+    let reg = PluginRegistry::discover_with_roots(&opts, Some(&[])).unwrap();
+
+    for name in ["ttl-hook", "ttl-nested"] {
+        let (_, hook) = reg
+            .find_hook(name)
+            .unwrap_or_else(|| panic!("ttl 声明不得导致 {name} 解析失败"));
+        assert_eq!(
+            hook.cache_scope,
+            PluginCacheScope::None,
+            "{name} 的 ttl 保留值必须按 cache_scope=none 处理"
+        );
+    }
+    assert_eq!(
+        reg.warnings.iter().filter(|w| w.contains("ttl")).count(),
+        2,
+        "两条 ttl 声明必须各产生一条告警: {:?}",
+        reg.warnings
+    );
+}

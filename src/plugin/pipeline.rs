@@ -99,7 +99,8 @@ pub struct PluginStageOutcome {
     pub blocking_error: Option<String>,
 }
 
-fn suite_cache_key(directive: &PluginDirective) -> String {
+/// Hook 缓存键：suite 与 request 两种作用域共用（插件名 + 阶段 + 排序参数精确隔离）
+fn hook_cache_key(directive: &PluginDirective) -> String {
     let sorted_params: BTreeMap<&str, &str> = directive
         .params
         .iter()
@@ -190,6 +191,9 @@ impl PluginPipeline {
         let mut current_headers = resolved_headers.to_vec();
         let mut current_body = resolved_body.map(str::to_string);
         let mut current_vars = serde_json::Map::new();
+        // 请求局部 Hook 结果备忘录（03 §3.1 `cache_scope=request`：同一请求内同指令复用，
+        // 跨请求绝不复用——套件级复用专属 suite 作用域）
+        let mut request_cache: HashMap<String, super::PluginPatch> = HashMap::new();
 
         for directive in &ordered {
             let Some((exe_path, hook)) = registry.find_hook(&directive.name) else {
@@ -213,75 +217,117 @@ impl PluginPipeline {
                 continue;
             };
 
-            if matches!(hook.cache_scope, PluginCacheScope::Suite) {
-                let cache_key = suite_cache_key(directive);
-                let slot = suite_cache.slot_for(&cache_key);
-                let mut guard = slot.lock().await;
-                if let Some(cached) = guard.as_ref() {
-                    apply_patch_to_view(
-                        cached,
-                        &mut acc,
-                        &mut current_headers,
-                        &mut current_body,
-                        &mut current_vars,
-                    );
-                    continue;
-                }
-                match Self::invoke_hook_once(
-                    directive,
-                    exe_path,
-                    &hook.requires_env,
-                    options,
-                    &mut outcome,
-                    resolved_url,
-                    resolved_method,
-                    &current_headers,
-                    current_body.as_deref(),
-                    &current_vars,
-                )
-                .await
-                {
-                    HookInvokeStep::Patch(patch) => {
-                        *guard = Some(patch.clone());
+            match hook.cache_scope {
+                PluginCacheScope::Suite => {
+                    let cache_key = hook_cache_key(directive);
+                    let slot = suite_cache.slot_for(&cache_key);
+                    let mut guard = slot.lock().await;
+                    if let Some(cached) = guard.as_ref() {
                         apply_patch_to_view(
-                            &patch,
+                            cached,
                             &mut acc,
                             &mut current_headers,
                             &mut current_body,
                             &mut current_vars,
                         );
+                        continue;
                     }
-                    HookInvokeStep::Continue => continue,
-                    HookInvokeStep::Break => break,
+                    match Self::invoke_hook_once(
+                        directive,
+                        exe_path,
+                        &hook.requires_env,
+                        options,
+                        &mut outcome,
+                        resolved_url,
+                        resolved_method,
+                        &current_headers,
+                        current_body.as_deref(),
+                        &current_vars,
+                    )
+                    .await
+                    {
+                        HookInvokeStep::Patch(patch) => {
+                            *guard = Some(patch.clone());
+                            apply_patch_to_view(
+                                &patch,
+                                &mut acc,
+                                &mut current_headers,
+                                &mut current_body,
+                                &mut current_vars,
+                            );
+                        }
+                        HookInvokeStep::Continue => continue,
+                        HookInvokeStep::Break => break,
+                    }
                 }
-                continue;
-            }
-
-            match Self::invoke_hook_once(
-                directive,
-                exe_path,
-                &hook.requires_env,
-                options,
-                &mut outcome,
-                resolved_url,
-                resolved_method,
-                &current_headers,
-                current_body.as_deref(),
-                &current_vars,
-            )
-            .await
-            {
-                HookInvokeStep::Patch(patch) => {
-                    apply_patch_to_view(
-                        &patch,
-                        &mut acc,
-                        &mut current_headers,
-                        &mut current_body,
-                        &mut current_vars,
-                    );
+                PluginCacheScope::Request => {
+                    let cache_key = hook_cache_key(directive);
+                    if let Some(cached) = request_cache.get(&cache_key) {
+                        apply_patch_to_view(
+                            cached,
+                            &mut acc,
+                            &mut current_headers,
+                            &mut current_body,
+                            &mut current_vars,
+                        );
+                        continue;
+                    }
+                    match Self::invoke_hook_once(
+                        directive,
+                        exe_path,
+                        &hook.requires_env,
+                        options,
+                        &mut outcome,
+                        resolved_url,
+                        resolved_method,
+                        &current_headers,
+                        current_body.as_deref(),
+                        &current_vars,
+                    )
+                    .await
+                    {
+                        HookInvokeStep::Patch(patch) => {
+                            request_cache.insert(cache_key, patch.clone());
+                            apply_patch_to_view(
+                                &patch,
+                                &mut acc,
+                                &mut current_headers,
+                                &mut current_body,
+                                &mut current_vars,
+                            );
+                        }
+                        HookInvokeStep::Continue => continue,
+                        HookInvokeStep::Break => break,
+                    }
                 }
-                HookInvokeStep::Continue => continue,
-                HookInvokeStep::Break => break,
+                PluginCacheScope::None => {
+                    match Self::invoke_hook_once(
+                        directive,
+                        exe_path,
+                        &hook.requires_env,
+                        options,
+                        &mut outcome,
+                        resolved_url,
+                        resolved_method,
+                        &current_headers,
+                        current_body.as_deref(),
+                        &current_vars,
+                    )
+                    .await
+                    {
+                        HookInvokeStep::Patch(patch) => {
+                            apply_patch_to_view(
+                                &patch,
+                                &mut acc,
+                                &mut current_headers,
+                                &mut current_body,
+                                &mut current_vars,
+                            );
+                        }
+                        HookInvokeStep::Continue => continue,
+                        HookInvokeStep::Break => break,
+                    }
+                }
             }
         }
 

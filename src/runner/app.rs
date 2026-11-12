@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::RupostError;
+use crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES;
 use crate::history::save_batch_snapshot;
 use crate::runner::on_failure;
 use crate::runner::selector;
@@ -37,6 +38,8 @@ pub struct TestSuiteOptions {
     pub save_snapshot: Option<String>,
     /// Secrets Masker（opt-in）：快照 headers/body 掩码后再落盘
     pub mask_snapshot: bool,
+    /// 单响应体录入上限字节（03 §10.6 防 OOM；`--max-snapshot-body-bytes` 覆盖，缺省 256KB）
+    pub max_snapshot_body_bytes: Option<usize>,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
     /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
@@ -79,6 +82,7 @@ impl Default for TestSuiteOptions {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             mask_snapshot: false,
+            max_snapshot_body_bytes: None,
             allow_missing_plugins: false,
             strict_plugins: false,
             plugin_timeout_secs: crate::plugin::pipeline::DEFAULT_PLUGIN_TIMEOUT_SECS,
@@ -282,6 +286,9 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
             snapshot_path,
             options.mask_snapshot,
             options.env.as_deref(),
+            options
+                .max_snapshot_body_bytes
+                .unwrap_or(DEFAULT_MAX_SNAPSHOT_BODY_BYTES),
         )?;
     }
 
@@ -317,6 +324,7 @@ mod tests {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             mask_snapshot: false,
+            max_snapshot_body_bytes: None,
             only: None,
             on_failure: None,
             allow_missing_plugins: false,

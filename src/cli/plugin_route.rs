@@ -265,6 +265,8 @@ pub fn handle_plugin_command(
             // E-2：面向 IDE 补全的完整 schema——指令枚举、内置宏、manifest schema
             // 与插件参数四段齐备（场景 A 兑现：键入 "@" 即可弹出候选与参数模板）
             let directive_enum: Vec<&str> = ["auth", "transform", "sign", "plugin"].to_vec();
+            // P1-9（review）：宏表与 resolver SSOT 对齐——删 $timestamp_s（不存在），
+            // 补 $uuid/$timestamp/$timestamp_iso
             let builtin_macros = serde_json::json!({
                 "$hmac_sha256": {
                     "signature": "$hmac_sha256(key, msg)",
@@ -278,13 +280,21 @@ pub fn handle_plugin_command(
                     "signature": "$random_int(min, max)",
                     "description": "闭区间随机整数（含边界）"
                 },
+                "$uuid": {
+                    "signature": "$uuid",
+                    "description": "随机 UUID v4"
+                },
+                "$timestamp": {
+                    "signature": "$timestamp",
+                    "description": "当前 Unix 秒时间戳"
+                },
+                "$timestamp_iso": {
+                    "signature": "$timestamp_iso",
+                    "description": "当前 UTC ISO-8601 时间戳"
+                },
                 "$timestamp_ms": {
                     "signature": "$timestamp_ms",
                     "description": "当前 Unix 毫秒时间戳"
-                },
-                "$timestamp_s": {
-                    "signature": "$timestamp_s",
-                    "description": "当前 Unix 秒时间戳"
                 }
             });
             let manifest_schema = serde_json::json!({
@@ -312,7 +322,12 @@ pub fn handle_plugin_command(
                                 "name": {"type": "string"},
                                 "usage": {"type": "string"},
                                 "description": {"type": "string"},
-                                "requires_tty": {"type": "boolean"}
+                                "requires_tty": {"type": "boolean"},
+                                "requires_env": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "显式放行给子进程的环境变量（默认白名单外全部裁剪）"
+                                }
                             }
                         }
                     },

@@ -366,10 +366,22 @@ impl ReportContext {
                     })
                     .collect();
 
+                // P1-5（review）：优先 diagnose（TLS/证书）→ 次选 JSON timing 分段
+                // （M7 瀑布）→ 回退总时长——离线复渲染不再退化为单段
                 let timing_waterfall = res
                     .diagnose_report
                     .as_ref()
                     .map(TimingWaterfall::from_diagnostics)
+                    .or_else(|| {
+                        res.timing.as_ref().map(|t| TimingWaterfall {
+                            dns_ms: t.dns_ms as f64,
+                            tcp_ms: t.tcp_ms as f64,
+                            tls_ms: None,
+                            ttfb_ms: Some(t.ttfb_ms as f64),
+                            transfer_ms: t.transfer_ms as f64,
+                            total_ms: (t.dns_ms + t.tcp_ms + t.ttfb_ms + t.transfer_ms) as f64,
+                        })
+                    })
                     .or_else(|| {
                         // 普通请求 fallback：对齐在线模式，提供基于 duration_ms 的简单瀑布
                         TimingWaterfall::from_total_ms(res.duration_ms as f64)

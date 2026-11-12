@@ -69,3 +69,8 @@
 ## 4. 登记不做项（P2/生态期，有裁决背书）
 
 `@pipeline`/`@use` 语法、在线插件市场、热重载、MCP Server、RLIMIT 配额、`plugin sync --regenerate`、`plugin validate`/doctor、TUI/Web 的 `@` 补全、`fallback.builtin` 降级链、Windows shebang 透明代理。
+## 5. 容器运行边界（C-1 review 登记）
+
+- TLS 后端为 aws-lc-rs（reqwest `rustls` feature）——**musl 构建需 cmake + C 工具链**（CI musl-static job 已含）；
+- reqwest HTTPS 证书源为系统 store（rustls-platform-verifier）：**scratch 镜像内需自带 CA bundle 或设 `SSL_CERT_FILE`**；Alpine（装 ca-certificates）不受影响；
+- WSS 走 webpki-roots 内嵌 CA，无系统依赖。

@@ -95,3 +95,20 @@
 - `cargo test --workspace` 全绿；
 - `tests/verify_features.sh` exit 0（涉及重放/变量/会话项需增补对应冒烟步骤）；
 - `examples/run_all.sh` ALL PASS。
+
+---
+
+## 审查修复登记（2026-11-13，code review P0/P1 全项）
+
+外部 code review 发现 2×P0 + 10×P1，全部修复（`fix(review)` 提交）：
+- **P0-1** S-1 首建截断竞态：`File::create`→`OpenOptions::create_new + mode(0o600)`（mode 原子生效，无截断/无 0644 窗口；并发首建败方走 AlreadyExists 收紧分支）
+- **P0-2** E-3 keep_credentials 产物 0644 → `write_private_file_atomic` 0600 + 真实警告（generator/bootstrap 两处）
+- **P1-1** S-2 sha 三态语义 → model.rs SSOT 注释分态化 + 02 附录裁决登记 + 截断×掩码组合测试
+- **P1-2** S-3 assertion 四字段（expression/actual/expected/message）补值掩码 + 表面测试
+- **P1-3** E-3 query 敏感键豁免透传（`variabilize_url/query_pairs` 链路，与 header 语义一致）+ P1-4 豁免/对照双测试
+- **P1-5** E-5 `from_json_file_reports` 接线 JsonTiming（diagnose → timing 分段 → 总时长三级回退，离线复渲染兑现）
+- **P1-6** C-2 stderr 推送移到 failure 解析后（"exit 0+非法输出"形态诊断不再丢失）
+- **P1-7/P1-8** C-1 声明修正（ring→aws-lc-rs，musl 需 cmake）+ CI 装 cmake + CHANGELOG/E-1 档案登记 scratch HTTPS 需自带 CA bundle 边界
+- **P1-9** E-2 宏表与 resolver SSOT 对齐（删 `$timestamp_s`，补 `$uuid/$timestamp/$timestamp_iso`）
+- **P1-10** registry.rs 两段描述已回滚行为的假文档 → 改写为已知取舍说明
+- **P2 顺手**：S-3 值替换长度降序、`ensure_dir` doc 归位、commands schema 补 `requires_env`

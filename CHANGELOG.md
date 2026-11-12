@@ -10,7 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 - **免重填主线批 7（replay-reuse E-1/E-2，生态文档）**：①插件权威档案 `plugin_and_extensibility.md` 全面重写——废弃 Wasm/plugin.toml 旧设计（此前宣称"核心尚未接入运行时"与现实断裂），对齐 Stdio IPC 现架构 + 作者五步指南；②`plugin schema` 升级为四段统一 schema（pluginDirectives 参数+阶段序、directiveSyntax 枚举、builtinMacros 内置宏表、manifestSchema manifest 校验）——场景 A"键入 @ 弹出候选与参数模板"的 IDE 原料齐备。
 
-- **TLS 后端统一切换纯 Rust rustls（replay-reuse C-1，容器叙事工程事实化）**：reqwest `default-tls`(openssl-sys)→`rustls`(ring)——消除 musl 静态链接的结构性阻塞；tokio-tungstenite `rustls-tls-native-roots`→`rustls-tls-webpki-roots`——scratch/Alpine 无 `/etc/ssl/certs` 也可 WSS；CI 新增 `musl-static` job（静态链接断言 + ≤20MB 体积预算 DoD 断言）。rustls 后端下全量 70 套件 + examples/run_all.sh 外网用例全绿验证（原 load-bearing 风险注释保留为风险记忆：TLS 后端变更必须跑外网用例）。
+- **TLS 后端统一切换 rustls（replay-reuse C-1，容器叙事工程事实化；P1-7/P1-8 review 修正声明与边界）**：reqwest `default-tls`(openssl-sys)→`rustls` feature——**后端为 aws-lc-rs（C/汇编实现，musl 构建需 cmake）**，消除 openssl-sys 依赖；tokio-tungstenite `rustls-tls-native-roots`→`rustls-tls-webpki-roots`——WSS 在无 `/etc/ssl/certs` 环境可用；CI `musl-static` job 安装 `musl-tools + cmake`（静态链接断言 + ≤20MB 体积预算 DoD）。**边界登记（P1-8）**：reqwest HTTPS 走 `rustls-platform-verifier`（系统证书 store）——scratch 镜像内 HTTPS 需自带 CA bundle 或 `SSL_CERT_FILE`；Alpine（有 ca-certificates 包）不受影响。rustls 后端下全量 70 套件 + examples/run_all.sh 外网用例全绿验证。
 
 - **免重填主线批 5（replay-reuse E-3/E-4/E-5，开发者体验）**：①`--keep-credentials`（generate/ai bootstrap）——T2 链式溯源不命中时保留字面凭据，免"翻 history 抄 token 填 .env"；②`--strict-vars`——未解析 `{{var}}` 拒绝外发（可读错误指名变量），默认语义（警告+字面量发送）不回退防假守护对照；③JSON 报告 `timing` 分段（恒序列化键集稳定）+ 终端 `plugin +Xms` 渲染——插件冷启动占比可见、离线 HTML 复渲染不退化。
 

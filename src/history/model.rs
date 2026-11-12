@@ -310,7 +310,13 @@ pub struct SnapshotRequest {
     pub timeout_ms: Option<u64>,
 }
 
-/// 黑匣子响应镜像（256KB 截断保护 + 截断前完整 Body 的 SHA-256 供离线验真）
+/// 黑匣子响应镜像（256KB 截断保护 + SHA-256 验真摘要）
+///
+/// `body_sha256` 语义随 `masking` 分态（P1-1 review 裁决，02 §2）：
+/// ① 未掩码：截断时对**截断前完整原始 body**，未截断为 None；
+/// ② 掩码模式（masking=secrets）：恒 Some，对**文件内掩码后形态**（离线可验真；
+///    截断+掩码组合时原完整体摘要不可恢复——登记取舍）。
+/// 消费端必须先读顶层 `masking` 再解释本字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotResponse {
     pub status: u16,
@@ -318,7 +324,7 @@ pub struct SnapshotResponse {
     pub body: String,
     /// 超过单响应体上限截断时为 true
     pub body_truncated: bool,
-    /// 截断前完整原始响应体的 SHA-256 校验和（小写 hex）
+    /// 语义随 masking 分态（见 struct doc）；小写 hex
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_sha256: Option<String>,
 }

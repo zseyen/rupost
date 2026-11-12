@@ -492,9 +492,20 @@ impl PluginPipeline {
             };
 
         outcome.plugin_duration_us += invocation.duration_us;
-        // C-2（审查收口）：stderr 摘要仅在插件失败时入 warnings（诊断现场）；
-        // 成功路径的 stderr 是话唠插件日志，不污染"三处同文"的 warnings 语义
-        if invocation.failure.is_some() && !invocation.stderr_tail.is_empty() {
+        // C-2 + P1-6（review）：stderr 摘要仅在**任一失败形态**入 warnings——
+        // failure 在下方 parse 后才最终确定，故先解析再推送（"exit 0 + 非法输出"
+        // 形态的 stderr 诊断不再被丢弃）；成功路径的话唠日志不污染 warnings
+        let failure = if let Some(failure) = invocation.failure {
+            Some(failure)
+        } else if let Some(output) = invocation.output {
+            match parse_patch_from_output(&output) {
+                Ok(patch) => return HookInvokeStep::Patch(patch),
+                Err(err) => Some(err),
+            }
+        } else {
+            return HookInvokeStep::Continue;
+        };
+        if !invocation.stderr_tail.is_empty() {
             let tail: String = invocation
                 .stderr_tail
                 .chars()
@@ -507,16 +518,6 @@ impl PluginPipeline {
                 tail.chars().rev().collect::<String>()
             ));
         }
-        let failure = if let Some(failure) = invocation.failure {
-            Some(failure)
-        } else if let Some(output) = invocation.output {
-            match parse_patch_from_output(&output) {
-                Ok(patch) => return HookInvokeStep::Patch(patch),
-                Err(err) => Some(err),
-            }
-        } else {
-            return HookInvokeStep::Continue;
-        };
 
         if let Some(failure) = failure {
             let (degraded_msg, block_msg) =

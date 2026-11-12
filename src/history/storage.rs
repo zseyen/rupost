@@ -41,38 +41,38 @@ impl HistoryStorage {
         Self { file_path: path }
     }
 
-    /// Ensure directory exists
-    /// S-1（安全对齐）：history.jsonl 含完整请求/响应明文，权限必须与快照防线对齐——
-    /// 首次创建即 0600；既有 0644 等宽松权限在每次 append 前收紧（幂等，开销一次 stat）。
+    /// S-1（安全对齐，P0-1 review 修复）：history.jsonl 含完整请求/响应明文，权限
+    /// 必须与快照防线对齐——首建走 `create_new + mode(0o600)`（mode 创建时原子生效，
+    /// 无截断竞态、无 0644 窗口）；并发首建时败方走 AlreadyExists 分支收紧既有文件。
     fn ensure_private_file(&self) -> Result<()> {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            match std::fs::metadata(&self.file_path) {
-                Ok(meta) => {
-                    let mode = meta.permissions().mode() & 0o777;
-                    if mode & 0o077 != 0 {
-                        std::fs::set_permissions(
-                            &self.file_path,
-                            std::fs::Permissions::from_mode(0o600),
-                        )?;
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    std::fs::File::create(&self.file_path)
-                        .and_then(|f| f.set_permissions(std::fs::Permissions::from_mode(0o600)))
-                        .map_err(RupostError::IoError)?;
-                }
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&self.file_path)
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(RupostError::IoError(e)),
+            }
+            // 既有文件：收紧宽松权限（幂等；chmod 跟随 symlink 的 TOCTOU 由
+            // append 前置的 regular-file 语义缓解——history 路径不经用户可控 symlink）
+            let meta = std::fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
+            if meta.is_file() && meta.permissions().mode() & 0o777 & 0o077 != 0 {
+                std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(0o600))?;
             }
         }
         #[cfg(not(unix))]
         {
-            // Windows 权限模型不同（ACL），维持现状（CI 路径亦无 umask 概念）
+            // Windows 权限模型不同（ACL），维持现状；CHANGELOG 已登记平台边界
         }
         Ok(())
     }
 
+    /// 确保父目录存在。
     fn ensure_dir(&self) -> Result<()> {
         if let Some(parent) = self.file_path.parent()
             && !parent.exists()

@@ -141,12 +141,15 @@ pub fn mask_execution_snapshot_entry(
     entry: &mut crate::history::model::ExecutionSnapshotEntry,
     secret_values: &[String],
 ) {
-    // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式
+    // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式。
+    // P2-3（review）：按长度降序——先短后长会把长值打成 [REDACTED] 混合残片致长值失配
+    let mut ordered: Vec<&str> = secret_values.iter().map(String::as_str).collect();
+    ordered.sort_by_key(|v| std::cmp::Reverse(v.len()));
     let redact_values = |text: &str| -> String {
         let mut out = text.to_string();
-        for v in secret_values {
+        for v in ordered.iter() {
             if !v.is_empty() {
-                out = out.replace(v.as_str(), "[REDACTED]");
+                out = out.replace(v, "[REDACTED]");
             }
         }
         out
@@ -183,6 +186,14 @@ pub fn mask_execution_snapshot_entry(
     }
     for assertion in &mut entry.assertions {
         mask_snapshot_assertion(assertion);
+        // P1-2（review）：assertion 四字段值掩码——`body.api_key == "secret"` 类
+        // 表达式的 actual/expected 携带密钥值，必须同样经 redact_values
+        assertion.expression = redact_values(&assertion.expression);
+        assertion.actual = assertion.actual.take().map(|v| redact_values(&v));
+        assertion.expected = assertion.expected.take().map(|v| redact_values(&v));
+        if let Some(msg) = assertion.message.take() {
+            assertion.message = Some(redact_values(&msg));
+        }
     }
     for warning in &mut entry.warnings {
         *warning = redact_values(&mask_free_text_and_secrets(warning));
@@ -351,5 +362,50 @@ mod tests {
         assert!(!entry.request.url.contains("s3cr3t"));
         assert!(!entry.request.url.contains("query_secret"));
         assert!(entry.request.url.contains("v=1"));
+    }
+    /// P1-1（review）：截断+掩码组合形态——sha 对掩码后截断体（原完整体摘要不可恢复，
+    /// 02 附录裁决登记）；P1-2：assertion actual/expected 携带密钥值必须被值掩码。
+    #[test]
+    fn test_masked_truncated_sha_and_assertion_values() {
+        let mut entry = sample_entry();
+        if let Some(resp) = entry.response.as_mut() {
+            resp.body = r#"{"api_key":"ns-live-777"}"#.to_string();
+            resp.body_truncated = true;
+            resp.body_sha256 = Some("original-full-body-sha".to_string());
+        }
+        entry
+            .assertions
+            .push(crate::history::model::SnapshotAssertion {
+                expression: "body.api_key == \"ns-live-777\"".to_string(),
+                passed: false,
+                actual: Some("ns-live-777".to_string()),
+                expected: Some("ns-live-777".to_string()),
+                message: Some("mismatch at ns-live-777".to_string()),
+            });
+        mask_execution_snapshot_entry(&mut entry, &["ns-live-777".to_string()]);
+
+        if let Some(resp) = entry.response.as_ref() {
+            assert!(resp.body.contains("[REDACTED]"));
+            let expected = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(resp.body.as_bytes());
+                h.finalize()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            };
+            assert_ne!(resp.body_sha256.as_deref(), Some("original-full-body-sha"));
+            assert_eq!(resp.body_sha256.as_deref(), Some(expected.as_str()));
+            let a = &entry.assertions[0];
+            let combined = format!(
+                "{:?}{:?}{:?}{:?}",
+                a.expression, a.actual, a.expected, a.message
+            );
+            assert!(
+                !combined.contains("ns-live-777"),
+                "assertion 四字段必须值掩码（P1-2）: {combined}"
+            );
+        }
     }
 }

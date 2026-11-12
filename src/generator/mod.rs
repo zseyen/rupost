@@ -39,7 +39,19 @@ pub fn run_generate(opts: GenerateOptions) -> Result<()> {
         opts.templatize_host,
         opts.keep_credentials,
     )?;
-    fs::write(&opts.output_file, content)?;
+    // P0-2（review 修复）：keep_credentials 产物含明文凭据——0600 原子写 + 真实警告
+    if opts.keep_credentials {
+        crate::security::fs::write_private_file_atomic(
+            std::path::Path::new(&opts.output_file),
+            content.as_bytes(),
+        )?;
+        eprintln!(
+            "[!] {} 含明文凭据（--keep-credentials）——文件已 0600，严禁提交仓库或外传",
+            opts.output_file
+        );
+    } else {
+        fs::write(&opts.output_file, content)?;
+    }
     println!(
         "Generated test file: {} ({} requests)",
         opts.output_file,

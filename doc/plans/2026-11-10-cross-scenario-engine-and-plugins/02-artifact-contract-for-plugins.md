@@ -302,3 +302,12 @@ rupost ai triage --snapshot ./incident-dump.json
 
 * **掩码模式下的验签降级**：`masking: "secrets"` 时，加签校验/Diff 类插件的字节级验算结论 MUST 附带"数据不完整"警告（§2 `MaskingMode` 消费契约）；
 * 掩码发生在**变量解析之后**（否则 `{{DEBUG_FALLBACK_TOKEN}}` 解析值漏网）。
+
+---
+
+## 附录（2026-11-13 裁决登记）：`body_sha256` 语义随 masking 分态
+
+审查裁决（P1-1）：`body_sha256` 的取值语义随顶层 `masking` 字段分态，消费端必须先读 `masking` 再解释：
+1. **未掩码（masking=none）**：截断时 = 截断前完整原始 body 的 SHA-256（离线验真）；未截断 = null。
+2. **掩码（masking=secrets）**：恒有值 = 文件内掩码后 body 形态的 SHA-256（文件内自洽可验真）；截断+掩码组合时**原完整体摘要不可恢复**（登记取舍：掩码产物本就声明"数据不完整"）。
+本裁决为追加式语义澄清（不改字段形状），符合 §2.6 演进策略；消费端若需对原始字节验真，应使用未掩码快照。

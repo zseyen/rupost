@@ -68,6 +68,7 @@ fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
                 error: None,
                 skipped: false,
                 degraded: false,
+                timing: None,
                 assertions: vec![rupost::report::JsonAssertionReport {
                     raw: "status == 200".to_string(),
                     passed: false,
@@ -91,6 +92,7 @@ fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
                 error: None,
                 skipped: false,
                 degraded: false,
+                timing: None,
                 assertions: vec![rupost::report::JsonAssertionReport {
                     raw: "status == 200".to_string(),
                     passed: false,

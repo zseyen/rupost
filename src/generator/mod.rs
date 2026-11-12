@@ -15,6 +15,8 @@ pub struct GenerateOptions {
     pub interactive: bool,
     /// 将请求 origin 改写为 `{{base_url}}`，使生成文件可跨环境运行
     pub templatize_host: bool,
+    /// E-3：保留明文凭据（T2 溯源不命中时免手工回填 token）
+    pub keep_credentials: bool,
 }
 
 /// 执行从历史生成测试文件的机制层函数
@@ -32,8 +34,11 @@ pub fn run_generate(opts: GenerateOptions) -> Result<()> {
         return Ok(());
     }
 
-    let (content, variables) =
-        HttpGenerator::generate_with_variables(&entries, opts.templatize_host)?;
+    let (content, variables) = HttpGenerator::generate_with_variables_ex(
+        &entries,
+        opts.templatize_host,
+        opts.keep_credentials,
+    )?;
     fs::write(&opts.output_file, content)?;
     println!(
         "Generated test file: {} ({} requests)",

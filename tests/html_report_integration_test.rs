@@ -62,6 +62,7 @@ GET http://example.com/api/test
         allow_project_plugins: false,
         with_deps: false,
         var_state: None,
+        strict_vars: false,
     };
 
     // 执行套件并显式写出报告（报告落盘已上移至表现层门面）
@@ -184,6 +185,7 @@ Accept: text/event-stream
         allow_project_plugins: false,
         with_deps: false,
         var_state: None,
+        strict_vars: false,
     };
 
     let outcome = run_test_suite(options).await.unwrap();
@@ -233,6 +235,7 @@ fn test_offline_json_report_to_html_generation() {
         error: None,
         skipped: false,
         degraded: false,
+        timing: None,
         assertions: vec![assert_item],
         warnings: vec![],
         diagnose_report: None,

@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **免重填主线批 5（replay-reuse E-3/E-4/E-5，开发者体验）**：①`--keep-credentials`（generate/ai bootstrap）——T2 链式溯源不命中时保留字面凭据，免"翻 history 抄 token 填 .env"；②`--strict-vars`——未解析 `{{var}}` 拒绝外发（可读错误指名变量），默认语义（警告+字面量发送）不回退防假守护对照；③JSON 报告 `timing` 分段（恒序列化键集稳定）+ 终端 `plugin +Xms` 渲染——插件冷启动占比可见、离线 HTML 复渲染不退化。
+
 - **免重填主线批 4（replay-reuse S-1/S-2/S-3，安全对齐）**：①history.jsonl 权限对齐快照防线（首建 0600 + 宽松旧文件 append 前收紧）——共享账号堡垒机的最大凭据明文外带面收窄；②掩码后重算 `body_sha256`（摘要对掩码后记录形态，掩码快照离线可验真）；③`--mask-secret-value <VAL>` 按值掩码（可多次、独立于 `--mask-secrets` 生效、全表面替换 [REDACTED]、masking 标记联动）——词表外自定义 header 密钥不再明文落盘。
 
 - **免重填主线批 3（replay-reuse B-2/B-3/B-4/B-5/B-6◐，replay 消费契约收口）**：①`SnapshotSuite.masking`/`ResponseSnapshot.body_truncated`/`SnapshotRequest.timeout_ms` 三字段透传（追加式演进）；②replay 两级消费收口——masked 快照警告"数据不完整"（02 §4 裁决，验签/Diff 结论降级）、`body_truncated` 条目跳过 body diff（消灭截断 JSON 前缀的系统性假失败，注明原因）；③输入防线——64MB 体积上限（与 triage 对齐）+ schema 主版本门（2.0+ 显式拒绝，"1.x 均可消费"的另一半）+ legacy version≤2 门；④JUnit 报告 degraded→`<skipped>`（断言通过非 failure）+ JSON 报告 `degraded` 字段——CI 看板与 `--strict-plugins` 红 job 不再互相矛盾；⑤未安装插件阻断文案补三选一处方；⑥`@timeout` 快照往返（重放复现原超时语义）。B-6 error-Detail 部分 deferred（契约语义裁决，见底账）。

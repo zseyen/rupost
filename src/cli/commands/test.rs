@@ -92,6 +92,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub with_deps: bool,
 
+    /// E-4：未解析 {{var}} 拒绝外发（默认警告 + 字面量发送；CI 可开启硬门禁）
+    #[arg(long)]
+    pub strict_vars: bool,
+
     /// 捕获变量持久化文件（免重填：结束落盘 @capture/插件变量，下次运行回灌补缺；默认 .rupost/vars.json）
     #[arg(long, value_name = "FILE", num_args = 0..=1, default_missing_value = ".rupost/vars.json")]
     pub var_state: Option<String>,

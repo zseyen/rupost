@@ -30,6 +30,9 @@ pub use web::WebArgs;
 use clap::Subcommand;
 
 #[derive(Subcommand)]
+// TestArgs 聚合全部测试旗标（批 1-5 免重填/安全线持续扩充），与轻量 variant 的
+// 尺寸差属 CLI 枚举固有形态——Box 化会破坏 dispatch 的解构可读性，登记豁免
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Run requests from a file
     #[command(alias = "t")]

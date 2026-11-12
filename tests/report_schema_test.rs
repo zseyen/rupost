@@ -101,6 +101,7 @@ async fn test_batch_json_report_schema_exact_fields() {
         "skipped",
         "status",
         "success",
+        "timing",
         "url",
         "warnings",
     ];

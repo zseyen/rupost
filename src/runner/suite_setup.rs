@@ -99,6 +99,7 @@ pub(crate) fn build_suite_executor(options: &TestSuiteOptions) -> Result<TestExe
     Ok(executor
         .with_debug(options.debug)
         .with_debug_on_failure(options.debug_on_failure)
+        .with_strict_vars(options.strict_vars)
         .with_plugins(registry, plugin_runtime))
 }
 

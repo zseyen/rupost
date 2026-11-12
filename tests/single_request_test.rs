@@ -356,3 +356,55 @@ async fn test_only_without_with_deps_keeps_existing_semantics() {
         "依赖文件不得进入结果（既有契约：仅目标文件）"
     );
 }
+
+/// E-4（免重填）：`--strict-vars` 下未解析 `{{var}}` 拒绝外发（可读错误指名变量）；
+/// 默认语义（警告 + 字面量发送）不回退——防假守护对照。
+#[tokio::test]
+async fn test_strict_vars_rejects_unresolved_placeholders() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/x"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("should-not-happen"))
+        .mount(&server)
+        .await;
+    let case = dir.path().join("v.http");
+    std::fs::write(
+        &case,
+        format!("### v\nGET {}/x?ns={{{{missing_var_e4}}}}\n", server.uri()),
+    )
+    .unwrap();
+
+    // strict：拒绝外发（mock 零命中即无 200 假成功）
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            case.to_str().unwrap(),
+            "--strict-vars",
+            "--report",
+            "json",
+        ],
+    );
+    let report = json_stdout(&out);
+    let results = report[0]["results"].as_array().unwrap();
+    assert!(!results[0]["success"].as_bool().unwrap(), "必须失败");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("missing_var_e4") && stdout.contains("--strict-vars"),
+        "错误必须指名变量并注明门禁: {stdout}"
+    );
+
+    // 对照：默认语义维持（字面量发送 + 警告）——请求真实到达 mock
+    let out2 = run(
+        dir.path(),
+        &["t", case.to_str().unwrap(), "--report", "json"],
+    );
+    let report2 = json_stdout(&out2);
+    let results2 = report2[0]["results"].as_array().unwrap();
+    assert_eq!(
+        results2[0]["status"],
+        serde_json::json!(200),
+        "默认语义：字面量发送请求真实到达"
+    );
+}

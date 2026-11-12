@@ -33,6 +33,8 @@ pub struct BootstrapParams {
     pub no_ai: bool,
     /// origin 模板化为 `{{base_url}}`（透传发射器）
     pub templatize_host: bool,
+    /// E-3：保留明文凭据（T2 溯源不命中时免手工回填 token；文件自带 0600 建议）
+    pub keep_credentials: bool,
 }
 
 /// D 阶段裁决：断言过 parser、截断至 8 条；非法条目返回 (丢弃数, 合法断言行)
@@ -100,6 +102,8 @@ fn emit_blocks(
     entries: &[crate::history::model::HistoryEntry],
     outcome: Option<&SynthesisOutcome>,
     templatize_host: bool,
+    // E-3：保留明文凭据豁免（透传至发射器）
+    keep_credentials: bool,
 ) -> (String, usize, usize) {
     let advice_by_index: std::collections::HashMap<usize, &SynthesisAdvice> = outcome
         .map(|o| {
@@ -115,9 +119,12 @@ fn emit_blocks(
     let mut lint_dropped = 0usize;
 
     // ── 批量发射一次（Review P1-1：跨块共享 @name 去重表与变量头，禁止逐条调用） ──
-    let (full, _) =
-        crate::generator::HttpGenerator::generate_with_variables(entries, templatize_host)
-            .unwrap_or_default();
+    let (full, _) = crate::generator::HttpGenerator::generate_with_variables_ex(
+        entries,
+        templatize_host,
+        keep_credentials,
+    )
+    .unwrap_or_default();
 
     // 按块边界（"### " 行）切分：前导注释（变量声明头）单独保存，
     // 块与条目一一对应（advice index 直接对位，无偏移）
@@ -235,8 +242,11 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
     }
 
     // ── B 机械还原（确定性基线；AI 路径由 emit_blocks 批量发射——单次调用共享 @name 去重与变量头） ──
-    let (baseline, _) =
-        crate::generator::HttpGenerator::generate_with_variables(&entries, params.templatize_host)?;
+    let (baseline, _) = crate::generator::HttpGenerator::generate_with_variables_ex(
+        &entries,
+        params.templatize_host,
+        params.keep_credentials,
+    )?;
 
     // ── C AI 语义增强（可跳过/可失败） ──
     let (mut content, enhanced, failed_chunks) = if params.no_ai {
@@ -263,7 +273,12 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
                         outcome.failed_chunks
                     );
                 }
-                emit_blocks(&entries, Some(&outcome), params.templatize_host)
+                emit_blocks(
+                    &entries,
+                    Some(&outcome),
+                    params.templatize_host,
+                    params.keep_credentials,
+                )
             }
             Err(e) => {
                 eprintln!(
@@ -271,7 +286,12 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
                     "⚠".yellow(),
                     crate::utils::text::truncate_chars(&e.to_string(), 120, "…")
                 );
-                emit_blocks(&entries, None, params.templatize_host)
+                emit_blocks(
+                    &entries,
+                    None,
+                    params.templatize_host,
+                    params.keep_credentials,
+                )
             }
         }
     };
@@ -383,7 +403,7 @@ mod tests {
             advice: vec![advice],
             failed_chunks: 0,
         };
-        let (text, enhanced, dropped) = emit_blocks(&entries, Some(&outcome), false);
+        let (text, enhanced, dropped) = emit_blocks(&entries, Some(&outcome), false, false);
         assert_eq!(enhanced, 1);
         assert_eq!(dropped, 0);
         assert!(text.contains("# @assert body.token exists"));
@@ -393,7 +413,7 @@ mod tests {
     #[test]
     fn test_emit_blocks_none_is_baseline() {
         let entries = vec![entry(1, "http://a.local/v1/login")];
-        let (text, enhanced, dropped) = emit_blocks(&entries, None, false);
+        let (text, enhanced, dropped) = emit_blocks(&entries, None, false, false);
         assert_eq!(enhanced, 0);
         assert_eq!(dropped, 0);
         assert!(text.contains("# @assert status == 200"));

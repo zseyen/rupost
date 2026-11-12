@@ -41,6 +41,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 timing,
                 with_deps,
                 var_state,
+                strict_vars,
                 only,
                 on_failure,
                 allow_missing_plugins,
@@ -88,6 +89,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 timing_off,
                 with_deps,
                 var_state,
+                strict_vars,
                 only,
                 on_failure,
                 allow_missing_plugins,
@@ -133,6 +135,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 last: args.last,
                 interactive: args.interactive,
                 templatize_host: args.templatize_host,
+                keep_credentials: args.keep_credentials,
             };
             rupost::generator::run_generate(opts)?;
         }
@@ -235,6 +238,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 output,
                 no_ai,
                 templatize_host,
+                keep_credentials,
             } => {
                 let params = rupost::ai::bootstrap::BootstrapParams {
                     from,
@@ -243,6 +247,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     output,
                     no_ai,
                     templatize_host,
+                    keep_credentials,
                 };
                 rupost::ai::bootstrap::run_bootstrap(&params).await?;
             }

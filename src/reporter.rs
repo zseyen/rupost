@@ -63,14 +63,21 @@ impl TestReporter {
             String::new()
         };
 
+        // E-5：插件耗时可见性——时延隔离口径（duration 含插件耗时）下，
+        // 单独呈现 plugin_duration 供开发者核对插件冷启动占比
+        let plugin_part = match result.plugin_duration_us {
+            Some(us) if us > 0 => format!(" (plugin +{}ms)", us / 1000),
+            _ => String::new(),
+        };
         println!(
-            " {} [{}]{} {} {} ({}ms)",
+            " {} [{}]{} {} {} ({}ms){}",
             symbol.color(color),
             result.request_number,
             name_part,
             result.method.cyan(),
             result.url,
-            result.duration.as_millis()
+            result.duration.as_millis(),
+            plugin_part
         );
 
         // 如果是 verbose 模式，或者失败了，显示详细信息

@@ -28,15 +28,27 @@ impl HttpGenerator {
         entries: &[HistoryEntry],
         templatize_host: bool,
     ) -> Result<(String, Vec<String>)> {
-        let policy = crate::variable::ConfigLoader::find_and_load_redaction_policy();
-        Self::generate_with_policy(entries, templatize_host, Some(&policy))
+        Self::generate_with_variables_ex(entries, templatize_host, false)
     }
 
-    /// 接受显式脱敏策略的生成入口
+    /// E-3（免重填）：`keep_credentials = true` 保留明文凭据（T2 溯源不命中时免手工回填）
+    pub fn generate_with_variables_ex(
+        entries: &[HistoryEntry],
+        templatize_host: bool,
+        keep_credentials: bool,
+    ) -> Result<(String, Vec<String>)> {
+        let policy = crate::variable::ConfigLoader::find_and_load_redaction_policy();
+        Self::generate_with_policy(entries, templatize_host, Some(&policy), keep_credentials)
+    }
+
+    /// 接受显式脱敏策略的生成入口。
+    /// E-3（免重填）：`keep_credentials = true` 时保留明文凭据（T2 溯源不命中场景
+    /// 免手工回填 token）——生成文件自带 0600 建议警告，调用方须妥善保管。
     pub fn generate_with_policy(
         entries: &[HistoryEntry],
         templatize_host: bool,
         policy: Option<&crate::security::redact::RedactionPolicy>,
+        keep_credentials: bool,
     ) -> Result<(String, Vec<String>)> {
         let mut output = String::new();
         let mut variables = BTreeSet::new();
@@ -68,6 +80,7 @@ impl HttpGenerator {
                 },
                 if has_trace { Some(&trace_plan) } else { None },
                 policy,
+                keep_credentials,
             ));
         }
 
@@ -86,6 +99,7 @@ impl HttpGenerator {
         Ok((output, names))
     }
 
+    #[allow(clippy::too_many_arguments)] // E-3：keep_credentials 沿既有链路透传，重构签名超出本批范围
     fn format_entry(
         entry: &HistoryEntry,
         templatize_host: bool,
@@ -94,6 +108,8 @@ impl HttpGenerator {
         captures: Option<&[&super::trace::TracedLink]>,
         traced: Option<&super::trace::TracePlan>,
         policy: Option<&crate::security::redact::RedactionPolicy>,
+        // E-3：保留明文凭据豁免（--keep-credentials 透传）
+        keep_credentials: bool,
     ) -> String {
         let mut block = String::new();
 
@@ -169,7 +185,8 @@ impl HttpGenerator {
                 continue;
             }
             // 凭据模板化：生成的测试文件严禁落盘明文凭证
-            if is_key_sensitive(key_str, policy) {
+            // （E-3：--keep-credentials 显式豁免——保留字面值免手工回填）
+            if is_key_sensitive(key_str, policy) && !keep_credentials {
                 let var = Self::var_name_from_key(key_str);
                 variables.insert(var.clone());
                 match Self::split_auth_scheme(&val_str) {
@@ -539,7 +556,7 @@ mod tests {
         let policy =
             RedactionPolicy::new(["x-custom-signature", "x-tenant-token"], Vec::<&str>::new());
         let (output, vars) =
-            HttpGenerator::generate_with_policy(&[entry], false, Some(&policy)).unwrap();
+            HttpGenerator::generate_with_policy(&[entry], false, Some(&policy), false).unwrap();
 
         // 验证 Header 与 Query 中的自定义凭据均被模板化
         assert!(output.contains("x-custom-signature: {{x_custom_signature}}"));

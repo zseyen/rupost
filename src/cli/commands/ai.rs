@@ -101,5 +101,8 @@ pub enum AiCommands {
         /// Template request origin as {{base_url}}
         #[arg(long)]
         templatize_host: bool,
+        /// E-3：保留明文凭据（T2 溯源不命中时免手工回填 token；文件请 0600 妥善保管）
+        #[arg(long)]
+        keep_credentials: bool,
     },
 }

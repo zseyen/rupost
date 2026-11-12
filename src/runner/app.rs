@@ -61,6 +61,8 @@ pub struct TestSuiteOptions {
     pub with_deps: bool,
     /// `--var-state`（R-2 免重填）：捕获变量持久化文件；结束落盘、启动回灌（最低优先级层）
     pub var_state: Option<String>,
+    /// `--strict-vars`（E-4）：未解析 `{{var}}` 拒绝外发
+    pub strict_vars: bool,
 }
 
 impl Default for TestSuiteOptions {
@@ -98,6 +100,7 @@ impl Default for TestSuiteOptions {
             allow_project_plugins: false,
             with_deps: false,
             var_state: None,
+            strict_vars: false,
         }
     }
 }

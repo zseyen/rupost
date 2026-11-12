@@ -77,6 +77,9 @@ pub struct TestExecutor {
     observer: Arc<dyn ExecutionObserver>,
     pub debug: bool,
     pub debug_on_failure: bool,
+    /// E-4（免重填）：`--strict-vars`——未解析 `{{var}}` 拒绝外发（默认 false 维持
+    /// 字面量发送 + 事后警告的既有语义），防漏配变量打注定失败的请求
+    pub strict_vars: bool,
     pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
     /// 插件注册表（M3：`--save-snapshot`/插件注解存在时由 app 层装配；None 时由
     /// `executor_plugin` 回退空注册表进入管线，防止绕过严格门禁）。
@@ -130,6 +133,7 @@ impl TestExecutor {
             observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
+            strict_vars: false,
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
@@ -188,6 +192,12 @@ impl TestExecutor {
         self
     }
 
+    /// E-4：`--strict-vars`——未解析 `{{var}}` 拒绝外发
+    pub fn with_strict_vars(mut self, strict_vars: bool) -> Self {
+        self.strict_vars = strict_vars;
+        self
+    }
+
     /// Set stream_sender for long-connection notifications
     pub fn with_stream_sender(
         mut self,
@@ -217,6 +227,7 @@ impl TestExecutor {
             observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
+            strict_vars: false,
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
@@ -241,6 +252,7 @@ impl TestExecutor {
             observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
+            strict_vars: false,
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
@@ -335,6 +347,20 @@ impl TestExecutor {
 
         // 检测渲染后仍残留的占位符（未定义变量），收集为可见警告避免静默假通过
         let unresolved = VariableResolver::unresolved_placeholders(&parsed);
+        // E-4：--strict-vars 下未解析变量 → 拒绝外发（可读错误指名变量）
+        if self.strict_vars && !unresolved.is_empty() {
+            return TestResult::error(
+                request_number,
+                parsed.name().map(|s| s.to_string()),
+                parsed.method_or_default().to_string(),
+                parsed.url.clone(),
+                format!(
+                    "变量未解析（--strict-vars 拒绝外发）: {}——请补齐 --var/.env/rupost.toml 或 --var-state",
+                    unresolved.join(", ")
+                ),
+                start.elapsed(),
+            );
+        }
 
         // 检查未配置的 base_url/baseUrl 占位符
         if parsed.url.contains("{{base_url}}") || parsed.url.contains("{{baseUrl}}") {

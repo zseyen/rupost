@@ -16,6 +16,15 @@ pub struct JsonFileReport {
     pub results: Vec<JsonTestReport>,
 }
 
+/// E-5：网络时序分段（毫秒粒度，供离线 HTML 复渲染瀑布）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonTiming {
+    pub dns_ms: u64,
+    pub tcp_ms: u64,
+    pub ttfb_ms: u64,
+    pub transfer_ms: u64,
+}
+
 /// 单个请求的 JSON 测试报告
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonTestReport {
@@ -31,6 +40,11 @@ pub struct JsonTestReport {
     /// B-3：插件降级形态的成功（DegradedPass）——CI 看板可见性对齐 --strict-plugins
     #[serde(default)]
     pub degraded: bool,
+    /// E-5：网络时序分段（毫秒；DNS/TCP/TTFB/Transfer）——JSON 报告离线渲染不退化。
+    /// 恒序列化（None→null）保持键集合稳定（与 diagnose_report 同形态；失败条目
+    /// 无时序数据时为 null，键集合不随形态漂移）
+    #[serde(default)]
+    pub timing: Option<JsonTiming>,
     pub assertions: Vec<JsonAssertionReport>,
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -115,6 +129,12 @@ pub fn build_json_reports(
                         duration_ms: r.duration.as_millis() as u64,
                         success: r.success,
                         degraded: r.degraded,
+                        timing: r.timing.as_ref().map(|t| JsonTiming {
+                            dns_ms: t.dns_lookup.as_millis() as u64,
+                            tcp_ms: t.tcp_connect.as_millis() as u64,
+                            ttfb_ms: t.ttfb.as_millis() as u64,
+                            transfer_ms: t.transfer.as_millis() as u64,
+                        }),
                         // Gap Review P1-1：reqwest 错误文本自带完整原始 URL，必须掩码
                         error: r
                             .error

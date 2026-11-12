@@ -309,6 +309,7 @@ mod tests {
             error: None,
             skipped: false,
             degraded: false,
+            timing: None,
             assertions: vec![],
             warnings: vec![],
             response_body_snippet: None,

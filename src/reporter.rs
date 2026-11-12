@@ -5,6 +5,8 @@ use colored::Colorize;
 /// 终端渲染器：测试结果/摘要/批量汇总的彩色打印（JSON 契约见 `crate::report::json`）
 pub struct TestReporter {
     verbose: bool,
+    debug: bool,
+    debug_on_failure: bool,
     formatter: ResponseFormatter,
 }
 
@@ -18,8 +20,16 @@ impl TestReporter {
 
         Self {
             verbose,
+            debug: false,
+            debug_on_failure: false,
             formatter: ResponseFormatter::new(format),
         }
+    }
+
+    pub fn with_debug(mut self, debug: bool, debug_on_failure: bool) -> Self {
+        self.debug = debug;
+        self.debug_on_failure = debug_on_failure;
+        self
     }
 
     /// 打印单个测试结果
@@ -117,10 +127,12 @@ impl TestReporter {
             println!();
         }
 
-        // 显示网络时序与诊断报告
+        // 显示网络时序与诊断报告（M7-A 始终采集 timing 供快照使用，但终端仅在 --debug 或失败时 --debug-on-failure 渲染）
         if let Some(ref report) = result.diagnose_report {
             crate::http::print_diagnose_report(report);
-        } else if let Some(ref timing) = result.timing {
+        } else if (self.debug || (self.debug_on_failure && !result.success))
+            && let Some(ref timing) = result.timing
+        {
             self.print_timing(timing);
         }
     }

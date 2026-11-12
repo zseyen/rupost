@@ -26,6 +26,8 @@ pub struct SseRunnerOptions {
         Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
     /// 请求构建期的非致命警告（如畸形 JSON 降级发送），随流结果一起呈现
     pub warnings: Vec<String>,
+    /// M7-A 连接器采集的单连接时序（连接复用时为 None）
+    pub connect_span: Option<crate::http::timing_connector::ConnectSpan>,
 }
 
 /// 单个 SSE 事件的处理上下文。
@@ -389,14 +391,96 @@ impl SseRunner {
             test_result.success = test_result.assertions.iter().all(|a| a.passed);
         }
 
-        let need_timing = options.debug || (options.debug_on_failure && !test_result.success);
-        test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
-            probe_result,
+        // M7-A: 默认始终记录单连接时序（无需 --debug）；probe_result 保留供扩展诊断
+        let _ = probe_result;
+        super::http_runner::apply_connector_timing(
+            &mut test_result,
+            options.connect_span,
             final_response.ttfb,
             final_response.transfer,
-            need_timing,
         );
 
         test_result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::http::Client;
+    use crate::http::timing::TimingSource;
+    use crate::middleware::MiddlewarePipeline;
+    use crate::parser::HttpFileParser;
+    use crate::runner::observer::{ExecutionObserver, NoopExecutionObserver};
+    use crate::runner::protocol::http_runner::HttpRunner;
+    use crate::variable::VariableContext;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_sse_records_connector_timing_without_debug() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let body = "data: {\"ok\":true}\n\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let log_file = dir.path().join("sse_timing.log");
+        let doc = format!(
+            "### sse-timing\n# @stream\n# @sse-max-events 1\n# @stream-to {}\nGET http://{addr}/events\n",
+            log_file.display()
+        );
+        let parsed = HttpFileParser::parse_content(&doc)
+            .unwrap()
+            .requests
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let client = Client::new(None);
+        let mut ctx = VariableContext::new();
+        let observer: Arc<dyn ExecutionObserver> = Arc::new(NoopExecutionObserver);
+        let res = HttpRunner
+            .run(
+                parsed,
+                1,
+                &mut ctx,
+                &MiddlewarePipeline::new(),
+                &observer,
+                None,
+                false,
+                false,
+                &client,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(res.success, "SSE request should succeed: {:?}", res.error);
+        assert!(
+            res.timing.is_some(),
+            "SSE timing must be populated without --debug"
+        );
+        assert!(
+            res.connect_span.is_some(),
+            "cold SSE connect_span must be recorded without --debug"
+        );
+        assert!(
+            res.connect_span.unwrap().tcp_us.is_some(),
+            "cold SSE tcp_us must be recorded"
+        );
+        assert_eq!(res.timing_source, Some(TimingSource::Connector));
+        assert!(res.timing_attribution.is_some());
     }
 }

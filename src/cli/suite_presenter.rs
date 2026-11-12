@@ -46,7 +46,8 @@ pub async fn present_suite_outcome(
         }
         rupost::report::json::report_json(&outcome.batch_results, &mut std::io::stdout())?;
     } else {
-        let reporter = TestReporter::new(options.verbose);
+        let reporter =
+            TestReporter::new(options.verbose).with_debug(options.debug, options.debug_on_failure);
         let mut explain_session = rupost::ai::explain::ExplainSession::new();
         let ai_client = if options.explain {
             rupost::ai::config::resolve()

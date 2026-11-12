@@ -977,6 +977,39 @@ pub fn mask_inline_secrets(text: &str) -> String {
     re_auth.replace_all(&step1, "${1} [REDACTED]").into_owned()
 }
 
+/// 默认响应体片段字节上限（512 Bytes）
+pub const DEFAULT_SNIPPET_MAX_BYTES: usize = 512;
+
+/// 判断断言 raw 引用的字段是否命中敏感键（如 `body.access_token`、`headers.Authorization`）
+pub fn assertion_targets_sensitive_key(raw: &str) -> bool {
+    raw.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(is_sensitive_key)
+}
+
+/// 在 UTF-8 字符边界安全截断文本（按字节上限），超出时追加 `...[truncated]`。
+pub fn truncate_utf8_safe(text: &str, max_bytes: usize) -> String {
+    crate::utils::text::truncate_utf8_bytes(text, max_bytes, "...[truncated]")
+}
+
+/// 对响应体进行结构化脱敏并安全截断至 `max_bytes`
+pub fn redact_and_truncate_body(body: &str, max_bytes: usize) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let sanitized = if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        mask_json_pii_value_in_place(&mut json_val);
+        serde_json::to_string(&json_val).unwrap_or_else(|_| trimmed.to_string())
+    } else {
+        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
+    };
+
+    truncate_utf8_safe(&sanitized, max_bytes)
+}
+
 #[cfg(test)]
 mod mask_tests {
     use super::*;

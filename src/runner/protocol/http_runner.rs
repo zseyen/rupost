@@ -119,6 +119,7 @@ impl HttpRunner {
                         stream_to_append,
                         stream_sender,
                         warnings: build_warnings,
+                        connect_span,
                     };
                     return Ok(crate::runner::SseRunner::execute(
                         response,
@@ -231,28 +232,12 @@ impl HttpRunner {
 
                 // M7-A: 默认始终记录单连接时序（无需 --debug）；连接复用时 connect_span 为 None
                 //（对应快照 dns_lookup_us/tcp_connect_us = null）。
-                let span_dns = connect_span
-                    .and_then(|s| s.dns_us)
-                    .map(Duration::from_micros)
-                    .unwrap_or(Duration::ZERO);
-                let span_tcp = connect_span
-                    .and_then(|s| s.tcp_us)
-                    .map(Duration::from_micros)
-                    .unwrap_or(Duration::ZERO);
-                test_result.timing = Some(crate::http::timing::RequestTiming {
-                    dns_lookup: span_dns,
-                    tcp_connect: span_tcp,
-                    ttfb: response_obj.ttfb,
-                    transfer: response_obj.transfer,
-                });
-                test_result.connect_span = connect_span;
-                test_result.timing_source = Some(crate::http::timing::TimingSource::Connector);
-                test_result.timing_attribution =
-                    Some(if crate::http::timing_connector::has_proxy_env() {
-                        crate::http::timing::TimingAttribution::Approximate
-                    } else {
-                        crate::http::timing::TimingAttribution::Exact
-                    });
+                apply_connector_timing(
+                    &mut test_result,
+                    connect_span,
+                    response_obj.ttfb,
+                    response_obj.transfer,
+                );
 
                 Ok(test_result)
             }
@@ -304,4 +289,34 @@ impl HttpRunner {
             }
         }
     }
+}
+
+/// 将 M7-A 连接器采集的 `ConnectSpan` 与 `ttfb`/`transfer` 写入 `TestResult`（供 HTTP 与 SSE 复用）
+pub(super) fn apply_connector_timing(
+    test_result: &mut TestResult,
+    connect_span: Option<crate::http::timing_connector::ConnectSpan>,
+    ttfb: Duration,
+    transfer: Duration,
+) {
+    let span_dns = connect_span
+        .and_then(|s| s.dns_us)
+        .map(Duration::from_micros)
+        .unwrap_or(Duration::ZERO);
+    let span_tcp = connect_span
+        .and_then(|s| s.tcp_us)
+        .map(Duration::from_micros)
+        .unwrap_or(Duration::ZERO);
+    test_result.timing = Some(crate::http::timing::RequestTiming {
+        dns_lookup: span_dns,
+        tcp_connect: span_tcp,
+        ttfb,
+        transfer,
+    });
+    test_result.connect_span = connect_span;
+    test_result.timing_source = Some(crate::http::timing::TimingSource::Connector);
+    test_result.timing_attribution = Some(if crate::http::timing_connector::has_proxy_env() {
+        crate::http::timing::TimingAttribution::Approximate
+    } else {
+        crate::http::timing::TimingAttribution::Exact
+    });
 }

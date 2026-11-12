@@ -359,9 +359,9 @@ impl ReplayExecutor {
         let response_body_snippet = if matched {
             None
         } else {
-            Some(crate::ai::redactor::redact_and_truncate_body(
+            Some(crate::security::redact::redact_and_truncate_body(
                 &res.body,
-                crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
             ))
         };
 
@@ -415,9 +415,9 @@ impl ReplayExecutor {
                     } else {
                         diffs.join("; ")
                     };
-                    let summary = crate::ai::redactor::redact_free_text(&summary);
+                    let summary = crate::security::redact::redact_free_text(&summary);
                     let summary = crate::security::redact::mask_pii(&summary);
-                    let summary = crate::ai::redactor::truncate_utf8_safe(&summary, 512);
+                    let summary = crate::security::redact::truncate_utf8_safe(&summary, 512);
                     (Some(false), Some(summary))
                 }
             }
@@ -599,7 +599,7 @@ fn diff_values(
 /// 按叶子键名掩码差异值：路径命中敏感键（token/authorization 等）→ 值整体 `[REDACTED]`。
 /// 复用 `assertion_targets_sensitive_key`（分词匹配，`orders[0].access_token` 命中）。
 fn mask_by_key(path: &str, value: &str) -> String {
-    if crate::ai::redactor::assertion_targets_sensitive_key(path) {
+    if crate::security::redact::assertion_targets_sensitive_key(path) {
         "[REDACTED]".to_string()
     } else {
         value.to_string()

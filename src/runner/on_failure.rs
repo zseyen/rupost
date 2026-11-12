@@ -141,7 +141,7 @@ pub async fn fire_failure_hooks(
                 .as_ref()
                 .and_then(|resp| extract_trace_id(&resp.headers));
             // url 与报告/LLM 同一脱敏纪律（敏感 query 掩码，路径仍可用于日志定位）
-            let safe_url = crate::ai::redactor::redact_url(&r.url);
+            let safe_url = crate::security::redact::redact_url(&r.url);
             let outcome =
                 run_hook(cmd, &safe_url, r.status, trace_id.as_deref(), HOOK_TIMEOUT).await;
 

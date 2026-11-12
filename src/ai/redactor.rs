@@ -1,13 +1,11 @@
 pub use crate::security::redact::{
-    is_sensitive_key, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value,
-    redact_url,
+    DEFAULT_SNIPPET_MAX_BYTES, assertion_targets_sensitive_key, is_sensitive_key,
+    mask_inline_secrets, mask_pii, redact_and_truncate_body, redact_free_text, redact_header_value,
+    redact_url, truncate_utf8_safe,
 };
 use regex::Regex;
 use serde_json::Value;
 use std::sync::OnceLock;
-
-/// 默认响应体片段字节上限（512 Bytes）
-pub const DEFAULT_SNIPPET_MAX_BYTES: usize = 512;
 
 fn url_regex() -> &'static Regex {
     static URL_RE: OnceLock<Regex> = OnceLock::new();
@@ -18,12 +16,6 @@ fn url_regex() -> &'static Regex {
 /// 将文本中的 URL 整体替换为 `<url>` 占位符（用于去重签名：同端点不同实例同签名）
 pub fn mask_urls(text: &str) -> String {
     url_regex().replace_all(text, "<url>").to_string()
-}
-
-/// 判断断言 raw 引用的字段是否命中敏感键（如 `body.access_token`、`headers.Authorization`）
-pub fn assertion_targets_sensitive_key(raw: &str) -> bool {
-    raw.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .any(is_sensitive_key)
 }
 
 /// 断言期望/实际/消息值的脱敏（Gap Review P1-2）：
@@ -37,12 +29,6 @@ pub fn redact_assertion_value(raw: &str, value: Option<&str>) -> Option<String> 
     }
 }
 
-/// 在 UTF-8 字符边界安全截断文本（按字节上限），超出时追加 `...[truncated]`。
-/// 禁止裸切片（`&s[..n]` 会在多字节字符中间 panic），必须经 `is_char_boundary` 回退。
-pub fn truncate_utf8_safe(text: &str, max_bytes: usize) -> String {
-    crate::utils::text::truncate_utf8_bytes(text, max_bytes, "...[truncated]")
-}
-
 /// 按字符数截断错误消息，防止 AI 后端返回的超长错误体刷屏
 pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
     crate::utils::text::truncate_chars(msg, max_chars, "...[truncated]")
@@ -52,31 +38,6 @@ pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
 /// 对 `phone`/`mobile`/`id_card` 数值叶子及普通字符串叶子中的 PII 统一打码 `***`（结构保留）
 pub fn redact_json_value(val: &mut Value) {
     crate::security::redact::mask_json_pii_value_in_place(val);
-}
-
-/// 对响应体进行结构化脱敏并安全截断至 `max_bytes`：
-/// 1. 若响应体可解析为 JSON，先递归掩码敏感键再序列化为紧凑字符串；
-/// 2. 非 JSON 文本（HTML 错误页/纯文本）应用自由文本 URL 掩码（Gap Review P3：
-///    错误页常含 `?token=` 形态的回跳链接），再参与截断；
-/// 3. 在 UTF-8 字符边界处截断。
-pub fn redact_and_truncate_body(body: &str, max_bytes: usize) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    let sanitized = if (trimmed.starts_with('{') || trimmed.starts_with('['))
-        && let Ok(mut json_val) = serde_json::from_str::<Value>(trimmed)
-    {
-        redact_json_value(&mut json_val);
-        serde_json::to_string(&json_val).unwrap_or_else(|_| trimmed.to_string())
-    } else {
-        // 非 JSON（HTML/文本）：URL 掩码之外，兜底掩码内联键值凭据与 PII
-        // （token=xxx / api_key: xxx —— snippet 上行 LLM 前的最后防线）
-        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
-    };
-
-    truncate_utf8_safe(&sanitized, max_bytes)
 }
 
 #[cfg(test)]

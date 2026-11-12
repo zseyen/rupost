@@ -48,6 +48,42 @@ impl PluginDirective {
     }
 }
 
+impl From<crate::parser::ParsedPluginStage> for PluginStage {
+    fn from(stage: crate::parser::ParsedPluginStage) -> Self {
+        match stage {
+            crate::parser::ParsedPluginStage::Prepare => Self::Prepare,
+            crate::parser::ParsedPluginStage::Transform => Self::Transform,
+            crate::parser::ParsedPluginStage::Sign => Self::Sign,
+            crate::parser::ParsedPluginStage::PostResponse => Self::PostResponse,
+            crate::parser::ParsedPluginStage::OnFailure => Self::OnFailure,
+        }
+    }
+}
+
+impl From<&crate::parser::ParsedPluginDirective> for PluginDirective {
+    fn from(parsed: &crate::parser::ParsedPluginDirective) -> Self {
+        Self {
+            directive: parsed.directive.clone(),
+            name: parsed.name.clone(),
+            stage: parsed.stage.into(),
+            optional: parsed.optional,
+            params: parsed.params.clone(),
+        }
+    }
+}
+
+impl From<crate::parser::ParsedPluginDirective> for PluginDirective {
+    fn from(parsed: crate::parser::ParsedPluginDirective) -> Self {
+        Self {
+            directive: parsed.directive,
+            name: parsed.name,
+            stage: parsed.stage.into(),
+            optional: parsed.optional,
+            params: parsed.params,
+        }
+    }
+}
+
 /// 插件跨语言运行时依赖声明（03 §3.1 v2.1.1：零额外探针，仅 PATH stat 预检）
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginRuntime {

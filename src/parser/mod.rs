@@ -9,8 +9,8 @@ pub use http_file::HttpFileParser;
 pub use markdown_file::MarkdownFileParser;
 pub use mock_variant::MockVariantParser;
 pub use types::{
-    FileMetadata, ParseError, ParseResult, ParsedFile, ParsedMockVariant, ParsedRequest,
-    RequestMetadata,
+    FileMetadata, ParseError, ParseResult, ParsedFile, ParsedMockVariant, ParsedPluginDirective,
+    ParsedPluginStage, ParsedRequest, ParsedVariableCapture, RequestMetadata,
 };
 
 /// 通用 HTTP Header 行词法解析（`Key: Value` -> `(key, value)`）
@@ -57,4 +57,4 @@ pub fn parse_content(content: &str) -> ParseResult<ParsedFile> {
 }
 
 pub mod scanner;
-pub use scanner::DirectoryScanner;
+pub use scanner::{DirectoryScanner, is_supported_doc};

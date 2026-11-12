@@ -115,7 +115,33 @@ impl ParsedRequest {
     }
 }
 
-use crate::variable::capture::VariableCapture;
+/// 纯语法层插件生命周期阶段（不依赖 plugin 模块）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum ParsedPluginStage {
+    Prepare = 10,
+    #[default]
+    Transform = 20,
+    Sign = 30,
+    PostResponse = 40,
+    OnFailure = 50,
+}
+
+/// 纯语法层插件指令（`@auth`, `@transform`, `@sign`, `@plugin`）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPluginDirective {
+    pub directive: String,
+    pub name: String,
+    pub stage: ParsedPluginStage,
+    pub optional: bool,
+    pub params: std::collections::HashMap<String, String>,
+}
+
+/// 纯语法层变量捕获声明（`@capture <name> from <source>`）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParsedVariableCapture {
+    pub name: String,
+    pub source: String,
+}
 
 /// 请求元数据
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -133,7 +159,7 @@ pub struct RequestMetadata {
     pub assertions: Vec<String>,
 
     /// 变量捕获列表（@capture）
-    pub captures: Vec<VariableCapture>,
+    pub captures: Vec<ParsedVariableCapture>,
 
     /// 是否为 SSE 请求（@sse）
     pub sse: bool,
@@ -156,7 +182,7 @@ pub struct RequestMetadata {
     pub stream_to_append: bool,
 
     /// 插件生命周期指令列表（@auth, @transform, @sign, @plugin）
-    pub plugins: Vec<crate::plugin::PluginDirective>,
+    pub plugins: Vec<ParsedPluginDirective>,
 
     /// 请求重定向转发 URL（@forward_to，可选）
     pub forward_to: Option<String>,
@@ -211,7 +237,7 @@ pub enum Metadata {
     /// 显式声明的豁免键列表（@no-redact）
     NoRedact(Vec<String>),
     /// 插件生命周期指令（@auth, @transform, @sign, @plugin）
-    Plugin(crate::plugin::PluginDirective),
+    Plugin(ParsedPluginDirective),
 }
 
 /// 整个文件的解析结果

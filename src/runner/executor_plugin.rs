@@ -81,8 +81,14 @@ pub(crate) async fn run_plugin_stage(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    let directives: Vec<crate::plugin::PluginDirective> = parsed
+        .metadata
+        .plugins
+        .iter()
+        .map(crate::plugin::PluginDirective::from)
+        .collect();
     let stage = PluginPipeline::execute_for_request(
-        &parsed.metadata.plugins,
+        &directives,
         registry,
         plugin_ctx.options,
         plugin_ctx.suite_hook_cache,

@@ -1,6 +1,7 @@
-use crate::parser::types::RequestMetadata;
-use crate::parser::types::{Metadata, ParseError, ParseResult};
-use crate::variable::capture::VariableCapture;
+use crate::parser::types::{
+    Metadata, ParseError, ParseResult, ParsedPluginDirective, ParsedPluginStage,
+    ParsedVariableCapture, RequestMetadata,
+};
 use std::time::Duration;
 
 /// 主解析函数（统一入口）
@@ -59,9 +60,10 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
             target.assertions.push(expr.clone());
         }
         Metadata::Capture { var_name, source } => {
-            target
-                .captures
-                .push(VariableCapture::parse(var_name, source));
+            target.captures.push(ParsedVariableCapture {
+                name: var_name.clone(),
+                source: source.clone(),
+            });
         }
         Metadata::Test => {
             target.is_test = true;
@@ -136,10 +138,10 @@ fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadat
     }
 
     let default_stage = match directive {
-        "@auth" => crate::plugin::PluginStage::Prepare,
-        "@transform" => crate::plugin::PluginStage::Transform,
-        "@sign" => crate::plugin::PluginStage::Sign,
-        _ => crate::plugin::PluginStage::Transform,
+        "@auth" => ParsedPluginStage::Prepare,
+        "@transform" => ParsedPluginStage::Transform,
+        "@sign" => ParsedPluginStage::Sign,
+        _ => ParsedPluginStage::Transform,
     };
 
     let mut tokens = tokenize_plugin_args(content).into_iter();
@@ -180,7 +182,7 @@ fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadat
     }
 
     let dir_name = directive.strip_prefix('@').unwrap_or(directive).to_string();
-    Ok(Metadata::Plugin(crate::plugin::PluginDirective {
+    Ok(Metadata::Plugin(ParsedPluginDirective {
         directive: dir_name,
         name,
         stage,
@@ -663,8 +665,6 @@ mod tests {
 
     #[test]
     fn test_parse_plugin_directives_contract() {
-        use crate::plugin::PluginStage;
-
         // 1. @auth 默认进入 Prepare 阶段，支持 ?optional
         let res = parse_metadata("@auth aws-sigv4 region=us-east-1 service=s3 ?optional")
             .unwrap()
@@ -672,7 +672,7 @@ mod tests {
         if let Metadata::Plugin(p) = res {
             assert_eq!(p.directive, "auth");
             assert_eq!(p.name, "aws-sigv4");
-            assert_eq!(p.stage, PluginStage::Prepare);
+            assert_eq!(p.stage, ParsedPluginStage::Prepare);
             assert!(p.optional);
             assert_eq!(p.params.get("region").unwrap(), "us-east-1");
             assert_eq!(p.params.get("service").unwrap(), "s3");
@@ -697,7 +697,7 @@ mod tests {
         if let Metadata::Plugin(p) = res {
             assert_eq!(p.directive, "transform");
             assert_eq!(p.name, "aes-gcm");
-            assert_eq!(p.stage, PluginStage::Transform);
+            assert_eq!(p.stage, ParsedPluginStage::Transform);
             assert!(!p.optional);
             assert_eq!(p.params.get("key").unwrap(), "my-secret-key");
         } else {
@@ -711,7 +711,7 @@ mod tests {
         if let Metadata::Plugin(p) = res {
             assert_eq!(p.directive, "sign");
             assert_eq!(p.name, "hmac-sha256");
-            assert_eq!(p.stage, PluginStage::Sign);
+            assert_eq!(p.stage, ParsedPluginStage::Sign);
         } else {
             panic!("Expected Metadata::Plugin");
         }
@@ -723,7 +723,7 @@ mod tests {
         if let Metadata::Plugin(ref p) = res {
             assert_eq!(p.directive, "plugin");
             assert_eq!(p.name, "custom-tool");
-            assert_eq!(p.stage, PluginStage::Transform);
+            assert_eq!(p.stage, ParsedPluginStage::Transform);
             assert!(p.optional);
         } else {
             panic!("Expected Metadata::Plugin");

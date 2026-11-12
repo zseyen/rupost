@@ -17,7 +17,12 @@ Content-Type: application/json
     let parsed = HttpFileParser::parse_content(http_content).expect("Failed to parse http file");
     assert_eq!(parsed.requests.len(), 1);
 
-    let mut req_plugins = parsed.requests[0].metadata.plugins.clone();
+    let mut req_plugins: Vec<rupost::plugin::PluginDirective> = parsed.requests[0]
+        .metadata
+        .plugins
+        .iter()
+        .map(Into::into)
+        .collect();
     assert_eq!(req_plugins.len(), 2);
 
     // 1. 验证解析属性

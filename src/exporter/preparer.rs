@@ -307,7 +307,7 @@ fn is_valid_json_object_or_array(body: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::variable::capture::VariableCapture;
+    use crate::parser::ParsedVariableCapture;
     use std::time::Duration;
 
     #[test]
@@ -411,9 +411,10 @@ mod tests {
         req1.metadata.name = Some("Login".to_string());
         req1.method = Some("POST".to_string());
         req1.url = "https://api.example.com/login".to_string();
-        req1.metadata
-            .captures
-            .push(VariableCapture::from_body("token", "data.token"));
+        req1.metadata.captures.push(ParsedVariableCapture {
+            name: "token".to_string(),
+            source: "body.data.token".to_string(),
+        });
         file.add_request(req1);
 
         // 请求 2: 标记 @skip

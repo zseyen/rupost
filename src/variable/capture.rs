@@ -56,7 +56,21 @@ impl VariableCapture {
             source: CaptureSource::Header(header_name.into()),
         }
     }
+}
 
+impl From<&crate::parser::ParsedVariableCapture> for VariableCapture {
+    fn from(parsed: &crate::parser::ParsedVariableCapture) -> Self {
+        Self::parse(&parsed.name, &parsed.source)
+    }
+}
+
+impl From<crate::parser::ParsedVariableCapture> for VariableCapture {
+    fn from(parsed: crate::parser::ParsedVariableCapture) -> Self {
+        Self::from(&parsed)
+    }
+}
+
+impl VariableCapture {
     /// 解析捕获源字符串
     ///
     /// 语法:

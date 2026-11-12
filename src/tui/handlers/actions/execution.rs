@@ -130,8 +130,9 @@ async fn trigger_file_execution(
     let mut var_context = state.variables.clone();
     var_context.insert("__default_scheme", "http");
 
-    // R5：cookie 会话延续——桥接上一次运行的导出状态
-    let mut executor = crate::runner::TestExecutor::with_ephemeral_cookies();
+    // R5：cookie 会话延续——桥接上一次运行的导出状态。
+    // B-1 组合根收口：交互执行器经共享工厂装配本机插件注册表（免假性"未安装"阻断）
+    let mut executor = crate::runner::executor_factory::build_interactive_executor();
     executor.debug_on_failure = true; // R7：失败自动诊断（对齐 CLI --debug-on-failure）
     if let Some(state_json) = state
         .cookie_bridge

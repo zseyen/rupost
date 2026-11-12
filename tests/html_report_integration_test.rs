@@ -59,6 +59,7 @@ GET http://example.com/api/test
         plugin_timeout_secs: 5,
         plugin_env: vec![],
         allow_project_plugins: false,
+        with_deps: false,
     };
 
     // 执行套件并显式写出报告（报告落盘已上移至表现层门面）
@@ -178,6 +179,7 @@ Accept: text/event-stream
         plugin_timeout_secs: 5,
         plugin_env: vec![],
         allow_project_plugins: false,
+        with_deps: false,
     };
 
     let outcome = run_test_suite(options).await.unwrap();

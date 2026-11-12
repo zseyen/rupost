@@ -54,6 +54,9 @@ pub struct TestSuiteOptions {
     pub plugin_env: Vec<String>,
     /// 工作区本地插件放行（03 §3.2 沙箱警戒闸门）
     pub allow_project_plugins: bool,
+    /// `--with-deps`（R-1 免重填）：`--only` 时按拓扑序先执行目标文件的
+    /// `@depends-on` 依赖闭包（上游登录/取号自动先跑）
+    pub with_deps: bool,
 }
 
 impl Default for TestSuiteOptions {
@@ -88,6 +91,7 @@ impl Default for TestSuiteOptions {
             plugin_timeout_secs: crate::plugin::pipeline::DEFAULT_PLUGIN_TIMEOUT_SECS,
             plugin_env: Vec::new(),
             allow_project_plugins: false,
+            with_deps: false,
         }
     }
 }
@@ -172,9 +176,26 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
             "[i] 单请求模式：执行第 {} 条{}，其余 {} 条已跳过",
             applied.selected_number, name_part, applied.skipped_count
         )));
-        let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-        deps.insert(target.clone(), Vec::new());
-        (vec![target], deps)
+        if options.with_deps {
+            // R-1 免重填：按拓扑序先执行目标文件的依赖闭包（上游登录/取号自动先跑），
+            // @capture 捕获的登录态经变量解析链流入选中请求
+            let parse_pairs: Vec<_> = files_map
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let graph = WorkflowGraph::new(&parse_pairs);
+            let (order, deps_map) = graph.closure_execution_order(std::slice::from_ref(&target))?;
+            let dep_count = order.len().saturating_sub(1);
+            notices.push(SuiteNotice::TerminalStdout(format!(
+                "[i] 单请求模式（--with-deps）：先执行 {dep_count} 个依赖文件，再执行第 {} 条{name_part}",
+                applied.selected_number
+            )));
+            (order, deps_map)
+        } else {
+            let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+            deps.insert(target.clone(), Vec::new());
+            (vec![target], deps)
+        }
     } else {
         let parse_pairs: Vec<_> = files_map
             .iter()

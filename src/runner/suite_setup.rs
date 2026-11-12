@@ -53,30 +53,11 @@ pub(crate) fn assemble_plugin_runtime(
             || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
-    let cache_path = dirs::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
-        .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
-
-    let registry = match PluginRegistry::load_or_discover(&discover_options, &cache_path) {
-        Ok(reg) => {
-            for warning in &reg.warnings {
-                eprintln!("[!] {warning}");
-            }
-            let mut directives: Vec<String> = reg.hooks.keys().cloned().collect();
-            directives.sort();
-            directives.dedup();
-            let authorized_env_keys = extract_authorized_env_keys(&options.plugin_env);
-            for warning in reg.collect_missing_env_warnings(&directives, &authorized_env_keys) {
-                eprintln!("[WARN] {warning}");
-            }
-            Arc::new(reg)
-        }
-        Err(e) => {
-            // 反静默：发现失败必须可见；回退空注册表确保插件管线与严格门禁不旁路
-            eprintln!("[!] 插件注册表发现失败（插件注解将按缺失门禁/降级处理）: {e}");
-            Arc::new(PluginRegistry::new())
-        }
-    };
+    let authorized_env_keys = extract_authorized_env_keys(&options.plugin_env);
+    let registry = crate::runner::executor_factory::discover_plugin_registry(
+        &discover_options,
+        &authorized_env_keys,
+    );
     (registry, plugin_runtime)
 }
 

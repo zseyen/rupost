@@ -31,7 +31,7 @@
 
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| R-1 | `--only` 依赖闭包执行 | `src/runner/app.rs:143-174`（selector 分支 deps 插空表；`workflow.rs:39-100` 图/拓扑/环检测已就绪） | selector 分支计算目标文件祖先闭包，按拓扑序先执行；`--with-deps` 显式开关或默认开 | `--only @get_order` 自动先跑登录文件，`{{auth_token}}` 有值；无依赖文件零行为变化 | 🔧 |
+| R-1 | ✅ 已落地（2026-11-13：`--with-deps` opt-in 旗标 + `WorkflowGraph::closure_execution_order` 祖先闭包拓扑序；传递依赖 e2e + 既有语义防假守护对照） | `src/runner/app.rs`、`src/runner/engine/workflow.rs` | selector 分支计算目标文件祖先闭包，按拓扑序先执行；`--with-deps` 显式开关（保护既有 `--only` 契约） | `--only @get_order --with-deps` 自动先跑登录文件，`{{auth_token}}` 有值；无依赖文件零行为变化 | ✅ |
 | R-2 | `--var-state` 捕获变量持久化 | `variable/types.rs:7-12`（零落盘）；对照 cookie-file 模式（`middleware/cookie.rs:144-197`） | 套件结束捕获变量落 `.rupost/vars.json`（0600 + 原子写），`load_suite_context` 回灌为最低优先级层（低于 CLI `--var`）；TUI 退出同路 | 第二次运行免重跑登录（token 型 API）；`--var` 仍可覆盖 | 🔧 |
 | R-3 | TUI 捕获合并移出 Ok 分支 | `tui/state/stream.rs:105-113` + `lifecycle.rs:31-41` | 响应存在即合并捕获变量，断言结论不影响变量承接 | 登录 200 但断言红，token 仍被下游复用 | 🔧 |
 | R-4 | Web 轨道会话/变量延续 | `web/handlers/run.rs:79-87`（每次 ephemeral） | cookie bridge + variables 挂 `AppState`，复用 TUI 机制 | Web 逐块调试带登录链文档可复用会话 | 🔧 |
@@ -41,7 +41,7 @@
 
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| B-1 | TUI/Web 插件注册表装配 | `suite_setup.rs:42`（签名钉死 CLI 类型）；`run.rs:87,188`、`execution.rs:134` 裸建 | `assemble_plugin_runtime` 参数解耦为 `PluginRuntimeOptions` → 四构建点收口单一工厂 | 本机已装插件在 TUI/Web 真实生效；e2e 补"表现层 × 插件"象限 | 🔧 |
+| B-1 | ✅ 已落地（2026-11-13：`src/runner/executor_factory.rs` 共享工厂（`discover_plugin_registry` 拆层 DRY + `build_interactive_executor[_with]`）；TUI/Web 三构建点收口；装配守护 e2e 含防假守护对照） | `src/runner/executor_factory.rs`、`src/runner/suite_setup.rs`、`src/tui/handlers/actions/execution.rs`、`src/web/handlers/run.rs` | 注册表发现拆层为独立工厂函数，TUI/Web 经共享工厂装配本机注册表（项目级默认隔离 + env 通道一致） | 本机已装插件在 TUI/Web 真实生效（`tests/interactive_executor_test.rs`） | ✅ |
 | B-2 | replay 感知 masking / body_truncated | `replayer.rs:24,398-429`；`model.rs:459-480`（masking 被丢弃） | masked 快照 → 警告或严格拒绝；截断条目跳过 body diff 只锁 status/headers 并注明原因 | 两类系统性假失败消灭 | 🔧 |
 | B-3 | 报告 degraded 呈现 | `src/report/` 全目录零 degraded 字段 | JUnit → `<skipped>` 或 failure 注记；JSON/HTML 同步 | `--strict-plugins` 红 job 与看板不再互相矛盾 | 🔧 |
 | B-4 | "未安装"文案补指引 | `pipeline.rs:264-268` vs `:171-174` | 与 RuntimeMissing 三选一处方对齐 | 首跑失败消息含 `--allow-missing-plugins` 指引 | 🔧 |

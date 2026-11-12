@@ -84,6 +84,10 @@ pub struct TestArgs {
     #[arg(long, value_name = "CMD")]
     pub on_failure: Option<String>,
 
+    /// `--only` 时先执行目标文件的 @depends-on 依赖闭包（免重填：上游登录/取号自动先跑）
+    #[arg(long)]
+    pub with_deps: bool,
+
     /// 插件缺失/失败时降级为警告跳过，请求按 .http 原样外发（03 §2；现场排障）
     #[arg(long)]
     pub allow_missing_plugins: bool,

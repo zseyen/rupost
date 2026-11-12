@@ -1,6 +1,5 @@
 use crate::parser::parse_document_by_path;
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
-use crate::runner::TestExecutor;
 use crate::utils::path_guard::is_http_doc;
 use crate::variable::ConfigLoader;
 use crate::web::server::AppState;
@@ -83,8 +82,8 @@ pub async fn run_block_handler(
     }
     var_context.insert("__default_scheme", "http");
 
-    // 4. 原位单块调试执行（采用无污染内存隔离会话）
-    let executor = TestExecutor::with_ephemeral_cookies();
+    // 4. 原位单块调试执行（采用无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）
+    let executor = crate::runner::executor_factory::build_interactive_executor();
     let result = executor
         .execute_one(
             target_request,
@@ -183,9 +182,9 @@ pub async fn run_suite_handler(
     }
     var_context.insert("__default_scheme", "http");
 
-    // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话）
+    // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）
     let start_time = std::time::Instant::now();
-    let executor = TestExecutor::with_ephemeral_cookies();
+    let executor = crate::runner::executor_factory::build_interactive_executor();
     let results = match executor.execute_all(parsed_file, &mut var_context).await {
         Ok(r) => r,
         Err(e) => {

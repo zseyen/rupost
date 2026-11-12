@@ -8,6 +8,7 @@ mod suite_setup;
 pub mod types;
 
 pub mod engine;
+pub mod executor_factory;
 pub mod protocol;
 pub mod utils;
 

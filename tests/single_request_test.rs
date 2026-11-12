@@ -206,3 +206,153 @@ async fn test_duplicate_name_executes_first_with_warning() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("已执行首个"), "stderr: {stderr}");
 }
+
+/// R-1（免重填主线）：`--only --with-deps` 必须按拓扑序先执行目标文件的
+/// `@depends-on` 依赖闭包（含传递依赖），使 `@capture` 捕获的登录态在选中
+/// 请求中直接可用——免重填：不再手动先跑登录文件、手工搬运 token。
+#[tokio::test]
+async fn test_only_with_deps_executes_dependency_closure_first() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/ping"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("pong"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"token":"tok-42"}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/orders"))
+        .and(wiremock::matchers::header("Authorization", "Bearer tok-42"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("orders-ok"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/orders"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+        .mount(&server)
+        .await;
+
+    fs::write(
+        dir.path().join("base.http"),
+        format!("### ping\nGET {}/ping\n", server.uri()),
+    )
+    .unwrap();
+    let login = dir.path().join("login.http");
+    fs::write(
+        &login,
+        format!(
+            "### @depends-on base.http\nPOST {}/login\nContent-Type: application/json\n\n{{{{}}}}\n\n@capture auth_token from body.token\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let orders = dir.path().join("orders.http");
+    fs::write(
+        &orders,
+        format!(
+            "### @depends-on login.http\n# @name list\nGET {}/orders\nAuthorization: Bearer {{{{auth_token}}}}\n\n# @assert status == 200\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            orders.to_str().unwrap(),
+            "--only",
+            "@list",
+            "--with-deps",
+            "--report",
+            "json",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "--with-deps 下依赖闭包必须先执行、选中请求必须命中 token：stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report = json_stdout(&out);
+    let files: &Vec<serde_json::Value> = report.as_array().unwrap();
+    let order: Vec<&str> = files
+        .iter()
+        .filter_map(|f| f["file_path"].as_str())
+        .map(|p| Path::new(p).file_name().unwrap().to_str().unwrap())
+        .collect();
+    let pos = |name: &str| order.iter().position(|f| *f == name).unwrap();
+    assert!(
+        pos("base.http") < pos("login.http") && pos("login.http") < pos("orders.http"),
+        "依赖闭包必须按拓扑序执行（base → login → orders）：{order:?}"
+    );
+    let orders_results = files
+        .iter()
+        .find(|f| f["file_path"].as_str().unwrap().ends_with("orders.http"))
+        .unwrap()["results"]
+        .as_array()
+        .unwrap();
+    assert!(
+        orders_results
+            .iter()
+            .any(|r| r["skipped"] == serde_json::json!(false)),
+        "选中请求必须真实执行"
+    );
+}
+
+/// 防假守护对照（R-1）：不带 `--with-deps` 时维持既有契约——依赖不执行，
+/// 未解析 `{{auth_token}}` 按字面量发送 → 401 → 选中请求失败 exit 1。
+#[tokio::test]
+async fn test_only_without_with_deps_keeps_existing_semantics() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/orders"))
+        .and(wiremock::matchers::header("Authorization", "Bearer tok-42"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("orders-ok"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/orders"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+        .mount(&server)
+        .await;
+    let login = dir.path().join("login.http");
+    fs::write(&login, "### login\nPOST /login\n").unwrap();
+    let orders = dir.path().join("orders.http");
+    fs::write(
+        &orders,
+        format!(
+            "### @depends-on login.http\n# @name list\nGET {}/orders\nAuthorization: Bearer {{{{auth_token}}}}\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            orders.to_str().unwrap(),
+            "--only",
+            "@list",
+            "--report",
+            "json",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "未带 --with-deps 时不得静默成功（登录未执行，token 未定义）"
+    );
+    let report = json_stdout(&out);
+    assert_eq!(
+        report.as_array().map(|a| a.len()),
+        Some(1),
+        "依赖文件不得进入结果（既有契约：仅目标文件）"
+    );
+}

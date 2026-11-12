@@ -8,6 +8,39 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **插件体系差距收口（plugin-m6 工作区，M6-4/M6-5 + 代码-设计偏差三项）**：①`--max-snapshot-body-bytes <BYTES>` 旗标接线（冻结清单缺口 #4，M6-4）——单响应体录入上限参数化（缺省 256KB 不变），截断 + 截断前完整 Body 的 SHA-256 验真守护测试；②AST 语法错误退出码归位 exit 2（M6-5，P1-5 残尾）——main 入口对 `ParseError` 统一归位（01 §2.1 三值契约：2 = 参数/语法错误），其余执行错误维持 exit 1，二进制级守护含防假守护对照；③`cache_scope=request` 请求内复用实现——此前枚举有定义无分支、实际退化为 none，现 `PluginPipeline` 请求局部备忘录同指令去重（跨请求绝不复用，与 suite 语义对照锁定）；④registry 保留字阶段拒绝注册——`post_response`/`on_failure`/`harvest`（interface-freeze-m1 §1 P2 保留字）此前被静默注册为永不调用的死钩子，现 manifest 声明即跳过 + 含"保留字"可见告警；⑤manifest `ttl` P2 保留值告警归位——此前 serde 静默忽略与 `HookCapability` 注释裁决（"解析到即按 none + 告警"）不符，现顶层 `ttl` 键与 `cache_scope` 内嵌对象两种形态均告警 + 按 none 处理且不解析失败；⑥`verify_features.sh` 补插件体系冒烟步骤 15（真实 sh 子进程 Stdio IPC 注入防假守护 + 工作区闸门 + 缺失阻断/`?optional` 降级 DegradedPass 三态 + 保留字告警 + 新旗标 + exit 2）。
+
+- **`--var` 非法格式告警 + toml `${VAR}` 未设置告警 + 变量装配 DRY 收口（走查缺口 #6 家族收尾，walkthrough-gaps 合流 Step 5A）**：①`--var no_equals`（缺 `=` / 空键）此前经 `filter_map(parse_cli_var)` 静默丢弃——用户显式传参落空必须告警（与 `--env-file` 同语义；stderr 出站，`--report json` stdout 机器可读纯净不破坏，E2E 锁定退出码 0）；②toml 环境值引用的未设置 `${VAR}` 此前静默按字面量外发（`{{var}}` 残留检查覆盖不到 `${}` 形态）——现指名告警 + 同变量多键引用去重（`resolve_env_vars_with_warnings`；热路径 `resolve_env_vars` 签名不变，小写 `${x}` 不展开不告警既有语义锁定，防 `${path}` 类误展开）；③流式日志截断 marker 补 `flush()`——防下一次 metadata 采样滞后重复写。**DRY 收口（AGENTS §9）**：5 处重复的 5 层变量装配模板（runner/suite_setup、exporter、tui、web 单块/整套）收敛为 `ConfigLoader::parse_cli_vars_with_warnings` / `load_context` / `load_context_with_var_specs` 三入口（I/O 加载与告警渲染分离，渲染权归各适配层：CLI stderr / TUI 状态栏 / Web tracing）。
+
+- **配置/env 静默失败告警化（走查缺口 #6，DRY 封装）**：四处"用户已表达意图却静默吞错"的加载点全部告警化——①`--env <name>` 两层同时落空才告警——toml 存在其他环境段但不含目标名 **且** `.env.<name>` 也未找到（审查精度修正：toml 无任何环境段时不告警，`--env` 可能仅用于 cookie 隔离/env 文件模式，防告警疲劳）；②显式 `--env-file` 缺失/目录/解析失败（原契约测试锁定的静默行为反转，反向守护保持默认 `.env` 缺失静默——防告警过宽）；③`rupost.toml` 存在但损坏（原 `.ok()` 把解析失败与"没有配置"混同、环境变量层被静默清空且继续向父目录回退——现携带根因停止搜索）；④SSE/WS 流式日志写入失败（原 `let _ =` 吞掉每事件落盘错误，现 once 闸门首次失败告警进 warnings 随结果出站；审查补漏：WS 脚本模式 Send/EXPECT 两处同款静默点——守护测试先红后绿暴露）。封装：`env_file::load_env_file(path, explicit) → EnvFileOutcome` 为三个 env 加载点唯一决策点（决策表测试锁定）；`find_and_load`/`build_context` 返回 `(值, warnings)`，各入口自行渲染（CLI stderr / TUI 状态栏 / Web tracing）。语义裁决：存在即意图——文件损坏恒告警，缺失是否告警取决于显式与否；`.env.<env>` 为可选覆盖文件（缺失静默，防告警疲劳）。
+- `--report junit` 报告新增 `@timestamp`（RFC3339 聚合时间）与 `@hostname`（`RUPOST_RUN_HOST` > `HOSTNAME` env > 空串兜底，零新依赖）锚点（走查缺口 #3）——CI 平台按此归档与跨构建比对，此前仅相对 `time`。
+- `rupost --no-history`（走查缺口 #1）：**运行级历史落盘停用开关**——CI/共享环境防凭据明文落盘（此前每次 `rupost t` 都把完整 headers/body 写入 `.rupost/history.jsonl`，与报告出口的强制脱敏在同一进程内不一致）；全局旗标（子命令前后双序 + 内联模式，位置契约测试锁定）；派发层在任何请求执行前关停记录器（进程级不可逆，与测试进程静音同一原语）；停用提示走 stderr，`--report json` stdout 机器可读纯净不破坏。
+- **连接层诊断瀑布补齐（走查缺口 #5，DX-Debug D2 拆分）**：传输层失败（DNS/TCP/TLS）此前产出零诊断——恰在最需要诊断的场景断裂。`DiagnosticsProber::connect_tcp_staged` 分阶段探测（失败不早退，保留已测 DNS 阶段与已解析 IP，携带阶段分类失败信息；严格版 `connect_tcp_with_timeout` 委托之、错误文案不变）；`DiagnosticsReport` 新增 `connection_error` 字段（始终序列化 None→null，成功/失败形态键集合一致，schema 锁定 13→14 键）；`diagnose_url_lenient` 任一阶段失败均产出部分诊断报告（DNS/TCP/TLS/HTTP 全阶段降级——审查扩展把 TLS 阶段一并收口；严格版 `diagnose_url` 与 diagnose 命令的 Err 契约不变）；`http_runner` 传输错误路径换用宽容诊断——`--debug-on-failure` 在连接拒绝/证书损坏时也能给出 `Connection: TCP connection failed: ...` / `TLS handshake failed: ...` 分类瀑布（DNS 成功时 resolved_ips 非空可区分阶段）。
+- **HTML 报告失败片段同源脱敏（走查缺口 #2，审查扩展至全字段）**：在线直渲路径此前整体弱于 JSON 出口——body_snippet 仅 512 字符截断（`redact_and_truncate_body` 对齐），url/error/warnings/断言 expected-actual-message 裸奔（审查发现后补齐 `redact_url`/`redact_free_text`/`redact_assertion_value` 同一原语）——CI 归档的 `rupost-report.html` 可能携带失败响应中的 token/api_key 回显与 query 凭据。
+- **HTTP 请求体原样保真与零分配语法嗅探 (Raw Body Verbatim & Zero-Alloc Sniffing)**：
+  - `Request` 模型引入 `raw_body: Option<String>` 与 `with_verbatim_body`；
+  - `add_body` 采用 `serde_json::from_str::<serde::de::IgnoredAny>` 进行零堆分配合法性嗅探；
+  - 发包底层原样保真发送原始文本，彻底根除键字典序洗牌、空白折叠与浮点精度变形，确保 API 加签校验 100% 保真。
+
+- **快照全量黑匣子录制与 Schema v2 演进 (Full Snapshot Recording & Schema v2)**：
+  - 引入强类型 `ExecutionErrorDetail`，`SnapshotEntry` 演进为 `response: Option<ResponseSnapshot>` 与 `error: Option<ExecutionErrorDetail>`；
+  - 解除快照落盘时的 `r.response.is_some()` 过滤守卫，超时、断网与连接被拒等网络异常 100% 录入黑匣子快照；
+  - `SnapshotSuite` 支持 Schema `version: 2`，借助 `#[serde(default)]` 保证与 Schema v1 双向平滑兼容；
+  - `mask_snapshot_entry` 联动 `redact_free_text`，对 `error.message` 中潜伏的 URL Query / Basic Auth 凭据进行安全脱敏。
+
+- **全链路测试基建补强与守护套件 (Full Testing Baseline & Guard Suites)**：
+  - **格式化器直测**：`ResponseFormatter` 扩充 `with_color`、`with_body`、`with_headers`、`with_timing` Fluent Builder 接口，补齐全量表驱动单测；
+  - **TUI 关键动作与守卫直测**：新增 `tests/tui_key_actions_test.rs`，覆盖 `start_ws_session` 互斥防线与 `replay_latest_snapshot` 错误流，并通过 `TestBackend` 离屏验证；
+  - **Web 前端原生测试基建**：微调 `app.js` 环境安全守卫，基于 Node.js 原生 `node --test` 与 Micro-DOM 打桩建立 `tests/web/app_test.mjs`（零 npm 依赖），`Makefile` 接入 `make test-web`。
+
+- **凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)**：
+  - 核心策略控制中心 `RedactionPolicy`：表驱动三层过滤（`EXACT_KEYS` 硬键 $\to$ `ignore_keys` 豁免 $\to$ `SUBSTRINGS` 模糊匹配），二分查找与静态切片常量化；
+  - R3 硬键安全护栏：`Authorization`、`Cookie` 等 8 项 RFC 认证硬键绝对不可豁免，配置尝试豁免时启动即阻断防呆并输出黄色告警；
+  - 配置文件级联驱动：支持在 `rupost.toml` 中配置 `[export.redaction]` 的 `extra_keys` 与 `ignore_keys`；
+  - 请求级双向微调：支持在 `.http` 文件中通过 `# @sensitive <keys>`（追加脱敏）与 `# @no-redact <keys>`（局部豁免），支持逗号与空白分隔多值解析及大小写规范化；
+  - 导出审计清单 Footer：`rupost export` 导出脱敏命令时，在 stderr 输出格式化脱敏清单摘要（凭据键名、认证类型、字符数与来源维度），stdout 纯净命令管道不被破坏，支持 `--quiet` 静音；
+  - 模板变量清洗：`HttpGenerator` 自动将 Header/Query 键名规范化清洗为紧凑合法的变量名（去除首尾及连续下划线，空值回退为 `secret`）。
+
 - `@teardown` 确定性生命周期（M3）：请求块标记为清理步骤——常规阶段占位跳过（原序号保留），批处理 Finally 阶段按已执行文件逆拓扑序执行；变量防呆（渲染副本检残留，未解析 → skipped + 警告，杜绝脏请求外发）；`TestResult.is_teardown` 标记 + 快照导出默认排除（防 replay 重放 DELETE）；失败继续全部清理、最终聚合失败；parallel + fail_fast 中断路径修复（JoinError::is_cancelled 容忍，变量合并与 Finally 不再被跳过）。
 - `rupost mock` 智能 CORS（M3，默认开启）：预检 OPTIONS 秒回 204 + 动态回显 Origin + Credentials: true + Allow-Headers 回显预检请求头（非 `*`——credentialed 请求合规）；`--no-cors` 停用；无 Origin 时 `*` 形态；`Vary: Origin`。
 - `rupost t --report junit / --report-file <PATH>.xml`（M1/T8）：**工业级 JUnit XML 测试报告**——100% 符合 Jenkins/GitLab/GitHub Actions 消费规格；基于 build_json_reports 统一脱敏结果生成（SSOT 复用，敏感值不外泄）；终端 ANSI 控制符构造期彻底剥离（防 XML 解析异常）；`<failure>`（断言失败）与 `<error>`（请求异常）节点区分（Jenkins 红绿语义）；`--report junit` 无文件默认落盘 rupost-junit.xml；junit_schema_test E2E + verify_features 步骤 14。

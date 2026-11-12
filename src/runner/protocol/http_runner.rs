@@ -255,7 +255,9 @@ impl HttpRunner {
                 );
                 test_result.request = Some(request_snapshot);
                 let run_diagnose = enable_diagnose || debug || debug_on_failure;
-                if run_diagnose && let Ok(report) = crate::http::diagnose_url(&url).await {
+                // 传输层失败恰是最需要诊断的场景：用宽容版诊断保证 DNS/TCP
+                // 阶段性失败也能产出带 connection_error 分类的部分瀑布（D2 拆分）
+                if run_diagnose && let Ok(report) = crate::http::diagnose_url_lenient(&url).await {
                     test_result.diagnose_report = Some(report);
                 }
                 let need_timing = debug || debug_on_failure;

@@ -12,6 +12,7 @@ pub mod sidebar;
 pub mod sync;
 
 pub use actions::execution::trigger_request_execution;
+pub use actions::ws_session::start_ws_session;
 pub use mouse::handle_mouse;
 
 use crate::tui::event::{Action, TuiEvent};

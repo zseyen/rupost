@@ -72,7 +72,12 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
     // 变量上下文与 CLI 同源（runner/app.rs:111-124 同款）：
     // rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖。
     // 授权（Authorization: Bearer {{token}} 等）依赖于此。
-    state.variables = build_initial_context(&options);
+    // loader 告警（配置损坏/显式缺失）放状态栏——备用屏内不能 eprintln。
+    let (variables, loader_warnings) = build_initial_context(&options);
+    state.variables = variables;
+    if !loader_warnings.is_empty() {
+        state.last_error = Some(loader_warnings.join("；"));
+    }
     // R13：cookie 持久化文件——启动时加载进 bridge（触发末尾写回落盘）
     if let Some(cf) = &options.cookie_file {
         let path = std::path::Path::new(cf);
@@ -318,21 +323,17 @@ pub fn load_initial_file(state: &mut AppState, initial_file: Option<&str>) {
     }
 }
 
-/// 构建 TUI 启动时的变量上下文（与 CLI test 同一 `build_context` 入口，
-/// 级联顺序：rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖）。
-pub fn build_initial_context(options: &super::TuiOptions) -> crate::variable::VariableContext {
-    let config = crate::variable::ConfigLoader::find_and_load().unwrap_or_default();
-    let cli_vars: Vec<(String, String)> = options
-        .vars
-        .iter()
-        .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
-        .collect();
-    let env_file_to_load = options.env_file.as_deref().or(Some(".env"));
-    crate::variable::ConfigLoader::build_context(
-        &config,
+/// 构建 TUI 启动时的变量上下文（与 CLI test 同一装配入口
+/// `load_context_with_var_specs`，级联顺序：rupost.toml 环境 → .env → 系统环境变量 → --var 覆盖）。
+/// 附带 loader 告警（配置/env 文件损坏或显式缺失）——TUI 已进备用屏，
+/// 告警由调用方放入状态栏而非 stderr（走查缺口 #6）。
+pub fn build_initial_context(
+    options: &super::TuiOptions,
+) -> (crate::variable::VariableContext, Vec<String>) {
+    crate::variable::ConfigLoader::load_context_with_var_specs(
         options.env.as_deref(),
-        &cli_vars,
-        env_file_to_load,
+        &options.vars,
+        options.env_file.as_deref(),
     )
 }
 
@@ -570,7 +571,7 @@ mod context_tests {
             env_file: Some(env_path.to_string_lossy().into_owned()),
             cookie_file: None,
         };
-        let context = build_initial_context(&options);
+        let (context, _warnings) = build_initial_context(&options);
 
         // .env 变量生效
         assert_eq!(

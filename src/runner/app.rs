@@ -1,14 +1,14 @@
 use crate::Result;
 use crate::RupostError;
+use crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES;
 use crate::history::save_batch_snapshot;
-use crate::middleware::resolve_cookie_path;
 use crate::runner::on_failure;
 use crate::runner::selector;
+use crate::runner::suite_setup::{build_suite_executor, load_suite_context};
 use crate::runner::{
-    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestExecutor,
-    TestReporter, TestResult, WorkflowGraph,
+    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestReporter,
+    TestResult, WorkflowGraph,
 };
-use crate::variable::ConfigLoader;
 use colored::Colorize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,11 +38,23 @@ pub struct TestSuiteOptions {
     pub save_snapshot: Option<String>,
     /// Secrets Masker（opt-in）：快照 headers/body 掩码后再落盘
     pub mask_snapshot: bool,
+    /// 单响应体录入上限字节（03 §10.6 防 OOM；`--max-snapshot-body-bytes` 覆盖，缺省 256KB）
+    pub max_snapshot_body_bytes: Option<usize>,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
     /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
     /// 经 RUPOST_FAILED_URL/STATUS/TRACE_ID 环境变量暴露锚点
     pub on_failure: Option<String>,
+    /// 插件缺失/失败时降级为警告跳过（03 §2；现场排障即拷即走）
+    pub allow_missing_plugins: bool,
+    /// CI 严格门禁：发生任何插件降级 → 套件整体判失败（03 §10.5）
+    pub strict_plugins: bool,
+    /// 单次插件调用超时秒数（默认 5，`--plugin-timeout` 覆盖）
+    pub plugin_timeout_secs: u64,
+    /// `--plugin-env KEY=VALUE`：requires_env 声明外的显式放行
+    pub plugin_env: Vec<String>,
+    /// 工作区本地插件放行（03 §3.2 沙箱警戒闸门）
+    pub allow_project_plugins: bool,
 }
 
 impl Default for TestSuiteOptions {
@@ -70,6 +82,12 @@ impl Default for TestSuiteOptions {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             mask_snapshot: false,
+            max_snapshot_body_bytes: None,
+            allow_missing_plugins: false,
+            strict_plugins: false,
+            plugin_timeout_secs: crate::plugin::pipeline::DEFAULT_PLUGIN_TIMEOUT_SECS,
+            plugin_env: Vec::new(),
+            allow_project_plugins: false,
         }
     }
 }
@@ -162,45 +180,9 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         (order, dependencies)
     };
 
-    // 4. 加载配置并构建变量上下文
-    let config = ConfigLoader::find_and_load().unwrap_or_default();
-
-    // 解析 CLI 变量覆盖
-    let cli_vars: Vec<(String, String)> = options
-        .var
-        .iter()
-        .filter_map(|s| ConfigLoader::parse_cli_var(s))
-        .collect();
-
-    // 如果指定了 env_file 则使用它，否则默认自动寻找加载并合并本地 .env
-    let env_file_to_load = options.env_file.as_deref().or(Some(".env"));
-
-    let mut var_context =
-        ConfigLoader::build_context(&config, options.env.as_deref(), &cli_vars, env_file_to_load);
-    var_context.insert("__default_scheme", &options.default_scheme);
-
-    // 5. 构建 TestExecutor
-    let mut executor = if options.no_cookies {
-        TestExecutor::new()
-    } else if let Some(cookie_path) = &options.cookie_file {
-        let resolved = resolve_cookie_path(PathBuf::from(cookie_path), options.env.as_deref())?;
-        TestExecutor::with_cookies(resolved)?
-    } else {
-        // 默认为临时会话（运行内共享、进程退出即失），与 Postman 等的"默认持久化"
-        // 心智不同——不提示会让用户误以为会话已保存
-        if options.verbose {
-            println!(
-                "[i] 会话 Cookie 为临时模式（仅本次运行内共享）；加 --cookie-file <FILE> 可跨运行持久化"
-            );
-        }
-        tracing::debug!("Cookies are ephemeral for this run; pass --cookie-file to persist");
-        TestExecutor::with_ephemeral_cookies()
-    };
-
-    executor = executor
-        .with_debug(options.debug)
-        .with_debug_on_failure(options.debug_on_failure);
-
+    // 4 & 5. 加载配置上下文与构建 TestExecutor（含环境变量、Cookie 策略与插件装配）
+    let mut var_context = load_suite_context(&options);
+    let executor = build_suite_executor(&options)?;
     let batch_executor = BatchExecutor::new(executor);
 
     // 6. 执行批处理
@@ -230,10 +212,30 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         on_failure::fire_failure_hooks(&mut batch_results, hook_cmd).await;
     }
 
-    // 7. 渲染与汇报结果
+    // 7. 渲染与汇报结果。
+    // --strict-plugins CI 门禁（03 §10.5）：任何插件降级 → 整体判失败；
+    // 默认排障模式下降级只计 DegradedPass，不阻塞 exit 0（与任务使命第 4 条一致）
+    let any_degraded = batch_results
+        .iter()
+        .any(|(_, res_list)| res_list.iter().any(|r| r.degraded));
+    if any_degraded {
+        let degraded_count: usize = batch_results
+            .iter()
+            .map(|(_, res_list)| res_list.iter().filter(|r| r.degraded).count())
+            .sum();
+        eprintln!(
+            "[WARN] {degraded_count} 个请求以降级形态发送{}",
+            if options.strict_plugins {
+                "（--strict-plugins：整体判失败，阻断假阳性流入生产）"
+            } else {
+                "（现场数据已完整录入快照；CI 门禁请加 --strict-plugins）"
+            }
+        );
+    }
     let has_failure = batch_results
         .iter()
-        .any(|(_, res_list)| res_list.iter().any(|r| !r.success));
+        .any(|(_, res_list)| res_list.iter().any(|r| !r.success))
+        || (options.strict_plugins && any_degraded);
 
     if options.report.eq_ignore_ascii_case("json") {
         // Gap Review P3-4：JSON 模式下 explain/triage 无法渲染，显式提示而非静默忽略
@@ -276,9 +278,18 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         }
     }
 
-    // 保存快照
+    // 保存快照（黑匣子契约 Schema v1.0，02 §2；--env 记入 environment 字段）
     if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(&batch_results, &paths, snapshot_path, options.mask_snapshot)?;
+        save_batch_snapshot(
+            &batch_results,
+            &paths,
+            snapshot_path,
+            options.mask_snapshot,
+            options.env.as_deref(),
+            options
+                .max_snapshot_body_bytes
+                .unwrap_or(DEFAULT_MAX_SNAPSHOT_BODY_BYTES),
+        )?;
     }
 
     Ok(TestSuiteOutcome {
@@ -313,8 +324,14 @@ mod tests {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             mask_snapshot: false,
+            max_snapshot_body_bytes: None,
             only: None,
             on_failure: None,
+            allow_missing_plugins: false,
+            strict_plugins: false,
+            plugin_timeout_secs: 5,
+            plugin_env: vec![],
+            allow_project_plugins: false,
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());

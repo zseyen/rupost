@@ -156,6 +156,9 @@ impl WsRunner {
         let mut rx = client.subscribe();
         let mut assertion_results = Vec::new();
         let mut capture_warnings: Vec<String> = Vec::new();
+        // 走查缺口 #6d 同款（审查补漏）：WS 帧日志写入失败不得静默——
+        // once 闸门首个失败告警，后续事件不再重复
+        let mut ws_log_write_failed = false;
         let mut final_error = None;
 
         // 获取解码器适配器
@@ -179,17 +182,35 @@ impl WsRunner {
                     resolved_payload.clone().into_bytes(),
                     0,
                 );
-                let _ = client.send_frame(outbound_frame).await;
-                let ts = chrono::Local::now().format("%H:%M:%S").to_string();
-                let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
-                accumulated_log.push(log_line.trim_end().to_string());
-                let _ = write_log_with_limit(&log_path, &log_line, max_bytes).await;
+                // 审查 P1：发送失败不得静默（此前静默且日志已记 [→] SEND，
+                // 日志与事实不符）——告警一次并跳过日志/事件
+                match client.send_frame(outbound_frame).await {
+                    Ok(()) => {
+                        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                        let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
+                        accumulated_log.push(log_line.trim_end().to_string());
+                        if let Err(e) = write_log_with_limit(&log_path, &log_line, max_bytes).await
+                        {
+                            if !ws_log_write_failed {
+                                ws_log_write_failed = true;
+                                capture_warnings.push(format!(
+                                    "WS 流式日志 '{}' 写入失败，数据未落盘: {e}",
+                                    log_path.display()
+                                ));
+                            }
+                        }
 
-                if let Some(ref sender) = stream_sender {
-                    let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
-                        is_send: true,
-                        content: resolved_payload,
-                    });
+                        if let Some(ref sender) = stream_sender {
+                            let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
+                                is_send: true,
+                                content: resolved_payload,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        // live 模式仅此一次发包，无需 once 闸门
+                        capture_warnings.push(format!("WS 发送失败，帧未发出: {e}"));
+                    }
                 }
             }
 
@@ -223,7 +244,17 @@ impl WsRunner {
                                     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                                     let log_line = format!("[←] {} | {}\n", ts, payload_str);
                                     accumulated_log.push(log_line.trim_end().to_string());
-                                    let _ = write_log_with_limit(&log_path, &log_line, max_bytes).await;
+                                    if let Err(e) =
+                                        write_log_with_limit(&log_path, &log_line, max_bytes).await
+                                    {
+                                        if !ws_log_write_failed {
+                                            ws_log_write_failed = true;
+                                            capture_warnings.push(format!(
+                                                "WS 流式日志 '{}' 写入失败，数据未落盘: {e}",
+                                                log_path.display()
+                                            ));
+                                        }
+                                    }
 
                                     if let Some(ref sender) = stream_sender {
                                         let _ = sender.send(crate::runner::types::StreamEvent::WsFrame {
@@ -267,6 +298,7 @@ impl WsRunner {
                     stream_sender.as_ref(),
                     Some(&log_path),
                     &mut accumulated_log,
+                    &mut ws_log_write_failed,
                 )
                 .await
                 {
@@ -319,6 +351,8 @@ impl WsRunner {
                 capture_warnings
             },
             is_teardown: false,
+            degraded: false,
+            plugin_duration_us: None,
         };
 
         // 保存历史记录 (WebSocket 专用)
@@ -354,6 +388,7 @@ impl WsRunner {
         >,
         log_path: Option<&std::path::Path>,
         accumulated_log: &mut Vec<String>,
+        log_write_failed: &mut bool,
     ) -> Result<bool, String> {
         match action {
             WsAction::Connect { .. } => Ok(true),
@@ -375,8 +410,15 @@ impl WsRunner {
                     let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                     let log_line = format!("[→] {} | {}\n", ts, resolved_payload);
                     accumulated_log.push(log_line.trim_end().to_string());
-                    if let Some(path) = log_path {
-                        let _ = write_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                    if let Some(path) = log_path
+                        && let Err(e) = write_log_with_limit(path, &log_line, 5 * 1024 * 1024).await
+                        && !*log_write_failed
+                    {
+                        *log_write_failed = true;
+                        warnings.push(format!(
+                            "WS 流式日志 '{}' 写入失败，数据未落盘: {e}",
+                            path.display()
+                        ));
                     }
 
                     if let Some(sender) = stream_sender {
@@ -448,8 +490,15 @@ impl WsRunner {
                                         let ts = chrono::Local::now().format("%H:%M:%S").to_string();
                                         let log_line = format!("[←] {} | {}\n", ts, payload_str);
                                         accumulated_log.push(log_line.trim_end().to_string());
-                                        if let Some(path) = log_path {
-                                            let _ = write_log_with_limit(path, &log_line, 5 * 1024 * 1024).await;
+                                        if let Some(path) = log_path
+                                            && let Err(e) = write_log_with_limit(path, &log_line, 5 * 1024 * 1024).await
+                                            && !*log_write_failed
+                                        {
+                                            *log_write_failed = true;
+                                            warnings.push(format!(
+                                                "WS 流式日志 '{}' 写入失败，数据未落盘: {e}",
+                                                path.display()
+                                            ));
                                         }
 
                                         if let Some(sender) = stream_sender {
@@ -566,13 +615,7 @@ impl WsRunner {
 
 impl WsRunner {
     pub(crate) fn resolve_ws_url(url: &str) -> String {
-        let mut resolved = url.to_string();
-        if resolved.starts_with("https://") {
-            resolved.replace_range(0..8, "wss://");
-        } else if resolved.starts_with("http://") {
-            resolved.replace_range(0..7, "ws://");
-        }
-        resolved
+        crate::http::url::UrlTemplatizer::normalize_ws_url(url)
     }
 }
 

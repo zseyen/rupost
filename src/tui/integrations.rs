@@ -46,7 +46,9 @@ pub async fn replay_latest_snapshot(
     let path = path.clone();
     let tx = event_tx.clone();
     tokio::spawn(async move {
-        let executor = crate::runner::ReplayExecutor::new(None, true);
+        // target 恒为 None，构造不可能失败；expect 兼容 async block 无 Result 返回
+        let executor = crate::runner::ReplayExecutor::new(None, true)
+            .expect("ReplayExecutor::new(None) 不可能失败");
         match executor.replay_file(&path).await {
             Ok(report) => {
                 let _ = tx
@@ -178,6 +180,6 @@ pub fn persist_cookie_bridge(state: &AppState) {
             .clone()
         && let Err(e) = std::fs::write(path, json.to_string())
     {
-        tracing::warn!("cookie file persist failed: {}", e);
+        tracing::warn!("{}: {}: {}", crate::middleware::ERR_COOKIE_PERSIST, path, e);
     }
 }

@@ -1,7 +1,9 @@
 pub mod app;
 pub mod executor;
+mod executor_plugin;
 pub mod on_failure;
 pub mod selector;
+mod suite_setup;
 pub mod types;
 
 pub mod engine;

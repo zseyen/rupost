@@ -1,7 +1,7 @@
 #![allow(clippy::collapsible_if)]
-use super::model::HistoryEntry;
 use crate::Result;
 use crate::error::RupostError;
+use crate::history::model::HistoryEntry;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -228,137 +228,14 @@ pub fn get_storage() -> &'static HistoryStorage {
     STORAGE.get_or_init(HistoryStorage::new)
 }
 
-use super::model::SnapshotSuite;
-
-/// 将 SnapshotSuite 写入到指定路径
-pub fn write_snapshot_suite<P: AsRef<Path>>(suite: &SnapshotSuite, path: P) -> Result<()> {
-    if let Some(parent) = path.as_ref().parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-    }
-    let json = serde_json::to_string_pretty(suite)?;
-    fs::write(path, json).map_err(RupostError::IoError)?;
-    Ok(())
-}
-
-/// 从指定路径读取 SnapshotSuite
-pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
-    let content = fs::read_to_string(path).map_err(RupostError::IoError)?;
-    let suite = serde_json::from_str(&content)?;
-    Ok(suite)
-}
-
-/// T5（随 R6 搭车）：将最近 N 条历史条目导出为可重放快照套件文件。
-/// - `--last N` 语义 = 最近 N 条**条目**（`SelectionStrategy::Last` → `tail(n)`，追加序即重放序）
-/// - `body=None` 旧条目经 `From<HistoryEntry>` 占位导出（"Old snapshot: body not recorded"）
-/// - 空历史：warn 后不写文件、exit 0（对齐 generate 先例）
-/// - 输出路径静默覆盖（`write_snapshot_suite` 无 `--force` 语义）；凭据不脱敏（与 `--save-snapshot` 同暴露面）
-pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) -> Result<()> {
-    use super::model::{SnapshotEntry, SnapshotSuite};
-    use super::selector::{SelectionStrategy, select_entries};
-
-    let storage = get_storage();
-    let entries = select_entries(storage, SelectionStrategy::Last(last))?;
-    if entries.is_empty() {
-        tracing::warn!("No history entries to export.");
-        return Ok(());
-    }
-
-    let mut suite = SnapshotSuite {
-        timestamp: chrono::Utc::now(),
-        source_file: Some("history".to_string()),
-        entries: entries.into_iter().map(SnapshotEntry::from).collect(),
-    };
-    if mask_secrets {
-        for e in suite.entries.iter_mut() {
-            mask_snapshot_entry(e);
-        }
-    }
-    let count = suite.entries.len();
-    write_snapshot_suite(&suite, output)?;
-    println!("Exported snapshot: {} ({} requests)", output, count);
-    Ok(())
-}
-
-/// 从批处理测试结果中提取请求/响应快照并写入指定文件
-pub fn save_batch_snapshot<P: AsRef<Path>>(
-    batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
-    source_paths: &[String],
-    snapshot_path: P,
-    mask_secrets: bool,
-) -> Result<()> {
-    use super::model::{ResponseSnapshot, SnapshotEntry, SnapshotSuite};
-    let mut entries = Vec::new();
-    for (_, file_results) in batch_results {
-        for r in file_results {
-            // P1-11：@teardown 清理请求默认排除出快照（防 replay 重放 DELETE）
-            if r.is_teardown {
-                continue;
-            }
-            if let Some(req) = &r.request
-                && let Some(resp) = &r.response
-            {
-                let mut entry = SnapshotEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    request: req.clone(),
-                    response: ResponseSnapshot {
-                        status: resp.status.code(),
-                        headers: resp.headers.clone(),
-                        body: resp.body.clone(),
-                    },
-                };
-                if mask_secrets {
-                    mask_snapshot_entry(&mut entry);
-                }
-                entries.push(entry);
-            }
-        }
-    }
-    let normalized_source = source_paths
-        .iter()
-        .map(crate::utils::path_guard::normalize_posix_path)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let suite = SnapshotSuite {
-        timestamp: chrono::Utc::now(),
-        source_file: Some(normalized_source),
-        entries,
-    };
-    write_snapshot_suite(&suite, snapshot_path)
-}
-
-/// Secrets Masker（路线图条目 1 残余）：opt-in 快照脱敏——headers 走
-/// `redact_header_value`（scheme 前缀保留），body 走 `mask_body_secrets`
-/// （敏感键 `[REDACTED]` + PII 三正则，无截断）。schema 不变，产物仍可被 replay 加载。
-pub fn mask_snapshot_entry(entry: &mut super::model::SnapshotEntry) {
-    use crate::exporter::redact::{mask_body_secrets, redact_header_value};
-    // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
-    // 非 UTF-8 值原样保留（掩码通道不损伤结构）
-    let mask_headers = |map: &mut reqwest::header::HeaderMap| {
-        let drained: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> = map
-            .drain()
-            .map(|(name, value)| (name.expect("valid header name"), value))
-            .collect();
-        for (name, value) in drained {
-            match value.to_str() {
-                Ok(val) => {
-                    let masked = redact_header_value(name.as_str(), val);
-                    if let Ok(hv) = reqwest::header::HeaderValue::from_str(&masked) {
-                        map.append(name, hv);
-                    }
-                }
-                Err(_) => {
-                    map.append(name, value);
-                }
-            }
-        }
-    };
-    mask_headers(&mut entry.request.headers);
-    mask_headers(&mut entry.response.headers);
-    entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
-    entry.response.body = mask_body_secrets(entry.response.body.as_str());
-}
+// 兼容重导出：黑匣子/重放快照 I/O 与脱敏已按职责拆至 snapshot_io / snapshot_legacy / snapshot_mask
+pub use super::snapshot_io::{
+    read_execution_snapshot, save_batch_snapshot, write_execution_snapshot,
+};
+pub use super::snapshot_legacy::{
+    export_history_snapshot, read_snapshot_suite, read_snapshot_suite_compat, write_snapshot_suite,
+};
+pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entry};
 
 #[cfg(test)]
 mod tests {
@@ -423,64 +300,6 @@ mod tests {
         assert_eq!(tail.len(), 3);
         assert_eq!(tail[0].id, "7");
         assert_eq!(tail[2].id, "9");
-    }
-
-    #[test]
-    fn test_save_batch_snapshot_run() {
-        use crate::http::Response;
-        use crate::runner::types::TestResult;
-        use reqwest::header::HeaderMap;
-        use std::time::Duration;
-
-        let temp_dir = TempDir::new().unwrap();
-        let snapshot_file = temp_dir.path().join("snapshot.json");
-
-        let mut headers = HeaderMap::new();
-        headers.insert("content-type", "application/json".parse().unwrap());
-
-        let req_snap = RequestSnapshot {
-            timeout: None,
-            method: "POST".to_string(),
-            url: "http://example.com/test".to_string(),
-            headers: headers.clone(),
-            body: Some("{\"key\":\"value\"}".to_string()),
-        };
-
-        let response = Response::new(
-            201,
-            headers.clone(),
-            "{\"status\":\"ok\"}".to_string(),
-            Duration::from_millis(50),
-            Duration::from_millis(20),
-            Duration::from_millis(30),
-        )
-        .unwrap();
-
-        let mut test_result = TestResult::success(
-            1,
-            Some("test_req".to_string()),
-            "POST".to_string(),
-            "http://example.com/test".to_string(),
-            response,
-        );
-        test_result.request = Some(req_snap);
-
-        let batch_results = vec![(PathBuf::from("my_test.http"), vec![test_result])];
-
-        save_batch_snapshot(
-            &batch_results,
-            &["my_test.http".to_string()],
-            &snapshot_file,
-            false,
-        )
-        .unwrap();
-
-        // 验证读取快照
-        let suite = read_snapshot_suite(&snapshot_file).unwrap();
-        assert_eq!(suite.entries.len(), 1);
-        assert_eq!(suite.entries[0].request.method, "POST");
-        assert_eq!(suite.entries[0].response.status, 201);
-        assert_eq!(suite.entries[0].response.body, "{\"status\":\"ok\"}");
     }
 
     #[test]

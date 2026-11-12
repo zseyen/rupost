@@ -33,6 +33,11 @@ pub fn parse_metadata(line: &str) -> ParseResult<Option<Metadata>> {
         "@decoder" => parse_decoder(content).map(Some),
         "@diagnose" => parse_diagnose(content).map(Some),
         "@teardown" => Ok(Some(Metadata::Teardown)),
+        "@sensitive" => parse_key_list(content).map(|keys| Some(Metadata::Sensitive(keys))),
+        "@no-redact" => parse_key_list(content).map(|keys| Some(Metadata::NoRedact(keys))),
+        "@auth" | "@transform" | "@sign" | "@plugin" => {
+            parse_plugin_directive(directive, content).map(Some)
+        }
         _ => Ok(None), // 未识别的元数据
     }
 }
@@ -90,10 +95,152 @@ pub fn apply_metadata(metadata: &Metadata, target: &mut RequestMetadata) {
         Metadata::Teardown => {
             target.is_teardown = true;
         }
+        Metadata::Sensitive(keys) => {
+            target.sensitive_keys.extend(keys.clone());
+        }
+        Metadata::NoRedact(keys) => {
+            target.no_redact_keys.extend(keys.clone());
+        }
+        Metadata::Plugin(directive) => {
+            target.plugins.push(directive.clone());
+        }
     }
 }
 
 // === 各个解析器实现 ===
+
+/// 解析以逗号或空白字符分隔的键名列表，统一小写化并过滤空项
+fn parse_key_list(content: &str) -> ParseResult<Vec<String>> {
+    let keys: Vec<String> = content
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(keys)
+}
+
+/// 解析插件语义注解：@auth, @transform, @sign, @plugin
+///
+/// 语法契约（03 §4.1 唯一权威）：
+/// - 阶段由注解本身决定（`@auth`=Prepare / `@transform`=Transform / `@sign`=Sign），
+///   `stage=` / `priority=` 等底层调度魔数已彻底废除，出现即语法错误（05 ADR-D6）；
+/// - 可选声明唯一拼写为 `?optional` 后缀（P1-1 裁决，`optional=true` 废除）；
+/// - 参数分词采用引号感知状态机（支持 `"..."` / `'...'`），含空格参数不被撕裂。
+fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadata> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err(ParseError::InvalidMetadata {
+            line: 0,
+            message: format!("{} directive requires at least a plugin name", directive),
+        });
+    }
+
+    let default_stage = match directive {
+        "@auth" => crate::plugin::PluginStage::Prepare,
+        "@transform" => crate::plugin::PluginStage::Transform,
+        "@sign" => crate::plugin::PluginStage::Sign,
+        _ => crate::plugin::PluginStage::Transform,
+    };
+
+    let mut tokens = tokenize_plugin_args(content).into_iter();
+    let name = strip_surrounding_quotes(&tokens.next().unwrap()).to_string();
+
+    let stage = default_stage;
+    let mut optional = false;
+    let mut params = std::collections::HashMap::new();
+
+    for raw_token in tokens {
+        let token = strip_surrounding_quotes(&raw_token).to_string();
+        if token == "?optional" {
+            optional = true;
+        } else if let Some((k, v)) = token.split_once('=') {
+            match k {
+                // 已废除的底层调度魔数：显式报错引导迁移，绝不静默吞掉
+                "stage" | "priority" => {
+                    return Err(ParseError::InvalidMetadata {
+                        line: 0,
+                        message: format!(
+                            "'{k}=' 已废除：阶段由注解决定（@auth/@transform/@sign），执行顺序为阶段内书写行序，无需 {k}"
+                        ),
+                    });
+                }
+                "optional" => {
+                    return Err(ParseError::InvalidMetadata {
+                        line: 0,
+                        message: "'optional=' 已废除：请使用 ?optional 后缀声明可选降级"
+                            .to_string(),
+                    });
+                }
+                _ => {
+                    params.insert(k.to_string(), strip_surrounding_quotes(v).to_string());
+                }
+            }
+        }
+        // 不含 '=' 的裸 token 与旧解析行为一致：忽略
+    }
+
+    let dir_name = directive.strip_prefix('@').unwrap_or(directive).to_string();
+    Ok(Metadata::Plugin(crate::plugin::PluginDirective {
+        directive: dir_name,
+        name,
+        stage,
+        optional,
+        params,
+    }))
+}
+
+/// 引号感知的插件参数分词器：顶层空白分词，`"..."` / `'...'` 内的空白不撕裂
+/// （引号剥除由 `strip_surrounding_quotes` 统一处理）。
+fn tokenize_plugin_args(content: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in content.chars() {
+        if escaped {
+            cur.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            // 转义语义（与 resolver 宏分词一致）：反斜杠只作转义标记，
+            // 下一字符原样保留（`\"` → `"`），反斜杠本身不进参数值
+            '\\' if in_quote.is_some() => {
+                escaped = true;
+            }
+            q @ ('\'' | '"') if in_quote == Some(q) => {
+                in_quote = None;
+                cur.push(ch);
+            }
+            q @ ('\'' | '"') if in_quote.is_none() => {
+                in_quote = Some(q);
+                cur.push(ch);
+            }
+            c if c.is_whitespace() && in_quote.is_none() => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+/// 剥除首尾配对引号（成对才剥除，不成对视为字面量）
+fn strip_surrounding_quotes(s: &str) -> &str {
+    let b = s.as_bytes();
+    if b.len() >= 2
+        && (b[0] == b'"' && b[b.len() - 1] == b'"' || b[0] == b'\'' && b[b.len() - 1] == b'\'')
+    {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
 
 fn parse_diagnose(content: &str) -> ParseResult<Metadata> {
     let value = if content.is_empty() {
@@ -470,5 +617,147 @@ mod tests {
         let mut plain = RequestMetadata::default();
         apply_metadata(&Metadata::Test, &mut plain);
         assert!(!plain.is_teardown);
+    }
+
+    /// Step 4 Red 测试：@sensitive 与 @no-redact 元数据解析与应用
+    #[test]
+    fn test_sensitive_and_no_redact_metadata() {
+        // 1. @sensitive 支持多值逗号与空白分隔，且小写规范化
+        let res = parse_metadata("@sensitive X-Sentry-Key, fastly_key  custom-token")
+            .unwrap()
+            .expect("should parse @sensitive");
+        assert_eq!(
+            res,
+            Metadata::Sensitive(vec![
+                "x-sentry-key".to_string(),
+                "fastly_key".to_string(),
+                "custom-token".to_string()
+            ])
+        );
+
+        // 2. @no-redact 解析与小写规范化
+        let res = parse_metadata("@no-redact next_token, cursor, Page_Token")
+            .unwrap()
+            .expect("should parse @no-redact");
+        assert_eq!(
+            res,
+            Metadata::NoRedact(vec![
+                "next_token".to_string(),
+                "cursor".to_string(),
+                "page_token".to_string()
+            ])
+        );
+
+        // 3. 应用到 RequestMetadata
+        let mut meta = RequestMetadata::default();
+        apply_metadata(&res, &mut meta);
+        assert_eq!(
+            meta.no_redact_keys,
+            vec!["next_token", "cursor", "page_token"]
+        );
+
+        let sensitive_meta = Metadata::Sensitive(vec!["x-secret".to_string()]);
+        apply_metadata(&sensitive_meta, &mut meta);
+        assert_eq!(meta.sensitive_keys, vec!["x-secret"]);
+    }
+
+    #[test]
+    fn test_parse_plugin_directives_contract() {
+        use crate::plugin::PluginStage;
+
+        // 1. @auth 默认进入 Prepare 阶段，支持 ?optional
+        let res = parse_metadata("@auth aws-sigv4 region=us-east-1 service=s3 ?optional")
+            .unwrap()
+            .expect("should parse @auth");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.directive, "auth");
+            assert_eq!(p.name, "aws-sigv4");
+            assert_eq!(p.stage, PluginStage::Prepare);
+            assert!(p.optional);
+            assert_eq!(p.params.get("region").unwrap(), "us-east-1");
+            assert_eq!(p.params.get("service").unwrap(), "s3");
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 2. 引号感知分词：含空格的参数值不被撕裂（04 套件 5 契约）
+        let res = parse_metadata(r#"@auth oauth2 scope="read:orders write:orders""#)
+            .unwrap()
+            .expect("should parse quoted scope");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.params.get("scope").unwrap(), "read:orders write:orders");
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 3. @transform 默认进入 Transform 阶段，支持显式引号
+        let res = parse_metadata(r#"@transform aes-gcm key="my-secret-key""#)
+            .unwrap()
+            .expect("should parse @transform");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.directive, "transform");
+            assert_eq!(p.name, "aes-gcm");
+            assert_eq!(p.stage, PluginStage::Transform);
+            assert!(!p.optional);
+            assert_eq!(p.params.get("key").unwrap(), "my-secret-key");
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 4. @sign 默认进入 Sign 阶段
+        let res = parse_metadata("@sign hmac-sha256")
+            .unwrap()
+            .expect("should parse @sign");
+        if let Metadata::Plugin(p) = res {
+            assert_eq!(p.directive, "sign");
+            assert_eq!(p.name, "hmac-sha256");
+            assert_eq!(p.stage, PluginStage::Sign);
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 5. @plugin 兼容写法（默认 Transform 阶段）+ ?optional
+        let res = parse_metadata("@plugin custom-tool ?optional")
+            .unwrap()
+            .expect("should parse @plugin");
+        if let Metadata::Plugin(ref p) = res {
+            assert_eq!(p.directive, "plugin");
+            assert_eq!(p.name, "custom-tool");
+            assert_eq!(p.stage, PluginStage::Transform);
+            assert!(p.optional);
+        } else {
+            panic!("Expected Metadata::Plugin");
+        }
+
+        // 6. 应用到 RequestMetadata
+        let mut req_meta = RequestMetadata::default();
+        apply_metadata(&res, &mut req_meta);
+        assert_eq!(req_meta.plugins.len(), 1);
+        assert_eq!(req_meta.plugins[0].name, "custom-tool");
+    }
+
+    /// 已废除的底层调度魔数（stage=/priority=/optional=true）必须显式报错，
+    /// 绝不静默吞掉或降级（05 ADR-D6 防复活清单 + 反静默哲学）
+    #[test]
+    fn test_parse_plugin_abolished_magic_numbers_rejected() {
+        for input in [
+            "@plugin custom-tool stage=sign",
+            "@auth aws-sigv4 priority=99",
+            "@sign hmac-sha256 optional=true",
+        ] {
+            match parse_metadata(input) {
+                Err(ParseError::InvalidMetadata { message, .. }) => {
+                    assert!(
+                        message.contains("已废除"),
+                        "error should cite abolition, got: {message}"
+                    );
+                    let hint_matches = input.contains("stage=") && message.contains("阶段由注解")
+                        || input.contains("priority=") && message.contains("无需 priority")
+                        || input.contains("optional=") && message.contains("?optional");
+                    assert!(hint_matches, "guidance mismatch for {input}: {message}");
+                }
+                other => panic!("expected InvalidMetadata for {input}, got: {other:?}"),
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Integration tests for fine-grained network diagnostics (`rupost diagnose`).
 
-use rupost::http::{diagnose_url, print_diagnose_report};
+use rupost::http::{diagnose_url, diagnose_url_lenient, print_diagnose_report};
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -163,4 +163,48 @@ async fn test_diagnose_websocket_upgrade_success() {
 
     // 打印报告确保不 panic
     print_diagnose_report(&report);
+}
+
+#[tokio::test]
+async fn test_diagnose_lenient_preserves_partial_stages_on_http_failure() {
+    // 启动监听端口，accept 连接后立即挂断，触发 HTTP 读写阶段失败
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{}", port);
+
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            // 立即丢弃 stream，对端在尝试读取 HTTP 响应时将遭遇 EOF
+            drop(stream);
+        }
+    });
+
+    // 1. 严格契约：diagnose_url 必须返回 Err
+    let strict_res = diagnose_url(&url).await;
+    assert!(
+        strict_res.is_err(),
+        "严格诊断在 HTTP 阶段失败时必须返回 Err"
+    );
+
+    // 2. 宽容契约：diagnose_url_lenient 必须返回 Ok，且保留前期阶段数据
+    let lenient_res = diagnose_url_lenient(&url).await;
+    assert!(
+        lenient_res.is_ok(),
+        "宽容诊断在 HTTP 阶段失败时必须返回 Ok 降级报告"
+    );
+    let report = lenient_res.unwrap();
+
+    assert!(
+        report.connection_error.is_some(),
+        "connection_error 必须记录 HTTP 阶段失败原因"
+    );
+    assert!(
+        report.tcp_connect_duration.as_nanos() > 0,
+        "必须保留已成功的 TCP 握手耗时"
+    );
+    assert!(
+        report.dns_lookup_duration.as_nanos() > 0,
+        "必须保留已成功的 DNS 解析耗时"
+    );
+    assert_eq!(report.http_status, None, "未完成的 HTTP 状态码必须为 None");
 }

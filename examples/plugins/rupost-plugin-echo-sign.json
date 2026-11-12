@@ -1,0 +1,32 @@
+{
+  "manifest_version": "1.0",
+  "name": "echo-sign",
+  "version": "0.1.0",
+  "description": "Echo sign demo plugin (self-test fixture)",
+  "commands": [
+    {
+      "name": "echo-sign",
+      "usage": "rupost echo-sign --test",
+      "description": "Self test",
+      "requires_tty": false
+    }
+  ],
+  "hooks": [
+    {
+      "directive": "auth",
+      "alias": "echo-sign",
+      "stage": "prepare",
+      "cache_scope": "none",
+      "requires_env": [],
+      "parameters_schema": { "type": "object" }
+    },
+    {
+      "directive": "sign",
+      "alias": "echo-sign-v2",
+      "stage": "sign",
+      "cache_scope": "none",
+      "requires_env": [],
+      "parameters_schema": { "type": "object" }
+    }
+  ]
+}

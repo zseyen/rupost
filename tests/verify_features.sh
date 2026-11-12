@@ -603,6 +603,113 @@ rm -rf "$JUNIT_CASE" "$JUNIT_XML"
 kill $REPLAY_MOCK_PID 2>/dev/null
 rm -rf "$REPLAY_MOCK" "$REPLAY_SNAP" "$REPLAY_STDOUT"
 
+# 15. 验证插件体系冒烟（Stdio IPC 管线 + 工作区闸门 + 降级门禁 + 保留字拒绝 + 新旗标）
+echo -e "${BLUE}[*] 验证插件体系冒烟 (plugin registry/pipeline/degradation)...${NC}"
+# 子 shell 内 cd 到临时工作区后相对路径失效，先解析绝对路径（同步骤 2.5 先例）
+PLUGIN_BIN="$(cd "$(dirname "$RUPOST_BIN")" && pwd)/$(basename "$RUPOST_BIN")"
+PLUGIN_WS=$(mktemp -d /tmp/rupost_plugin_ws_XXXXXX)
+mkdir -p "$PLUGIN_WS/.rupost/plugins"
+
+# 插件 mock：X-Smoke=yes 命中 200 变体，否则兜底 403（防假守护：断言依赖插件真实注入的 Header）
+PLUGIN_MOCK="$PLUGIN_WS/mock.json"
+cat << 'EOF' > "$PLUGIN_MOCK"
+[
+  { "method": "GET", "path": "/guarded", "variants": [
+    { "condition": { "source": "Header", "key": "X-Smoke", "operator": "Equals", "expected_value": "yes" },
+      "status": 200, "headers": { "Content-Type": "application/json" }, "response_body": "{\"guarded\":\"ok\"}" },
+    { "condition": null, "status": 403, "headers": { "Content-Type": "application/json" }, "response_body": "{\"error\":\"no plugin header\"}" }
+  ] }
+]
+EOF
+$RUPOST_BIN mock "$PLUGIN_MOCK" --port 9005 > /dev/null 2>&1 &
+PLUGIN_MOCK_PID=$!
+sleep 2
+
+# suite 级缓存插件：注入 X-Smoke: yes（真实 sh 子进程 Stdio IPC）
+SMOKE_EXE="$PLUGIN_WS/.rupost/plugins/rupost-plugin-smoke-auth"
+cat << 'EOF' > "$SMOKE_EXE"
+#!/bin/sh
+cat > /dev/null
+echo '{"protocol_version":"1.0","extra_headers":[["X-Smoke","yes"]],"remove_headers":[],"mutated_body":null,"set_variables":{},"warnings":[]}'
+EOF
+chmod 755 "$SMOKE_EXE"
+cat << 'EOF' > "$PLUGIN_WS/.rupost/plugins/rupost-plugin-smoke-auth.json"
+{
+  "manifest_version": "1.0", "name": "smoke-auth", "version": "0.1.0", "description": "smoke plugin",
+  "commands": [],
+  "hooks": [{ "directive": "auth", "alias": "smoke-auth", "stage": "prepare", "cache_scope": "suite", "requires_env": [], "parameters_schema": {} }]
+}
+EOF
+# 保留字阶段 manifest（C2：必须被拒绝注册并告警，且无同目录二进制也不得误报二进制缺失在前）
+cat << 'EOF' > "$PLUGIN_WS/.rupost/plugins/rupost-plugin-reserved.json"
+{
+  "manifest_version": "1.0", "name": "reserved", "version": "0.1.0", "description": "reserved stage",
+  "commands": [],
+  "hooks": [{ "directive": "harvest", "stage": "post_response", "cache_scope": "none", "requires_env": [], "parameters_schema": {} }]
+}
+EOF
+
+cat << 'EOF' > "$PLUGIN_WS/rupost.toml"
+[environments.dev]
+base_url = "http://127.0.0.1:9005"
+EOF
+
+# a) plugin list 冒烟（含工作区闸门旗标 + 保留字跳过告警可见）
+PLUGIN_LIST_ERR=$(mktemp /tmp/rupost_plugin_list_XXXXXX)
+PLUGIN_LIST_EXIT=0
+(cd "$PLUGIN_WS" && $PLUGIN_BIN plugin list --allow-project-plugins) > /dev/null 2> "$PLUGIN_LIST_ERR" || PLUGIN_LIST_EXIT=$?
+if [ "$PLUGIN_LIST_EXIT" -eq 0 ] && grep -q "保留字" "$PLUGIN_LIST_ERR"; then
+    echo -e "${GREEN}[✓] plugin list + 保留字阶段拒绝注册告警验证成功！${NC}"
+else
+    echo -e "${RED}[ERROR] plugin list / 保留字告警验证失败！${NC}"; cat "$PLUGIN_LIST_ERR"; kill $PLUGIN_MOCK_PID; exit 1
+fi
+
+# b) 插件真实注入：请求带 @auth smoke-auth → X-Smoke: yes 命中 200 变体（exit 0 证明插件 Header 到达）
+PLUGIN_HTTP="$PLUGIN_WS/plugin.http"
+printf '%s\n' "### guarded" "@auth smoke-auth ?optional" "GET {{base_url}}/guarded" "" "# @assert status == 200" > "$PLUGIN_HTTP"
+PLUGIN_RUN_EXIT=0
+(cd "$PLUGIN_WS" && $PLUGIN_BIN t plugin.http --env dev --allow-project-plugins --save-snapshot plugin_snap.json --max-snapshot-body-bytes 8) > /dev/null 2>&1 || PLUGIN_RUN_EXIT=$?
+if [ "$PLUGIN_RUN_EXIT" -eq 0 ] && grep -q '"body_truncated": *true' "$PLUGIN_WS/plugin_snap.json"; then
+    echo -e "${GREEN}[✓] 插件 Stdio IPC 管线注入 + --max-snapshot-body-bytes 截断验证成功！${NC}"
+else
+    echo -e "${RED}[ERROR] 插件管线 / 快照上限旗标验证失败！${NC}"; kill $PLUGIN_MOCK_PID; exit 1
+fi
+
+# c) 必选插件缺失：默认阻断 exit 1；--strict-plugins 下即使 200 也判失败 exit 1
+MISS_HTTP="$PLUGIN_WS/missing.http"
+printf '%s\n' "### blocked" "@auth no-such-plugin" "GET {{base_url}}/guarded" "" "# @assert status == 200" > "$MISS_HTTP"
+(cd "$PLUGIN_WS" && $PLUGIN_BIN t missing.http --env dev --allow-project-plugins) > /dev/null 2>&1 && BLOCKED=0 || BLOCKED=$?
+if [ "$BLOCKED" -eq 1 ]; then
+    echo -e "${GREEN}[✓] 必选插件缺失默认阻断（exit 1）验证成功！${NC}"
+else
+    echo -e "${RED}[ERROR] 缺失插件阻断失效（exit=$BLOCKED）！${NC}"; kill $PLUGIN_MOCK_PID; exit 1
+fi
+
+# d) ?optional + --allow-missing-plugins：降级原样外发（403 断言失败照常 exit 1，但插件缺席不额外阻断）
+printf '%s\n' "### degraded" "@auth no-such-plugin ?optional" "GET {{base_url}}/guarded" "" "# @assert status == 403" > "$MISS_HTTP"
+DEGRADE_EXIT=0
+(cd "$PLUGIN_WS" && $PLUGIN_BIN t missing.http --env dev --allow-project-plugins --allow-missing-plugins --save-snapshot degraded_snap.json) > /dev/null 2>&1 || DEGRADE_EXIT=$?
+if [ "$DEGRADE_EXIT" -eq 0 ] && grep -q '"degraded_pass"' "$PLUGIN_WS/degraded_snap.json"; then
+    echo -e "${GREEN}[✓] ?optional + --allow-missing-plugins 降级 + DegradedPass 快照三态验证成功！${NC}"
+else
+    echo -e "${RED}[ERROR] 降级语义验证失败（exit=$DEGRADE_EXIT）！${NC}"; kill $PLUGIN_MOCK_PID; exit 1
+fi
+
+kill $PLUGIN_MOCK_PID 2>/dev/null
+rm -rf "$PLUGIN_WS" "$PLUGIN_LIST_ERR"
+
+# e) AST 语法错误退出码归位（M6-5：解析错误 exit 2，执行失败仍 exit 1）
+AST_BAD=$(mktemp /tmp/rupost_ast_bad_XXXXXX.http)
+printf '%s\n' "FTP https://example.invalid" > "$AST_BAD"
+$RUPOST_BIN t "$AST_BAD" > /dev/null 2>&1 && AST_EXIT=0 || AST_EXIT=$?
+rm -f "$AST_BAD"
+if [ "$AST_EXIT" -eq 2 ]; then
+    echo -e "${GREEN}[✓] AST 语法错误 exit 2 归位验证成功！${NC}"
+else
+    echo -e "${RED}[ERROR] AST 语法错误退出码应为 2，实际: $AST_EXIT${NC}"
+    exit 1
+fi
+
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}      RuPost 核心特性端到端自动化验证通过！[PASS]      ${NC}"
 echo -e "${GREEN}=====================================================${NC}"

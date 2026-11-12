@@ -1,4 +1,4 @@
-use crate::exporter::redact::{redact_header_value, redact_url};
+use crate::exporter::redact::{RedactionAuditLog, RedactionPolicy};
 use crate::exporter::types::{ExportableRequest, SkippedItem};
 use crate::http::url::resolve_final_url;
 use crate::parser::{ParsedFile, ParsedRequest};
@@ -25,6 +25,30 @@ impl RequestPreparer {
         cookie_store: Option<&CookieStore>,
         filter_name: Option<&str>,
         redact_secrets: bool,
+        captured_symbols: &mut HashSet<String>,
+    ) -> Result<PreparedFileOutput> {
+        Self::prepare_file_with_policy(
+            parsed_file,
+            context,
+            cookie_store,
+            filter_name,
+            redact_secrets,
+            None,
+            None,
+            captured_symbols,
+        )
+    }
+
+    /// 将整份 `ParsedFile` 中的请求按执行期规则过滤并归一化为 `ExportableRequest`（支持策略注入与审计收集）
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_file_with_policy(
+        parsed_file: &ParsedFile,
+        context: &mut VariableContext,
+        cookie_store: Option<&CookieStore>,
+        filter_name: Option<&str>,
+        redact_secrets: bool,
+        policy: Option<&RedactionPolicy>,
+        mut audit_log: Option<&mut RedactionAuditLog>,
         captured_symbols: &mut HashSet<String>,
     ) -> Result<PreparedFileOutput> {
         let mut requests = Vec::new();
@@ -95,12 +119,14 @@ impl RequestPreparer {
                 continue;
             }
 
-            let ir = Self::prepare_one(
+            let ir = Self::prepare_one_with_policy(
                 req.clone(),
                 context,
                 cookie_store,
                 source_label.as_deref(),
                 redact_secrets,
+                policy,
+                audit_log.as_deref_mut(),
                 captured_symbols,
             )?;
 
@@ -113,11 +139,35 @@ impl RequestPreparer {
 
     /// 归一化单个 `ParsedRequest`
     pub fn prepare_one(
+        parsed: ParsedRequest,
+        context: &mut VariableContext,
+        cookie_store: Option<&CookieStore>,
+        source_path: Option<&str>,
+        redact_secrets: bool,
+        captured_symbols: &HashSet<String>,
+    ) -> Result<ExportableRequest> {
+        Self::prepare_one_with_policy(
+            parsed,
+            context,
+            cookie_store,
+            source_path,
+            redact_secrets,
+            None,
+            None,
+            captured_symbols,
+        )
+    }
+
+    /// 归一化单个 `ParsedRequest`（支持策略注入与审计收集）
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_one_with_policy(
         mut parsed: ParsedRequest,
         context: &mut VariableContext,
         cookie_store: Option<&CookieStore>,
         source_path: Option<&str>,
         redact_secrets: bool,
+        policy: Option<&RedactionPolicy>,
+        mut audit_log: Option<&mut RedactionAuditLog>,
         captured_symbols: &HashSet<String>,
     ) -> Result<ExportableRequest> {
         // 1. 变量与环境替换（含全局 user_agent 自动注入）
@@ -212,14 +262,22 @@ impl RequestPreparer {
         };
 
         // 7. 可选脱敏处理
+        let effective_policy = match policy {
+            Some(p) => p.with_request_metadata(&parsed.metadata),
+            None => {
+                let builtin = RedactionPolicy::builtin();
+                builtin.with_request_metadata(&parsed.metadata)
+            }
+        };
+
         let url_out = if redact_secrets {
-            redact_url(&final_url)
+            effective_policy.redact_url_audited(&final_url, audit_log.as_deref_mut())
         } else {
             final_url
         };
         if redact_secrets {
             for (k, v) in &mut headers {
-                *v = redact_header_value(k, v);
+                *v = effective_policy.redact_header_value_audited(k, v, audit_log.as_deref_mut());
             }
         }
 
@@ -416,5 +474,71 @@ mod tests {
 
         assert!(ir.is_sse);
         assert_eq!(ir.timeout_secs, Some(120));
+    }
+
+    #[test]
+    fn test_prepare_file_with_policy_and_audit_log() {
+        use crate::exporter::redact::{RedactionAuditLog, RedactionPolicy, RedactionSource};
+
+        let mut file = ParsedFile::new();
+        let mut req = ParsedRequest::new(1);
+        req.method = Some("GET".to_string());
+        req.url = "https://api.example.com/items?auth_token=tok123&page=2".to_string();
+        req.headers
+            .push(("Authorization".to_string(), "Bearer secret_abc".to_string()));
+        req.headers
+            .push(("x-custom-secret".to_string(), "secret_xyz".to_string()));
+        req.headers
+            .push(("x-debug-key".to_string(), "keep_this".to_string()));
+        // 请求级指令：标记 x-custom-secret 敏感，豁免 x-debug-key
+        req.metadata
+            .sensitive_keys
+            .push("x-custom-secret".to_string());
+        req.metadata.no_redact_keys.push("x-debug-key".to_string());
+        file.add_request(req);
+
+        let mut context = VariableContext::new();
+        let mut captured = HashSet::new();
+        let policy = RedactionPolicy::builtin();
+        let mut audit_log = RedactionAuditLog::new();
+
+        let output = RequestPreparer::prepare_file_with_policy(
+            &file,
+            &mut context,
+            None,
+            None,
+            true,
+            Some(&policy),
+            Some(&mut audit_log),
+            &mut captured,
+        )
+        .unwrap();
+
+        let req_out = &output.requests[0];
+        // 1. URL 脱敏
+        assert!(
+            req_out.url.contains("auth_token=%5BREDACTED%5D")
+                || req_out.url.contains("auth_token=[REDACTED]")
+        );
+        assert!(req_out.url.contains("page=2"));
+
+        // 2. Headers 脱敏
+        let headers_map: std::collections::HashMap<_, _> =
+            req_out.headers.iter().cloned().collect();
+        assert_eq!(
+            headers_map.get("Authorization").unwrap(),
+            "Bearer [REDACTED]"
+        );
+        assert_eq!(headers_map.get("x-custom-secret").unwrap(), "[REDACTED]");
+        assert_eq!(headers_map.get("x-debug-key").unwrap(), "keep_this");
+
+        // 3. 审计日志校验
+        assert_eq!(audit_log.len(), 3);
+        assert_eq!(audit_log.entries()[0].source, RedactionSource::UrlQuery);
+        assert_eq!(audit_log.entries()[0].key, "auth_token");
+        assert_eq!(audit_log.entries()[1].source, RedactionSource::Header);
+        assert_eq!(audit_log.entries()[1].key, "Authorization");
+        assert_eq!(audit_log.entries()[2].source, RedactionSource::Header);
+        assert_eq!(audit_log.entries()[2].key, "x-custom-secret");
     }
 }

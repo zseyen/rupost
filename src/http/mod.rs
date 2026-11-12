@@ -11,7 +11,9 @@ pub mod types;
 
 // Re-export commonly used types for convenient access
 pub use client::Client;
-pub use diagnose::{CertInfo, DiagnosticsReport, diagnose_url, print_diagnose_report};
+pub use diagnose::{
+    CertInfo, DiagnosticsReport, diagnose_url, diagnose_url_lenient, print_diagnose_report,
+};
 pub use llm_adapter::{LlmProvider, LlmStreamAdapter};
 pub use mock::MockLlmServer;
 pub use request::Request;

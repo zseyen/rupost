@@ -95,6 +95,11 @@ pub struct TestExecutor {
     pub debug: bool,
     pub debug_on_failure: bool,
     pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
+    /// 插件注册表（M3：`--save-snapshot`/插件注解存在时由 app 层装配；None 时由
+    /// `executor_plugin` 回退空注册表进入管线，防止绕过严格门禁）。
+    pub plugin_registry: Option<Arc<crate::plugin::PluginRegistry>>,
+    pub plugin_options: crate::plugin::pipeline::PluginRuntimeOptions,
+    pub suite_hook_cache: Arc<crate::plugin::pipeline::SuiteHookCache>,
 }
 
 impl TestExecutor {
@@ -103,11 +108,14 @@ impl TestExecutor {
         self.cookie_middleware.is_some()
     }
 
-    /// 导出当前执行器的 Cookie 状态为 JSON Value (如果启用了 Cookie)
-    pub fn export_cookie_state(&self) -> Option<serde_json::Value> {
-        self.cookie_middleware
-            .as_ref()
-            .and_then(|mw| mw.export_cookie_state().ok())
+    /// 导出当前执行器的 Cookie 状态为 JSON Value。
+    /// 未启用 cookie → Ok(None)；启用但序列化失败 → Err（审查 P1：此前 `.ok()`
+    /// 把序列化失败与"未启用"混同，调用方静默跳过落盘/传递）
+    pub fn export_cookie_state(&self) -> Result<Option<serde_json::Value>> {
+        match self.cookie_middleware.as_ref() {
+            Some(mw) => Ok(Some(mw.export_cookie_state()?)),
+            None => Ok(None),
+        }
     }
 
     /// 将 Cookie 状态导入到当前的执行器中
@@ -125,7 +133,7 @@ impl TestExecutor {
         if let Some(mw) = &self.cookie_middleware
             && let Err(e) = mw.save()
         {
-            tracing::warn!("Failed to persist cookies: {}", e);
+            tracing::warn!("{}: {}", crate::middleware::ERR_COOKIE_PERSIST, e);
         }
     }
 
@@ -139,7 +147,34 @@ impl TestExecutor {
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
+            plugin_registry: None,
+            plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
+            suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
         }
+    }
+
+    /// 装配插件注册表与运行时选项（app 层在 discover 后调用）
+    pub fn with_plugins(
+        mut self,
+        registry: Arc<crate::plugin::PluginRegistry>,
+        options: crate::plugin::pipeline::PluginRuntimeOptions,
+    ) -> Self {
+        self.plugin_registry = Some(registry);
+        self.plugin_options = options;
+        self
+    }
+
+    /// 并行调度器共享插件注册表、运行配置与同一个 Suite 级并发缓存。
+    pub(crate) fn with_shared_plugins(
+        mut self,
+        registry: Option<Arc<crate::plugin::PluginRegistry>>,
+        options: crate::plugin::pipeline::PluginRuntimeOptions,
+        suite_hook_cache: Arc<crate::plugin::pipeline::SuiteHookCache>,
+    ) -> Self {
+        self.plugin_registry = registry;
+        self.plugin_options = options;
+        self.suite_hook_cache = suite_hook_cache;
+        self
     }
 
     pub fn with_middleware(
@@ -189,6 +224,9 @@ impl TestExecutor {
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
+            plugin_registry: None,
+            plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
+            suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
         })
     }
 
@@ -205,6 +243,9 @@ impl TestExecutor {
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
+            plugin_registry: None,
+            plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
+            suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
         }
     }
 
@@ -352,7 +393,31 @@ impl TestExecutor {
         let url = parsed.url.clone();
         let name = parsed.name().map(|s| s.to_string());
 
-        let mut result = match runner
+        // 2.5 插件管线（03 §5.1 阶段不可逆流；03 §2 统一降级语义）：
+        // 变量解析后、发包前执行；即使注册表未装配也不旁路，早退路径共享统一诊断收口。
+        let (parsed, diag) = match crate::runner::executor_plugin::run_plugin_stage(
+            parsed,
+            request_number,
+            context,
+            crate::runner::executor_plugin::PluginContext {
+                registry: self.plugin_registry.as_ref(),
+                options: &self.plugin_options,
+                suite_hook_cache: &self.suite_hook_cache,
+            },
+            &unresolved,
+            start,
+        )
+        .await
+        {
+            crate::runner::executor_plugin::PluginDispatchOutcome::Proceed(req, diag) => {
+                (*req, diag)
+            }
+            crate::runner::executor_plugin::PluginDispatchOutcome::EarlyReturn(early) => {
+                return *early;
+            }
+        };
+
+        let result = match runner
             .run(
                 parsed,
                 request_number,
@@ -376,8 +441,7 @@ impl TestExecutor {
                 start.elapsed(),
             ),
         };
-        result.warnings.extend(unresolved);
-        result
+        crate::runner::executor_plugin::finalize_plugin_result(result, unresolved, diag)
     }
 }
 

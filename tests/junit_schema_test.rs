@@ -88,6 +88,19 @@ async fn test_junit_report_e2e_structure_and_exit_code() {
     assert!(xml.contains("time=\""), "time attr: {xml}");
     // time 格式由单测 time_aggregation 精确锁定（E2E 不重复——慢 CI ≥1s 时前缀断言会误杀）
 
+    // 走查缺口 #3：timestamp/hostname 锚点——CI 归档与跨构建比对的时间/节点坐标
+    {
+        let ts_start = xml
+            .find("timestamp=\"")
+            .expect("timestamp attr must exist: {xml}")
+            + "timestamp=\"".len();
+        let ts_end = xml[ts_start..].find('"').expect("timestamp value quote") + ts_start;
+        let ts = &xml[ts_start..ts_end];
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap_or_else(|e| panic!("timestamp 必须是可解析的 RFC3339: {ts:?} ({e})"));
+        assert!(xml.contains("hostname=\""), "hostname attr: {xml}");
+    }
+
     // ④SSOT 脱敏复用：junit 不外泄响应体 PII（/ok 响应经 build_json_reports 脱敏）
     //   注：/ok 通过，无 response_body_snippet——此处验证 failure 面与 url/query 面
     assert!(

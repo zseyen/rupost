@@ -139,7 +139,7 @@ async fn test_batch_json_report_schema_exact_fields() {
     );
 }
 
-/// diagnose JSON 报告：顶层 13 字段精确键集合 + http 场景的空值形态
+/// diagnose JSON 报告：顶层 14 字段精确键集合 + http 场景的空值形态
 #[tokio::test]
 async fn test_diagnose_json_schema_exact_fields() {
     // 本地裸 TCP HTTP 服务：无 TLS、无证书 → 锁定 cert_info/tls 相关字段的空值形态
@@ -172,6 +172,7 @@ async fn test_diagnose_json_schema_exact_fields() {
     sorted.sort_unstable();
     let mut expected = vec![
         "cert_info",
+        "connection_error",
         "dns_lookup_duration",
         "http_status",
         "http_version",
@@ -193,6 +194,8 @@ async fn test_diagnose_json_schema_exact_fields() {
     assert_eq!(value["cert_info"], serde_json::Value::Null);
     assert_eq!(value["tls_handshake_duration"], serde_json::Value::Null);
     assert_eq!(value["http_status"], 200);
+    // 连接成功时 connection_error 恒为 null（始终序列化，保证形态键集合一致）
+    assert_eq!(value["connection_error"], serde_json::Value::Null);
     // Duration 序列化为 {secs, nanos} 对象
     let dns = &value["dns_lookup_duration"];
     let dns_keys: Vec<&str> = dns

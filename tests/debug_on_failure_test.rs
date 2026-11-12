@@ -3,10 +3,12 @@
 //! 锁定契约（测试方案 §5.9 待补项）：
 //! 1. 断言失败（活服务器）→ 自动输出网络诊断瀑布（"RuPost Network Diagnostics" + "DNS Lookup"）；
 //! 2. 请求成功 → 零诊断噪音；
-//! 3. 连接拒绝（不可达端口）→ 失败退出、零 panic。注意：连接层失败当前**无** DNS/TCP
-//!    拆分可输出（diagnose_url 返回 Err、probe 失败 → timing 全零静默）——该缺口由
-//!    快照路线图"Virtual Response"条目承接，此处仅锁失败语义不作拆分断言；
-//! 4. `--report json` 模式下失败结果的 `diagnose_report` 字段非空（机器可读契约）。
+//! 3. 连接拒绝（不可达端口）→ 失败退出、零 panic；
+//!    （2026-11-10 走查缺口 #5 已闭合：连接层失败现经 `diagnose_url_lenient`
+//!    产出带 `connection_error` 阶段分类的部分诊断报告，见测试 ⑤）
+//! 4. `--report json` 模式下失败结果的 `diagnose_report` 字段非空（机器可读契约）；
+//! 5. 连接拒绝的部分诊断报告：`connection_error` 落在 TCP 阶段、resolved_ips
+//!    非空（DNS 成功）而 tls/cert/http_status 为空——DNS/TCP 拆分可观测。
 
 use std::fs;
 use std::path::Path;
@@ -145,4 +147,107 @@ async fn test_json_report_carries_diagnose_report() {
         !first["diagnose_report"].is_null(),
         "失败结果应携带诊断报告, json: {report}"
     );
+}
+
+/// 走查缺口 #5（D2 连接层拆分）：连接拒绝时 `diagnose_url_lenient` 产出
+/// 带 `connection_error` 阶段分类的部分诊断报告——resolved_ips 非空证明
+/// DNS 阶段成功、tls/cert/http 字段为空证明失败落在 TCP 阶段。
+#[tokio::test]
+async fn test_connection_refused_carries_staged_partial_diagnose() {
+    let dir = tempdir().unwrap();
+    let port = closed_port();
+    let case = dir.path().join("refused.http");
+    fs::write(&case, format!("GET http://127.0.0.1:{port}/broken\n")).unwrap();
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            case.to_string_lossy().as_ref(),
+            "--debug-on-failure",
+            "--report",
+            "json",
+        ],
+    );
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout 应为纯 JSON 报告");
+    let diag = &report[0]["results"][0]["diagnose_report"];
+    assert!(
+        !diag.is_null(),
+        "连接层失败也必须携带部分诊断报告, json: {report}"
+    );
+
+    // 阶段拆分：DNS 成功（IP 已解析）而 TCP 失败（分类信息非空）
+    let conn_err = diag["connection_error"]
+        .as_str()
+        .expect("connection_error 应携带阶段分类");
+    assert!(
+        conn_err.starts_with("TCP connection failed"),
+        "连接拒绝的分类应落在 TCP 阶段: {conn_err}"
+    );
+    let ips = diag["resolved_ips"].as_array().expect("resolved_ips 数组");
+    assert!(
+        !ips.is_empty(),
+        "DNS 已成功，127.0.0.1 必须出现在 resolved_ips 中"
+    );
+    assert_eq!(diag["tls_handshake_duration"], serde_json::Value::Null);
+    assert_eq!(diag["cert_info"], serde_json::Value::Null);
+    assert_eq!(diag["http_status"], serde_json::Value::Null);
+}
+
+/// 审查扩展（D2 边界收口）：TLS 阶段失败同样降级为部分诊断——对明文端口发
+/// https 请求，reqwest TLS 握手失败进入传输错误路径，lenient 诊断的 TLS 阶段
+/// 同样失败 → connection_error 分类落在 TLS 阶段、DNS/TCP 阶段数据保留。
+#[tokio::test]
+async fn test_tls_stage_failure_degrades_to_partial_diagnose() {
+    let dir = tempdir().unwrap();
+    // wiremock 是明文 HTTP 服务器：https:// 请求必然 TLS 握手失败（双方确定性）
+    let server = MockServer::start().await;
+    let case = dir.path().join("tls.http");
+    fs::write(
+        &case,
+        format!(
+            "GET {}/broken\n",
+            server.uri().replace("http://", "https://")
+        ),
+    )
+    .unwrap();
+
+    let out = run(
+        dir.path(),
+        &[
+            "t",
+            case.to_string_lossy().as_ref(),
+            "--debug-on-failure",
+            "--report",
+            "json",
+        ],
+    );
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout 应为纯 JSON 报告");
+    let diag = &report[0]["results"][0]["diagnose_report"];
+    assert!(
+        !diag.is_null(),
+        "TLS 阶段失败也必须携带部分诊断报告, json: {report}"
+    );
+    let conn_err = diag["connection_error"]
+        .as_str()
+        .expect("connection_error 应携带阶段分类");
+    assert!(
+        conn_err.starts_with("TLS handshake failed"),
+        "分类应落在 TLS 阶段: {conn_err}"
+    );
+    assert!(
+        !diag["resolved_ips"]
+            .as_array()
+            .expect("resolved_ips 数组")
+            .is_empty(),
+        "DNS/TCP 已成功，IP 必须保留"
+    );
+    assert_eq!(diag["http_status"], serde_json::Value::Null);
+    assert_eq!(diag["cert_info"], serde_json::Value::Null);
 }

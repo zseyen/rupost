@@ -6,16 +6,18 @@ let activeInspectorTab = 'overview';
 let lastDebugData = null;
 
 // Initialize theme immediately to prevent FOUC
-initTheme();
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  initTheme();
 
-document.addEventListener('DOMContentLoaded', () => {
-  loadFiles();
-  applyReadonlyState();
-  initEditorEvents();
-  initKeyboardShortcuts();
-  updateGutter();
-  updateEditorMeta();
-});
+  document.addEventListener('DOMContentLoaded', () => {
+    loadFiles();
+    applyReadonlyState();
+    initEditorEvents();
+    initKeyboardShortcuts();
+    updateGutter();
+    updateEditorMeta();
+  });
+}
 
 // Theme Management (Light / Dark)
 function initTheme() {
@@ -716,4 +718,18 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    applyReadonlyState,
+    runSuite,
+    escapeHtml,
+    applyTheme,
+    toggleTheme,
+    setCurrentFilePath: (p) => { currentFilePath = p; },
+    getCurrentFilePath: () => currentFilePath,
+    setAllFiles: (f) => { allFiles = f; },
+    getAllFiles: () => allFiles,
+  };
 }

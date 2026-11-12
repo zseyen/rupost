@@ -1941,6 +1941,7 @@ fn test_diagnose_tab_render_smoke() {
         http_version: Some("HTTP/1.1".to_string()),
         ttfb: Some(std::time::Duration::from_millis(45)),
         total_duration: std::time::Duration::from_millis(60),
+        connection_error: None,
     });
     terminal
         .draw(|f| rupost::tui::ui::render(f, &mut state))

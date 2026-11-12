@@ -25,6 +25,26 @@ impl ResponseFormatter {
         }
     }
 
+    pub fn with_color(mut self, enable: bool) -> Self {
+        self.color = enable;
+        self
+    }
+
+    pub fn with_body(mut self, enable: bool) -> Self {
+        self.show_body = enable;
+        self
+    }
+
+    pub fn with_headers(mut self, enable: bool) -> Self {
+        self.show_headers = enable;
+        self
+    }
+
+    pub fn with_timing(mut self, enable: bool) -> Self {
+        self.show_timing = enable;
+        self
+    }
+
     pub fn format(&self, response: &Response) -> Result<String> {
         match self.format {
             ResponseFormat::Compact => self.format_compact(response),
@@ -52,12 +72,12 @@ impl ResponseFormatter {
             output.push(status_line);
         }
         if self.show_timing {
-            let timeing = format!("Time: {}ms", response.duration.as_millis());
+            let timing = format!("Time: {}ms", response.duration.as_millis());
             if self.color {
-                let colored_timing = timeing.cyan();
+                let colored_timing = timing.cyan();
                 output.push(colored_timing.to_string());
             } else {
-                output.push(timeing);
+                output.push(timing);
             }
         }
 
@@ -98,12 +118,12 @@ impl ResponseFormatter {
             output.push(status_line);
         }
         if self.show_timing {
-            let timeing = format!("Time: {}ms", response.duration.as_millis());
+            let timing = format!("Time: {}ms", response.duration.as_millis());
             if self.color {
-                let colored_timing = timeing.cyan();
+                let colored_timing = timing.cyan();
                 output.push(colored_timing.to_string());
             } else {
-                output.push(timeing);
+                output.push(timing);
             }
         }
         if self.show_headers {
@@ -148,5 +168,120 @@ impl ResponseFormatter {
     fn try_format_json(&self, body: &str) -> Result<String> {
         let value: serde_json::Value = serde_json::from_str(body)?;
         serde_json::to_string_pretty(&value).map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::HeaderMap;
+    use std::time::Duration;
+
+    fn make_test_response(status: u16, body: &str, headers: HeaderMap) -> Response {
+        Response::new(
+            status,
+            headers,
+            body.to_string(),
+            Duration::from_millis(125),
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_format_compact_table_driven() {
+        struct Case {
+            name: &'static str,
+            status: u16,
+            body: String,
+            color: bool,
+            expected_fragments: Vec<&'static str>,
+            unexpected_fragments: Vec<&'static str>,
+        }
+
+        let cases = vec![
+            Case {
+                name: "200 OK 短 JSON 美化展开 (无色)",
+                status: 200,
+                body: r#"{"status":"ready"}"#.to_string(),
+                color: false,
+                expected_fragments: vec!["HTTP 200 OK", "Time: 125ms", "\"status\": \"ready\""],
+                unexpected_fragments: vec!["Body:", "Headers:"],
+            },
+            Case {
+                name: "404 超过 200 字节长文本截断 (无色)",
+                status: 404,
+                body: "A".repeat(250),
+                color: false,
+                expected_fragments: vec!["HTTP 404 Not Found", "Time: 125ms", "Body: 250 bytes"],
+                unexpected_fragments: vec!["AAAAA"],
+            },
+            Case {
+                name: "500 畸形 JSON 原样输出",
+                status: 500,
+                body: "Invalid {JSON} syntax".to_string(),
+                color: false,
+                expected_fragments: vec!["HTTP 500 Internal Server Error", "Invalid {JSON} syntax"],
+                unexpected_fragments: vec!["Body:"],
+            },
+        ];
+
+        for c in cases {
+            let res = make_test_response(c.status, &c.body, HeaderMap::new());
+            let formatter = ResponseFormatter::new(ResponseFormat::Compact).with_color(c.color);
+            let output = formatter.format(&res).unwrap();
+
+            for exp in c.expected_fragments {
+                assert!(
+                    output.contains(exp),
+                    "[{}] 缺少预期片段: {}\n实际输出:\n{}",
+                    c.name,
+                    exp,
+                    output
+                );
+            }
+            for unexp in c.unexpected_fragments {
+                assert!(
+                    !output.contains(unexp),
+                    "[{}] 包含了非预期片段: {}\n实际输出:\n{}",
+                    c.name,
+                    unexp,
+                    output
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_format_verbose_headers_and_body_indentation() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert("X-Request-Id", "req-12345".parse().unwrap());
+
+        let res = make_test_response(201, r#"{"id":1}"#, headers);
+        let formatter = ResponseFormatter::new(ResponseFormat::Verbose).with_color(false);
+        let output = formatter.format(&res).unwrap();
+
+        // 验证 Verbose 模式包含明确的 Headers 标题与 3 空格缩进
+        assert!(output.contains("HTTP 201 Created"));
+        assert!(output.contains("Time: 125ms"));
+        assert!(output.contains("Headers:"));
+        assert!(output.contains("   content-type: application/json"));
+        assert!(output.contains("   x-request-id: req-12345"));
+        assert!(output.contains("Body:"));
+        assert!(output.contains("{\n  \"id\": 1\n}"));
+    }
+
+    #[test]
+    fn test_formatter_flags_toggle() {
+        let res = make_test_response(200, "hello", HeaderMap::new());
+        let formatter = ResponseFormatter::new(ResponseFormat::Compact)
+            .with_color(false)
+            .with_timing(false)
+            .with_body(false);
+        let output = formatter.format(&res).unwrap();
+
+        assert_eq!(output.trim(), "HTTP 200 OK");
     }
 }

@@ -4,6 +4,14 @@ use crate::history::model::HistoryEntry;
 use colored::Colorize;
 use std::collections::{BTreeSet, HashMap};
 
+fn is_key_sensitive(key: &str, policy: Option<&crate::exporter::redact::RedactionPolicy>) -> bool {
+    if let Some(p) = policy {
+        p.is_sensitive(key)
+    } else {
+        is_sensitive_key(key)
+    }
+}
+
 pub struct HttpGenerator;
 
 impl HttpGenerator {
@@ -15,22 +23,27 @@ impl HttpGenerator {
     /// Convert history entries to .http content, plus the sorted names of all
     /// variables referenced by templated credentials.
     ///
-    /// 敏感凭据一律模板化为 `{{variable}}` 引用（绝不内联原值），用户经四层级联
-    /// （`--var` > 系统环境变量 > `.env` > `rupost.toml`）任一渠道提供真值即可运行；
-    /// 与 `export` 的 `[REDACTED]` 脱敏分工：export 给人看，generate 给机器跑。
-    ///
-    /// `templatize_host` 为 true 时，将请求 origin（scheme://host[:port]）改写为
-    /// `{{base_url}}`，使同一文件经变量级联跨环境运行。
+    /// 自动从配置中加载脱敏策略 [export.redaction]，未配置时回退到内置默认策略。
     pub fn generate_with_variables(
         entries: &[HistoryEntry],
         templatize_host: bool,
+    ) -> Result<(String, Vec<String>)> {
+        let policy = crate::variable::ConfigLoader::find_and_load_redaction_policy();
+        Self::generate_with_policy(entries, templatize_host, Some(&policy))
+    }
+
+    /// 接受显式脱敏策略的生成入口
+    pub fn generate_with_policy(
+        entries: &[HistoryEntry],
+        templatize_host: bool,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> Result<(String, Vec<String>)> {
         let mut output = String::new();
         let mut variables = BTreeSet::new();
         let mut used_names: HashMap<String, usize> = HashMap::new();
 
         // T2：链式值溯源（时间序即拓扑序；上游产出 → 下游 {{capture}} 重建数据流）
-        let trace_plan = super::trace::build_trace_plan(entries);
+        let trace_plan = super::trace::build_trace_plan_with_policy(entries, policy);
         let has_trace =
             !trace_plan.links.is_empty() || !trace_plan.upstream_cookie_names.is_empty();
 
@@ -54,6 +67,7 @@ impl HttpGenerator {
                     Some(captures.as_slice())
                 },
                 if has_trace { Some(&trace_plan) } else { None },
+                policy,
             ));
         }
 
@@ -79,6 +93,7 @@ impl HttpGenerator {
         used_names: &mut HashMap<String, usize>,
         captures: Option<&[&super::trace::TracedLink]>,
         traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> String {
         let mut block = String::new();
 
@@ -108,9 +123,10 @@ impl HttpGenerator {
                 &Self::templatize_host_in_url(&entry.request.url, variables),
                 variables,
                 traced,
+                policy,
             )
         } else {
-            Self::variabilize_url(&entry.request.url, variables, traced)
+            Self::variabilize_url(&entry.request.url, variables, traced, policy)
         };
         block.push_str(&format!("{} {}\n", entry.request.method, rendered_url));
 
@@ -153,7 +169,7 @@ impl HttpGenerator {
                 continue;
             }
             // 凭据模板化：生成的测试文件严禁落盘明文凭证
-            if is_sensitive_key(key_str) {
+            if is_key_sensitive(key_str, policy) {
                 let var = Self::var_name_from_key(key_str);
                 variables.insert(var.clone());
                 match Self::split_auth_scheme(&val_str) {
@@ -187,7 +203,7 @@ impl HttpGenerator {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
                 // T1：JSON 字符串叶子命中动态形状 → 反向模板化（敏感键跳过，凭据警告语义不变）；
                 // T2 溯源命中优先于形状（PRD 管线序）
-                let templatized = Self::templatize_dynamic_leaves(&json, None, traced);
+                let templatized = Self::templatize_dynamic_leaves(&json, None, traced, policy);
                 if let Ok(pretty) = serde_json::to_string_pretty(&templatized) {
                     block.push_str(&pretty);
                 } else {
@@ -266,17 +282,25 @@ impl HttpGenerator {
         (title, name)
     }
 
-    /// Header/Query 键名转变量名：小写、非字母数字转下划线（`X-Api-Key` -> `x_api_key`）
+    /// Header/Query 键名转变量名：小写、非字母数字转下划线、压缩连续下划线并去除首尾下划线（若为空则回退至 "secret"）
     fn var_name_from_key(key: &str) -> String {
-        key.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() {
-                    c.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect()
+        let mut s = String::with_capacity(key.len());
+        let mut prev_underscore = false;
+        for c in key.chars() {
+            if c.is_ascii_alphanumeric() {
+                s.push(c.to_ascii_lowercase());
+                prev_underscore = false;
+            } else if !prev_underscore {
+                s.push('_');
+                prev_underscore = true;
+            }
+        }
+        let trimmed = s.trim_matches('_');
+        if trimmed.is_empty() {
+            "secret".to_string()
+        } else {
+            trimmed.to_string()
+        }
     }
 
     /// 已识别认证 scheme（Bearer/Basic/Digest/Token）时返回它，变量仅承载凭证本体
@@ -290,32 +314,13 @@ impl HttpGenerator {
     }
 
     /// 将 origin（scheme://host[:port]）改写为 `{{base_url}}`；变量名沿用
-    /// `rupost.toml` 模板约定。其余部分逐字保留。
+    /// `rupost.toml` 模板约定。复用全库单一事实来源 `UrlTemplatizer::templatize_origin`。
     fn templatize_host_in_url(raw: &str, variables: &mut BTreeSet<String>) -> String {
-        let Ok(parsed) = url::Url::parse(raw) else {
-            return raw.to_string();
-        };
-        let Some(host) = parsed.host_str() else {
-            return raw.to_string();
-        };
-        if host.is_empty() {
-            return raw.to_string();
+        let templatized = crate::http::url::UrlTemplatizer::templatize_origin(raw, "{{base_url}}");
+        if templatized != raw && templatized.contains("{{base_url}}") {
+            variables.insert("base_url".to_string());
         }
-        let mut origin = format!("{}://{}", parsed.scheme(), host);
-        if let Some(port) = parsed.port() {
-            origin.push_str(&format!(":{port}"));
-        }
-        match raw.find(&origin) {
-            Some(pos) => {
-                variables.insert("base_url".to_string());
-                let mut out = String::with_capacity(raw.len());
-                out.push_str(&raw[..pos]);
-                out.push_str("{{base_url}}");
-                out.push_str(&raw[pos + origin.len()..]);
-                out
-            }
-            None => raw.to_string(),
-        }
+        templatized
     }
 
     /// T1：递归模板化 JSON 字符串叶子（动态形状 → `{{$...}}`）；
@@ -325,6 +330,7 @@ impl HttpGenerator {
         value: &serde_json::Value,
         key: Option<&str>,
         traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> serde_json::Value {
         use serde_json::Value;
         if let Value::String(s) = value
@@ -334,7 +340,7 @@ impl HttpGenerator {
             return Value::String(format!("{{{{{}}}}}", l.capture_name));
         }
         if let Some(k) = key
-            && crate::exporter::redact::is_sensitive_key(k)
+            && is_key_sensitive(k, policy)
         {
             return value.clone();
         }
@@ -350,7 +356,7 @@ impl HttpGenerator {
                     .map(|(k, v)| {
                         (
                             k.clone(),
-                            Self::templatize_dynamic_leaves(v, Some(k), traced),
+                            Self::templatize_dynamic_leaves(v, Some(k), traced, policy),
                         )
                     })
                     .collect(),
@@ -358,43 +364,103 @@ impl HttpGenerator {
             Value::Array(items) => Value::Array(
                 items
                     .iter()
-                    .map(|v| Self::templatize_dynamic_leaves(v, key, traced))
+                    .map(|v| Self::templatize_dynamic_leaves(v, key, traced, policy))
                     .collect(),
             ),
             other => other.clone(),
         }
     }
 
-    /// URL query 中的敏感键值模板化为 `{{变量}}`；溯源命中值（T2，最高优先）→ `{{capture}}`；
-    /// 其余 T1 动态形状反向模板化；其余部分逐字保留（不做重编码）。
-    /// 已知限制：URL 编码形态的值（%3A 等）不参与溯源/形状识别。
+    /// 结构化切分 URL 并模板化 Query 参数与 SPA Fragment 参数中的敏感键。
+    ///
+    /// 核心保障：
+    /// 1. 标准 URL：`https://api.com/items?page=1&token=sec#my-anchor`
+    ///    - `token` 正确模板化为 `{{token}}`；
+    ///    - 锚点 `#my-anchor` 100% 原样保留，绝不丢失。
+    /// 2. SPA 路由：`https://app.com/#/login?token=sec`
+    ///    - 识别 fragment 中的 query 部分并实施模板化。
+    /// 3. 复合形态：标准 Query 与 Fragment Query 并存时，两部分同时脱敏，杜绝安全绕过。
+    /// 4. 支持前置 `{{base_url}}` 模板变量占位符，不发生解析降级。
     fn variabilize_url(
         raw: &str,
         variables: &mut BTreeSet<String>,
         traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
     ) -> String {
-        let Some((base, query)) = raw.split_once('?') else {
-            return raw.to_string();
+        let (before_hash, after_hash) = match raw.split_once('#') {
+            Some((bh, ah)) => (bh, Some(ah)),
+            None => (raw, None),
         };
+
+        let mut changed = false;
+
+        // 1. 处理主体 URL（# 前部分）的标准 Query 参数
+        let rebuilt_before = if let Some((base_path, query_str)) = before_hash.split_once('?') {
+            let (rebuilt_query, query_changed) =
+                Self::variabilize_query_pairs(query_str, variables, traced, policy);
+            if query_changed {
+                changed = true;
+                format!("{base_path}?{rebuilt_query}")
+            } else {
+                before_hash.to_string()
+            }
+        } else {
+            before_hash.to_string()
+        };
+
+        // 2. 处理 Fragment（# 后部分），若包含问号则作为 SPA Query 进行脱敏
+        let rebuilt_after = after_hash.map(|ah| {
+            if let Some((spa_path, spa_query)) = ah.split_once('?') {
+                let (rebuilt_spa_query, spa_changed) =
+                    Self::variabilize_query_pairs(spa_query, variables, traced, policy);
+                if spa_changed {
+                    changed = true;
+                    format!("{spa_path}?{rebuilt_spa_query}")
+                } else {
+                    ah.to_string()
+                }
+            } else {
+                ah.to_string()
+            }
+        });
+
+        if !changed {
+            return raw.to_string();
+        }
+
+        match rebuilt_after {
+            Some(ah) => format!("{rebuilt_before}#{ah}"),
+            None => rebuilt_before,
+        }
+    }
+
+    /// 对形如 `k1=v1&k2=v2` 的 query 字符串进行结构化反向模板化
+    /// 返回 `(模板化后的 query 串, 是否发生变化)`
+    fn variabilize_query_pairs(
+        query: &str,
+        variables: &mut BTreeSet<String>,
+        traced: Option<&super::trace::TracePlan>,
+        policy: Option<&crate::exporter::redact::RedactionPolicy>,
+    ) -> (String, bool) {
         let mut templated = false;
         let rebuilt: Vec<String> = query
             .split('&')
             .map(|pair| match pair.split_once('=') {
-                Some((k, _v)) if is_sensitive_key(k) => {
+                Some((k, _v)) if is_key_sensitive(k, policy) => {
                     templated = true;
                     let var = Self::var_name_from_key(k);
                     variables.insert(var.clone());
                     format!("{k}={{{{{var}}}}}")
                 }
                 Some((k, v)) => {
-                    // T2 最高优先：溯源命中 query 值 → {{capture}}（管线序 T2>T1>凭据豁免）
+                    // T2 最高优先：溯源命中 query 值 → {{capture}}
                     if let Some(plan) = traced
                         && let Some(l) = plan.links.iter().find(|l| l.value == *v)
                     {
                         templated = true;
                         return format!("{k}={{{{{}}}}}", l.capture_name);
                     }
-                    // T1：非敏感 query 值命中动态形状 → 反向模板化（不进变量符号表）
+                    // T1：非敏感 query 值命中动态形状 → 反向模板化
                     match super::dynamic::template_value(v) {
                         Some(t) => {
                             templated = true;
@@ -403,13 +469,138 @@ impl HttpGenerator {
                         None => pair.to_string(),
                     }
                 }
-                _ => pair.to_string(),
+                None => pair.to_string(),
             })
             .collect();
-        if templated {
-            format!("{base}?{}", rebuilt.join("&"))
-        } else {
-            raw.to_string()
-        }
+
+        (rebuilt.join("&"), templated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_var_name_from_key_sanitization() {
+        assert_eq!(HttpGenerator::var_name_from_key("X-Api-Key"), "x_api_key");
+        assert_eq!(
+            HttpGenerator::var_name_from_key("Authorization"),
+            "authorization"
+        );
+        assert_eq!(
+            HttpGenerator::var_name_from_key("---X--Api--Key---"),
+            "x_api_key"
+        );
+        assert_eq!(
+            HttpGenerator::var_name_from_key("api.token.secret"),
+            "api_token_secret"
+        );
+        assert_eq!(HttpGenerator::var_name_from_key("---$$$---"), "secret");
+        assert_eq!(HttpGenerator::var_name_from_key(""), "secret");
+    }
+
+    #[test]
+    fn test_generator_with_custom_redaction_policy() {
+        use crate::exporter::redact::RedactionPolicy;
+        use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
+        use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-custom-signature"),
+            HeaderValue::from_static("sig-123456"),
+        );
+        headers.insert(
+            HeaderName::from_static("x-normal-header"),
+            HeaderValue::from_static("normal-val"),
+        );
+
+        let entry = HistoryEntry {
+            id: "entry-1".to_string(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 10,
+            source: None,
+            request: RequestSnapshot {
+                timeout: None,
+                method: "GET".to_string(),
+                url: "https://api.com/users?x-tenant-token=tok999&limit=10".to_string(),
+                headers,
+                body: None,
+            },
+            response: ResponseMeta {
+                status: 200,
+                headers: HeaderMap::new(),
+                body: None,
+            },
+        };
+
+        // 自定义策略：把 x-custom-signature 和 x-tenant-token 加入 extra_keys
+        let policy =
+            RedactionPolicy::new(["x-custom-signature", "x-tenant-token"], Vec::<&str>::new());
+        let (output, vars) =
+            HttpGenerator::generate_with_policy(&[entry], false, Some(&policy)).unwrap();
+
+        // 验证 Header 与 Query 中的自定义凭据均被模板化
+        assert!(output.contains("x-custom-signature: {{x_custom_signature}}"));
+        assert!(output.contains("x-normal-header: normal-val"));
+        assert!(output.contains("x-tenant-token={{x_tenant_token}}"));
+        assert!(output.contains("limit=10"));
+        assert!(vars.contains(&"x_custom_signature".to_string()));
+        assert!(vars.contains(&"x_tenant_token".to_string()));
+    }
+
+    #[test]
+    fn test_variabilize_url_with_fragment_preservation() {
+        let mut vars = BTreeSet::new();
+
+        // 场景 A：敏感键位于末尾，后接普通锚点 —— 锚点必须 100% 完整保留
+        let url_a = "https://api.com/items?limit=10&access_token=secret999#section-details";
+        let out_a = HttpGenerator::variabilize_url(url_a, &mut vars, None, None);
+        assert_eq!(
+            out_a,
+            "https://api.com/items?limit=10&access_token={{access_token}}#section-details"
+        );
+        assert!(vars.contains("access_token"));
+
+        // 场景 B：前置已被 templatize_host 改写为 {{base_url}}，同样无缝保留锚点
+        let url_b = "{{base_url}}/items?token=secret888#quick-start";
+        let out_b = HttpGenerator::variabilize_url(url_b, &mut vars, None, None);
+        assert_eq!(out_b, "{{base_url}}/items?token={{token}}#quick-start");
+
+        // 场景 C：SPA 路由形态（# 在 ? 之前）—— 参数正常模板化，SPA 路由路径原样保留
+        let url_c = "https://app.com/#/dashboard?auth_token=secret777&mode=dark";
+        let out_c = HttpGenerator::variabilize_url(url_c, &mut vars, None, None);
+        assert_eq!(
+            out_c,
+            "https://app.com/#/dashboard?auth_token={{auth_token}}&mode=dark"
+        );
+
+        // 场景 D：纯锚点无敏感键，保持零修改原样返回
+        let url_d = "https://docs.com/guide#keyboard-shortcuts";
+        let out_d = HttpGenerator::variabilize_url(url_d, &mut vars, None, None);
+        assert_eq!(out_d, url_d);
+
+        // 场景 E（安全漏洞防护）：主体 Query 含敏感凭据，Fragment 亦包含带参锚点 —— 绝不发生凭据泄漏
+        let url_e = "https://api.com/v1/auth?secret_key=SUPER_SECRET_TOKEN#heading?section=2";
+        let out_e = HttpGenerator::variabilize_url(url_e, &mut vars, None, None);
+        assert_eq!(
+            out_e,
+            "https://api.com/v1/auth?secret_key={{secret_key}}#heading?section=2"
+        );
+        assert!(vars.contains("secret_key"));
+        assert!(!out_e.contains("SUPER_SECRET_TOKEN"));
+
+        // 场景 F：主体与 Fragment 内部同时含有敏感凭据 —— 双侧同时脱敏
+        let url_f = "https://api.com/login?token=sec1#spa/path?access_token=sec2";
+        let out_f = HttpGenerator::variabilize_url(url_f, &mut vars, None, None);
+        assert_eq!(
+            out_f,
+            "https://api.com/login?token={{token}}#spa/path?access_token={{access_token}}"
+        );
+        assert!(vars.contains("token"));
+        assert!(vars.contains("access_token"));
+        assert!(!out_f.contains("sec1"));
+        assert!(!out_f.contains("sec2"));
     }
 }

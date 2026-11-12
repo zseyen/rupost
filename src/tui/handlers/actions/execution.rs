@@ -207,11 +207,30 @@ async fn trigger_file_execution(
         drop(res_tx);
         let _ = relay.await;
         // R5：cookie 状态导出到桥（供下次触发 import——executor 为 &self 调用后仍存活）
-        if let Some(state_json) = executor.export_cookie_state() {
-            *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json.clone());
-            // R13：--cookie-file 提供时同步落盘
-            if let Some(path) = &cookie_file_path {
-                let _ = std::fs::write(path, state_json.to_string());
+        // 审查 P1：导出/落盘失败不得静默（备用屏内禁 eprintln，走 tracing，
+        // 与 integrations.rs 落盘告警同口径；TUI 上屏管线为后续项）
+        match executor.export_cookie_state() {
+            Ok(Some(state_json)) => {
+                *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json.clone());
+                // R13：--cookie-file 提供时同步落盘
+                if let Some(path) = &cookie_file_path
+                    && let Err(e) = std::fs::write(path, state_json.to_string())
+                {
+                    tracing::warn!(
+                        "{}: {}: {}",
+                        crate::middleware::ERR_COOKIE_PERSIST,
+                        std::path::Path::new(path).display(),
+                        e
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "{}: 状态导出失败: {}",
+                    crate::middleware::ERR_COOKIE_PERSIST,
+                    e
+                )
             }
         }
     });

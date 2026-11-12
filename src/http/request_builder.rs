@@ -66,39 +66,40 @@ fn add_body(
 
     match content_type {
         Some(ct) if ct.contains("application/json") => {
-            // 显式指定 JSON：能解析就用 with_json；畸形时按原文发送
-            match serde_json::from_str::<serde_json::Value>(body) {
-                Ok(json) => {
-                    request = request.with_json(&json)?;
+            // 显式指定 JSON：使用 IgnoredAny 零分配语法嗅探，合法与否均逐字保真发送（防键顺序重排与空格压缩）
+            match serde_json::from_str::<serde::de::IgnoredAny>(body) {
+                Ok(_) => {
+                    request = request.with_verbatim_body(body);
                 }
                 Err(e) => {
                     warnings.push(format!(
                         "body 不是合法 JSON（{e}），已按原文发送（Content-Type 声明保留）"
                     ));
-                    request = request.with_text(body);
+                    request = request.with_verbatim_body(body);
                 }
             }
         }
         Some(ct) if ct.contains("application/x-www-form-urlencoded") => {
-            // 显式指定 Form：直接使用文本
-            request = request.with_text(body);
+            // 显式指定 Form：直接使用文本逐字保真
+            request = request.with_verbatim_body(body);
         }
         _ => {
             // 未指定 Content-Type：尝试自动检测
             if is_json_like(body) {
-                // 看起来像 JSON，尝试解析
-                match serde_json::from_str::<serde_json::Value>(body) {
-                    Ok(json) => {
-                        request = request.with_json(&json)?;
+                match serde_json::from_str::<serde::de::IgnoredAny>(body) {
+                    Ok(_) => {
+                        // 零分配嗅探合法：自动补充 Content-Type，原样逐字保真发送
+                        request = request.with_header("Content-Type", "application/json")?;
+                        request = request.with_verbatim_body(body);
                     }
                     Err(_) => {
-                        // JSON 解析失败，使用纯文本
-                        request = request.with_text(body);
+                        // 外表形似 JSON 但语法非法：使用纯文本
+                        request = request.with_verbatim_body(body);
                     }
                 }
             } else {
                 // 不像 JSON，使用纯文本
-                request = request.with_text(body);
+                request = request.with_verbatim_body(body);
             }
         }
     }
@@ -286,5 +287,19 @@ mod tests {
 
         let result: Result<Request> = parsed.try_into();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_raw_body_preserved_verbatim_without_json_reshuffling() {
+        let mut parsed = ParsedRequest::new(1);
+        parsed.url = "http://example.com/api".to_string();
+        parsed.headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        // 刻意使用无序键名和特定缩进/空格，以验证未被 serde_json::Value 洗牌与折叠
+        let raw_json = "{\n  \"z_service\": \"auth\",\n  \"a_action\": \"login\"  \n}";
+        parsed.body = Some(raw_json.to_string());
+
+        let (request, warnings) = try_from_parsed_with_warnings(parsed).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(request.raw_body.as_deref(), Some(raw_json));
     }
 }

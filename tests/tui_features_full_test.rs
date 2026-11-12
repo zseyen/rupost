@@ -225,6 +225,7 @@ async fn test_r7_failure_switches_to_diagnose_tab() {
         http_version: None,
         ttfb: None,
         total_duration: Duration::from_millis(2),
+        connection_error: None,
     };
 
     let failed = rupost::runner::types::TestResult {
@@ -244,6 +245,8 @@ async fn test_r7_failure_switches_to_diagnose_tab() {
         request: None,
         warnings: vec![],
         is_teardown: false,
+        degraded: false,
+        plugin_duration_us: None,
     };
     state.handle_request_result(failed, std::collections::HashMap::new(), 1);
 

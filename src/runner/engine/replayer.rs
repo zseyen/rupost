@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 pub struct ReplayExecutor {
     client: Client,
     target_url: Option<String>,
+    /// 构造期一次性解析的 target（审查 P0-B：target 非法在 new 即 Err 快失败，
+    /// 杜绝 per-entry `if let Ok` 静默跳过覆写——流量会打向快照原始主机）
+    parsed_target: Option<url::Url>,
     verbose: bool,
     /// T4 追加排除的叶子键名（默认列表之外，大小写敏感精确匹配）
     ignore_fields: Vec<String>,
@@ -78,14 +81,25 @@ pub struct ReplayReport {
 }
 
 impl ReplayExecutor {
-    pub fn new(target_url: Option<String>, verbose: bool) -> Self {
-        Self {
+    pub fn new(target_url: Option<String>, verbose: bool) -> crate::Result<Self> {
+        let parsed_target = match target_url.as_deref() {
+            // 无 scheme 的裸 host（如 `--target example.com`）是最高频误写形态，
+            // 此前静默跳过全部覆写 → 重放流量打向快照原始主机
+            Some(t) => Some(url::Url::parse(t).map_err(|e| {
+                crate::error::RupostError::ParseError(format!(
+                    "--target '{t}' 不是合法 URL（需含 scheme，如 http://host:port）: {e}"
+                ))
+            })?),
+            None => None,
+        };
+        Ok(Self {
             client: Client::new(None),
             target_url,
+            parsed_target,
             verbose,
             ignore_fields: Vec::new(),
             status_only: false,
-        }
+        })
     }
 
     /// 追加排除键（`--ignore-fields`，逗号分隔）
@@ -102,7 +116,7 @@ impl ReplayExecutor {
 
     /// 执行快照重放并输出对比结果
     pub async fn replay_file<P: AsRef<Path>>(&self, path: P) -> Result<ReplayReport> {
-        let suite = crate::history::read_snapshot_suite(path)?;
+        let suite = crate::history::read_snapshot_suite_compat(path)?;
         println!(
             "{} Loaded snapshot containing {} requests.",
             "[*]".bold().blue(),
@@ -212,13 +226,23 @@ impl ReplayExecutor {
     ) -> ReplayEntryResult {
         // 1. 地址覆写
         let mut target_url = entry.request.url.clone();
-        if let Some(target) = &self.target_url
+        if let Some(parsed_target) = &self.parsed_target
             && let Ok(mut parsed_url) = url::Url::parse(&entry.request.url)
-            && let Ok(parsed_target) = url::Url::parse(target)
         {
+            // 构造期已保证 target 合法；set_* 的 .ok() 仅防御奇异 scheme 转换
+            // （逐 entry 确定性相同，告警会刷屏——登记注释即可）
             parsed_url.set_scheme(parsed_target.scheme()).ok();
             parsed_url.set_host(parsed_target.host_str()).ok();
             parsed_url.set_port(parsed_target.port()).ok();
+
+            // 若 target 显式包含非根路径前缀（如 http://host/api/v1），与原路径组合
+            let target_path = parsed_target.path().trim_end_matches('/');
+            if !target_path.is_empty() {
+                let original_path = parsed_url.path();
+                let combined_path = crate::http::url::join_paths(&[target_path, original_path]);
+                parsed_url.set_path(&combined_path);
+            }
+
             target_url = parsed_url.to_string();
         }
 
@@ -234,6 +258,7 @@ impl ReplayExecutor {
                     target_url,
                     start.elapsed(),
                     &e,
+                    false,
                 );
             }
         };
@@ -242,19 +267,51 @@ impl ReplayExecutor {
         let res = match self.client.execute(req).await {
             Ok(res) => res,
             Err(e) => {
+                let is_expected_failure = entry.response.is_none();
                 return Self::transport_error_entry(
                     entry,
                     request_number,
                     target_url,
                     start.elapsed(),
                     &e,
+                    is_expected_failure,
                 );
             }
         };
         let elapsed = start.elapsed();
 
-        // 4. 比对状态码（精确相等语义；状态不等短路 body 比对——单一归因原则）
-        let expected_status = entry.response.status;
+        // 4. 比对状态码（若快照记录的是传输层网络故障，收到响应则视为行为不一致）
+        let Some(ref recorded_resp) = entry.response else {
+            let err_desc = entry
+                .error
+                .as_ref()
+                .map(|e| e.message.as_str())
+                .unwrap_or("transport failure");
+            let mismatch_msg = format!(
+                "Snapshot recorded transport error ({err_desc}), but replay received HTTP {}",
+                res.status.code()
+            );
+            println!(
+                "  {} [✗] Unexpected response: {}",
+                "[✗]".bold().red(),
+                mismatch_msg
+            );
+            return ReplayEntryResult {
+                request_number,
+                method: entry.request.method.clone(),
+                url: target_url,
+                expected_status: 0,
+                actual_status: Some(res.status.code()),
+                matched: false,
+                duration_ms: elapsed.as_millis() as u64,
+                error: Some(mismatch_msg),
+                body_matched: Some(false),
+                body_diff: None,
+                response_body_snippet: Some(res.body.chars().take(200).collect()),
+            };
+        };
+
+        let expected_status = recorded_resp.status;
         let actual_status = res.status.code();
         let status_matched = expected_status == actual_status;
 
@@ -266,7 +323,7 @@ impl ReplayExecutor {
                 .map(|s| s.to_string())
                 .collect();
             keys.extend(self.ignore_fields.iter().cloned());
-            Self::compare_bodies(&entry.response.body, &res.body, &keys)
+            Self::compare_bodies(&recorded_resp.body, &res.body, &keys)
         } else {
             (None, None)
         };
@@ -398,7 +455,7 @@ impl ReplayExecutor {
         Ok(req)
     }
 
-    /// 传输层失败条目：`actual_status=None` + `error=Some(首行)`，计入 failed。
+    /// 传输层失败条目：若快照原本记录的就是网络异常则判定吻合（matched=true），否则计入 failed。
     /// duration 取请求发起至失败的实际耗时（禁止硬编码 0）。
     fn transport_error_entry(
         entry: &SnapshotEntry,
@@ -406,6 +463,7 @@ impl ReplayExecutor {
         url: String,
         elapsed: Duration,
         error: &impl std::fmt::Display,
+        matched_expected_failure: bool,
     ) -> ReplayEntryResult {
         let message = error
             .to_string()
@@ -413,16 +471,28 @@ impl ReplayExecutor {
             .next()
             .unwrap_or_default()
             .to_string();
-        println!("  {} Replay error: {}", "[✗]".bold().red(), message);
+        if matched_expected_failure {
+            println!(
+                "  {} [✓] Transport failure matched snapshot ({})",
+                "[✓]".bold().green(),
+                message
+            );
+        } else {
+            println!("  {} Replay error: {}", "[✗]".bold().red(), message);
+        }
         ReplayEntryResult {
             request_number,
             method: entry.request.method.clone(),
             url,
-            expected_status: entry.response.status,
+            expected_status: entry.response.as_ref().map(|r| r.status).unwrap_or(0),
             actual_status: None,
-            matched: false,
+            matched: matched_expected_failure,
             duration_ms: elapsed.as_millis() as u64,
-            error: Some(message),
+            error: if matched_expected_failure {
+                None
+            } else {
+                Some(message)
+            },
             body_matched: None,
             body_diff: None,
             response_body_snippet: None,

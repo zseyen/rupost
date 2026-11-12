@@ -7,12 +7,37 @@ pub struct VariableResolver;
 
 impl VariableResolver {
     /// 替换文本中的所有 {{variable}} 占位符，支持动态内置变量
+    ///
+    /// 两段式求值：
+    /// 1. 函数宏通道（`{{$hmac_sha256(key, msg)}}` 等）：先于普通变量求值，
+    ///    宏参数在求值时再做一次嵌套 `{{...}}` 插值（内外层求值序由守护测试锁定）；
+    /// 2. 简单变量通道（`{{$uuid}}` / `{{user_id}}`）。
+    ///
+    /// 求值失败的函数宏保留字面量，交由 `unresolved_placeholders` 显式告警（反静默）。
     pub fn substitute(text: &str, context: &VariableContext) -> String {
+        static FN_MACRO_REGEX: OnceLock<Regex> = OnceLock::new();
         static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
+        let fn_re =
+            FN_MACRO_REGEX.get_or_init(|| Regex::new(r"\{\{\$([a-z_0-9]+)\((.*?)\)\}\}").unwrap());
+
+        // 通道 1：函数宏（带参数）
+        let with_fns = fn_re.replace_all(text, |caps: &Captures| {
+            let name: &str = &caps[1];
+            let raw_args = caps[2].to_string();
+            let evaluated = match name {
+                "hmac_sha256" => Self::eval_hmac_sha256(&raw_args, context),
+                "sha256" => Self::eval_sha256(&raw_args, context),
+                "random_int" => Self::eval_random_int(&raw_args, context),
+                _ => None, // 未知函数宏：保持字面量，残留检查显式告警
+            };
+            evaluated.unwrap_or_else(|| caps[0].to_string())
+        });
+
+        // 通道 2：简单变量
         let re =
             VAR_REGEX.get_or_init(|| Regex::new(r"\{\{([$a-zA-Z_][a-zA-Z0-9_.]*)\}\}").unwrap());
 
-        re.replace_all(text, |caps: &Captures| {
+        re.replace_all(&with_fns, |caps: &Captures| {
             let var_name = &caps[1];
 
             // 处理动态内置变量
@@ -35,16 +60,142 @@ impl VariableResolver {
         .to_string()
     }
 
+    /// `$hmac_sha256(key, msg)` → 小写十六进制 HMAC-SHA256 摘要
+    fn eval_hmac_sha256(raw_args: &str, context: &VariableContext) -> Option<String> {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        let args = Self::split_macro_args(raw_args);
+        if args.len() != 2 {
+            return None;
+        }
+        let key = Self::substitute(&args[0], context);
+        let msg = Self::substitute(&args[1], context);
+
+        let mut mac = HmacSha256::new_from_slice(key.as_bytes()).ok()?;
+        mac.update(msg.as_bytes());
+        Some(Self::hex_lower(&mac.finalize().into_bytes()))
+    }
+
+    /// `$sha256(msg)` → 小写十六进制 SHA-256 摘要
+    fn eval_sha256(raw_args: &str, context: &VariableContext) -> Option<String> {
+        use sha2::{Digest, Sha256};
+
+        let args = Self::split_macro_args(raw_args);
+        if args.len() != 1 {
+            return None;
+        }
+        let msg = Self::substitute(&args[0], context);
+        let mut hasher = Sha256::new();
+        hasher.update(msg.as_bytes());
+        Some(Self::hex_lower(&hasher.finalize()))
+    }
+
+    /// `$random_int(min, max)` → 闭区间 [min, max] 内的随机整数
+    fn eval_random_int(raw_args: &str, context: &VariableContext) -> Option<String> {
+        use rand::Rng;
+        let args = Self::split_macro_args(raw_args);
+        if args.len() != 2 {
+            return None;
+        }
+        let min: i64 = Self::substitute(&args[0], context).trim().parse().ok()?;
+        let max: i64 = Self::substitute(&args[1], context).trim().parse().ok()?;
+        if min > max {
+            return None;
+        }
+        let mut rng = rand::rng();
+        Some(rng.random_range(min..=max).to_string())
+    }
+
+    /// 引号感知的宏参数分词器：顶层逗号分参，支持 `'...'` / `"..."` 与 `\` 转义，
+    /// 严禁裸 `split(',')` 撕裂含逗号/空格的参数值（04 套件 5 契约）。
+    fn split_macro_args(raw: &str) -> Vec<String> {
+        let mut args = Vec::new();
+        let mut cur = String::new();
+        let mut in_quote: Option<char> = None;
+        let mut escaped = false;
+        for ch in raw.chars() {
+            if escaped {
+                cur.push(ch);
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' if in_quote.is_some() => {
+                    escaped = true;
+                }
+                q @ ('\'' | '"') if in_quote == Some(q) => {
+                    in_quote = None;
+                    cur.push(ch);
+                }
+                q @ ('\'' | '"') if in_quote.is_none() => {
+                    in_quote = Some(q);
+                    cur.push(ch);
+                }
+                ',' if in_quote.is_none() => {
+                    args.push(cur.trim().to_string());
+                    cur = String::new();
+                }
+                _ => cur.push(ch),
+            }
+        }
+        if !cur.trim().is_empty() {
+            args.push(cur.trim().to_string());
+        }
+        // 去除首尾配对引号
+        args.into_iter()
+            .map(|a| {
+                let bytes = a.as_bytes();
+                if bytes.len() >= 2
+                    && (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'
+                        || bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+                {
+                    a[1..a.len() - 1].to_string()
+                } else {
+                    a
+                }
+            })
+            .collect()
+    }
+
+    fn hex_lower(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// toml 配置值的系统变量展开正则（SSOT：`resolve_env_vars` 与
+    /// `resolve_env_vars_with_warnings` 共用同一 `OnceLock`，防止模式漂移）
+    fn env_regex() -> &'static Regex {
+        static ENV_REGEX: OnceLock<Regex> = OnceLock::new();
+        ENV_REGEX.get_or_init(|| Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap())
+    }
+
     /// 解析并替换系统环境变量 ${VAR}
     pub fn resolve_env_vars(text: &str) -> String {
-        static ENV_REGEX: OnceLock<Regex> = OnceLock::new();
-        let re = ENV_REGEX.get_or_init(|| Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap());
+        Self::env_regex()
+            .replace_all(text, |caps: &Captures| {
+                let env_name = &caps[1];
+                std::env::var(env_name).unwrap_or_else(|_| caps[0].to_string())
+            })
+            .to_string()
+    }
 
-        re.replace_all(text, |caps: &Captures| {
-            let env_name = &caps[1];
-            std::env::var(env_name).unwrap_or_else(|_| caps[0].to_string())
-        })
-        .to_string()
+    /// toml 配置值的系统变量展开（带未设置告警）——仅 build_context 路径使用；
+    /// 热路径 [`resolve_env_vars`]（每请求 URL/headers/body 三处调用）签名不变。
+    /// 正则保持 `[A-Z_]` 不变（保守裁决：小写 `${x}` 从不展开是既有行为，
+    /// 扩展会让 `${path}` 类突然命中进程 env——破坏性）
+    pub fn resolve_env_vars_with_warnings(text: &str) -> (String, Vec<String>) {
+        let mut warnings = Vec::new();
+        let out = Self::env_regex().replace_all(text, |caps: &Captures| {
+            std::env::var(&caps[1]).unwrap_or_else(|_| {
+                warnings.push(format!(
+                    "toml 引用的系统变量 ${{{}}} 未设置，已按字面量保留",
+                    &caps[1]
+                ));
+                caps[0].to_string()
+            })
+        });
+        (out.to_string(), warnings)
     }
 
     /// 完整的变量解析流程：先解析环境变量，再替换自定义变量
@@ -193,6 +344,38 @@ mod tests {
         assert_eq!(output, "Value: ${NONEXISTENT_VAR}");
     }
 
+    /// `${VAR}` 带告警变体决策表：命中展开 / 未命中保留+告警 / 小写不展开不告警
+    #[test]
+    fn test_resolve_env_vars_with_warnings_decision_table() {
+        unsafe {
+            std::env::set_var("RUPOST_GAP6_SET_PROBE", "resolved-val");
+        }
+        // 1. 命中 → 展开，零告警
+        let (out, warnings) =
+            VariableResolver::resolve_env_vars_with_warnings("x=${RUPOST_GAP6_SET_PROBE}");
+        assert_eq!(out, "x=resolved-val");
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // 2. 未命中 → 字面量保留 + 一条指名道姓的告警
+        let (out, warnings) =
+            VariableResolver::resolve_env_vars_with_warnings("y=${RUPOST_GAP6_NEVER_SET}");
+        assert_eq!(out, "y=${RUPOST_GAP6_NEVER_SET}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("RUPOST_GAP6_NEVER_SET"),
+            "{warnings:?}"
+        );
+
+        // 3. 小写 ${x} 不属于本机制：不展开、不告警（既有行为锁定，防 ${path} 误展开）
+        let (out, warnings) = VariableResolver::resolve_env_vars_with_warnings("z=${path}");
+        assert_eq!(out, "z=${path}");
+        assert!(warnings.is_empty(), "小写形态不得告警: {warnings:?}");
+
+        unsafe {
+            std::env::remove_var("RUPOST_GAP6_SET_PROBE");
+        }
+    }
+
     #[test]
     fn test_resolve_combined() {
         unsafe {
@@ -245,6 +428,97 @@ mod tests {
         let num_str = &output[6..];
         let num: u32 = num_str.parse().unwrap();
         assert!((1..=10000).contains(&num));
+    }
+
+    // ===== 函数宏（M1 内置加签宏，01 §1.2 [待建 M1]）=====
+
+    /// RFC 4231 Test Case 2（ASCII key="Jefe"）—— 字符串宏可直接对齐官方向量
+    #[test]
+    fn test_hmac_sha256_rfc4231_case2() {
+        let ctx = VariableContext::new();
+        let output = VariableResolver::resolve(
+            r#"{{$hmac_sha256("Jefe", "what do ya want for nothing?")}}"#,
+            &ctx,
+        );
+        assert_eq!(
+            output,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// 嵌套插值先行求值：ctx 提供的片段拼出 RFC 4231 Case 2 的 key，证明宏参数
+    /// 在求值前完成了 `{{...}}` 解析（求值序守护测试）
+    #[test]
+    fn test_hmac_sha256_nested_interpolation() {
+        let mut ctx = VariableContext::new();
+        ctx.insert("k1", "Je");
+        ctx.insert("k2", "fe");
+        let output = VariableResolver::resolve(
+            r#"{{$hmac_sha256("{{k1}}{{k2}}", "what do ya want for nothing?")}}"#,
+            &ctx,
+        );
+        assert_eq!(
+            output,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// 含逗号与空格的引号参数不被撕裂（引号感知分词器契约）
+    #[test]
+    fn test_hmac_sha256_quoted_comma_arg() {
+        let ctx = VariableContext::new();
+        let output = VariableResolver::resolve(r#"{{$sha256("a,b c")}}"#, &ctx);
+        // SHA-256("a,b c")
+        assert_eq!(
+            output,
+            "8e60a689618d2ebf84591742943652e2d4ba87b3bcac87df4450dce88701687b"
+        );
+    }
+
+    #[test]
+    fn test_sha256_known_vectors() {
+        let ctx = VariableContext::new();
+        assert_eq!(
+            VariableResolver::resolve(r#"{{$sha256("abc")}}"#, &ctx),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            VariableResolver::resolve(r#"{{$sha256("")}}"#, &ctx),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_random_int_param_bounds() {
+        let ctx = VariableContext::new();
+        assert_eq!(
+            VariableResolver::resolve("{{$random_int(5, 5)}}", &ctx),
+            "5"
+        );
+        for _ in 0..32 {
+            let out = VariableResolver::resolve("{{$random_int( 1 , 3 )}}", &ctx);
+            let n: i64 = out.parse().unwrap();
+            assert!((1..=3).contains(&n));
+        }
+    }
+
+    /// 反静默：参数个数/取值非法时保留字面量，交由残留占位符检查显式告警
+    #[test]
+    fn test_function_macro_invalid_args_keeps_literal() {
+        let ctx = VariableContext::new();
+        for bad in [
+            "{{$hmac_sha256(\"only-key\")}}",
+            "{{$sha256(\"a\", \"b\")}}",
+            "{{$random_int(abc, 3)}}",
+            "{{$random_int(5, 1)}}",
+            "{{$unknown_fn(1)}}",
+        ] {
+            assert_eq!(VariableResolver::resolve(bad, &ctx), bad, "case: {bad}");
+            let mut parsed = crate::parser::ParsedRequest::new(1);
+            parsed.url = bad.to_string();
+            let warnings = VariableResolver::unresolved_placeholders(&parsed);
+            assert!(!warnings.is_empty(), "非法函数宏必须被残留检查捕获: {bad}");
+        }
     }
 
     #[test]

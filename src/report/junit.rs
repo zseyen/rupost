@@ -11,9 +11,23 @@
 use crate::report::json::JsonFileReport;
 use serde::Serialize;
 
-/// 终端 ANSI 控制符剥离（防御外部服务响应自带控制字符进入 XML）
+/// 终端 ANSI 控制符剥离 + C0 控制字符清理（XML 1.0 同样非法；\t\n\r 保留）。
+/// 双层：strip_ansi_escapes 处理 ANSI 序列，正则兜底其余 C0（红队补充：\x00 不在 ANSI 范围）。
 fn strip_ansi(text: &str) -> String {
-    String::from_utf8_lossy(&strip_ansi_escapes::strip(text.as_bytes())).into_owned()
+    static C0: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re =
+        C0.get_or_init(|| regex::Regex::new("[\x00-\x08\x0b\x0c\x0e-\x1f]").expect("c0 regex"));
+    let stripped =
+        String::from_utf8_lossy(&strip_ansi_escapes::strip(text.as_bytes())).into_owned();
+    re.replace_all(&stripped, "").into_owned()
+}
+
+/// 执行主机名取值链：`RUPOST_RUN_HOST` env（CI 显式注入）> `HOSTNAME` env
+/// （Linux shell 常见）> 空串兜底（零新依赖；macOS 无 HOSTNAME env 属预期）
+fn execution_hostname() -> String {
+    std::env::var("RUPOST_RUN_HOST")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_default()
 }
 
 /// JUnit 顶层 `<testsuites>`
@@ -30,6 +44,12 @@ pub struct JUnitTestSuites {
     pub skipped: usize,
     #[serde(rename = "@time")]
     pub time: String,
+    /// 聚合时间锚点（RFC3339）——CI 平台按此归档/跨构建比对（走查缺口 #3）
+    #[serde(rename = "@timestamp")]
+    pub timestamp: String,
+    /// 执行主机名（区分 runner 节点；`RUPOST_RUN_HOST` > `HOSTNAME` env > 空串兜底）
+    #[serde(rename = "@hostname")]
+    pub hostname: String,
     #[serde(rename = "testsuite")]
     pub suites: Vec<JUnitTestSuite>,
 }
@@ -224,6 +244,8 @@ impl JUnitTestSuites {
             errors,
             skipped,
             time: secs(total_ms),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            hostname: execution_hostname(),
             suites,
         }
     }
@@ -240,6 +262,22 @@ impl JUnitTestSuites {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_execution_hostname_prefers_explicit_env() {
+        // 取值链：RUPOST_RUN_HOST > HOSTNAME > 空串（CI 显式注入优先）
+        unsafe {
+            std::env::set_var("RUPOST_RUN_HOST", "ci-node-7");
+        }
+        assert_eq!(super::execution_hostname(), "ci-node-7");
+        unsafe {
+            std::env::remove_var("RUPOST_RUN_HOST");
+        }
+        // 移除后回落：HOSTNAME 存在则取之，否则空串（两种环境都合法）
+        let fallback = super::execution_hostname();
+        let expected = std::env::var("HOSTNAME").unwrap_or_default();
+        assert_eq!(fallback, expected);
+    }
     use super::*;
     use crate::report::json::{JsonAssertionReport, JsonTestReport};
 

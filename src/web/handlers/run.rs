@@ -68,17 +68,19 @@ pub async fn run_block_handler(
         }
     };
 
-    // 3. 准备变量执行上下文
-    let config = ConfigLoader::find_and_load().unwrap_or_default();
+    // 3. 准备变量执行上下文（配置/env 文件告警走服务端日志——走查缺口 #6）
     let mut cli_vars = Vec::new();
     if let Some(extra) = &req.extra_variables {
         for (k, v) in extra {
             cli_vars.push((k.clone(), v.clone()));
         }
     }
-
     let target_env = req.env.as_deref().or(state.default_env.as_deref());
-    let mut var_context = ConfigLoader::build_context(&config, target_env, &cli_vars, Some(".env"));
+    let (mut var_context, loader_warnings) =
+        ConfigLoader::load_context(target_env, &cli_vars, None);
+    for warning in &loader_warnings {
+        tracing::warn!("web run: {warning}");
+    }
     var_context.insert("__default_scheme", "http");
 
     // 4. 原位单块调试执行（采用无污染内存隔离会话）
@@ -174,9 +176,11 @@ pub async fn run_suite_handler(
     }
 
     // 3. 准备变量上下文（CLI 变量列表为空：环境级联与 .env 同 CLI 语义）
-    let config = ConfigLoader::find_and_load().unwrap_or_default();
     let target_env = req.env.as_deref().or(state.default_env.as_deref());
-    let mut var_context = ConfigLoader::build_context(&config, target_env, &[], Some(".env"));
+    let (mut var_context, loader_warnings) = ConfigLoader::load_context(target_env, &[], None);
+    for warning in &loader_warnings {
+        tracing::warn!("web run: {warning}");
+    }
     var_context.insert("__default_scheme", "http");
 
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话）

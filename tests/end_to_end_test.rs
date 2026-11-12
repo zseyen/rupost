@@ -165,7 +165,7 @@ Authorization: Bearer {{api_key}}
 
     // 加载配置并构建变量上下文
     let config = ConfigLoader::load_from_path(&config_file).unwrap();
-    let mut context = ConfigLoader::build_context(&config, Some("test"), &[], None);
+    let (mut context, _) = ConfigLoader::build_context(&config, Some("test"), &[], None);
 
     // 解析文件
     let parsed = HttpFileParser::parse_file(&http_file).unwrap();
@@ -361,7 +361,7 @@ X-API-Key: {{api_key}}
 
     // 加载配置并构建变量上下文
     let config = ConfigLoader::load_from_path(&config_file).unwrap();
-    let mut context = ConfigLoader::build_context(&config, Some("test"), &[], None);
+    let (mut context, _) = ConfigLoader::build_context(&config, Some("test"), &[], None);
 
     // 解析文件
     let parsed = HttpFileParser::parse_file(&http_file).unwrap();
@@ -429,7 +429,7 @@ X-Custom-Header: {{custom_header}}
         "cli-override-value".to_string(),
     )];
     let config = ConfigLoader::load_from_path(&config_file).unwrap();
-    let mut context = ConfigLoader::build_context(&config, Some("test"), &cli_vars, None);
+    let (mut context, _) = ConfigLoader::build_context(&config, Some("test"), &cli_vars, None);
 
     // 解析文件
     let parsed = HttpFileParser::parse_file(&http_file).unwrap();

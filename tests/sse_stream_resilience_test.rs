@@ -283,3 +283,66 @@ GET {uri}/stream
     assert!(results[0].success, "{:?}", results[0].error);
     assert_eq!(context.get("rec").as_deref(), Some("after-giant"));
 }
+
+/// 走查缺口 #6d：`@stream_to` 目标不可写时不得静默——首个写入失败产出一条
+/// warning（随 TestResult.warnings / JSON 报告出站），后续事件不重复刷屏。
+#[tokio::test]
+async fn test_sse_stream_to_unwritable_warns_once() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let uri = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+
+    let server = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            handshake(&mut socket).await;
+            // 两个完整事件：两次写入尝试都必然失败（父级是普通文件）
+            socket
+                .write_all(
+                    b"id: 1\nevent: a\ndata: {\"text\": \"one\"}\n\nid: 2\nevent: b\ndata: {\"text\": \"two\"}\n\n",
+                )
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let http_file = temp.path().join("unwritable.http");
+    // 目标路径的父级是一个普通文件：write_log_with_limit 的自动建目录
+    // （create_dir_all）必然失败，写入错误确定性地复现（chmod 方案对 root 无效）
+    let blocker = temp.path().join("blocker");
+    std::fs::write(&blocker, "i-am-a-file").unwrap();
+    let bad_target = blocker.join("stream.log");
+    std::fs::write(
+        &http_file,
+        format!(
+            r#"### SSE unwritable stream-to
+@sse
+@sse_max_events 2
+@assert status == 200
+@stream_to {}
+GET {uri}/stream
+"#,
+            bad_target.display()
+        ),
+    )
+    .unwrap();
+
+    let parsed = HttpFileParser::parse_file(&http_file).unwrap();
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+    let results = executor.execute_all(parsed, &mut context).await.unwrap();
+
+    server.await.unwrap();
+    // 写失败不得影响流式测试本身的成败
+    assert!(
+        results[0].success,
+        "stream must complete: {:?}",
+        results[0].error
+    );
+    let warnings = &results[0].warnings;
+    let hits: Vec<_> = warnings.iter().filter(|w| w.contains("写入失败")).collect();
+    assert_eq!(hits.len(), 1, "写入失败应恰好告警一次: {warnings:?}");
+    assert!(hits[0].contains("blocker"), "告警应指明目标路径: {hits:?}");
+    assert!(hits[0].contains("未落盘"), "告警应说明后果: {hits:?}");
+    assert!(!bad_target.exists(), "不可写目标不得凭空产出日志文件");
+}

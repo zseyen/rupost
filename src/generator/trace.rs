@@ -140,9 +140,25 @@ fn capture_name_from_source(source: &str) -> String {
     }
 }
 
+fn is_key_sensitive(key: &str, policy: Option<&crate::exporter::redact::RedactionPolicy>) -> bool {
+    if let Some(p) = policy {
+        p.is_sensitive(key)
+    } else {
+        crate::exporter::redact::is_sensitive_key(key)
+    }
+}
+
 /// 构建溯源计划（纯函数，时间序即拓扑序）：
 /// 对每个下游条目的候选值（Header/Body JSON 叶子/query），反序搜索上游产出精确命中。
 pub fn build_trace_plan(entries: &[HistoryEntry]) -> TracePlan {
+    build_trace_plan_with_policy(entries, None)
+}
+
+/// 接受显式脱敏策略的溯源计划构建入口
+pub fn build_trace_plan_with_policy(
+    entries: &[HistoryEntry],
+    policy: Option<&crate::exporter::redact::RedactionPolicy>,
+) -> TracePlan {
     let mut plan = TracePlan::default();
 
     // Cookie 链：上游 Set-Cookie 下发的 cookie 名
@@ -175,10 +191,15 @@ pub fn build_trace_plan(entries: &[HistoryEntry]) -> TracePlan {
         }
         // URL query 值也进候选（评审 F1：token 在 query 的 API 形态）；
         // 敏感键值跳过——凭据模板化管线负责（管线序：敏感键凭据 > T2）
-        if let Some((_, query)) = entry.request.url.split_once('?') {
+        // 剥离尾随 #fragment，防止最后一个参数值带入锚点导致比对失效
+        if let Some((_, raw_query)) = entry.request.url.split_once('?') {
+            let query = raw_query
+                .split_once('#')
+                .map(|(q, _)| q)
+                .unwrap_or(raw_query);
             for pair in query.split('&') {
                 if let Some((k, v)) = pair.split_once('=')
-                    && !crate::exporter::redact::is_sensitive_key(k)
+                    && !is_key_sensitive(k, policy)
                 {
                     candidates.push(v.to_string());
                 }
@@ -454,5 +475,44 @@ mod tests {
         let plan = plan_of(&entries);
         assert_eq!(plan.links.len(), 1);
         assert_eq!(plan.links[0].capture_source, "header.x-request-id");
+    }
+
+    /// URL query 中的溯源值末尾带 #fragment 时不应被锚点污染；自定义脱敏键不进溯源候选
+    #[test]
+    fn test_trace_query_with_fragment_and_custom_policy() {
+        use crate::exporter::redact::RedactionPolicy;
+
+        let entries = vec![
+            entry(
+                "POST",
+                "http://a/login",
+                &[],
+                None,
+                200,
+                &[],
+                Some(r#"{"session_code":"sess-12345678"}"#),
+            ),
+            entry(
+                "GET",
+                "http://a/dashboard?x_custom_sec=sec888&sid=sess-12345678#view-tab",
+                &[],
+                None,
+                200,
+                &[],
+                None,
+            ),
+        ];
+
+        // 未配置策略时：sid 正常命中上游 session_code（不会因为 #view-tab 污染而失效）
+        let plan = build_trace_plan(&entries);
+        assert_eq!(plan.links.len(), 1);
+        assert_eq!(plan.links[0].value, "sess-12345678");
+        assert_eq!(plan.links[0].capture_name, "session_code");
+
+        // 配置自定义策略忽略 x_custom_sec：不会被误提取
+        let policy = RedactionPolicy::new(["x_custom_sec"], Vec::<&str>::new());
+        let plan_with_policy = build_trace_plan_with_policy(&entries, Some(&policy));
+        assert_eq!(plan_with_policy.links.len(), 1);
+        assert_eq!(plan_with_policy.links[0].value, "sess-12345678");
     }
 }

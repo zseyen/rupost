@@ -48,6 +48,8 @@ struct SseEventContext<'a> {
     accumulated_body: &'a mut String,
     accumulated_llm_content: &'a mut String,
     context: &'a mut VariableContext,
+    /// `@stream_to` 写入失败告警的 once 闸门（首个失败即告警，防逐事件刷屏——走查缺口 #6d）
+    stream_to_write_failed: bool,
 }
 
 impl SseEventContext<'_> {
@@ -58,7 +60,17 @@ impl SseEventContext<'_> {
         self.accumulated_body.push('\n');
 
         let log_line = format!("data: {}\n\n", event.data);
-        let _ = write_log_with_limit(self.log_path, &log_line, self.max_bytes).await;
+        // 走查缺口 #6d：通用流式日志写入失败不得静默（此前 `let _ =` 吞掉全部
+        // 落盘错误）——首个失败告警进 warnings 随结果出站，后续事件不再重复
+        if let Err(e) = write_log_with_limit(self.log_path, &log_line, self.max_bytes).await {
+            if !self.stream_to_write_failed {
+                self.stream_to_write_failed = true;
+                self.capture_warnings.push(format!(
+                    "SSE 流式日志 '{}' 写入失败，数据未落盘: {e}",
+                    self.log_path.display()
+                ));
+            }
+        }
 
         if let Some(ref sender) = self.options.stream_sender {
             let _ = sender.send(crate::runner::types::StreamEvent::SseChunk(
@@ -75,8 +87,20 @@ impl SseEventContext<'_> {
 
         let llm_adapter = crate::http::llm_adapter::LlmStreamAdapter;
         if let Some(w) = self.file_writer.as_mut() {
-            if let Ok(Some(delta)) = w.write_sse_event(&event.data, self.llm_provider).await {
-                self.accumulated_llm_content.push_str(&delta);
+            match w.write_sse_event(&event.data, self.llm_provider).await {
+                Ok(Some(delta)) => self.accumulated_llm_content.push_str(&delta),
+                Ok(None) => {}
+                // 走查缺口 #6d：写入失败不得静默——首个失败告警进 warnings
+                // （随 TestResult/JSON 报告出站），后续事件不再重复
+                Err(e) => {
+                    if !self.stream_to_write_failed {
+                        self.stream_to_write_failed = true;
+                        self.capture_warnings.push(format!(
+                            "@stream_to '{}' 写入失败，流式数据未落盘: {e}",
+                            self.options.stream_to.as_deref().unwrap_or("<unknown>")
+                        ));
+                    }
+                }
             }
         } else if let Some(delta) = llm_adapter.extract_delta(self.llm_provider, &event.data) {
             self.accumulated_llm_content.push_str(&delta);
@@ -252,6 +276,7 @@ impl SseRunner {
                 accumulated_body: &mut accumulated_body,
                 accumulated_llm_content: &mut accumulated_llm_content,
                 context: &mut *context,
+                stream_to_write_failed: false,
             };
 
             loop {

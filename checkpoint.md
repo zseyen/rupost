@@ -10,12 +10,24 @@
 * **项目定位**: 基于文档（`.http` 与 `.md`）驱动的极简高性能 API 测试、回归与排障引擎。
 * **分支与代码基线**:
   * **主干分支**: `main`（加固战役分支 `feature/decoupling-and-workbench-hardening` 已通过 **PR #13** 完整合流）。
-  * **工作区收敛**: 仅保留单一 `default` 主工作区，所有历史/辅助工作区已全部注销并出清，工作副本保持 clean。
+  * **当前活跃开发工作区**: `.workspace/cross-scenario-plugins`（全场景自适应与微内核插件生态专项工作区）。
 * **质量保障金字塔**:
-  * **单元测试**: 564 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。
-  * **集成冒烟测试**: `tests/verify_features.sh` 涵盖 Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等全部通过。
+  * **单元测试**: 590+ 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。
+  * **集成冒烟测试**: `tests/verify_features.sh` 涵盖 14 个核心特性（脱敏扩展性、Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等）全部通过。
   * **真实端到端回归**: `examples/run_all.sh` 涵盖 15 套真实复杂场景（变量级联、SSE 流式、WebSocket 握手）全绿。
-  * **代码质量与工具链**: Rust MSRV 1.89，`cargo clippy --all-targets -- -D warnings` 零告警，`cargo fmt` 零格式漂移。
+  * **Web 前端单元测试**: `tests/web/app_test.mjs` 基于原生 `node --test` + Micro-DOM 打桩（零 npm 依赖）5 测试全绿。
+  * **代码质量与工具链**: Rust MSRV 1.89，`cargo clippy --workspace --all-targets -- -D warnings` 零告警，`cargo fmt` 零格式漂移。
+  * **近期重大交付**:
+    * `核心引擎保真与快照黑匣子演进 (Engine Fidelity & Snapshot Schema v2)`：请求体零分配嗅探（`IgnoredAny`，根除加签字典序洗牌）；快照全量强类型网络错误录制（`ExecutionErrorDetail`，Schema v2 平滑兼容）。
+    * `全链路测试基建闭环 (Testing Baseline & Guard Suites)`：`ResponseFormatter` Fluent Builder 表驱动单测、TUI 关键动作与守卫直测（`tests/tui_key_actions_test.rs` + `TestBackend`）、Web 原生前端单测。
+    * `凭据脱敏扩展性与合规治理 (Redaction Extensibility & Compliance Guard)`：`RedactionPolicy`、R3硬键护栏、TOML级联装配、`@sensitive` / `@no-redact` 指令、stderr审计清单Footer、变量名安全清洗。
+    * `脱敏引擎同构复用与快照回放对称语义纠偏 (Redaction Reuse & Replay Parity)`：提炼 `redact_key_value_pairs` 统一同构引擎（彻底解决 URL Fragment 键值脱敏并杜绝锚点误杀）；修正快照网络错误对称回放比对逻辑；快照异常信息深度脱敏（含 `BARE_AUTH` 正则覆盖孤立 Token）；代码生成接线脱敏策略及配置加载 DRY 统一。
+    * `分支深度审查加固与核心缺陷闭环 (Branch Review Hardening & Core Defect Fixes)`：
+      * **P0-1 复合 URL 凭据明文泄露封堵**：重构 `variabilize_url` 与 `variabilize_query_pairs`，废除互斥分支，引入正交解构模型（主体 Query 与 Hash SPA Query 双侧独立脱敏并重组）；
+      * **P0-2 `--no-history` 全局分派顶层下沉**：在 `dispatch` 最外层统一禁用录制，消除 TUI/Web/Inline 旁路泄露风险；
+      * **P1-4 诊断 TLS 阶段数据保留**：`probe_after_connect` 引入 `lenient` 参数，在 HTTP TTFB 超时或 0 字节 EOF 时完整保留 TLS 耗时与证书实体；
+      * **P1-5 重放引擎 `--target` 路径前缀支持**：复用 `join_paths` 支持含上下文路径的目标 URL 重放；
+      * **DRY 协议规范化治理**：`UrlTemplatizer` 统一管理 WebSocket URL 规范化（RFC 6455 剥离 `#fragment`）与 origin 模板化。
 
 ---
 
@@ -50,3 +62,18 @@
 * **规则双镜像 100% 对齐**: 根目录 `AGENTS.md` 与 `.agents/AGENTS.md` 实现零 diff 字节级一致，作为平台与智能体协作的唯一权威契约。
 * **技能单一事实来源**: 全仓 8 大核心技能（AI 集成、头脑风暴、CLI 美学、前端设计、微内核架构、异步模式、编排调度、TUI 设计）全部收敛于 `.agent/skills/`。
 * **TDD 驱动重构法则**: 遵循 Red-Green-Refactor 三阶段闭环；守护测试必须经受反转生产代码必然变红的验证，杜绝假守护。
+
+---
+
+## 3. 全场景架构与微内核插件体系规划 (Cross-Scenario & Plugin Ecosystem)
+* **最新决策白皮书**: [`doc/plans/2026-11-10-cross-scenario-engine-and-plugins/05-comprehensive-architecture-and-requirements-summary.md`](doc/plans/2026-11-10-cross-scenario-engine-and-plugins/05-comprehensive-architecture-and-requirements-summary.md)
+* **核心架构裁决**:
+  1. **三异构场景适配**: 开发环境（插件最全）、发布环境（单二进制确定性门禁）、调试环境（单二进制即拷即走，离线数据黑匣子保真）。
+  2. **插件技术选型**: 确定采用 **方案 D (Unix Stdio IPC 管道协议)**。零外部 Crate 依赖，二进制不膨胀，语言绝对自由（Python/Node/Go/Shell/Rust）。
+  3. **产物契约与离线深层挖掘**: 现场录制全量失败/超时/网络时序快照（Snapshot v1.0），拷回开发机由富插件离线二次挖掘。
+  4. **阻断性风险防护**: 锁定 Phase 0 决策 A（请求体零拷贝保真与 `raw_body` 保护，防止签名篡改）；锁定快照模型升级（`response: Option<...>` + `error` + `waterfall`）。
+  5. **统一注册表机制 (DeepSeek Harness 模式)**: 引入 `PluginRegistry` 统一管理 CLI 自定义命令、生命周期钩子与离线挖掘器，提供 `<5ms` 的 Manifest 轻量缓存。
+  6. **生命周期顺序控制与友好语法**: 废除生硬底阶语法，确立 `@auth` / `@transform` / `@sign` / `@pipeline` 语义注解，绑定 `Prepare -> Transform -> Sign` 不可逆阶段流与不可变 Patch 链；通过 JSON Schema 驱动 IDE 智能补全。
+  7. **CLI 自定义命令动态路由**: 采用规范命名与双模路由，直通 TTY（支持交互终端与密码输入），100% 穿透退出码，并在 `rupost --help` 优雅聚合 EXTENSIONS 清单。
+  8. **AI 预留接口体系 (AI Integration SPI)**: 严守 `ai-master-roadmap.md` B0~B4 不变量（运行期零 AI），预留脱敏上下文 (`AiContextSPI`)、离线快照分诊 (`AiMinerSPI`)、引擎语法裁决 (`EngineArbiter`) 与 MCP 双向桥梁 (`McpToolBridge`)。
+

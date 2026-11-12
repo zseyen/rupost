@@ -60,7 +60,7 @@ timeout = "60"
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 构建 dev 环境上下文
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("dev"), &[], None);
     assert_eq!(
         context.get("base_url").as_deref(),
         Some("http://localhost:3000")
@@ -68,7 +68,7 @@ timeout = "60"
     assert_eq!(context.get("timeout").as_deref(), Some("30"));
 
     // 构建 staging 环境上下文
-    let context = ConfigLoader::build_context(&config, Some("staging"), &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("staging"), &[], None);
     assert_eq!(
         context.get("base_url").as_deref(),
         Some("http://staging.example.com")
@@ -95,7 +95,7 @@ api_key = "config-key"
 
     // 使用 CLI 变量覆盖
     let cli_vars = vec![("api_key".to_string(), "cli-override-key".to_string())];
-    let context = ConfigLoader::build_context(&config, Some("dev"), &cli_vars, None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("dev"), &cli_vars, None);
 
     // CLI 变量应该覆盖配置文件中的值
     assert_eq!(context.get("api_key").as_deref(), Some("cli-override-key"));
@@ -125,7 +125,7 @@ api_key = "${TEST_ENV_VAR}"
 
     // 加载配置
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("dev"), &[], None);
 
     let result = VariableResolver::substitute("{{api_key}}", &context);
     assert_eq!(result, "environment-value");
@@ -188,7 +188,7 @@ db_name = "prod_db"
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 测试 dev 环境
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("dev"), &[], None);
     assert_eq!(
         VariableResolver::substitute("{{base_url}}", &context),
         "http://localhost:3000"
@@ -199,7 +199,7 @@ db_name = "prod_db"
     );
 
     // 测试 test 环境
-    let context = ConfigLoader::build_context(&config, Some("test"), &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("test"), &[], None);
     assert_eq!(
         VariableResolver::substitute("{{base_url}}", &context),
         "http://test-server:3000"
@@ -210,7 +210,7 @@ db_name = "prod_db"
     );
 
     // 测试 prod 环境
-    let context = ConfigLoader::build_context(&config, Some("prod"), &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, Some("prod"), &[], None);
     assert_eq!(
         VariableResolver::substitute("{{base_url}}", &context),
         "https://api.example.com"
@@ -238,7 +238,7 @@ base_url = "http://localhost:3000"
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
     // 不指定环境时，上下文为空
-    let context = ConfigLoader::build_context(&config, None, &[], None);
+    let (context, _) = ConfigLoader::build_context(&config, None, &[], None);
     assert!(context.is_empty());
 }
 
@@ -357,7 +357,8 @@ async fn test_env_file_loader_integration() {
     let config = ConfigLoader::load_from_path(&temp_path).unwrap_or_default();
 
     // 4. 构建变量上下文并传入临时 .env 路径
-    let mut context = ConfigLoader::build_context(&config, Some("dev"), &[], Some(&temp_path));
+    let (mut context, _) =
+        ConfigLoader::build_context(&config, Some("dev"), &[], Some((&temp_path, true)));
     assert_eq!(
         context.get("base_url").as_deref(),
         Some(mock_server.uri().as_str())
@@ -380,12 +381,11 @@ async fn test_env_file_loader_integration() {
     }
 }
 
-/// 契约锁定（测试策略 §5.3 P2，2026-10-30）：`--env-file` 指向不存在的路径
-/// 或目录时，当前行为为**静默忽略**——不报错、不中断，上下文回退到
-/// toml/系统环境变量（config.rs 中 `.ok()` 吞掉解析错误，质量加固登记的已知债）。
-/// 若未来改为告警或硬错误，此测试先行失败，提示同步更新契约描述。
+/// 契约演进（走查缺口 #6a/6b，2026-11-10）：显式指定的 env 文件（`--env-file`
+/// 与 `.env.<env>`）不存在或为目录时**必须告警**——原"静默忽略"契约已反转
+/// （静默失败会让"以为切了环境实际没切"不可见）。toml 变量不受影响的语义保持。
 #[test]
-fn test_env_file_invalid_path_is_silently_ignored() {
+fn test_env_file_invalid_path_emits_warnings() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("rupost.toml");
     fs::write(
@@ -395,15 +395,33 @@ fn test_env_file_invalid_path_is_silently_ignored() {
     .unwrap();
     let config = ConfigLoader::load_from_path(&config_path).unwrap();
 
-    // 场景 1：路径不存在 → 静默忽略，toml 变量不受影响
-    let context = ConfigLoader::build_context(&config, Some("dev"), &[], Some("/no/such/file.env"));
+    // 场景 1：路径不存在 → 告警 + toml 变量不受影响
+    let (context, warnings) =
+        ConfigLoader::build_context(&config, Some("dev"), &[], Some(("/no/such/file.env", true)));
     assert_eq!(context.get("toml_var").as_deref(), Some("from-toml"));
     assert_eq!(context.get("should_not_exist"), None);
+    assert_eq!(warnings.len(), 1, "显式缺失应恰好一条告警: {warnings:?}");
+    assert!(warnings[0].contains("/no/such/file.env"), "{warnings:?}");
 
-    // 场景 2：路径存在但为目录（读入失败同样被吞）→ 静默忽略
+    // 场景 2：路径存在但为目录 → 告警
     let dir = temp_dir.path().join("dir_as_env_file");
     fs::create_dir(&dir).unwrap();
-    let context =
-        ConfigLoader::build_context(&config, Some("dev"), &[], Some(dir.to_str().unwrap()));
+    let (context, warnings) = ConfigLoader::build_context(
+        &config,
+        Some("dev"),
+        &[],
+        Some((dir.to_str().unwrap(), true)),
+    );
     assert_eq!(context.get("toml_var").as_deref(), Some("from-toml"));
+    assert_eq!(warnings.len(), 1, "目录形态应恰好一条告警: {warnings:?}");
+    assert!(warnings[0].contains("目录"), "{warnings:?}");
+
+    // 场景 3（反向守护）：默认 .env 缺失仍是常态静默，不得过度告警
+    let (_, warnings) = ConfigLoader::build_context(
+        &config,
+        Some("dev"),
+        &[],
+        Some(("/no/such/default_dotenv_probe.env", false)),
+    );
+    assert!(warnings.is_empty(), "默认探测缺失必须静默: {warnings:?}");
 }

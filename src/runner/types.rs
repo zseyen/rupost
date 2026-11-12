@@ -69,6 +69,13 @@ pub struct TestResult {
 
     /// M3：是否为 @teardown 清理请求（快照导出默认排除；报告/终端可区分）
     pub is_teardown: bool,
+
+    /// 插件管线是否以降级形态发送（03 §10.5 DegradedPass 判定源；
+    /// 快照 outcome 与 --strict-plugins 门禁均由本标记驱动）
+    pub degraded: bool,
+
+    /// 外部插件管道总耗时（微秒；时延隔离，绝不混入物理网络 duration/ttfb）
+    pub plugin_duration_us: Option<u64>,
 }
 
 impl TestResult {
@@ -100,6 +107,8 @@ impl TestResult {
             request: None,
             warnings: Vec::new(),
             is_teardown: false,
+            degraded: false,
+            plugin_duration_us: None,
         }
     }
 
@@ -128,6 +137,8 @@ impl TestResult {
             request: None,
             warnings: Vec::new(),
             is_teardown: false,
+            degraded: false,
+            plugin_duration_us: None,
         }
     }
 
@@ -154,6 +165,8 @@ impl TestResult {
             request: None,
             warnings: Vec::new(),
             is_teardown: false,
+            degraded: false,
+            plugin_duration_us: None,
         }
     }
 }

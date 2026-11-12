@@ -54,20 +54,16 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         return Ok(());
     }
 
-    // 3. 5层级联加载环境配置
-    let config = crate::variable::ConfigLoader::find_and_load().unwrap_or_default();
-    let cli_vars: Vec<(String, String)> = opts
-        .var
-        .iter()
-        .filter_map(|s| crate::variable::ConfigLoader::parse_cli_var(s))
-        .collect();
-    let env_file_to_load = opts.env_file.as_deref().or(Some(".env"));
-    let mut var_context = crate::variable::ConfigLoader::build_context(
-        &config,
-        opts.env.as_deref(),
-        &cli_vars,
-        env_file_to_load,
-    );
+    // 3. 5层级联加载环境配置（配置/env 文件告警走 stderr，不污染导出 stdout——走查缺口 #6）
+    let (mut var_context, loader_warnings) =
+        crate::variable::ConfigLoader::load_context_with_var_specs(
+            opts.env.as_deref(),
+            &opts.var,
+            opts.env_file.as_deref(),
+        );
+    for warning in &loader_warnings {
+        eprintln!("[!] {warning}");
+    }
     var_context.insert("__default_scheme", &opts.default_scheme);
 
     // 4. 加载 CookieStore (若指定了 cookie_file)
@@ -79,7 +75,18 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         if resolved.exists() {
             let file = std::fs::File::open(&resolved)?;
             let reader = std::io::BufReader::new(file);
-            cookie_store::serde::json::load_all(reader).ok()
+            // 文件存在即意图（#6 同语义）：JSON 损坏必须可见——导出的命令
+            // 将缺失 cookie 注入，静默会让粘贴方拿到必然 401 的命令
+            match cookie_store::serde::json::load_all(reader) {
+                Ok(store) => Some(store),
+                Err(e) => {
+                    eprintln!(
+                        "[!] cookie 文件 '{}' 解析失败，导出命令将不含 cookie 注入: {e}",
+                        resolved.display()
+                    );
+                    None
+                }
+            }
         } else {
             None
         }
@@ -94,6 +101,16 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         compact: opts.compact,
         redact_secrets: opts.redact,
     };
+    let redaction_policy = if opts.redact {
+        Some(crate::variable::ConfigLoader::find_and_load_redaction_policy())
+    } else {
+        None
+    };
+    let mut audit_log = if opts.redact {
+        Some(crate::exporter::redact::RedactionAuditLog::new())
+    } else {
+        None
+    };
 
     for path in scanned_paths {
         let is_markdown = path
@@ -107,12 +124,14 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
             crate::parser::HttpFileParser::parse_file(&path)?
         };
 
-        let prep_res = preparer::RequestPreparer::prepare_file(
+        let prep_res = preparer::RequestPreparer::prepare_file_with_policy(
             &parsed_file,
             &mut var_context,
             cookie_store.as_ref(),
             opts.name.as_deref(),
             opts.redact,
+            redaction_policy.as_ref(),
+            audit_log.as_mut(),
             &mut captured_symbols,
         )?;
 
@@ -186,6 +205,15 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         );
     } else {
         print!("{full_output}");
+    }
+
+    // 8. 若启用脱敏且未静音，输出脱敏清单 Footer 到 stderr（确保 stdout 命令管道纯净）
+    if opts.redact
+        && !opts.quiet
+        && let Some(ref log) = audit_log
+    {
+        let mut stderr = std::io::stderr().lock();
+        let _ = log.render_footer(&mut stderr);
     }
 
     Ok(())

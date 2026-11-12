@@ -33,14 +33,16 @@ async fn test_snapshot_recording_and_replaying() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"message": "hello world"}"#.to_string(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("test_suite".to_string()),
         entries: vec![entry],
@@ -51,7 +53,7 @@ async fn test_snapshot_recording_and_replaying() {
     assert!(snapshot_file.exists());
 
     // 3. 执行重放 (使用 --target 参数覆写 URL 指向本地 mock 端口)
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), true);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), true).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.total, 1);
@@ -103,11 +105,12 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: "resp_a".to_string(),
-        },
+        }),
+        error: None,
     };
 
     let entry_b = SnapshotEntry {
@@ -119,14 +122,16 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
             headers: reqwest::header::HeaderMap::new(),
             body: Some("{\"k\":\"v\"}".to_string()),
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 201,
             headers: reqwest::header::HeaderMap::new(),
             body: "resp_b".to_string(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("multi_test".to_string()),
         entries: vec![entry_a, entry_b],
@@ -134,7 +139,7 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.total, 2);
@@ -173,14 +178,16 @@ async fn test_replay_honors_recorded_timeout() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: "slow response".to_string(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("timeout_test".to_string()),
         entries: vec![entry],
@@ -188,7 +195,7 @@ async fn test_replay_honors_recorded_timeout() {
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
 
     let start = Instant::now();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
@@ -210,7 +217,7 @@ async fn test_replay_honors_recorded_timeout() {
 #[tokio::test]
 async fn test_replay_corrupt_snapshot_readable_error() {
     let temp_dir = TempDir::new().unwrap();
-    let replayer = ReplayExecutor::new(None, false);
+    let replayer = ReplayExecutor::new(None, false).unwrap();
 
     // 1. 坏输入一：纯文本非合法 JSON
     let path_plain = temp_dir.path().join("plain.txt");
@@ -230,6 +237,7 @@ async fn test_replay_corrupt_snapshot_readable_error() {
     // 3. 坏输入三：结构合法但 entries 为空数组
     let path_empty = temp_dir.path().join("empty_suite.json");
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("empty".to_string()),
         entries: vec![],
@@ -269,14 +277,16 @@ async fn test_replay_mixed_results_entries_structured() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("mixed_test".to_string()),
         entries: vec![
@@ -287,7 +297,7 @@ async fn test_replay_mixed_results_entries_structured() {
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     // 聚合守恒：passed + failed = total = entries.len()
@@ -338,13 +348,15 @@ async fn test_replay_transport_error_entry_structured() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("dead_port_test".to_string()),
         entries: vec![entry],
@@ -352,7 +364,7 @@ async fn test_replay_transport_error_entry_structured() {
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
     // 指向必然连接拒绝的端口（1 保留端口）
-    let replayer = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false);
+    let replayer = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.total, 1);
@@ -406,14 +418,16 @@ async fn test_replay_cli_exit_code_and_failed_entries_stdout() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
 
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_mixed_test".to_string()),
         entries: vec![make_entry("id-1", "ok"), make_entry("id-2", "bad")],
@@ -470,13 +484,15 @@ async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_ok_test".to_string()),
         entries: vec![entry],
@@ -607,20 +623,22 @@ async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("slow_timeout_test".to_string()),
         entries: vec![entry],
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
     let report = replayer.replay_file(&snapshot_file).await.unwrap();
 
     assert_eq!(report.failed, 1);
@@ -654,19 +672,21 @@ async fn test_smart_diff_jitter_tolerated_and_real_diff_caught() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"quota":100,"timestamp":"2026-01-01T00:00:00Z"}"#.to_string(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("smart_diff".to_string()),
         entries: vec![entry],
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
-    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false);
+    let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
 
     // 1) 抖动：timestamp 漂移（quota 相同）→ matched，无假失败
     mock_server.reset().await;
@@ -732,13 +752,15 @@ async fn test_smart_diff_cli_fourth_form_and_escapes() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"quota":100,"timestamp":"new"}"#.to_string(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_sd".to_string()),
         entries: vec![entry],
@@ -835,13 +857,15 @@ async fn test_replay_explain_no_key_degradation() {
             headers: reqwest::header::HeaderMap::new(),
             body: None,
         },
-        response: ResponseSnapshot {
+        response: Some(ResponseSnapshot {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"ok":true}"#.to_string(),
-        },
+        }),
+        error: None,
     };
     let suite = SnapshotSuite {
+        version: 1,
         timestamp: chrono::Utc::now(),
         source_file: Some("explain".to_string()),
         entries: vec![entry],
@@ -957,7 +981,7 @@ async fn test_save_snapshot_mask_secrets_flag() {
     assert!(content.contains("***"), "pii placeholder present");
 
     // 掩码快照 schema 未变——replay 仍可加载（本测试只验证 loadable，不验证 pass/fail）
-    let replayer = ReplayExecutor::new(None, false);
+    let replayer = ReplayExecutor::new(None, false).unwrap();
     let report = replayer.replay_file(&snap).await.unwrap();
     assert_eq!(report.total, 1);
     let _ = mock_server;
@@ -1015,4 +1039,278 @@ async fn test_t1_generated_file_reruns_with_fresh_values() {
         })
         .collect();
     assert_ne!(ids[0], ids[ids.len() - 1], "fresh uuid per run: {ids:?}");
+}
+
+#[tokio::test]
+async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
+    use rupost::history::storage::save_batch_snapshot;
+    use rupost::runner::types::TestResult;
+    use std::path::PathBuf;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("error_snapshot.json");
+
+    let req_snap = RequestSnapshot {
+        timeout: None,
+        method: "GET".to_string(),
+        url: "http://example.com/timeout".to_string(),
+        headers: reqwest::header::HeaderMap::new(),
+        body: None,
+    };
+
+    let fail_result = TestResult {
+        request_number: 1,
+        name: Some("TimeoutReq".to_string()),
+        method: "GET".to_string(),
+        url: "http://example.com/timeout".to_string(),
+        status: None,
+        duration: Duration::from_millis(5000),
+        success: false,
+        error: Some("connection timed out to https://api.com?secret_token=12345".to_string()),
+        response: None, // 模拟网络超时，没有收到 Response
+        skipped: false,
+        assertions: vec![],
+        timing: None,
+        diagnose_report: None,
+        request: Some(req_snap),
+        warnings: vec![],
+        is_teardown: false,
+        degraded: false,
+        plugin_duration_us: None,
+    };
+
+    let batch = vec![(PathBuf::from("test.http"), vec![fail_result])];
+    save_batch_snapshot(
+        &batch,
+        &["test.http".to_string()],
+        &snapshot_file,
+        true,
+        None,
+        rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+    )
+    .unwrap();
+
+    let content = fs::read_to_string(&snapshot_file).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+    // 验证：条目数必须为 1，不能被静默吞掉
+    let entries = parsed.get("entries").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(entries.len(), 1, "超时或连接失败请求必须被录入快照黑匣子");
+
+    let entry = &entries[0];
+    assert!(
+        entry.get("response").unwrap().is_null(),
+        "response 字段应为 null"
+    );
+
+    let error_obj = entry.get("error").unwrap();
+    assert!(error_obj.get("message").is_some());
+    // 验证脱敏生效：错误信息中的敏感 token 必须被脱敏
+    let err_msg = error_obj.get("message").unwrap().as_str().unwrap();
+    assert!(err_msg.contains("[REDACTED]") || err_msg.contains("%5BREDACTED%5D"));
+    assert!(!err_msg.contains("12345"));
+}
+
+#[test]
+fn test_mask_snapshot_entry_redacts_inline_tokens_and_pii_in_error_message() {
+    use rupost::history::model::ExecutionErrorDetail;
+    use rupost::history::storage::mask_snapshot_entry;
+
+    let mut entry = SnapshotEntry {
+        id: "test-err-inline".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "POST".to_string(),
+            url: "http://api.com/auth".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: None,
+        error: Some(ExecutionErrorDetail {
+            kind: "ConnectionError".to_string(),
+            message: "Failed handshake: Bearer eyJhbGciOiJIUzI1NiJ9.test and phone 13812345678"
+                .to_string(),
+            duration_ms: 120,
+            occurred_at: chrono::Utc::now(),
+        }),
+    };
+
+    mask_snapshot_entry(&mut entry);
+
+    let masked_msg = &entry.error.unwrap().message;
+    assert!(
+        !masked_msg.contains("eyJhbGci"),
+        "Inline bearer token in error message must be redacted: {masked_msg}"
+    );
+    assert!(
+        !masked_msg.contains("13812345678"),
+        "Inline PII in error message must be masked: {masked_msg}"
+    );
+    assert!(masked_msg.contains("***") || masked_msg.contains("[REDACTED]"));
+}
+
+#[tokio::test]
+async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
+    use rupost::history::model::ExecutionErrorDetail;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("transport_error_suite.json");
+
+    // 录制的是网络故障（期望无响应）
+    let error_entry = SnapshotEntry {
+        id: "err-entry-1".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://example.com/api/test".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: None,
+        error: Some(ExecutionErrorDetail {
+            kind: "ConnectionRefused".to_string(),
+            message: "connection refused".to_string(),
+            duration_ms: 50,
+            occurred_at: chrono::Utc::now(),
+        }),
+    };
+
+    let suite = SnapshotSuite {
+        version: 2,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("test.http".to_string()),
+        entries: vec![error_entry],
+    };
+
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 场景 1：回放对端意外恢复为 200 OK -> 行为不匹配，必须判为 matched: false
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/test"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+        .mount(&mock_server)
+        .await;
+
+    let executor = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
+    let report = executor.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report.entries.len(), 1);
+    assert!(
+        !report.entries[0].matched,
+        "快照记录网络错误，重放收到 200 响应必须判定不匹配 (matched: false)"
+    );
+    assert!(
+        report.entries[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Snapshot recorded transport error")
+    );
+
+    // 场景 2：回放对端依然无法连接 -> 行为完全吻合，判定为 matched: true
+    let dead_executor = ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false).unwrap();
+    let dead_report = dead_executor.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(dead_report.entries.len(), 1);
+    assert!(
+        dead_report.entries[0].matched,
+        "快照记录网络错误，重放亦发生网络错误，必须判定吻合 (matched: true)"
+    );
+}
+
+/// 审查 P0-B：非法 `--target` 在构造期快失败——此前 per-entry 三层 `if let Ok`
+/// 静默跳过覆写，重放流量会打向快照**原始主机**（最高频误写：裸 host 无 scheme）。
+#[test]
+fn test_replay_executor_rejects_invalid_target_at_construction() {
+    let err = ReplayExecutor::new(Some("example.com".to_string()), false)
+        .err()
+        .expect("裸 host（无 scheme）必须在构造期被拒绝");
+    let msg = err.to_string();
+    assert!(msg.contains("--target"), "错误应点名 --target: {msg}");
+    assert!(msg.contains("scheme"), "错误应指引补全 scheme: {msg}");
+
+    // 合法 target 与无 target 均可构造（行为不回归）
+    assert!(ReplayExecutor::new(Some("http://127.0.0.1:1".to_string()), false).is_ok());
+    assert!(ReplayExecutor::new(None, false).is_ok());
+}
+
+/// P0-B CLI 时序守护：target 校验先于快照加载——即使快照文件不存在，
+/// 报错也必须是 target 非法（证明没有任何 I/O 发生在校验之前）。
+#[test]
+fn test_replay_cli_invalid_target_fails_fast_before_any_io() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            "/no/such/snapshot_for_p0b.json",
+            "--target",
+            "example.com",
+        ])
+        .output()
+        .expect("Failed to execute rupost binary");
+    assert!(!out.status.success(), "非法 target 必须非零退出");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("--target"),
+        "应报 target 非法而非文件不存在: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn test_replay_target_with_path_prefix() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/users"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "ok"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("snapshot_prefix.json");
+
+    let entry = SnapshotEntry {
+        id: "test-prefix-1".to_string(),
+        request: RequestSnapshot {
+            timeout: None,
+            method: "GET".to_string(),
+            url: "http://example.com/users".to_string(),
+            headers: reqwest::header::HeaderMap::new(),
+            body: None,
+        },
+        response: Some(ResponseSnapshot {
+            status: 200,
+            headers: reqwest::header::HeaderMap::new(),
+            body: r#"{"status": "ok"}"#.to_string(),
+        }),
+        error: None,
+    };
+
+    let suite = SnapshotSuite {
+        version: 1,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("test_suite_prefix".to_string()),
+        entries: vec![entry],
+    };
+
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    // 1. target 带路径前缀（无尾随斜杠）
+    let target = format!("{}/api/v1", mock_server.uri());
+    let replayer = ReplayExecutor::new(Some(target), true).unwrap();
+    let report = replayer.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report.total, 1);
+    assert_eq!(report.passed, 1);
+    assert_eq!(report.failed, 0);
+
+    // 2. target 带路径前缀（有尾随斜杠）
+    let target_trailing = format!("{}/api/v1/", mock_server.uri());
+    let replayer_trailing = ReplayExecutor::new(Some(target_trailing), true).unwrap();
+    let report_trailing = replayer_trailing.replay_file(&snapshot_file).await.unwrap();
+    assert_eq!(report_trailing.total, 1);
+    assert_eq!(report_trailing.passed, 1);
+    assert_eq!(report_trailing.failed, 0);
 }

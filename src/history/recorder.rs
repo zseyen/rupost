@@ -16,7 +16,12 @@ use uuid::Uuid;
 ///   [`disable_history_recording`]（测试线程并行启动，逐测试设置存在竞态）。
 static RECORDING_ENABLED: AtomicBool = AtomicBool::new(!cfg!(test));
 
-/// 进程级禁用历史落盘（幂等，进程内不可逆）。仅供测试进程初始化使用。
+/// 进程级禁用历史落盘（幂等，进程内不可逆）。
+///
+/// 两个调用方：
+/// - 测试进程初始化（`tests/common` 的 `#[ctor]` pre-main）；
+/// - CLI `--no-history`（`cli/dispatch.rs` Test 臂与内联 runner 在任何请求
+///   执行前关停，CI/共享环境防凭据明文落盘——走查缺口 #1）。
 pub fn disable_history_recording() {
     RECORDING_ENABLED.store(false, Ordering::SeqCst);
 }

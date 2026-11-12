@@ -174,3 +174,51 @@ pub async fn run_ai_triage_from_file(
     }
     Ok(())
 }
+
+/// 离线黑匣子挖掘入口（02 §3.2 / 05 ADR-D9：首个内置 miner 消费者，M5）。
+///
+/// 读取现场拷回的 incident snapshot（ExecutionSnapshotFile Schema v1.0），适配为
+/// `JsonFileReport` 后复用失败聚类 SSOT（确定性机械归因为 B1 基线；配置 AI Key 时
+/// 五阶段管线的 C 阶段自动增强——与 `ai triage` 同一判定路径）。消费前执行
+/// 02 §3.3 不可信输入校验：体积上限 64MB。
+pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool) -> Result<()> {
+    const MAX_CONSUME_BYTES: u64 = 64 * 1024 * 1024;
+    let meta = std::fs::metadata(snapshot_path).map_err(|e| {
+        crate::RupostError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("snapshot 打开失败: {e}"),
+        ))
+    })?;
+    if meta.len() > MAX_CONSUME_BYTES {
+        return Err(crate::RupostError::ParseError(format!(
+            "snapshot 体积 {} 超过消费上限 64MB（02 §3.3 不可信输入防线）",
+            meta.len()
+        )));
+    }
+    let snapshot = crate::history::read_execution_snapshot(snapshot_path)?;
+
+    let masking_note = crate::ai::snapshot_adapter::snapshot_masking_notice(&snapshot);
+    let reports = crate::ai::snapshot_adapter::snapshot_to_json_reports(&snapshot);
+
+    if let Some(note) = masking_note {
+        eprintln!("[!] {note}");
+    }
+    eprintln!(
+        "[i] 快照指纹: {} entries, schema {}, masking={:?}, runner {}/{} v{}",
+        snapshot.entries.len(),
+        snapshot.schema_version,
+        snapshot.masking,
+        snapshot.runner_fingerprint.os,
+        snapshot.runner_fingerprint.arch,
+        snapshot.runner_fingerprint.rupost_version
+    );
+
+    let triage = build_triage_report(&reports).await;
+    if json_flag {
+        let s = serde_json::to_string_pretty(&triage)?;
+        println!("{s}");
+    } else {
+        print!("{}", format_triage_markdown(&triage));
+    }
+    Ok(())
+}

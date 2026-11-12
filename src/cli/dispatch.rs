@@ -10,6 +10,13 @@ use rupost::Result;
 pub async fn dispatch(cli: Cli) -> Result<()> {
     use colored::Colorize;
 
+    // --no-history 必须在任何命令执行前关停记录器（进程级不可逆全局开关，
+    // CI/共享环境防凭据明文落盘；统一覆盖 Test、Tui、Web、Replay 与内联模式；提示走 stderr）
+    if cli.no_history {
+        rupost::history::recorder::disable_history_recording();
+        eprintln!("[i] 历史记录已停用 (--no-history)：本次运行不写入 history.jsonl");
+    }
+
     match cli.command {
         Some(Commands::Test(args)) => {
             let crate::cli::TestArgs {
@@ -29,8 +36,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 cookie_file,
                 save_snapshot,
                 mask_secrets,
+                max_snapshot_body_bytes,
                 only,
                 on_failure,
+                allow_missing_plugins,
+                strict_plugins,
+                plugin_timeout,
+                plugin_env,
+                allow_project_plugins,
             } = args;
 
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
@@ -59,8 +72,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 default_scheme: cli.default_scheme,
                 save_snapshot,
                 mask_snapshot: mask_secrets,
+                max_snapshot_body_bytes,
                 only,
                 on_failure,
+                allow_missing_plugins,
+                strict_plugins,
+                plugin_timeout_secs: plugin_timeout,
+                plugin_env,
+                allow_project_plugins,
             };
             let outcome = rupost::runner::run_test_suite(options).await?;
 
@@ -140,7 +159,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             )?;
         }
         Some(Commands::Replay(args)) => {
-            let mut replayer = rupost::runner::ReplayExecutor::new(args.target, args.verbose);
+            let mut replayer = rupost::runner::ReplayExecutor::new(args.target, args.verbose)?;
             if let Some(keys) = args.ignore_fields {
                 let parsed: Vec<String> = keys
                     .split(',')
@@ -204,6 +223,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             } => {
                 rupost::ai::triage::run_ai_triage_from_file(&report_file, json, &format).await?;
             }
+            AiCommands::TriageSnapshot { snapshot, json } => {
+                rupost::ai::triage::run_snapshot_triage(&snapshot, json).await?;
+            }
             AiCommands::Resolve { file, dry_run } => {
                 rupost::ai::resolve::run_resolve(&file, dry_run).await?;
             }
@@ -229,6 +251,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Some(Commands::Import { command }) => match command {
             ImportCommands::Curl(args) => rupost::importer::run_curl_import(&args.into_request())?,
         },
+        Some(Commands::Plugin {
+            allow_project_plugins,
+            command,
+        }) => {
+            super::plugin_route::handle_plugin_command(command, allow_project_plugins)?;
+        }
         Some(Commands::Tui(args)) => {
             rupost::tui::run(
                 args.file,
@@ -267,7 +295,38 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                runner::run(RunParams::from_cli(&cli)).await?;
+                // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
+                // 先从 cli.args 剥离 rupost 路由旗标再查表，确保前置/后置均可达插件命令。
+                let parsed = super::plugin_route::parse_routing_args(&cli.args);
+                let builtins = super::plugin_route::builtin_subcommand_names();
+                let registry =
+                    super::plugin_route::discover_for_routing(parsed.allow_project_plugins);
+                match super::plugin_route::route(&parsed.passthrough, &builtins, &registry) {
+                    super::plugin_route::RoutingDecision::PluginCommand(exe_path, _name, rest) => {
+                        let code = super::plugin_exec::launch_plugin_command(
+                            &exe_path,
+                            &rest,
+                            &parsed.allow_env,
+                        )
+                        .await;
+                        std::process::exit(code);
+                    }
+                    super::plugin_route::RoutingDecision::Unknown(command) => {
+                        eprintln!(
+                            "error: 未知命令 '{command}'（内置子命令见 --help；插件命令需先安装 rupost-plugin-<name> 静态 manifest）"
+                        );
+                        if !registry.commands.is_empty() {
+                            eprintln!("可用插件命令：");
+                            for line in super::plugin_route::render_extensions(&registry) {
+                                eprintln!("{line}");
+                            }
+                        }
+                        std::process::exit(2);
+                    }
+                    super::plugin_route::RoutingDecision::Inline => {
+                        runner::run(RunParams::from_cli(&cli)).await?;
+                    }
+                }
             }
         }
     }

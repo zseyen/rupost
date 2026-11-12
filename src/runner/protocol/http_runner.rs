@@ -87,9 +87,9 @@ impl HttpRunner {
             None
         };
 
-        // 执行请求
-        match client.execute_raw(request).await {
-            Ok((response, ttfb)) => {
+        // 执行请求（M7-A: 始终在 task_local! 作用域内采集单连接 DNS/TCP 时序）
+        match client.execute_raw_with_timing(request).await {
+            Ok((response, ttfb, connect_span)) => {
                 // 判断是否是 SSE 响应
                 let is_sse_by_content_type = response
                     .headers()
@@ -224,13 +224,30 @@ impl HttpRunner {
                     }
                 }
 
-                let need_timing = debug || (debug_on_failure && !test_result.success);
-                test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
-                    probe_result,
-                    response_obj.ttfb,
-                    response_obj.transfer,
-                    need_timing,
-                );
+                // M7-A: 默认始终记录单连接时序（无需 --debug）；连接复用时 connect_span 为 None
+                //（对应快照 dns_lookup_us/tcp_connect_us = null）。
+                let span_dns = connect_span
+                    .and_then(|s| s.dns_us)
+                    .map(Duration::from_micros)
+                    .unwrap_or(Duration::ZERO);
+                let span_tcp = connect_span
+                    .and_then(|s| s.tcp_us)
+                    .map(Duration::from_micros)
+                    .unwrap_or(Duration::ZERO);
+                test_result.timing = Some(crate::http::timing::RequestTiming {
+                    dns_lookup: span_dns,
+                    tcp_connect: span_tcp,
+                    ttfb: response_obj.ttfb,
+                    transfer: response_obj.transfer,
+                });
+                test_result.connect_span = connect_span;
+                test_result.timing_source = Some(crate::http::timing::TimingSource::Connector);
+                test_result.timing_attribution =
+                    Some(if crate::http::timing_connector::has_proxy_env() {
+                        crate::http::timing::TimingAttribution::Approximate
+                    } else {
+                        crate::http::timing::TimingAttribution::Exact
+                    });
 
                 Ok(test_result)
             }
@@ -267,6 +284,16 @@ impl HttpRunner {
                     Duration::ZERO,
                     need_timing,
                 );
+                if test_result.timing.is_some() {
+                    test_result.timing_source =
+                        Some(crate::http::timing::TimingSource::ProbeDegraded);
+                    test_result.timing_attribution =
+                        Some(if crate::http::timing_connector::has_proxy_env() {
+                            crate::http::timing::TimingAttribution::Approximate
+                        } else {
+                            crate::http::timing::TimingAttribution::Exact
+                        });
+                }
 
                 Ok(test_result)
             }

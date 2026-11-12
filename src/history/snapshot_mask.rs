@@ -198,6 +198,8 @@ mod tests {
                 occurred_at: chrono::Utc::now(),
             }),
             timing_waterfall: None,
+            timing_source: None,
+            timing_attribution: None,
             socket_diagnostics: None,
             assertions: vec![SnapshotAssertion {
                 expression: "body.token == \"assert_expr_secret\"".to_string(),

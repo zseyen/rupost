@@ -99,9 +99,21 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 None
             };
 
-            // 时序瀑布 + Socket 指纹：diagnose 报告优先（含 TLS/证书），退回 RequestTiming
+            // 时序瀑布 + Socket 指纹：M7-A Connector 优先（区分复用 None 与 Some(0)），退回 Prober
             let timing_waterfall = r.timing.as_ref().map(|t| {
-                crate::history::model::TimingWaterfallUs::from_probes(t, r.diagnose_report.as_ref())
+                if r.timing_source == Some(crate::http::timing::TimingSource::Connector) {
+                    crate::history::model::TimingWaterfallUs::from_connect_span(
+                        r.connect_span,
+                        t.ttfb,
+                        t.transfer,
+                        r.diagnose_report.as_ref(),
+                    )
+                } else {
+                    crate::history::model::TimingWaterfallUs::from_probes(
+                        t,
+                        r.diagnose_report.as_ref(),
+                    )
+                }
             });
             let socket_diagnostics = r
                 .diagnose_report
@@ -149,6 +161,8 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 response,
                 error,
                 timing_waterfall,
+                timing_source: r.timing_source,
+                timing_attribution: r.timing_attribution,
                 socket_diagnostics,
                 assertions,
                 warnings: r.warnings.clone(),

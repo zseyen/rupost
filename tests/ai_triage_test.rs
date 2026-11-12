@@ -353,6 +353,8 @@ fn test_cli_ai_triage_accepts_snapshot_and_hidden_legacy_alias_and_rejects_confl
                 transfer_us: 1_000,
                 total_us: 527_000,
             }),
+            timing_source: None,
+            timing_attribution: None,
             socket_diagnostics: None,
             assertions: vec![],
             warnings: vec![],

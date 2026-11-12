@@ -704,6 +704,8 @@ fn test_redaction_contract_headers_query_body_and_ai_parity() {
         }),
         error: None,
         timing_waterfall: None,
+        timing_source: None,
+        timing_attribution: None,
         socket_diagnostics: None,
         assertions: vec![],
         warnings: vec!["X-Sign: warn_sig_1234".to_string()],
@@ -719,4 +721,109 @@ fn test_redaction_contract_headers_query_body_and_ai_parity() {
     assert!(exec_entry.request.url.contains("page_token=pt1"));
     assert!(!exec_entry.request.url.contains("qs3"));
     assert!(!exec_entry.warnings[0].contains("warn_sig_1234"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_default_save_snapshot_without_debug_records_connector_timing_and_keepalive_nulls() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = socket.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    let resp =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok";
+                    if socket.write_all(resp.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let http_file = dir.path().join("m7_timing.http");
+    let snap_file = dir.path().join("snap.json");
+    let content = format!(
+        "### Cold Request\nGET http://localhost:{}/first\n\n### Pooled Request\nGET http://localhost:{}/second\n",
+        addr.port(),
+        addr.port()
+    );
+    std::fs::write(&http_file, content).unwrap();
+
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_rupost"));
+    cmd.arg("test")
+        .arg(&http_file)
+        .arg("--save-snapshot")
+        .arg(&snap_file);
+    for proxy_var in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ] {
+        cmd.env_remove(proxy_var);
+    }
+    let output = cmd.output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "rupost test --save-snapshot failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let raw_json = std::fs::read_to_string(&snap_file).unwrap();
+    let raw_val: serde_json::Value = serde_json::from_str(&raw_json).unwrap();
+    let entries = raw_val["entries"].as_array().expect("entries array");
+    assert_eq!(entries.len(), 2, "must have 2 entries");
+
+    // 1. Cold request (without --debug): non-null timing_waterfall, timing_source="connector", timing_attribution="exact"
+    let e0 = &entries[0];
+    assert!(
+        e0["timing_waterfall"].is_object(),
+        "default --save-snapshot without --debug must produce non-null timing_waterfall: {e0}"
+    );
+    assert!(
+        e0["timing_waterfall"]["dns_lookup_us"].is_u64(),
+        "cold hostname request must have dns_lookup_us: {e0}"
+    );
+    assert!(
+        e0["timing_waterfall"]["tcp_connect_us"].is_u64(),
+        "cold request must have tcp_connect_us: {e0}"
+    );
+    assert_eq!(e0["timing_source"], "connector");
+    assert_eq!(e0["timing_attribution"], "exact");
+
+    // 2. Pooled keep-alive request: dns_lookup_us=null, tcp_connect_us=null, ttfb_us present
+    let e1 = &entries[1];
+    assert!(
+        e1["timing_waterfall"].is_object(),
+        "pooled request must still record timing_waterfall: {e1}"
+    );
+    assert!(
+        e1["timing_waterfall"]["dns_lookup_us"].is_null(),
+        "pooled request must have dns_lookup_us: null: {e1}"
+    );
+    assert!(
+        e1["timing_waterfall"]["tcp_connect_us"].is_null(),
+        "pooled request must have tcp_connect_us: null: {e1}"
+    );
+    assert!(
+        e1["timing_waterfall"]["ttfb_us"].is_u64(),
+        "pooled request must have ttfb_us: {e1}"
+    );
+    assert_eq!(e1["timing_source"], "connector");
+    assert_eq!(e1["timing_attribution"], "exact");
 }

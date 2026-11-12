@@ -353,6 +353,9 @@ impl WsRunner {
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
+            connect_span: None,
+            timing_source: None,
+            timing_attribution: None,
         };
 
         // 保存历史记录 (WebSocket 专用)

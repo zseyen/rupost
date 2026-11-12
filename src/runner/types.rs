@@ -76,6 +76,15 @@ pub struct TestResult {
 
     /// 外部插件管道总耗时（微秒；时延隔离，绝不混入物理网络 duration/ttfb）
     pub plugin_duration_us: Option<u64>,
+
+    /// M7-A: 单连接时序原始观测区间（区分 None=连接复用/跳过 vs Some(0)=实际耗时 0us）
+    pub connect_span: Option<crate::http::timing_connector::ConnectSpan>,
+
+    /// M7-A: 时序采集来源
+    pub timing_source: Option<crate::http::timing::TimingSource>,
+
+    /// M7-A: 时序归属精度
+    pub timing_attribution: Option<crate::http::timing::TimingAttribution>,
 }
 
 impl TestResult {
@@ -109,6 +118,9 @@ impl TestResult {
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
+            connect_span: None,
+            timing_source: None,
+            timing_attribution: None,
         }
     }
 
@@ -139,6 +151,9 @@ impl TestResult {
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
+            connect_span: None,
+            timing_source: None,
+            timing_attribution: None,
         }
     }
 
@@ -167,6 +182,9 @@ impl TestResult {
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
+            connect_span: None,
+            timing_source: None,
+            timing_attribution: None,
         }
     }
 }

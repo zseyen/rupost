@@ -246,7 +246,7 @@ pub struct ExecutionSnapshotEntry {
     /// 插件耗时由 [`ExecutionSnapshotEntry::plugin_duration_us`] 单列承载。
     /// 采集链路缺失时序时回退为执行墙钟（runner duration）。
     pub duration_us: u64,
-    /// 外部插件管道总耗时（M3 接线；当前恒为 None）
+    /// 外部插件管道总耗时（微秒；由 M3 插件管线采样并隔离记录）
     #[serde(default)]
     pub plugin_duration_us: Option<u64>,
 
@@ -266,6 +266,14 @@ pub struct ExecutionSnapshotEntry {
     /// 微秒级网络时延拆解（连接复用时对应阶段为 None）
     #[serde(default)]
     pub timing_waterfall: Option<TimingWaterfallUs>,
+
+    /// M7-A: 时序采集来源（connector / probe_degraded / none）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_source: Option<crate::http::timing::TimingSource>,
+
+    /// M7-A: 时序归属精度（exact / approximate）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_attribution: Option<crate::http::timing::TimingAttribution>,
 
     /// 底层物理连接诊断指纹
     #[serde(default)]
@@ -363,6 +371,35 @@ impl TimingWaterfallUs {
             ttfb_us: ttfb,
             transfer_us: transfer,
             total_us: total,
+        }
+    }
+
+    /// 从 M7-A `ConnectSpan` + 请求自身 `ttfb`/`transfer` 合成微秒级瀑布。
+    /// 连接复用时 `span` 为 `None`，`dns_lookup_us` 与 `tcp_connect_us` 均保持 `None`（JSON `null`）。
+    pub fn from_connect_span(
+        span: Option<crate::http::timing_connector::ConnectSpan>,
+        ttfb: std::time::Duration,
+        transfer: std::time::Duration,
+        diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
+    ) -> Self {
+        let dns_lookup_us = span.and_then(|s| s.dns_us);
+        let tcp_connect_us = span.and_then(|s| s.tcp_us);
+        let tls_handshake_us =
+            diagnose.and_then(|d| d.tls_handshake_duration.map(|t| t.as_micros() as u64));
+        let ttfb_us = ttfb.as_micros() as u64;
+        let transfer_us = transfer.as_micros() as u64;
+        let total_us = dns_lookup_us.unwrap_or(0)
+            + tcp_connect_us.unwrap_or(0)
+            + tls_handshake_us.unwrap_or(0)
+            + ttfb_us
+            + transfer_us;
+        Self {
+            dns_lookup_us,
+            tcp_connect_us,
+            tls_handshake_us,
+            ttfb_us,
+            transfer_us,
+            total_us,
         }
     }
 }

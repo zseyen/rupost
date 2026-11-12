@@ -1,307 +1,71 @@
-# M7 设计文档：单连接时序采集（Timing Connector）
+# M7 设计文档：单连接时序采集（M7-A `task_local!` Timing Connector）
 
-- **状态**: Approved 设计蓝本（v1.0.0 — 示例代码为实现基线，编译期细节以 reqwest 0.13.4 实际签名为准微调）
+- **状态**: 已修订（M7-A 方案 — 经 `tests/m7_reqwest_probe_test.rs` 在 `reqwest 0.13.4` 实测编译与 keep-alive 验证通过）
 - **背景**: R1 缺口——默认 `--save-snapshot` 产出 `timing_waterfall: null`（实测确认），"微秒时序黑匣子"默认形态为空承诺。根因：`RequestTiming` 采集依赖 `DiagnosticsProber` 独立探测连接，仅 `@diagnose`/`--debug` 激活。
-- **方案裁决**: 主路径 = TimingResolver + TimingConnector **双包装点**（DNS/TCP 分段真实测量，与请求同连接）；兜底 = Prober 轻量档（`timing_source: "probe_degraded"` 标注）；TLS/证书深度诊断保持 `@diagnose`/`--debug` 重档，与时序采集解耦。
+- **方案裁决（M7-A）**:
+  - 主路径：`TimingDnsResolver`（`reqwest::dns::Resolve`）+ `TimingConnectorLayer`（`tower::Layer<S>` 挂载于 `ClientBuilder::connector_layer`）+ `tokio::task_local!` 作用域 `ACTIVE_TIMING_SLOT: Arc<RequestTimingSlot>`；
+  - 兜底：`DiagnosticsProber` 轻量档（`timing_source: "probe_degraded"`）；
+  - 深度诊断：TLS/证书详情仍由 `@diagnose`/`--debug` 触发 `DiagnosticsProber` 提供（`tls_handshake_us: None` 默认不额外建连探测）。
 
 ---
 
 ## 1. 架构与数据流
 
 ```
-请求链路（改造后）：
-http_runner → reqwest Client（装配 TimingResolver + TimingConnector）
+请求链路（M7-A）：
+http_runner → Client::execute_raw_with_timing(request)
    │
-   ├─ TimingResolver::resolve(name)      ← DNS 段计时（getaddrinfo 前后）
-   │     └─ pending 区间（authority 分桶）
-   ├─ TimingConnector::call(uri)         ← TCP 段计时（tokio TcpStream::connect）
-   │     └─ 合并 dns_us + tcp_us → 完成区间（按 authority FIFO）
-   ├─ hyper 连接池 → 复用的请求 dns/tcp = None（02 §2 契约天然满足）
-   └─ http_runner 秒表 → ttfb/transfer（请求自有，永远精确）
+   ├─ ACTIVE_TIMING_SLOT.scope(slot, req.send())
+   │     ├─ TimingDnsResolver::resolve(name)       ← reqwest::dns::Resolve（tokio::net::lookup_host）
+   │     │     └─ 记录 dns_us 到当前 task_local slot（IP 字面量跳过此步）
+   │     └─ TimingConnectorLayer / Service::call   ← tower::Layer 包装 reqwest 内部 connector
+   │           └─ 测量 connect_total_us：
+   │              - HTTP:  tcp_us = connect_total_us.saturating_sub(dns_us)
+   │              - HTTPS: tcp_us = connect_total_us.saturating_sub(dns_us)（诚实包含 TCP+TLS；
+   │                       tls_handshake_us 默认为 None，除非 --debug DiagnosticsProber 提供）
+   │              - 连接失败时清空暂存 dns_us，不残留脏状态
+   ├─ hyper 连接池复用 → connector_layer 不触发 → ConnectSpan = None（02 §2 契约：dns/tcp = null）
+   └─ http_runner 秒表 → ttfb_us / transfer_us / total_us（永远精确）
 ```
 
-**三条已裁决的语义边界**：
-1. **authority 分桶**：connect/resolver 打点按 `host:port` 分桶，请求按自身 host 消费——跨 host 错配结构性消灭；同 host 并发错位（池竞争/inflight 等待）为 `approximate`
-2. **代理语义**：检测到 `HTTP_PROXY/HTTPS_PROXY` 时 warnings 注明"时序经代理"；CONNECT 隧道内阶段不可见，诚实声明
-3. **并发归属**：串行（concurrency=1）= `exact`；并发 = `approximate`（快照字段标注，消费者自行定策略）；`ttfb_us`/`transfer_us` 永远精确（请求自有秒表）
+**为何 M7-A 优于旧版 `.resolver()`/`.connector()` + authority-FIFO `TimingSlots`**：
+1. **编译期真实可用**：`reqwest 0.13.4` 公开 API 为 `ClientBuilder::dns_resolver(Arc<dyn Resolve>)` 与 `ClientBuilder::connector_layer(impl Layer<...>)`；保留 `reqwest` 原生 `default-tls`、ALPN/HTTP2、Happy Eyeballs 与代理栈，不破坏 TLS/H2 协商。
+2. **结构性消除 FIFO 泄漏**：`RequestTimingSlot` 绑定在单次 `req.send()` 的 `tokio::task_local!` 作用域内，请求结束即消费并随 `Arc` 释放。IP 字面量、连接超时/拒绝、3xx 重定向、代理、speculative connect 均不会向全局队列泄漏或错位消费。
+3. **线程安全与抗毒化**：`RequestTimingSlot` 内部使用 `Mutex::lock().unwrap_or_else(|e| e.into_inner())`（poison-tolerant），在 panic 场景下也不会二次 panic。
+
+**语义边界**：
+1. **HTTPS 诚实标注**：`connector_layer` 在 reqwest 内部同时包裹 TCP + TLS 建连，故 HTTPS 无 `--debug` 时 `tcp_connect_us` 反映 `tcp+tls` 合并建连耗时，`tls_handshake_us` 为 `None`；启用 `--debug`/`--diagnose` 时由 `DiagnosticsProber` 补充真实 `tls_handshake_us` 与证书指纹。
+2. **代理与并发归属（`timing_attribution`）**：检测到 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 或并行执行（`is_parallel`）时标记 `approximate`；串行无代理请求标记 `exact`。
+3. **连接复用语义**：`ConnectSpan == None` 时，请求依然记录 `RequestTiming` 与 `TimingWaterfallUs`（`dns_lookup_us: None`, `tcp_connect_us: None`, `ttfb_us`, `transfer_us`, `total_us`），`timing_source: "connector"`。
 
 ---
 
-## 2. 示例代码：`src/http/timing_connector.rs`（完整实现蓝本）
+## 2. 核心组件设计
 
-```rust
-//! M7 单连接时序采集（03 §3.1 设计文档；02 §2 Schema timing_source/timing_attribution）。
-//!
-//! 双包装点：TimingResolver（DNS 段）+ TimingConnector（TCP 段），
-//! 与请求共用同一连接，零额外网络开销；连接池复用的请求不触发
-//! connector —— dns/tcp = None 与 02 §2 "None = 连接复用" 契约天然吻合。
-//!
-//! 升级税规避（06 M7 验收）：
-//! - 仅依赖 reqwest 两个小 trait（Resolve + Service<Uri>），不包装 HttpConnector
-//!   内部类型（TCP connect 自建 tokio::net::TcpStream，hyper-util 内部重组免疫）；
-//! - 契约守护测试（H2 存活 + 时序存在性）使 reqwest 升级税显式化（编译期/断言期红）。
+### 2.1 `src/http/timing_connector.rs`
+- `ConnectSpan { pub dns_us: Option<u64>, pub tcp_us: Option<u64> }`
+- `RequestTimingSlot`：暂存 `dns_us: Mutex<Option<u64>>` 与 `span: Mutex<Option<ConnectSpan>>`，提供 `record_dns` / `record_connect` / `clear_dns` / `take_span`。
+- `tokio::task_local! { pub static ACTIVE_TIMING_SLOT: Arc<RequestTimingSlot>; }`
+- `TimingDnsResolver`：实现 `reqwest::dns::Resolve`，内部调用 `tokio::net::lookup_host((host, 0))`，记录微秒耗时至 `ACTIVE_TIMING_SLOT`。
+- `TimingConnectorLayer` / `TimingConnectorService<S>`：实现 `tower::Layer<S>` 与 `tower::Service<Req>`，测量 `connect_total_us` 并结合 `dns_us` 计算 `tcp_us`。
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+### 2.2 `src/http/client.rs`
+- `Client::new` 与 `Client::with_cookie_store` 统一通过内部 `base_builder(ua)` 挂载 `.dns_resolver(Arc::new(TimingDnsResolver))` 与 `.connector_layer(TimingConnectorLayer)`。
+- 新增 `Client::execute_raw_with_timing(&self, request: Request) -> Result<(reqwest::Response, Duration, Option<ConnectSpan>)>`，用 `ACTIVE_TIMING_SLOT.scope(slot.clone(), req.send())` 包裹发包；保留 `execute_raw` 原签名兼容既有调用方。
 
-use hyper_util::client::legacy::connect::dns::{GaiResolver, Name};
-use hyper_util::rt::TokioIo;
-
-/// 单连接观测区间（DNS + TCP 分段微秒耗时）
-#[derive(Debug, Clone, Copy)]
-pub struct ConnectSpan {
-    pub dns_us: u64,
-    pub tcp_us: u64,
-}
-
-/// authority 分桶的区间存储：
-/// pending（resolver 已记 DNS、connector 未完成 TCP）与 done（完整区间）。
-#[derive(Default)]
-pub struct TimingSlots {
-    pending: Mutex<HashMap<String, VecDeque<PartialSpan>>>,
-    done: Mutex<HashMap<String, VecDeque<ConnectSpan>>>,
-}
-
-#[derive(Debug)]
-struct PartialSpan {
-    dns_us: u64,
-}
-
-impl TimingSlots {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-
-    /// resolver 侧：DNS 段完成，挂入 pending（authority 分桶）
-    fn push_dns(&self, authority: &str, dns_us: u64) {
-        self.pending
-            .lock()
-            .unwrap()
-            .entry(authority.to_string())
-            .or_default()
-            .push_back(PartialSpan { dns_us });
-    }
-
-    /// connector 侧：TCP 段完成，与最早 pending 的 DNS 段配对为完整区间
-    fn finish_tcp(&self, authority: &str, tcp_us: u64) {
-        if let Some(queue) = self.pending.lock().unwrap().get_mut(authority)
-            && let Some(partial) = queue.pop_front()
-        {
-            self.done
-                .lock()
-                .unwrap()
-                .entry(authority.to_string())
-                .or_default()
-                .push_back(ConnectSpan { dns_us: partial.dns_us, tcp_us });
-        }
-    }
-
-    /// http_runner 侧：请求完成后按 authority FIFO 消费一个完整区间。
-    /// 并发场景为近似归属（06 M7 验收 `timing_attribution: approximate`）；
-    /// 串行（concurrency=1）精确。
-    pub fn take_span(&self, authority: &str) -> Option<ConnectSpan> {
-        self.done
-            .lock()
-            .unwrap()
-            .get_mut(authority)
-            .and_then(|queue| queue.pop_front())
-    }
-}
-
-// ==================== DNS 段：TimingResolver ====================
-
-/// 包装 GaiResolver（getaddrinfo），在解析前后计时 DNS 段。
-/// 仅依赖 reqwest `Resolve` trait（~10 行接口面），不触碰 hyper-util 内部类型。
-pub struct TimingResolver {
-    inner: GaiResolver,
-    slots: Arc<TimingSlots>,
-}
-
-impl TimingResolver {
-    pub fn new(slots: Arc<TimingSlots>) -> Self {
-        Self { inner: GaiResolver::new(), slots }
-    }
-}
-
-impl tower::Service<Name> for TimingResolver {
-    type Response = <GaiResolver as tower::Service<Name>>::Response;
-    type Error = <GaiResolver as tower::Service<Name>>::Error;
-    type Future = <GaiResolver as tower::Service<Name>>::Future;
-
-    fn poll_ready(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        tower::Service::poll_ready(&mut self.inner, cx)
-    }
-
-    fn call(&mut self, name: Name) -> Self::Future {
-        let authority = name.as_str().to_string();
-        let slots = self.slots.clone();
-        let start = Instant::now();
-        let mut inner = self.inner.clone();
-        let future = tower::Service::call(&mut inner, name);
-        // GaiResolver::Future 输出 Result<Addrs>；在输出侧补打点并注入 pending
-        Box::pin(async move {
-            let addrs = future.await?;
-            slots.push_dns(&authority, start.elapsed().as_micros() as u64);
-            Ok(addrs)
-        })
-    }
-}
-
-// ==================== TCP 段：TimingConnector ====================
-
-/// 自建 TCP connect（tokio::net::TcpStream），计 TCP 段并与 pending DNS 段配对。
-/// 不包装 HttpConnector —— hyper-util 内部重组免疫（升级税最小化）。
-/// 代价：放弃 happy eyeballs（IPv6/v4 竞争）——排障工具可接受，文档声明。
-#[derive(Clone)]
-pub struct TimingConnector {
-    slots: Arc<TimingSlots>,
-}
-
-impl TimingConnector {
-    pub fn new(slots: Arc<TimingSlots>) -> Self {
-        Self { slots }
-    }
-}
-
-impl tower::Service<http::Uri> for TimingConnector {
-    type Response = TokioIo<TcpStream>;
-    type Error = std::io::Error;
-    type Future = std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
-    >;
-
-    fn poll_ready(
-        &mut self,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        std::task::Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, uri: http::Uri) -> Self::Future {
-        let slots = self.slots.clone();
-        let authority = format!(
-            "{}:{}",
-            uri.host().unwrap_or_default(),
-            uri.port_u16().unwrap_or(if uri.scheme_str() == Some("https") { 443 } else { 80 })
-        );
-        Box::pin(async move {
-            let start = Instant::now();
-            let stream = TcpStream::connect(authority.as_str()).await?;
-            let tcp_us = start.elapsed().as_micros() as u64;
-            slots.finish_tcp(&authority, tcp_us);
-            stream.set_nodelay(true).ok();
-            Ok(TokioIo::new(stream))
-        })
-    }
-}
-```
-
-> **编译期注记**：reqwest 0.13.4 的 `Resolve`/connector 装配要求 `ClientBuilder` 处于"未启用 TLS 特性包装前"的自定义通道；`Connection` trait 的 ALPN 透传由 `TokioIo<TcpStream>` 的既有实现承担——**M7 开工第一件事是跑 §4 的 H2 存活断言**（防协议静默降级），红则在该测试上迭代，不做任何其他接线。
+### 2.3 `src/http/timing.rs` & `src/history/model.rs`
+- 新增：
+  - `TimingSource { Connector, ProbeDegraded, None }`（`#[serde(rename_all = "snake_case")]`）
+  - `TimingAttribution { Exact, Approximate }`（`#[serde(rename_all = "snake_case")]`）
+- `ExecutionSnapshotEntry`（`src/history/model.rs`）新增向后兼容字段：
+  - `#[serde(default)] pub timing_source: Option<TimingSource>`
+  - `#[serde(default)] pub timing_attribution: Option<TimingAttribution>`
+- `TimingWaterfallUs`：支持从 `ConnectSpan` / `RequestTiming` 合成，`dns_lookup_us` 与 `tcp_connect_us` 在连接复用时为 `None`（JSON `null`）。
 
 ---
 
-## 3. 接线示例（`src/http/client.rs` 构建处 + 快照消费）
+## 3. 验收测试矩阵
 
-```rust
-// Client 构建：resolver + connector 双注入（--timing off 时走原路径）
-let timing_slots = TimingSlots::new();
-let mut builder = reqwest::Client::builder();
-if timing_enabled {
-    builder = builder
-        .resolver(TimingResolver::new(timing_slots.clone()))
-        .connector(TimingConnector::new(timing_slots.clone()));
-}
-let client = builder.build()?;
-
-// http_runner 请求完成后：按 authority 消费区间 + 合成瀑布（M1-B 既有合成函数）
-let span = timing_slots.take_span(&authority_of(&url));
-let timing_waterfall = span.map(|s| TimingWaterfallUs {
-    dns_lookup_us: Some(s.dns_us),
-    tcp_connect_us: Some(s.tcp_us),
-    tls_handshake_us: diagnose.and_then(|d| d.tls_handshake_duration.map(|t| t.as_micros() as u64)),
-    ttfb_us: ttfb_us,
-    transfer_us: transfer_us,
-    total_us: s.dns_us + s.tcp_us + ttfb_us + transfer_us,
-});
-```
-
-快照新字段（02 §2 只增合规）：
-
-```rust
-/// 时序采集来源：connector = 单连接真实测量；probe_degraded = 探测连接降级形态；
-/// none = 未采集（--timing off）
-#[serde(default)]
-pub timing_source: TimingSource,       // Connector | ProbeDegraded | None
-/// 时序归属精度：exact = 串行精确归属；approximate = 并发近似（authority 分桶内）
-#[serde(default)]
-pub timing_attribution: TimingAttribution, // Exact | Approximate
-```
-
----
-
-## 4. 验收测试示例（`tests/timing_connector_test.rs` 基线）
-
-```rust
-/// 守护 1（升级税保险·最高优先）：H2 存活 —— connector 包装后 ALPN 透传
-/// 断裂会导致静默降级 HTTP/1.1，只有协议断言能抓（先跑通本条再做其余接线）
-#[tokio::test]
-async fn test_h2_negotiation_survives_timing_connector() {
-    // 本地 h2 server（如 hyper h2 示例或 nghttpd）+ TimingConnector client
-    // 断言 resp.version() == Version::HTTP_2
-}
-
-/// 守护 2：默认快照时序存在性（R1 反转即红——修复前为 null）
-#[tokio::test]
-async fn test_default_snapshot_has_timing() {
-    // wiremock + 默认旗标 --save-snapshot
-    // 断言 entries[0].timing_waterfall.dns_lookup_us.is_some()
-    //      && ttfb_us > 0 && timing_source == "connector"
-}
-
-/// 守护 3：时延隔离不变量（DoD 06 §5 性能基线 3）
-#[tokio::test]
-async fn test_plugin_duration_never_pollutes_ttfb() {
-    // mock 插件 sleep 3s + wiremock 固定响应
-    // 断言 ttfb_us < 100_000 && plugin_duration_us > 3_000_000
-}
-
-/// 守护 4：authority 分桶防跨 host 错配
-#[tokio::test]
-async fn test_multi_host_no_cross_attribution() {
-    // 两个 host 并发请求，断言各自 dns/tcp ∈ 自身 connector 观测区间
-}
-```
-
----
-
-## 5. 使用场景与收益矩阵（汇总自评审讨论）
-
-| 场景 | 触发 | 落地前 | 落地后 |
-|---|---|---|---|
-| 堡垒机 504 排障（场景 C） | 默认 `--save-snapshot` | `timing_waterfall: null` | DNS/TCP/TTFB 微秒拆解入 incident.json，`ai triage-snapshot` 聚类可判"链路 vs 应用" |
-| TTFB 归因处方 | 同上 | 凭猜 | TCP 5000ms（网关/路由）≠ TTFB 5000ms（应用慢），处方分叉 |
-| CI 性能门禁 | `--report-file junit.xml` | 无时序来源 | junit 带 `ttfb_us`，流水线阈值告警 |
-| TUI 实时瀑布 | 默认 | 需 `--debug` | 默认完整瀑布（复用显示"复用"） |
-| 火焰图/AI miner 生态 | snapshot 消费 | 空图 | 有米下炊 |
-| 深度诊断（证书/协议） | `@diagnose`/`--debug` | 可用 | 不变（重档并存） |
-| 隐私极致 | `--timing off` | — | 零打点、无链路指纹 |
-
----
-
-## 6. 风险登记与残余声明
-
-| 风险 | 缓解 | 残余 |
-|---|---|---|
-| reqwest trait 演进（0.14 未发布） | 最小 trait 面（Resolve + Service）+ 自建 TCP connect + 三条守护断言 + `timing_source: probe_degraded` 回退 | 大版本重构需重写 connector（约束在一个文件） |
-| ALPN/H2 静默降级 | 守护 1 先行（开工第一件事） | 无（断言全覆盖） |
-| 并发归属近似 | authority 分桶 + `timing_attribution` 标注 + 串行建议（01 §1.4） | 同 host 高并发错位无法归零（放弃池代价不成比例） |
-| 代理场景失真 | warnings 注明"时序经代理" | CONNECT 隧道内阶段不可见（诚实声明） |
-| DNS/TCP 双包装点配对竞态 | authority 分桶 FIFO + 并发近似声明 | 无 |
-
-## 7. 工作量与排期
-
-约 340 行（connector/resolver 250 + 接线 40 + 测试 50）+ 文档四处口径修订（本文档即蓝本）。**开工顺序**：守护 1（H2 存活）先跑通 → connector/resolver → 接线 → 守护 2~4 → 文档口径收尾。
+1. `tests/m7_reqwest_probe_test.rs`：`reqwest 0.13.4` `dns_resolver` + `connector_layer` + `task_local!` 编译与 keep-alive 行为（冷连接记录 `dns_us`+`tcp_us`，复用连接为 `None`，IP 字面量仅记录 `tcp_us`）。
+2. `tests/snapshot_contract_test.rs`：默认 `rupost test --save-snapshot`（无 `--debug`）产出非空 `timing_waterfall`、`timing_source: "connector"`、`timing_attribution: "exact"`；同连接池第二次请求 `dns_lookup_us: null, tcp_connect_us: null` 且 `ttfb_us` 存在。
+3. `src/http/timing.rs` 单元测试：`TimingSource` / `TimingAttribution` 序列化契约与 `DiagnosticsProber` 既有用例全绿。

@@ -157,6 +157,8 @@ mod tests {
                     occurred_at: chrono::Utc::now(),
                 }),
                 timing_waterfall: None,
+                timing_source: None,
+                timing_attribution: None,
                 socket_diagnostics: None,
                 assertions: vec![SnapshotAssertion {
                     expression: "body.token == 'ok'".to_string(),
@@ -227,6 +229,8 @@ mod tests {
                     transfer_us: 2_000,
                     total_us: 620_000,
                 }),
+                timing_source: None,
+                timing_attribution: None,
                 socket_diagnostics: Some(SocketDiagnostics {
                     remote_ip: "10.0.0.9".to_string(),
                     remote_port: 443,

@@ -7,6 +7,7 @@ pub mod request_builder;
 pub mod response;
 pub mod stream;
 pub mod timing;
+pub mod timing_connector;
 pub mod types;
 
 // Re-export commonly used types for convenient access
@@ -20,7 +21,10 @@ pub use request::Request;
 pub use request_builder::{to_request, try_from_parsed_with_warnings};
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
-pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};
+pub use timing::{
+    DiagnosticsProber, NetworkLatency, RequestTiming, TimingAttribution, TimingSource,
+};
+pub use timing_connector::{ConnectSpan, TimingConnectorLayer, TimingDnsResolver};
 pub use types::{Method, Status, Url};
 pub mod url;
 pub use url::resolve_final_url;

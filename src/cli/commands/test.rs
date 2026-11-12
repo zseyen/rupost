@@ -68,6 +68,10 @@ pub struct TestArgs {
     #[arg(long)]
     pub mask_secrets: bool,
 
+    /// S-3 按值掩码：快照中精确命中的值替换为 [REDACTED]（可多次；独立于 --mask-secrets 生效）
+    #[arg(long, value_name = "VALUE")]
+    pub mask_secret_value: Vec<String>,
+
     /// 单响应体录入快照的上限字节（默认 262144=256KB；防 OOM，截断部分以 SHA-256 摘要验真）
     #[arg(long, value_name = "BYTES")]
     pub max_snapshot_body_bytes: Option<usize>,

@@ -42,6 +42,37 @@ impl HistoryStorage {
     }
 
     /// Ensure directory exists
+    /// S-1（安全对齐）：history.jsonl 含完整请求/响应明文，权限必须与快照防线对齐——
+    /// 首次创建即 0600；既有 0644 等宽松权限在每次 append 前收紧（幂等，开销一次 stat）。
+    fn ensure_private_file(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            match std::fs::metadata(&self.file_path) {
+                Ok(meta) => {
+                    let mode = meta.permissions().mode() & 0o777;
+                    if mode & 0o077 != 0 {
+                        std::fs::set_permissions(
+                            &self.file_path,
+                            std::fs::Permissions::from_mode(0o600),
+                        )?;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::File::create(&self.file_path)
+                        .and_then(|f| f.set_permissions(std::fs::Permissions::from_mode(0o600)))
+                        .map_err(RupostError::IoError)?;
+                }
+                Err(e) => return Err(RupostError::IoError(e)),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows 权限模型不同（ACL），维持现状（CI 路径亦无 umask 概念）
+        }
+        Ok(())
+    }
+
     fn ensure_dir(&self) -> Result<()> {
         if let Some(parent) = self.file_path.parent()
             && !parent.exists()
@@ -61,6 +92,7 @@ impl HistoryStorage {
     /// The lock is held only for the duration of the write (microseconds).
     pub fn append(&self, entry: &HistoryEntry) -> Result<()> {
         self.ensure_dir()?;
+        self.ensure_private_file()?;
         let json = serde_json::to_string(entry)?;
 
         let mut retries = 0;
@@ -236,6 +268,54 @@ pub use super::snapshot_legacy::{
     export_history_snapshot, read_snapshot_suite, read_snapshot_suite_compat, write_snapshot_suite,
 };
 pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entry};
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+
+    /// S-1：history.jsonl 权限必须与快照防线对齐——新建即 0600，宽松旧文件收紧。
+    #[cfg(unix)]
+    #[test]
+    fn test_history_file_permissions_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        // 1) 预置 0644 旧文件 → append 后必须收紧
+        std::fs::write(&path, "{}\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let store = HistoryStorage::new_with_path(path.clone());
+        store.append(&sample_entry()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "宽松权限必须被收紧");
+        // 2) 新建路径 → append 创建即 0600
+        let path2 = dir.path().join("history2.jsonl");
+        let store2 = HistoryStorage::new_with_path(path2.clone());
+        store2.append(&sample_entry()).unwrap();
+        let mode2 = std::fs::metadata(&path2).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode2, 0o600, "新建文件必须 0600");
+    }
+
+    fn sample_entry() -> HistoryEntry {
+        HistoryEntry {
+            id: "s1".to_string(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 1,
+            request: crate::history::model::RequestSnapshot {
+                method: "GET".to_string(),
+                url: "http://x".to_string(),
+                headers: Default::default(),
+                body: None,
+                timeout: None,
+            },
+            source: Some("test".to_string()),
+            response: crate::history::model::ResponseMeta {
+                status: 200,
+                headers: Default::default(),
+                body: Some("{}".to_string()),
+            },
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

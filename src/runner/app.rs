@@ -35,6 +35,8 @@ pub struct TestSuiteOptions {
     pub save_snapshot: Option<String>,
     /// Secrets Masker（opt-in）：快照 headers/body 掩码后再落盘
     pub mask_snapshot: bool,
+    /// S-3 按值掩码：--mask-secret-value <VAL>（可多次；独立于 --mask-secrets 生效）
+    pub mask_secret_values: Vec<String>,
     /// 单响应体录入上限字节（03 §10.6 防 OOM；`--max-snapshot-body-bytes` 覆盖，缺省 256KB）
     pub max_snapshot_body_bytes: Option<usize>,
     /// 关闭时序采集（`--timing off`，02 §2:135）：快照 timing_waterfall=null、timing_source=none
@@ -86,6 +88,7 @@ impl Default for TestSuiteOptions {
             default_scheme: "http".to_string(),
             save_snapshot: None,
             mask_snapshot: false,
+            mask_secret_values: Vec::new(),
             max_snapshot_body_bytes: None,
             timing_off: false,
             allow_missing_plugins: false,

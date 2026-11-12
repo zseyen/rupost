@@ -137,27 +137,55 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
 /// 黑匣子契约快照 (ExecutionSnapshotEntry) 的 Secrets Masker：
 /// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/exporter/redact.rs`），
 /// 覆盖 URL、Headers、Body、Error、Assertions 与 Warnings 全展示面（02 §2/§4）。
-pub fn mask_execution_snapshot_entry(entry: &mut crate::history::model::ExecutionSnapshotEntry) {
+pub fn mask_execution_snapshot_entry(
+    entry: &mut crate::history::model::ExecutionSnapshotEntry,
+    secret_values: &[String],
+) {
+    // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式
+    let redact_values = |text: &str| -> String {
+        let mut out = text.to_string();
+        for v in secret_values {
+            if !v.is_empty() {
+                out = out.replace(v.as_str(), "[REDACTED]");
+            }
+        }
+        out
+    };
     let mask_pairs = |headers: &mut Vec<(String, String)>| {
         for (name, value) in headers.iter_mut() {
-            *value = redact_header_value(name, value);
+            *value = redact_values(&redact_header_value(name, value));
         }
     };
-    entry.request.url = redact_url(&entry.request.url);
+    entry.request.url = redact_values(&redact_url(&entry.request.url));
     mask_pairs(&mut entry.request.headers);
     if let Some(ref mut resp) = entry.response {
         mask_pairs(&mut resp.headers);
-        resp.body = mask_body_secrets(resp.body.as_str());
+        resp.body = redact_values(&mask_body_secrets(resp.body.as_str()));
+        // S-2：掩码后重算 body_sha256——摘要对文件内记录的掩码后形态（离线可验真）；
+        // 对原始字节的验真在掩码模式下不可行（masking=secrets 已声明数据不完整）
+        resp.body_sha256 = Some({
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(resp.body.as_bytes());
+            h.finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        });
     }
-    entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
+    entry.request.body = entry
+        .request
+        .body
+        .as_ref()
+        .map(|b| redact_values(&mask_body_secrets(b)));
     if let Some(ref mut err) = entry.error {
-        err.message = mask_free_text_and_secrets(&err.message);
+        err.message = redact_values(&mask_free_text_and_secrets(&err.message));
     }
     for assertion in &mut entry.assertions {
         mask_snapshot_assertion(assertion);
     }
     for warning in &mut entry.warnings {
-        *warning = mask_free_text_and_secrets(warning);
+        *warning = redact_values(&mask_free_text_and_secrets(warning));
     }
 }
 
@@ -217,9 +245,59 @@ mod tests {
     }
 
     #[test]
+    fn test_secret_value_masking_hits_all_surfaces() {
+        let mut entry = sample_entry();
+        entry.request.url = "https://vault.example.com/x?ns=super-secret-ns".to_string();
+        entry.request.headers = vec![(
+            "X-Vault-Namespace".to_string(),
+            "super-secret-ns".to_string(),
+        )];
+        entry.request.body = Some("ns=super-secret-ns".to_string());
+        if let Some(resp) = entry.response.as_mut() {
+            resp.body = r#"{"namespace":"super-secret-ns"}"#.to_string();
+        }
+        mask_execution_snapshot_entry(&mut entry, &["super-secret-ns".to_string()]);
+        let combined = format!(
+            "{}{:?}{:?}",
+            entry.request.url, entry.request.headers, entry.request.body
+        );
+        assert!(
+            !combined.contains("super-secret-ns"),
+            "按值掩码必须覆盖 url/headers/body 全表面: {combined}"
+        );
+        assert!(combined.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_masked_body_sha256_matches_masked_form() {
+        use sha2::{Digest, Sha256};
+        let mut entry = sample_entry();
+        if let Some(resp) = entry.response.as_mut() {
+            resp.body = r#"{"api_key":"sk-live-plain"}"#.to_string();
+            resp.body_sha256 = Some("deadbeef".to_string());
+        }
+        mask_execution_snapshot_entry(&mut entry, &[]);
+        if let Some(resp) = entry.response.as_ref() {
+            let expected = {
+                let mut h = Sha256::new();
+                h.update(resp.body.as_bytes());
+                h.finalize()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            };
+            assert_eq!(
+                resp.body_sha256.as_deref(),
+                Some(expected.as_str()),
+                "S-2：掩码后 sha 必须对掩码后形态（离线可验真）"
+            );
+        }
+    }
+
+    #[test]
     fn test_mask_execution_snapshot_entry_full_surface() {
         let mut entry = sample_entry();
-        mask_execution_snapshot_entry(&mut entry);
+        mask_execution_snapshot_entry(&mut entry, &[]);
 
         // 1. Headers & Body
         assert_ne!(entry.request.headers[0].1, "Bearer real-token");

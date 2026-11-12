@@ -11,7 +11,7 @@ pub fn snapshot_to_json_reports(snapshot: &ExecutionSnapshotFile) -> Vec<JsonFil
         .iter()
         .map(|entry| {
             let mut masked = entry.clone();
-            crate::history::snapshot_mask::mask_execution_snapshot_entry(&mut masked);
+            crate::history::snapshot_mask::mask_execution_snapshot_entry(&mut masked, &[]);
             adapt_entry_to_json_report(&masked)
         })
         .collect();

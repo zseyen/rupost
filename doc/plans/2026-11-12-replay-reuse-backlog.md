@@ -52,9 +52,9 @@
 
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| S-1 | history.jsonl 0600 + 脱敏评估 | `history/storage.rs:70-91`（umask 明文 append） | 权限对齐快照 0600；默认脱敏评估约束：**模板级重放链路（bootstrap/generate）不受损**（其本不依赖字面凭据） | 共享账号堡垒机凭据外带面收窄；`ai bootstrap` 链路回归绿 | 🔧 |
-| S-2 | 掩码后重算 body_sha256 | `snapshot_io.rs:70-89,170-172`（sha 在掩码前算） | 掩码模式下摘要对掩码后形态重算（或注明语义） | 掩码快照离线验真链路成立 | 🔧 |
-| S-3 | 按值掩码能力 | `test.rs:67-69`（bool 开关）；`redact.rs:8-33`（键名启发式） | `--mask-secret-value <VAL>` 或从 env 名单生成掩码表 | 词表外自定义 header（如 `x-vault-namespace`）密钥不再明文进快照 | 🔧 |
+| S-1 | history.jsonl 0600 + 脱敏评估 | `history/storage.rs:70-91`（umask 明文 append） | 权限对齐快照 0600；默认脱敏评估约束：**模板级重放链路（bootstrap/generate）不受损**（其本不依赖字面凭据） | 共享账号堡垒机凭据外带面收窄；`ai bootstrap` 链路回归绿 | ✅ 已落地（2026-11-13：`ensure_private_file`——history.jsonl 首建即 0600、宽松旧文件每次 append 前收紧（幂等 stat）；`test_history_file_permissions_tightened` 双路径守护） |
+| S-2 | 掩码后重算 body_sha256 | `snapshot_io.rs:70-89,170-172`（sha 在掩码前算） | 掩码模式下摘要对掩码后形态重算（或注明语义） | 掩码快照离线验真链路成立 | ✅ 已落地（2026-11-13：`mask_execution_snapshot_entry` 掩码后重算 `body_sha256`——摘要对文件内掩码后形态（离线可验真），原始字节验真在掩码模式下按 masking=secrets 声明降级；`test_masked_body_sha256_matches_masked_form`） |
+| S-3 | 按值掩码能力 | `test.rs:67-69`（bool 开关）；`redact.rs:8-33`（键名启发式） | `--mask-secret-value <VAL>` 或从 env 名单生成掩码表 | 词表外自定义 header（如 `x-vault-namespace`）密钥不再明文进快照 | ✅ 已落地（2026-11-13：`--mask-secret-value <VAL>`（可多次）→ 值掩码独立于 `--mask-secrets` 生效（url/headers/body/error/warnings/assertions 全表面 → [REDACTED]），masking 标记联动 secrets；`test_secret_value_masking_hits_all_surfaces` + e2e `test_mask_secret_value_hits_custom_headers`（x-vault-ns 词表外 header）） |
 
 ## 4. P3 · 体验与生态
 

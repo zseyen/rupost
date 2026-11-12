@@ -91,6 +91,7 @@ fn test_save_batch_snapshot_excludes_teardown_results() {
         &["t.http".to_string()],
         &snapshot_file,
         false,
+        &[],
         None,
         rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )
@@ -207,6 +208,7 @@ fn test_save_batch_snapshot_roundtrip_fields() {
         &["my_test.http".to_string()],
         &snapshot_file,
         false,
+        &[],
         Some("staging"),
         rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )
@@ -282,6 +284,7 @@ fn test_save_batch_snapshot_honors_custom_body_limit() {
         &["t.http".to_string()],
         &snapshot_file,
         false,
+        &[],
         None,
         8,
     )
@@ -332,6 +335,7 @@ fn test_save_batch_snapshot_honors_custom_body_limit() {
         &["t.http".to_string()],
         &snapshot_file_default,
         false,
+        &[],
         None,
         rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )
@@ -714,7 +718,7 @@ fn test_redaction_contract_headers_query_body_and_ai_parity() {
         assertions: vec![],
         warnings: vec!["X-Sign: warn_sig_1234".to_string()],
     };
-    mask_execution_snapshot_entry(&mut exec_entry);
+    mask_execution_snapshot_entry(&mut exec_entry, &[]);
     assert_eq!(exec_entry.request.headers[0].1, "Bearer [REDACTED]");
     assert_eq!(exec_entry.request.headers[1].1, "[REDACTED]");
     assert_eq!(exec_entry.request.headers[2].1, "application/json");
@@ -1007,5 +1011,64 @@ async fn test_timing_unknown_mode_is_syntax_error_exit_2() {
     assert!(
         stderr.contains("--timing") && stderr.contains("off"),
         "错误消息必须指明合法值: {stderr}"
+    );
+}
+
+/// S-3（免重填审查）：`--mask-secret-value` 按值掩码独立于 `--mask-secrets` 生效——
+/// 词表外的自定义 header（x-vault-ns 类）携带的密钥值必须被替换为 [REDACTED]。
+#[tokio::test]
+async fn test_mask_secret_value_hits_custom_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let snap = dir.path().join("snap_sv.json");
+    let resp = Response::new(
+        200,
+        reqwest::header::HeaderMap::new(),
+        "{}".to_string(),
+        Duration::from_millis(5),
+        Duration::from_millis(5),
+        Duration::ZERO,
+    )
+    .unwrap();
+    let mut result = TestResult::success(
+        1,
+        Some("vault".to_string()),
+        "GET".to_string(),
+        "https://vault.example.com/x?ns=ns-live-777".to_string(),
+        resp,
+    );
+    result.request = Some(RequestSnapshot {
+        method: "GET".to_string(),
+        url: "https://vault.example.com/x?ns=ns-live-777".to_string(),
+        headers: {
+            let mut m = reqwest::header::HeaderMap::new();
+            m.insert(
+                "x-vault-ns",
+                reqwest::header::HeaderValue::from_static("ns-live-777"),
+            );
+            m
+        },
+        body: None,
+        timeout: None,
+    });
+    let batch = vec![(PathBuf::from("t.http"), vec![result])];
+    // 只传按值掩码（mask_secrets=false）→ 独立生效
+    save_batch_snapshot(
+        &batch,
+        &["t.http".to_string()],
+        &snap,
+        false,
+        &["ns-live-777".to_string()],
+        None,
+        rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+    )
+    .unwrap();
+    let content = std::fs::read_to_string(&snap).unwrap();
+    assert!(
+        !content.contains("ns-live-777"),
+        "词表外自定义 header 的密钥值必须被按值掩码: {content}"
+    );
+    assert!(content.contains("[REDACTED]"));
+    assert!(
+        content.contains("masking\": \"secrets") || content.contains("\"masking\": \"secrets\"")
     );
 }

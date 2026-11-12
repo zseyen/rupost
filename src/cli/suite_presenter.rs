@@ -96,6 +96,7 @@ pub async fn present_suite_outcome(
             &outcome.resolved_paths,
             snapshot_path,
             options.mask_snapshot,
+            &options.mask_secret_values,
             options.env.as_deref(),
             options
                 .max_snapshot_body_bytes

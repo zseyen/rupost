@@ -1124,6 +1124,7 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
         &["test.http".to_string()],
         &snapshot_file,
         true,
+        &[],
         None,
         rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )

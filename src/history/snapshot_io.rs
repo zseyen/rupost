@@ -38,6 +38,8 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     source_paths: &[String],
     snapshot_path: P,
     mask_secrets: bool,
+    // S-3：按值掩码清单（--mask-secret-value；独立于键名掩码开关生效）
+    secret_values: &[String],
     environment: Option<&str>,
     max_body_bytes: usize,
 ) -> Result<()> {
@@ -172,8 +174,8 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 assertions,
                 warnings: r.warnings.clone(),
             };
-            if mask_secrets {
-                mask_execution_snapshot_entry(&mut entry);
+            if mask_secrets || !secret_values.is_empty() {
+                mask_execution_snapshot_entry(&mut entry, secret_values);
             }
             entries.push(entry);
         }
@@ -189,7 +191,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             arch: std::env::consts::ARCH.to_string(),
             rupost_version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        masking: if mask_secrets {
+        masking: if mask_secrets || !secret_values.is_empty() {
             MaskingMode::Secrets
         } else {
             MaskingMode::None
@@ -295,6 +297,7 @@ mod tests {
             &[],
             &snap_path,
             false,
+            &[],
             None,
             DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
         )

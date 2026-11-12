@@ -63,7 +63,7 @@ fn test_run_diagnose_cli_error_exit_one() {
 
     assert_eq!(out.status.code(), Some(1), "diagnose failure must exit 1");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("Error:"), "stderr carries error: {stderr}");
+    assert!(stderr.contains("[ERROR]"), "stderr carries error: {stderr}");
 }
 
 #[tokio::test]

@@ -37,6 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Guard rupost_ai crate boundary (P1-9/B0)
+        run: |
+          if grep -rnE '\brupost_ai\b' src/ --exclude-dir=ai; then
+            echo "::error::P1-9/B0 boundary violation: rupost_ai may only be referenced inside src/ai/"
+            exit 1
+          fi
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

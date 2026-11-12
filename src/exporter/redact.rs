@@ -25,7 +25,11 @@ pub const SUBSTRINGS: &[&str] = &[
     "token",
 ];
 
-/// 内置默认豁免词表（按 ASCII 字母升序严格排列，解决分页游标过度脱敏痛点）
+/// 按 `_` 与 `-` 切词后匹配的敏感词根（避免 design/assign/signal/keyboard 误报，可被 ignore_keys 豁免）
+/// 严格按 ASCII 字母升序排列，以保证 binary_search 确定性生效。
+pub const SENSITIVE_TOKENS: &[&str] = &["key", "passwd", "sig", "sign", "signature"];
+
+/// 内置默认豁免词表（按 ASCII 字母升序严格排列，解决分页游标等误报痛点）
 pub const DEFAULT_IGNORE_KEYS: &[&str] = &[
     "cursor",
     "next_cursor",
@@ -33,28 +37,57 @@ pub const DEFAULT_IGNORE_KEYS: &[&str] = &[
     "next_token",
     "page_token",
     "pagination_token",
+    "primary_key",
 ];
 
 use std::collections::HashSet;
 
+#[inline]
+fn is_hard_sensitive_key(key_str: &str) -> bool {
+    EXACT_KEYS.binary_search(&key_str).is_ok() || key_str.starts_with("authorization")
+}
+
+#[inline]
+fn matches_fuzzy_sensitive_key(key_str: &str) -> bool {
+    SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
+        || key_str
+            .split(['_', '-'])
+            .any(|tok| SENSITIVE_TOKENS.binary_search(&tok).is_ok())
+}
+
+/// 判断键名是否属于 PII 数值字段（如 phone / mobile / id_card），用于对 JSON Number 叶子打码
+#[inline]
+pub fn is_pii_key(key: &str) -> bool {
+    let lower = key.trim().to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "phone"
+            | "mobile"
+            | "id_card"
+            | "id-card"
+            | "idcard"
+            | "phone_number"
+            | "phone_no"
+            | "mobile_number"
+            | "mobile_no"
+            | "id_card_no"
+            | "id_card_number"
+            | "user_phone"
+            | "user_mobile"
+            | "contact_phone"
+            | "contact_mobile"
+    ) || lower
+        .split(['_', '-'])
+        .next_back()
+        .is_some_and(|last| matches!(last, "phone" | "mobile" | "idcard"))
+        || lower.ends_with("_id_card")
+        || lower.ends_with("-id-card")
+}
+
 /// 判断 Header 键名是否属于敏感信息（全局内置默认判定）
 #[inline]
 pub fn is_sensitive_key(key: &str) -> bool {
-    let lower = key.trim().to_ascii_lowercase();
-    let key_str = lower.as_str();
-
-    // 1. 绝对硬键（最高优先级，不可穿透豁免）
-    if EXACT_KEYS.binary_search(&key_str).is_ok() {
-        return true;
-    }
-
-    // 2. 内置默认豁免游标（误报治理，豁免模糊子串匹配）
-    if DEFAULT_IGNORE_KEYS.binary_search(&key_str).is_ok() {
-        return false;
-    }
-
-    // 3. 模糊词族子串匹配
-    SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
+    BUILTIN_POLICY.is_sensitive(key)
 }
 
 /// 脱敏策略控制中心
@@ -223,7 +256,7 @@ impl RedactionPolicy {
                 continue;
             }
             // R3 安全护栏：严禁豁免硬键！
-            if EXACT_KEYS.binary_search(&normalized.as_str()).is_ok() {
+            if is_hard_sensitive_key(normalized.as_str()) {
                 eprintln!(
                     "[warn] 安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！"
                 );
@@ -252,7 +285,7 @@ impl RedactionPolicy {
             if normalized.is_empty() {
                 continue;
             }
-            if EXACT_KEYS.binary_search(&normalized.as_str()).is_ok() {
+            if is_hard_sensitive_key(normalized.as_str()) {
                 eprintln!(
                     "[warn] 安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！"
                 );
@@ -274,18 +307,18 @@ impl RedactionPolicy {
             return true;
         }
 
-        // 2. 内置硬键不可穿透
-        if EXACT_KEYS.binary_search(&key_str).is_ok() {
+        // 2. 内置硬键（含 Authorization*）不可穿透
+        if is_hard_sensitive_key(key_str) {
             return true;
         }
 
-        // 3. 豁免检查（只作用于 SUBSTRINGS 模糊匹配层）
+        // 3. 豁免检查（只作用于模糊/词根匹配层）
         if self.ignore_keys.contains(key_str) {
             return false;
         }
 
-        // 4. 内置模糊词族子串匹配
-        SUBSTRINGS.iter().any(|&sub| key_str.contains(sub))
+        // 4. 内置模糊词族子串与词根匹配
+        matches_fuzzy_sensitive_key(key_str)
     }
 
     /// 对 Header 凭据值进行掩码脱敏（支持可选审计记录）
@@ -462,30 +495,43 @@ impl RedactionPolicy {
         }
     }
 
-    /// JSON 掩码变体：敏感键 `[REDACTED]` 之外，普通字符串叶子上的 PII 也打码
-    pub fn mask_json_pii(&self, val: &serde_json::Value) -> serde_json::Value {
+    /// JSON 掩码变体（原地改写）：敏感键 `[REDACTED]`，PII 数值键（phone/mobile/id_card）`***`，字符串叶子上的 PII 也打码
+    pub fn mask_json_pii_in_place(&self, val: &mut serde_json::Value) {
         match val {
-            serde_json::Value::Object(map) => serde_json::Value::Object(
-                map.iter()
-                    .map(|(k, v)| {
-                        if self.is_sensitive(k) {
-                            (
-                                k.clone(),
-                                serde_json::Value::String("[REDACTED]".to_string()),
-                            )
-                        } else {
-                            (k.clone(), self.mask_json_pii(v))
-                        }
-                    })
-                    .collect(),
-            ),
-            serde_json::Value::Array(items) => serde_json::Value::Array(
-                items.iter().map(|item| self.mask_json_pii(item)).collect(),
-            ),
-            serde_json::Value::String(s) => serde_json::Value::String(mask_pii(s)),
-            other => other.clone(),
+            serde_json::Value::Object(map) => {
+                for (k, v) in map.iter_mut() {
+                    if self.is_sensitive(k) {
+                        *v = serde_json::Value::String("[REDACTED]".to_string());
+                    } else if is_pii_key(k) && v.is_number() {
+                        *v = serde_json::Value::String("***".to_string());
+                    } else {
+                        self.mask_json_pii_in_place(v);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items.iter_mut() {
+                    self.mask_json_pii_in_place(item);
+                }
+            }
+            serde_json::Value::String(s) => {
+                *s = mask_pii(s);
+            }
+            _ => {}
         }
     }
+
+    /// JSON 掩码变体：敏感键 `[REDACTED]` 之外，PII 数值键与普通字符串叶子上的 PII 也打码
+    pub fn mask_json_pii(&self, val: &serde_json::Value) -> serde_json::Value {
+        let mut cloned = val.clone();
+        self.mask_json_pii_in_place(&mut cloned);
+        cloned
+    }
+}
+
+/// JSON 原地脱敏掩码（全局默认内置策略，供 `ai::redactor` 等复用以保证规则 SSOT）
+pub fn mask_json_pii_value_in_place(val: &mut serde_json::Value) {
+    BUILTIN_POLICY.mask_json_pii_in_place(val);
 }
 
 static BUILTIN_POLICY: std::sync::LazyLock<RedactionPolicy> =
@@ -874,16 +920,21 @@ ignore_keys = ["custom_cursor", "next_token"]
 
 // ═══════════ Secrets Masker body 残余（快照 --mask-secrets，路线图条目 1） ═══════════
 
-/// PII 掩码：中国大陆手机号 / 银行卡号（13–19 位数字串）/ 邮箱 → `***`
+/// PII 掩码：中国大陆手机号 / 18 位身份证号（含末位 X/x）/ 银行卡号（13–19 位数字串）/ 邮箱 → `***`
 /// （值形态掩码，与 is_sensitive_key 的键形态掩码互补；opt-in 旗标下才参与）
 pub fn mask_pii(text: &str) -> String {
     static EMAIL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ID_CARD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static CARD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static PHONE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let email = EMAIL.get_or_init(|| {
         regex::Regex::new(r#"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#).expect("email regex")
     });
-    // regex crate 无 lookaround——用捕获组锚定非数字边界（${1}/${3} 原样保留）
+    // regex crate 无 lookaround——用捕获组锚定非数字边界（${1}/${2} 原样保留）
+    // 18 位身份证号（17 位数字 + X/x）必须先于 CARD 匹配，防止末位 X 残余为 "***X"
+    let id_card = ID_CARD.get_or_init(|| {
+        regex::Regex::new(r"(^|[^0-9])[0-9]{17}[Xx]([^0-9A-Za-z]|$)").expect("id card regex")
+    });
     let card = CARD.get_or_init(|| {
         // 13–19 位数字形态风险由 opt-in 旗标承担（PRD D1）
         regex::Regex::new(r"(^|[^0-9])[0-9]{13,19}([^0-9]|$)").expect("card regex")
@@ -892,6 +943,7 @@ pub fn mask_pii(text: &str) -> String {
         regex::Regex::new(r"(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)").expect("phone regex")
     });
     let s = email.replace_all(text, "***").into_owned();
+    let s = id_card.replace_all(&s, "${1}***${2}").into_owned();
     let s = card.replace_all(&s, "${1}***${2}").into_owned();
     phone.replace_all(&s, "${1}***${2}").into_owned()
 }
@@ -906,14 +958,14 @@ pub fn redact_free_text(text: &str) -> String {
     RedactionPolicy::builtin().redact_free_text(text)
 }
 
-/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` / 孤立 `Bearer <token>` / `Basic <base64>` 形态
+/// 非 JSON 文本的内联键值凭据兜底掩码：`token=xxx` / `api_key: xxx` / `x-sign: xxx` / `cookie: xxx` / 孤立 `Bearer <token>` / `Basic <base64>` 形态
 /// （键名保留、值替换为 [REDACTED]；值长度 ≥4 才掩，避免误伤短 token 字样）
 pub fn mask_inline_secrets(text: &str) -> String {
     static INLINE_SECRET: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static BARE_AUTH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = INLINE_SECRET.get_or_init(|| {
         regex::Regex::new(
-            r#"(?i)(token|api[_-]?key|secret|password|passwd|authorization)\s*[=:]\s*(?:(?:bearer|basic|digest|token)\s+)?[^\s"'<>&,;}{]{4,}"#,
+            r#"(?i)(^|[^a-zA-Z0-9])(token|api[_-]?key|secret|password|passwd|authorization|x-sign|sign|set-cookie|cookie)\s*[=:]\s*(?:(?:bearer|basic|digest|token)\s+)?[^\s"'<>&,;}{]{4,}"#,
         )
         .expect("inline secret regex")
     });
@@ -921,7 +973,7 @@ pub fn mask_inline_secrets(text: &str) -> String {
         regex::Regex::new(r#"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/-]{10,}={0,2}"#)
             .expect("bare auth regex")
     });
-    let step1 = re.replace_all(text, "${1}=[REDACTED]");
+    let step1 = re.replace_all(text, "${1}${2}=[REDACTED]");
     re_auth.replace_all(&step1, "${1} [REDACTED]").into_owned()
 }
 
@@ -960,5 +1012,184 @@ mod mask_tests {
         assert!(out.contains("***"), "pii masked in text: {out}");
         // 空体
         assert_eq!(mask_body_secrets(""), "");
+    }
+
+    #[test]
+    fn test_token_aware_sensitive_key_and_no_false_positives_table() {
+        let cases = [
+            // 必须脱敏的新增/既有敏感键
+            ("X-Sign", true),
+            ("x-sign", true),
+            ("X-Signature", true),
+            ("x-signature", true),
+            ("Authorization", true),
+            ("Authorization-Ext", true),
+            ("authorization_custom", true),
+            ("sign", true),
+            ("sig", true),
+            ("signature", true),
+            ("key", true),
+            ("passwd", true),
+            ("user_passwd", true),
+            ("api_key", true),
+            ("x-api-key", true),
+            ("Cookie", true),
+            ("Set-Cookie", true),
+            // 绝不误报的普通键
+            ("design", false),
+            ("assign", false),
+            ("signal", false),
+            ("keyboard", false),
+            ("primary_key", false),
+            ("next_token", false),
+            ("page_token", false),
+            ("Content-Type", false),
+            ("page", false),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(
+                is_sensitive_key(key),
+                expected,
+                "is_sensitive_key({key:?}) should be {expected}"
+            );
+        }
+
+        // Authorization* 不可被 ignore_keys 豁免；非硬键（如 fastly-key / x-api-key-safe）仍可豁免
+        let policy = RedactionPolicy::new(
+            Vec::<&str>::new(),
+            ["authorization-ext", "fastly-key", "x-api-key-safe"],
+        );
+        assert!(policy.is_sensitive("Authorization-Ext"));
+        assert!(!policy.is_sensitive("fastly-key"));
+        assert!(!policy.is_sensitive("x-api-key-safe"));
+    }
+
+    #[test]
+    fn test_headers_and_url_query_redaction_table() {
+        let header_cases = [
+            ("Authorization", "Bearer jwt-123", "Bearer [REDACTED]"),
+            ("Authorization-Ext", "Bearer ext-123", "Bearer [REDACTED]"),
+            ("Authorization-Ext", "opaque-ext", "[REDACTED]"),
+            ("Cookie", "sid=abc123", "[REDACTED]"),
+            ("Set-Cookie", "sid=abc123; HttpOnly", "[REDACTED]"),
+            ("X-Sign", "sig-deadbeef", "[REDACTED]"),
+            ("X-Signature", "hmac-sha256=deadbeef", "[REDACTED]"),
+            ("Content-Type", "application/json", "application/json"),
+        ];
+        for (k, v, expected) in header_cases {
+            assert_eq!(
+                redact_header_value(k, v),
+                expected,
+                "header {k} redaction mismatch"
+            );
+        }
+
+        let url = "https://api.example.com/v1/items?token=t1&access_token=at2&sign=s3&sig=s4&key=k5&secret=sec6&page=2&next_token=nt7&design=modern&signal=ok";
+        let redacted = redact_url(url);
+        for leaked in ["t1", "at2", "s3", "s4", "k5", "sec6"] {
+            assert!(
+                !redacted.contains(&format!("={leaked}")),
+                "sensitive query value {leaked} leaked in {redacted}"
+            );
+        }
+        for preserved in ["page=2", "next_token=nt7", "design=modern", "signal=ok"] {
+            assert!(
+                redacted.contains(preserved),
+                "non-sensitive query {preserved} dropped in {redacted}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mask_pii_id_card_and_variants_table() {
+        let cases = [
+            ("11010119900101123X", "***"),
+            ("11010119900101123x", "***"),
+            ("id_card=11010119900101123X, ok", "id_card=***, ok"),
+            ("110101199001011234", "***"),
+            ("13812345678", "***"),
+            ("card=6222021234567890123", "card=***"),
+            ("mail lee@example.com ok", "mail *** ok"),
+            ("id=113812345678", "id=113812345678"),
+            ("12345678901234567xyz", "***xyz"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(mask_pii(input), expected, "mask_pii({input:?}) mismatch");
+        }
+    }
+
+    #[test]
+    fn test_mask_body_secrets_json_string_number_and_nested_table() {
+        let raw = r#"{
+            "password": "pw1",
+            "passwd": "pw2",
+            "secret": "sec3",
+            "token": "tok4",
+            "access_token": "at5",
+            "phone": 13812345678,
+            "mobile": 13900001111,
+            "id_card": 110101199001011234,
+            "nested": {
+                "phone": "13712345678",
+                "mobile": "13612345678",
+                "id_card": "11010119900101123X",
+                "passwd": "nested_pw",
+                "primary_key": 42,
+                "timestamp_ms": 1731396798000,
+                "design": "minimal",
+                "assign": "alice",
+                "signal": "green",
+                "keyboard": "hhkb"
+            },
+            "items": [{"key": "k-secret", "page": 1}]
+        }"#;
+        let masked = mask_body_secrets(raw);
+        let parsed: serde_json::Value = serde_json::from_str(&masked).unwrap();
+
+        assert_eq!(parsed["password"], "[REDACTED]");
+        assert_eq!(parsed["passwd"], "[REDACTED]");
+        assert_eq!(parsed["secret"], "[REDACTED]");
+        assert_eq!(parsed["token"], "[REDACTED]");
+        assert_eq!(parsed["access_token"], "[REDACTED]");
+        assert_eq!(parsed["phone"], "***");
+        assert_eq!(parsed["mobile"], "***");
+        assert_eq!(parsed["id_card"], "***");
+        assert_eq!(parsed["nested"]["phone"], "***");
+        assert_eq!(parsed["nested"]["mobile"], "***");
+        assert_eq!(parsed["nested"]["id_card"], "***");
+        assert_eq!(parsed["nested"]["passwd"], "[REDACTED]");
+        assert_eq!(parsed["nested"]["primary_key"], 42);
+        assert_eq!(parsed["nested"]["timestamp_ms"], 1731396798000_i64);
+        assert_eq!(parsed["nested"]["design"], "minimal");
+        assert_eq!(parsed["nested"]["assign"], "alice");
+        assert_eq!(parsed["nested"]["signal"], "green");
+        assert_eq!(parsed["nested"]["keyboard"], "hhkb");
+        assert_eq!(parsed["items"][0]["key"], "[REDACTED]");
+        assert_eq!(parsed["items"][0]["page"], 1);
+    }
+
+    #[test]
+    fn test_mask_inline_secrets_expanded_table() {
+        let cases = [
+            ("X-Sign: deadbeef", "X-Sign=[REDACTED]"),
+            ("sign=deadbeef&page=1", "sign=[REDACTED]&page=1"),
+            ("Cookie: sid=abc12345", "Cookie=[REDACTED]"),
+            (
+                "Set-Cookie: sid=abc12345; HttpOnly",
+                "Set-Cookie=[REDACTED]; HttpOnly",
+            ),
+            ("passwd=hunter2", "passwd=[REDACTED]"),
+            (
+                "design=abcdef assign=abcdef signal=abcdef",
+                "design=abcdef assign=abcdef signal=abcdef",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                mask_inline_secrets(input),
+                expected,
+                "mask_inline_secrets({input:?}) mismatch"
+            );
+        }
     }
 }

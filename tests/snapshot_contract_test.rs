@@ -498,3 +498,225 @@ fn test_snapshot_writes_protect_symlinks_and_enforce_0600_permissions() {
         & 0o777;
     assert_eq!(fresh_mode, 0o600);
 }
+
+#[test]
+fn test_redaction_contract_headers_query_body_and_ai_parity() {
+    use rupost::ai::redactor::redact_and_truncate_body;
+    use rupost::exporter::redact::mask_body_secrets;
+    use rupost::history::mask_execution_snapshot_entry;
+    use rupost::history::model::{ExecutionOutcome, ExecutionSnapshotEntry, SnapshotResponse};
+
+    let req_body = r#"{
+        "password": "pw1",
+        "passwd": "pw2",
+        "secret": "sec3",
+        "token": "tok4",
+        "access_token": "at5",
+        "phone": 13812345678,
+        "mobile": "13900001111",
+        "id_card": "11010119900101123X",
+        "nested": {
+            "id_card": 110101199001011234,
+            "mobile": 13700001111,
+            "phone": "13600001111",
+            "primary_key": 101,
+            "design": "minimal",
+            "assign": "bob",
+            "signal": "ok",
+            "keyboard": "qwerty"
+        }
+    }"#;
+
+    let mut req_headers = reqwest::header::HeaderMap::new();
+    req_headers.append("authorization", "Bearer auth_secret_1".parse().unwrap());
+    req_headers.append(
+        "authorization-ext",
+        "Bearer auth_ext_secret_2".parse().unwrap(),
+    );
+    req_headers.append("cookie", "sid=cookie_secret_3".parse().unwrap());
+    req_headers.append("x-sign", "sign_secret_4".parse().unwrap());
+    req_headers.append("x-signature", "sig_secret_5".parse().unwrap());
+    req_headers.append("content-type", "application/json".parse().unwrap());
+
+    let mut resp_headers = reqwest::header::HeaderMap::new();
+    resp_headers.append("set-cookie", "s1=resp_cookie_1; HttpOnly".parse().unwrap());
+    resp_headers.append("set-cookie", "s2=resp_cookie_2; Path=/".parse().unwrap());
+    resp_headers.append("content-type", "application/json".parse().unwrap());
+
+    let mut legacy_entry = SnapshotEntry::new_success(
+        "contract-redact".to_string(),
+        RequestSnapshot {
+            method: "POST".to_string(),
+            url: "https://api.example.com/submit?token=qt1&access_token=qat2&sign=qs3&sig=qsig4&key=qk5&secret=qsec6&page=3&next_token=cursor9&design=v1&signal=true".to_string(),
+            headers: req_headers,
+            body: Some(req_body.to_string()),
+            timeout: None,
+        },
+        ResponseSnapshot {
+            status: 200,
+            headers: resp_headers,
+            body: req_body.to_string(),
+        },
+    );
+    mask_snapshot_entry(&mut legacy_entry);
+
+    // 1. Request headers
+    assert_eq!(
+        legacy_entry
+            .request
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "Bearer [REDACTED]"
+    );
+    assert_eq!(
+        legacy_entry
+            .request
+            .headers
+            .get("authorization-ext")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "Bearer [REDACTED]"
+    );
+    assert_eq!(
+        legacy_entry
+            .request
+            .headers
+            .get("cookie")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "[REDACTED]"
+    );
+    assert_eq!(
+        legacy_entry
+            .request
+            .headers
+            .get("x-sign")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "[REDACTED]"
+    );
+    assert_eq!(
+        legacy_entry
+            .request
+            .headers
+            .get("x-signature")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "[REDACTED]"
+    );
+    assert_eq!(
+        legacy_entry
+            .request
+            .headers
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/json"
+    );
+
+    // 2. Response headers (multi-value Set-Cookie)
+    let set_cookies: Vec<&str> = legacy_entry
+        .response
+        .as_ref()
+        .unwrap()
+        .headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .collect();
+    assert_eq!(set_cookies, vec!["[REDACTED]", "[REDACTED]"]);
+
+    // 3. URL query (sensitive masked + non-sensitive preserved)
+    for leaked in ["qt1", "qat2", "qs3", "qsig4", "qk5", "qsec6"] {
+        assert!(
+            !legacy_entry.request.url.contains(leaked),
+            "query secret {leaked} leaked: {}",
+            legacy_entry.request.url
+        );
+    }
+    for kept in ["page=3", "next_token=cursor9", "design=v1", "signal=true"] {
+        assert!(
+            legacy_entry.request.url.contains(kept),
+            "non-sensitive query {kept} missing: {}",
+            legacy_entry.request.url
+        );
+    }
+
+    // 4. Body JSON (String + Number + nested) + AI redactor parity
+    let masked_body = legacy_entry.request.body.as_deref().unwrap();
+    let ai_body = redact_and_truncate_body(req_body, 4096);
+    let exp_body = mask_body_secrets(req_body);
+    let masked_json: serde_json::Value = serde_json::from_str(masked_body).unwrap();
+    let ai_json: serde_json::Value = serde_json::from_str(&ai_body).unwrap();
+    let exp_json: serde_json::Value = serde_json::from_str(&exp_body).unwrap();
+    assert_eq!(masked_json, exp_json);
+    assert_eq!(ai_json, exp_json);
+
+    for secret_key in ["password", "passwd", "secret", "token", "access_token"] {
+        assert_eq!(masked_json[secret_key], "[REDACTED]");
+    }
+    assert_eq!(masked_json["phone"], "***");
+    assert_eq!(masked_json["mobile"], "***");
+    assert_eq!(masked_json["id_card"], "***");
+    assert_eq!(masked_json["nested"]["id_card"], "***");
+    assert_eq!(masked_json["nested"]["mobile"], "***");
+    assert_eq!(masked_json["nested"]["phone"], "***");
+    assert_eq!(masked_json["nested"]["primary_key"], 101);
+    assert_eq!(masked_json["nested"]["design"], "minimal");
+    assert_eq!(masked_json["nested"]["assign"], "bob");
+    assert_eq!(masked_json["nested"]["signal"], "ok");
+    assert_eq!(masked_json["nested"]["keyboard"], "qwerty");
+
+    // 5. ExecutionSnapshotEntry surface check (single Set-Cookie + headers + body)
+    let mut exec_entry = ExecutionSnapshotEntry {
+        request_number: 1,
+        name: None,
+        file_path: "t.http".to_string(),
+        success: true,
+        outcome: ExecutionOutcome::Pass,
+        status: Some(200),
+        duration_us: 100,
+        plugin_duration_us: None,
+        request: rupost::history::model::SnapshotRequest {
+            method: "POST".to_string(),
+            url: "https://api.example.com/submit?sign=qs3&page_token=pt1".to_string(),
+            headers: vec![
+                ("Authorization-Ext".to_string(), "Bearer ext9".to_string()),
+                ("X-Sign".to_string(), "sig9".to_string()),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: Some(req_body.to_string()),
+        },
+        response: Some(SnapshotResponse {
+            status: 200,
+            headers: vec![("Set-Cookie".to_string(), "sid=single_cookie".to_string())],
+            body: req_body.to_string(),
+            body_truncated: false,
+            body_sha256: None,
+        }),
+        error: None,
+        timing_waterfall: None,
+        socket_diagnostics: None,
+        assertions: vec![],
+        warnings: vec!["X-Sign: warn_sig_1234".to_string()],
+    };
+    mask_execution_snapshot_entry(&mut exec_entry);
+    assert_eq!(exec_entry.request.headers[0].1, "Bearer [REDACTED]");
+    assert_eq!(exec_entry.request.headers[1].1, "[REDACTED]");
+    assert_eq!(exec_entry.request.headers[2].1, "application/json");
+    assert_eq!(
+        exec_entry.response.as_ref().unwrap().headers[0].1,
+        "[REDACTED]"
+    );
+    assert!(exec_entry.request.url.contains("page_token=pt1"));
+    assert!(!exec_entry.request.url.contains("qs3"));
+    assert!(!exec_entry.warnings[0].contains("warn_sig_1234"));
+}

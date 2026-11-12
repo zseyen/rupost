@@ -1,5 +1,6 @@
 pub use crate::exporter::redact::{
-    is_sensitive_key, mask_inline_secrets, redact_free_text, redact_header_value, redact_url,
+    is_sensitive_key, mask_inline_secrets, mask_pii, redact_free_text, redact_header_value,
+    redact_url,
 };
 use regex::Regex;
 use serde_json::Value;
@@ -47,25 +48,10 @@ pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
     crate::utils::text::truncate_chars(msg, max_chars, "...[truncated]")
 }
 
-/// 递归遍历 JSON Value，将命中 `is_sensitive_key` 的对象字段值替换为 `"[REDACTED]"`（结构保留）
+/// 递归遍历 JSON Value，将命中 `is_sensitive_key` 的对象字段值替换为 `"[REDACTED]"`，
+/// 对 `phone`/`mobile`/`id_card` 数值叶子及普通字符串叶子中的 PII 统一打码 `***`（结构保留）
 pub fn redact_json_value(val: &mut Value) {
-    match val {
-        Value::Object(map) => {
-            for (k, v) in map.iter_mut() {
-                if is_sensitive_key(k) {
-                    *v = Value::String("[REDACTED]".to_string());
-                } else {
-                    redact_json_value(v);
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr.iter_mut() {
-                redact_json_value(item);
-            }
-        }
-        _ => {}
-    }
+    crate::exporter::redact::mask_json_pii_value_in_place(val);
 }
 
 /// 对响应体进行结构化脱敏并安全截断至 `max_bytes`：
@@ -85,9 +71,9 @@ pub fn redact_and_truncate_body(body: &str, max_bytes: usize) -> String {
         redact_json_value(&mut json_val);
         serde_json::to_string(&json_val).unwrap_or_else(|_| trimmed.to_string())
     } else {
-        // 非 JSON（HTML/文本）：URL 掩码之外，兜底掩码内联键值凭据
+        // 非 JSON（HTML/文本）：URL 掩码之外，兜底掩码内联键值凭据与 PII
         // （token=xxx / api_key: xxx —— snippet 上行 LLM 前的最后防线）
-        mask_inline_secrets(&redact_free_text(trimmed))
+        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
     };
 
     truncate_utf8_safe(&sanitized, max_bytes)
@@ -263,5 +249,56 @@ mod tests {
             Some("see http://h.com/?token=%5BREDACTED%5D".to_string())
         );
         assert_eq!(redact_assertion_value("status == 200", None), None);
+    }
+
+    #[test]
+    fn test_redact_and_truncate_body_pii_and_numeric_parity() {
+        let raw = r#"{
+            "password": "pw1",
+            "passwd": "pw2",
+            "secret": "sec3",
+            "token": "tok4",
+            "access_token": "at5",
+            "phone": 13812345678,
+            "mobile": 13900001111,
+            "id_card": 110101199001011234,
+            "nested": {
+                "phone": "13712345678",
+                "id_card": "11010119900101123X",
+                "primary_key": 7,
+                "timestamp_ms": 1731396798000,
+                "design": "clean",
+                "signal": "ready"
+            }
+        }"#;
+        let ai_out = redact_and_truncate_body(raw, 4096);
+        let exp_out = crate::exporter::redact::mask_body_secrets(raw);
+        let ai_val: Value = serde_json::from_str(&ai_out).unwrap();
+        let exp_val: Value = serde_json::from_str(&exp_out).unwrap();
+        assert_eq!(
+            ai_val, exp_val,
+            "AI redactor must match exporter mask_body_secrets"
+        );
+
+        assert_eq!(ai_val["passwd"], "[REDACTED]");
+        assert_eq!(ai_val["phone"], "***");
+        assert_eq!(ai_val["mobile"], "***");
+        assert_eq!(ai_val["id_card"], "***");
+        assert_eq!(ai_val["nested"]["phone"], "***");
+        assert_eq!(ai_val["nested"]["id_card"], "***");
+        assert_eq!(ai_val["nested"]["primary_key"], 7);
+        assert_eq!(ai_val["nested"]["timestamp_ms"], 1731396798000_i64);
+        assert_eq!(ai_val["nested"]["design"], "clean");
+        assert_eq!(ai_val["nested"]["signal"], "ready");
+
+        // 非 JSON 文本也必须同步掩码扩展后的内联密钥与 PII
+        let text_out = redact_and_truncate_body(
+            "X-Sign: deadbeef Set-Cookie: sid=xyz123; phone 13812345678 id 11010119900101123X",
+            4096,
+        );
+        assert!(!text_out.contains("deadbeef"), "{text_out}");
+        assert!(!text_out.contains("xyz123"), "{text_out}");
+        assert!(!text_out.contains("13812345678"), "{text_out}");
+        assert!(!text_out.contains("11010119900101123X"), "{text_out}");
     }
 }

@@ -6,7 +6,7 @@
 set -e
 
 # 注册全局清理 Trap，确保脚本因 error 意外退出或被中断时后台 Mock 进程一定能被清理
-trap 'echo -e "\n${YELLOW}[*] 正在释放后台仿真 Mock 服务进程...${NC}"; kill $LLM_MOCK_PID $SSE_MOCK_PID 2>/dev/null || true' EXIT
+trap 'echo -e "\n${YELLOW}[*] 正在释放后台仿真 Mock 服务进程...${NC}"; kill $LLM_MOCK_PID $SSE_MOCK_PID $PLUGIN_MOCK_PID 2>/dev/null || true' EXIT
 
 # 定义终端色彩
 GREEN='\033[0;32m'
@@ -107,6 +107,32 @@ run_case "通用 SSE 接口流用例 (sse_demo.md)" "test examples/llm_and_sse/s
 # 关闭 SSE Mock
 kill $SSE_MOCK_PID || true
 SSE_MOCK_PID=""
+
+# 5.5 插件体系闭环（Stdio IPC 管线 @auth/@sign + 声明式自愈降级；需 python3）
+if command -v python3 &>/dev/null; then
+    PLUGIN_EX_WS=$(mktemp -d /tmp/rupost_plugin_example_XXXXXX)
+    mkdir -p "$PLUGIN_EX_WS/.rupost/plugins"
+    cp examples/plugins/rupost-plugin-echo-sign "$PLUGIN_EX_WS/.rupost/plugins/"
+    cp examples/plugins/rupost-plugin-echo-sign.json "$PLUGIN_EX_WS/.rupost/plugins/"
+    chmod 755 "$PLUGIN_EX_WS/.rupost/plugins/rupost-plugin-echo-sign"
+    echo -e "\n${BLUE}>>> 第五阶段(续)：插件体系闭环联调${NC}"
+    # 插件工作区闸门以 cwd 为根：cd 进临时工作区后相对路径失效，先解析绝对路径
+    RUPOST_BIN="$(cd "$(dirname "$RUPOST_BIN")" && pwd)/$(basename "$RUPOST_BIN")"
+    $RUPOST_BIN mock examples/plugins/mock.json --port 8090 > /tmp/plugin_mock_run.log 2>&1 &
+    PLUGIN_MOCK_PID=$!
+    sleep 2
+    EX_PWD=$PWD
+    cd "$PLUGIN_EX_WS"
+    # 防假守护：必选插件形态——插件环境损坏时本用例必须 FAIL
+    run_case "插件 Stdio IPC 管线 @auth/@sign (plugins)" "test $EX_PWD/examples/plugins/plugin_pipeline.http --allow-project-plugins --var base_url=http://127.0.0.1:8090"
+    run_case "插件缺失自愈降级 (plugins)" "test $EX_PWD/examples/plugins/plugin_degrade.http --allow-project-plugins --allow-missing-plugins --var base_url=http://127.0.0.1:8090"
+    cd "$EX_PWD"
+    kill $PLUGIN_MOCK_PID || true
+    PLUGIN_MOCK_PID=""
+    rm -rf "$PLUGIN_EX_WS"
+else
+    echo -e "\n${YELLOW}[i] 未检测到 python3，跳过插件示例（安装 python3 后可跑通插件 Stdio IPC 闭环）${NC}"
+fi
 
 # 6. 打印最终执行结果
 echo -e "\n${BLUE}======================================================================${NC}"

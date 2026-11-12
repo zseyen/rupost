@@ -441,6 +441,7 @@ manifest 的 `name/description/usage` 与插件 `warnings` 渲染进终端前必
 * **超时可配置**：默认 5s 硬熔断，可用 `--plugin-timeout <sec>` 覆盖（SigV4 STS 冷启动等慢插件场景）；
 * **时延隔离**：插件子进程耗时独立统计为 `plugin_duration_us`，落盘于快照 `ExecutionSnapshotEntry.plugin_duration_us`（02 §2），**绝不混入**物理网络的 `duration_us` 和 `ttfb`；
 * **Hook 结果缓存**：按 manifest `cache_scope` 复用 Patch（suite 级缓存使 OAuth2 类插件全套件仅 1~2 次子进程，量化验收见 06 §5）。
+* **cache_scope 适用边界裁决（2026-11-12 审查收口）**：缓存键 = 插件名 + 阶段 + 排序参数，**不含请求态维度（headers/body/变量）**——同请求内前置插件改写 body 后再次声明同一 hook，命中的是旧请求态算出的 Patch。对 body 敏感的签名类插件（依赖完整报文计算签名）应声明 `none`；`request`/`suite` 仅适用于请求态无关的取证类插件（OAuth2 取 Token、STS 凭据等）。失败降级不写缓存槽（request 作用域同请求内以降级哨兵去重，suite 作用域跨请求按各自现场自愈重试）。
 
 ---
 

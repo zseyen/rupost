@@ -333,7 +333,7 @@
 | M3 | ✅ 落地 | StdioDriver / 失败分类学 / 统一降级 / `--strict-plugins`（04 套件 2/5 全绿）|
 | M4 | ✅ 落地 | args[0] 裁决序 / TOFU / 环境白名单 / 信号感知穿透（e2e exit 7）|
 | M5 | ✅ 落地 | plugin list/schema / `ai triage-snapshot`（masking 感知）/ 套件 1 与套件 4 |
-| M6 | 🆕 立项（v2.1.1） | 插件运行时就绪：`runtime` 声明 + readdir 预检 + 三态状态机 + 处方提示（03 §3.1.1/§8.3）+ §6 缺口收尾清单 |
+| M6 | ✅ 落地（2026-11-12） | runtime 预检（零子进程）+ 三态状态机 + plugin list 三态处方（M6-1/2/3）/ `--max-snapshot-body-bytes` + exit 2 归位（M6-4/5）/ DoD 四测试（M6-6）/ artifact_mining（M6-7）/ 掩码扩面表驱动（M6-8）/ P1-9 CI grep 守护（M6-9）——详见 p0-p1-remediation-plan.md §4 |
 
 **M6 任务拆解（环境就绪与缺口收尾）**：
 1. **runtime 预检与三态**：`PluginRuntime` manifest 解析；readdir 级解释器存在性预检；插件三态（ready/pending/failed）状态机；`plugin list` 三态可视化与处方提示（03 §3.1.1）；
@@ -345,11 +345,10 @@
 7. **04 套件 3 落地**：`tests/artifact_mining_test.rs`（Schema 契约半已在 M1 交付于 lib 内，录制保真半补集成测试文件）；
 8. **掩码扩面表驱动单测**：X-Sign 类自定义签名头 / query token / Set-Cookie / body PII 全表（02 §4）。
 
-**M7 立项（v2.1.2 新增：单连接时序采集，兑现"微秒时序黑匣子"默认形态）**：
-* **任务**：`TimingResolver` + `TimingConnector` 双包装点（DNS/TCP 分段真实测量，与请求同连接零额外开销）+ `--timing off` + 快照 `timing_source`/`timing_attribution` 新字段；
-* **设计蓝本**：[`m7-timing-connector-design.md`](./m7-timing-connector-design.md)（完整示例代码 + 三条边界语义 + 使用场景矩阵）；
-* **验收**：守护 1 H2 存活断言先行（防 ALPN 静默降级）→ 默认快照时序存在性（R1 反转即红）→ DoD 时延隔离不变量 → authority 分桶防跨 host 错配；
-* **风险缓解**：reqwest 升级税 = 最小 trait 面（自建 TCP connect）+ 版本显式化 + 守护断言；并发归属 = authority 分桶 + `approximate` 标注 + 串行建议；Prober 轻量档作为 `probe_degraded` 回退（不并行维护）。
+**M7 立项（v2.1.2 新增：单连接时序采集，兑现"微秒时序黑匣子"默认形态）— ✅ M7-A 核心已落地（2026-11-12）**：
+* **落地形态（M7-A，经 `tests/m7_reqwest_probe_test.rs` reqwest 0.13.4 探针实测后修订）**：`TimingDnsResolver`（`reqwest::dns::Resolve`）+ `TimingConnectorLayer`（tower Layer）双钩子 + `task_local!` 单连接槽位；快照 `timing_source`/`timing_attribution`/`timing_waterfall` 字段；默认（无 `--debug`）快照时序真实测量（R1 反转守护：`snapshot_contract_test.rs`）；HTTPS 无 diagnose 时 `tcp_connect_us` 为 (tcp+tls) 合算（诚实声明）；`--timing off` 已兑现（waterfall=null + source=none）；并行池竞争 → `approximate`（`reconcile_timing_metadata` 后置收敛，替代原 authority 分桶方案——task_local 单槽结构性消除 FIFO 泄漏）；代理 → `approximate`；`probe_degraded` 回退保留；
+* **设计蓝本**：[`m7-timing-connector-design.md`](./m7-timing-connector-design.md)（M7-A 修订版，含探针结论与 3 处蓝本硬伤勘误）；
+* **验收现状**：R1 反转守护 ✅ / DoD 时延隔离不变量 ✅（sleep 3s / ttfb<100ms 字面口径）/ H2 存活探针 ✅（`m7_reqwest_probe_test.rs`）/ authority 分桶 → 以 task_local 单槽 + 并行 approximate 标注替代（语义等价，已在设计文档登记裁决）。
 
 **登记不做的裁决项（P2/生态期，非缺口）**：`@pipeline`/`@use` 语法、miners 路由化入口、TUI/Web 补全、`$md5`/`$random_string`/`$random_email`、正则断言、`plugin sync --regenerate`、doctor 自报健康协议（生态期，`plugin list --doctor` 聚合）、降级链 `fallback.builtin`（仅签名类开放）、RLIMIT 配额、全量 sha256 指纹、MCP Server、Windows shebang 透明代理（跨平台 CI 批次）。
 

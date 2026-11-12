@@ -175,7 +175,7 @@ async fn test_dod_latency_isolation_plugin_duration_vs_ttfb() {
         "auth",
         PluginStage::Prepare,
         PluginCacheScope::None,
-        "#!/bin/sh\ncat > /dev/null\nsleep 2\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer slow-auth\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+        "#!/bin/sh\ncat > /dev/null\nsleep 3\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer slow-auth\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
     );
 
     let http_file = dir.path().join("latency.http");
@@ -221,12 +221,12 @@ async fn test_dod_latency_isolation_plugin_duration_vs_ttfb() {
         .expect("必须记录 timing_waterfall")
         .ttfb_us;
     assert!(
-        plugin_us >= 1_500_000,
-        "plugin_duration_us 应 >= 1_500_000，实际 {plugin_us}"
+        plugin_us >= 3_000_000,
+        "plugin_duration_us 应 > 3s（06 §5 DoD 字面口径），实际 {plugin_us}"
     );
     assert!(
-        ttfb_us < 200_000,
-        "HTTP TTFB 不得污染插件耗时，应 < 200_000us，实际 {ttfb_us}"
+        ttfb_us < 100_000,
+        "HTTP TTFB 不得污染插件耗时，应 < 100ms（06 §5 DoD 字面口径），实际 {ttfb_us}"
     );
     server.verify().await;
 }

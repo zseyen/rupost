@@ -129,6 +129,12 @@ pub struct HookCapability {
     /// Hook 结果缓存作用域 (03 §3.1)：`none` = 每请求执行；`request` = 请求内复用；
     /// `suite` = 全套件复用（OAuth2 取 Token 类插件声明，消除子进程风暴）。
     /// 缺省 `none`；`ttl` 为 P2 保留值，解析到即按 none + 告警处理。
+    ///
+    /// **适用边界（cache key 裁决，审查 D2）**：缓存键 = 插件名 + 阶段 + 排序参数，
+    /// **不含请求态**（headers/body/变量）。同请求内前置插件改写 body 后再次声明同一
+    /// hook，命中的是旧请求态算出的 Patch——对 body 敏感的签名类插件（依赖完整报文
+    /// 计算签名）应声明 `none`；`request`/`suite` 仅适用于请求态无关的取证类插件
+    /// （OAuth2 取 Token、STS 凭据等）。
     #[serde(default)]
     pub cache_scope: PluginCacheScope,
     /// 环境变量白名单声明（03 §6.2）：子进程默认仅继承 PATH/HOME/LANG/TERM/TMPDIR +

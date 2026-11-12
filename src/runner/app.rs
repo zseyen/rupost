@@ -37,6 +37,8 @@ pub struct TestSuiteOptions {
     pub mask_snapshot: bool,
     /// 单响应体录入上限字节（03 §10.6 防 OOM；`--max-snapshot-body-bytes` 覆盖，缺省 256KB）
     pub max_snapshot_body_bytes: Option<usize>,
+    /// 关闭时序采集（`--timing off`，02 §2:135）：快照 timing_waterfall=null、timing_source=none
+    pub timing_off: bool,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
     /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
@@ -80,6 +82,7 @@ impl Default for TestSuiteOptions {
             save_snapshot: None,
             mask_snapshot: false,
             max_snapshot_body_bytes: None,
+            timing_off: false,
             allow_missing_plugins: false,
             strict_plugins: false,
             plugin_timeout_secs: crate::plugin::pipeline::DEFAULT_PLUGIN_TIMEOUT_SECS,
@@ -215,6 +218,11 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
     let mut batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
 
+    // M7-A 语义边界收敛（02 §2）：并行池竞争 → connector 观测 dns/tcp 标 approximate；
+    // `--timing off` → 时序字段整体归零（timing_source=none）。单点后置修正，
+    // 快照（snapshot_io 直透字段）与报告/终端消费保持一致口径。
+    reconcile_timing_metadata(&mut batch_results, &options.mode, options.timing_off);
+
     // 6.5 失败钩子（DX-Debug R7）：触发后使警告进入结果上下文
     if let Some(hook_cmd) = &options.on_failure {
         on_failure::fire_failure_hooks(&mut batch_results, hook_cmd).await;
@@ -243,6 +251,37 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     execute_test_suite(&options).await
 }
 
+/// 批跑结束后的 timing 元数据收敛（02 §2 契约诚实性，M7-A 语义边界裁决）：
+/// 1. `timing_off`：时序字段整体归零——`timing_waterfall=null`、`timing_source=none`
+///    （显式记录"未采集"，与字段缺省 null 区分）、归属标记抹除、采集原语清空；
+/// 2. 并行模式：connector 观测的 dns/tcp 可能因连接池竞争跨请求错位 →
+///    `timing_attribution=approximate`（`ttfb`/`transfer` 永远精确，attribution 仅描述
+///    dns/tcp 两段）；probe 独立探测连接与已标 approximate 的代理形态保持不变。
+pub fn reconcile_timing_metadata(
+    batch_results: &mut [(PathBuf, Vec<crate::runner::types::TestResult>)],
+    mode: &str,
+    timing_off: bool,
+) {
+    let parallel = mode == "parallel";
+    for (_, res_list) in batch_results {
+        for r in res_list {
+            if timing_off {
+                r.timing = None;
+                r.connect_span = None;
+                r.timing_source = Some(crate::http::timing::TimingSource::None);
+                r.timing_attribution = None;
+                continue;
+            }
+            if parallel
+                && r.timing_source == Some(crate::http::timing::TimingSource::Connector)
+                && r.timing_attribution == Some(crate::http::timing::TimingAttribution::Exact)
+            {
+                r.timing_attribution = Some(crate::http::timing::TimingAttribution::Approximate);
+            }
+        }
+    }
+}
+
 /// 统计非 `@teardown` 请求的插件降级数（与 `snapshot_io.rs` 一致，teardown 不计入降级告警与 `--strict-plugins` 门禁）
 fn count_degraded_non_teardown(batch_results: &[(PathBuf, Vec<TestResult>)]) -> usize {
     batch_results
@@ -259,6 +298,115 @@ fn count_degraded_non_teardown(batch_results: &[(PathBuf, Vec<TestResult>)]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::timing::{TimingAttribution, TimingSource};
+    use crate::runner::types::TestResult;
+
+    /// P1-1/P1-2（审查收口）：timing 元数据后置收敛决策表。
+    /// `--timing off` → 时序字段整体归零（02 §2:135 `none` = 未采集）；
+    /// 并行模式 + connector 观测 + exact → approximate（dns/tcp 池竞争可能跨请求错位，
+    /// ttfb/transfer 永远精确；probe 独立连接与代理已标 approximate 的形态不变）。
+    #[test]
+    fn test_reconcile_timing_metadata_decision_table() {
+        let mk_result =
+            |source: Option<TimingSource>, attribution: Option<TimingAttribution>| -> TestResult {
+                let mut r = TestResult::error(
+                    1,
+                    None,
+                    "GET".to_string(),
+                    "http://x".to_string(),
+                    "e".to_string(),
+                    Duration::ZERO,
+                );
+                r.timing_source = source;
+                r.timing_attribution = attribution;
+                r
+            };
+
+        // 决策 1：--timing off → 无论原形态，时序整体归零且 source 显式记录 none
+        for (source, attribution) in [
+            (
+                Some(TimingSource::Connector),
+                Some(TimingAttribution::Exact),
+            ),
+            (
+                Some(TimingSource::ProbeDegraded),
+                Some(TimingAttribution::Approximate),
+            ),
+            (None, None),
+        ] {
+            let mut batch = vec![(
+                PathBuf::from("t.http"),
+                vec![mk_result(source, attribution)],
+            )];
+            reconcile_timing_metadata(&mut batch, "sequential", true);
+            let r = &batch[0].1[0];
+            assert!(r.timing.is_none(), "off 必须抹除 timing 瀑布");
+            assert!(r.connect_span.is_none(), "off 必须抹除 connect_span");
+            assert_eq!(
+                r.timing_source,
+                Some(TimingSource::None),
+                "off 必须显式记录 timing_source=none"
+            );
+            assert!(r.timing_attribution.is_none(), "off 必须抹除归属标记");
+        }
+
+        // 决策 2：parallel + connector + exact → approximate
+        let mut batch = vec![(
+            PathBuf::from("t.http"),
+            vec![mk_result(
+                Some(TimingSource::Connector),
+                Some(TimingAttribution::Exact),
+            )],
+        )];
+        reconcile_timing_metadata(&mut batch, "parallel", false);
+        assert_eq!(
+            batch[0].1[0].timing_attribution,
+            Some(TimingAttribution::Approximate),
+            "并行池竞争下 connector dns/tcp 观测必须标 approximate"
+        );
+
+        // 决策 3：串行 + connector + exact → 保持 exact（R1 既有守护不回退）
+        let mut batch = vec![(
+            PathBuf::from("t.http"),
+            vec![mk_result(
+                Some(TimingSource::Connector),
+                Some(TimingAttribution::Exact),
+            )],
+        )];
+        reconcile_timing_metadata(&mut batch, "sequential", false);
+        assert_eq!(
+            batch[0].1[0].timing_attribution,
+            Some(TimingAttribution::Exact)
+        );
+
+        // 决策 4：parallel + probe 独立探测连接 → 保持 exact（不受池竞争影响）
+        let mut batch = vec![(
+            PathBuf::from("t.http"),
+            vec![mk_result(
+                Some(TimingSource::ProbeDegraded),
+                Some(TimingAttribution::Exact),
+            )],
+        )];
+        reconcile_timing_metadata(&mut batch, "parallel", false);
+        assert_eq!(
+            batch[0].1[0].timing_attribution,
+            Some(TimingAttribution::Exact)
+        );
+
+        // 决策 5：parallel + 已标 approximate（代理形态） → 保持 approximate
+        let mut batch = vec![(
+            PathBuf::from("t.http"),
+            vec![mk_result(
+                Some(TimingSource::Connector),
+                Some(TimingAttribution::Approximate),
+            )],
+        )];
+        reconcile_timing_metadata(&mut batch, "parallel", false);
+        assert_eq!(
+            batch[0].1[0].timing_attribution,
+            Some(TimingAttribution::Approximate)
+        );
+    }
 
     #[tokio::test]
     async fn test_run_test_suite_empty_paths() {

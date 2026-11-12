@@ -827,3 +827,181 @@ async fn test_default_save_snapshot_without_debug_records_connector_timing_and_k
     assert_eq!(e1["timing_source"], "connector");
     assert_eq!(e1["timing_attribution"], "exact");
 }
+
+/// P1-1（M7-A 语义边界裁决）：并行模式下 connector 观测的 dns/tcp 可能因连接池
+/// 竞争跨请求错位 → 快照 timing_attribution 必须标 approximate（诚实契约），
+/// timing_source 保持 connector；串行路径保持 exact（R1 既有守护不回退）。
+#[tokio::test]
+async fn test_parallel_mode_marks_connector_timing_approximate() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = socket.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    let resp =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok";
+                    if socket.write_all(resp.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let http_file = dir.path().join("par_timing.http");
+    let snap_file = dir.path().join("par_snap.json");
+    let content = format!(
+        "### Parallel One\nGET http://localhost:{}/p1\n\n### Parallel Two\nGET http://localhost:{}/p2\n",
+        addr.port(),
+        addr.port()
+    );
+    std::fs::write(&http_file, content).unwrap();
+
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_rupost"));
+    cmd.arg("test")
+        .arg(&http_file)
+        .arg("--mode")
+        .arg("parallel")
+        .arg("--save-snapshot")
+        .arg(&snap_file);
+    for proxy_var in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ] {
+        cmd.env_remove(proxy_var);
+    }
+    let output = cmd.output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "parallel snapshot run failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let raw_val: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&snap_file).unwrap()).unwrap();
+    let entries = raw_val["entries"].as_array().expect("entries array");
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(
+            entry["timing_source"], "connector",
+            "并行请求仍为 connector 真实测量"
+        );
+        assert_eq!(
+            entry["timing_attribution"], "approximate",
+            "并行模式 connector dns/tcp 观测必须诚实标注 approximate: {}",
+            entry["name"]
+        );
+    }
+}
+
+/// P1-2（02 §2:135 契约兑现）：`--timing off` → 快照 timing_waterfall=null、
+/// timing_source=none（显式记录"未采集"，与字段缺省 null 区分）。
+#[tokio::test]
+async fn test_timing_off_writes_null_waterfall_and_none_source() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = socket.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    let resp =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok";
+                    if socket.write_all(resp.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let http_file = dir.path().join("timing_off.http");
+    let snap_file = dir.path().join("off_snap.json");
+    let content = format!("### Off Case\nGET http://localhost:{}/off\n", addr.port());
+    std::fs::write(&http_file, content).unwrap();
+
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_rupost"));
+    cmd.arg("test")
+        .arg(&http_file)
+        .arg("--timing")
+        .arg("off")
+        .arg("--save-snapshot")
+        .arg(&snap_file);
+    let output = cmd.output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "timing off run failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let raw_val: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&snap_file).unwrap()).unwrap();
+    let entry = &raw_val["entries"][0];
+    assert!(
+        entry["timing_waterfall"].is_null(),
+        "--timing off 必须产出 timing_waterfall=null: {}",
+        entry
+    );
+    assert_eq!(
+        entry["timing_source"], "none",
+        "--timing off 必须显式记录 timing_source=none"
+    );
+    assert!(
+        entry["timing_attribution"].is_null(),
+        "--timing off 无归属标记"
+    );
+}
+
+/// P1-2 防误用对照：`--timing <未知模式>` 属语法错误，必须 exit 2。
+#[tokio::test]
+async fn test_timing_unknown_mode_is_syntax_error_exit_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let http_file = dir.path().join("x.http");
+    std::fs::write(&http_file, "### x\nGET http://127.0.0.1:1/x\n").unwrap();
+
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .arg("test")
+        .arg(&http_file)
+        .arg("--timing")
+        .arg("turbo")
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "未知 --timing 模式必须 exit 2: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--timing") && stderr.contains("off"),
+        "错误消息必须指明合法值: {stderr}"
+    );
+}

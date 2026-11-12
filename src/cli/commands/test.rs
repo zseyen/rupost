@@ -72,6 +72,10 @@ pub struct TestArgs {
     #[arg(long, value_name = "BYTES")]
     pub max_snapshot_body_bytes: Option<usize>,
 
+    /// 时序采集模式（02 §2 契约）：仅支持 `off`——关闭时序采集，快照 timing_waterfall=null、timing_source=none
+    #[arg(long, value_name = "MODE")]
+    pub timing: Option<String>,
+
     /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
     #[arg(long, value_name = "N|@NAME")]
     pub only: Option<String>,

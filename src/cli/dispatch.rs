@@ -37,6 +37,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 save_snapshot,
                 mask_secrets,
                 max_snapshot_body_bytes,
+                timing,
                 only,
                 on_failure,
                 allow_missing_plugins,
@@ -49,6 +50,16 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
             let explain_enabled =
                 explain || rupost::security::fs::env_flag_enabled("RUPOST_AI_EXPLAIN");
+            // --timing 仅支持 off（02 §2:135 契约：none = 未采集）；未知模式按语法错误 exit 2
+            let timing_off = match timing.as_deref() {
+                None => false,
+                Some("off") => true,
+                Some(other) => {
+                    return Err(rupost::RupostError::ParseError(format!(
+                        "无效的 --timing 模式 '{other}'（当前仅支持: off）"
+                    )));
+                }
+            };
             let options = rupost::runner::TestSuiteOptions {
                 paths,
                 mode,
@@ -70,6 +81,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 save_snapshot,
                 mask_snapshot: mask_secrets,
                 max_snapshot_body_bytes,
+                timing_off,
                 only,
                 on_failure,
                 allow_missing_plugins,

@@ -907,3 +907,110 @@ async fn test_pipeline_dependency_missing_attaches_three_option_prescription() {
         degraded.warnings
     );
 }
+
+/// D1/D5 收口（审查发现）：request 作用域下降级后必须写入"降级哨兵"——
+/// 同一请求内重复声明同一失败指令只拉起一次子进程、只产生一条降级告警，
+/// 绝不重复调用与告警轰炸（跨请求仍按各自现场重试，suite 作用域自愈语义不变）。
+#[tokio::test]
+async fn test_pipeline_request_scope_degraded_sentinel_dedupes_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter_file = dir.path().join("sentinel_calls.txt");
+    let exe = install_script_plugin(
+        dir.path(),
+        "flaky-auth",
+        PluginStage::Prepare,
+        PluginCacheScope::Request,
+        vec![],
+        &format!(
+            "READ_STDIN=\nAPPEND_STDIN={}\nEXIT_CODE=3\n",
+            counter_file.display()
+        ),
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let directive = PluginDirective::new("auth", "flaky-auth", PluginStage::Prepare);
+    let opts = PluginRuntimeOptions {
+        allow_missing_plugins: true,
+        ..PluginRuntimeOptions::default()
+    };
+    let outcome = PluginPipeline::execute_for_request(
+        &[directive.clone(), directive],
+        &reg,
+        &opts,
+        &SuiteHookCache::new(),
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+
+    assert!(outcome.degraded, "allow_missing_plugins 下失败必须降级放行");
+    let degraded_warnings = outcome
+        .warnings
+        .iter()
+        .filter(|w| w.contains("flaky-auth"))
+        .count();
+    assert_eq!(
+        degraded_warnings, 1,
+        "同请求重复声明同一失败指令必须只产生一条降级告警: {:?}",
+        outcome.warnings
+    );
+    let lines = std::fs::read_to_string(&counter_file).unwrap();
+    assert_eq!(
+        lines.lines().count(),
+        1,
+        "降级哨兵生效：失败指令同请求内只调用一次子进程"
+    );
+}
+
+/// D4 收口（审查发现）：阻断（blocking_error）时已成功插件产出的 patch.warnings
+/// 必须并入 outcome.warnings——现场信息绝不静默丢弃。
+#[tokio::test]
+async fn test_pipeline_blocking_preserves_upstream_patch_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install_script_plugin(
+        dir.path(),
+        "warn-auth",
+        PluginStage::Prepare,
+        PluginCacheScope::None,
+        vec![],
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[\"PLUGIN_WARN_1\"]}\n",
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let outcome = PluginPipeline::execute_for_request(
+        &[
+            PluginDirective::new("auth", "warn-auth", PluginStage::Prepare),
+            PluginDirective::new("sign", "no-such-blocker", PluginStage::Sign),
+        ],
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &SuiteHookCache::new(),
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+
+    assert!(outcome.blocking_error.is_some(), "必选插件缺失必须阻断");
+    assert!(
+        outcome.warnings.iter().any(|w| w.contains("PLUGIN_WARN_1")),
+        "阻断时已成功插件的 patch.warnings 必须保留在现场: {:?}",
+        outcome.warnings
+    );
+}

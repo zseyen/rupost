@@ -99,7 +99,9 @@ pub struct PluginStageOutcome {
     pub blocking_error: Option<String>,
 }
 
-/// Hook 缓存键：suite 与 request 两种作用域共用（插件名 + 阶段 + 排序参数精确隔离）
+/// Hook 缓存键：suite 与 request 两种作用域共用（插件名 + 阶段 + 排序参数精确隔离）。
+/// **不含请求态维度（headers/body/变量）**——缓存命中复用的是旧请求态算出的 Patch，
+/// body 敏感的签名类插件应声明 `none`（适用边界裁决见 [`crate::plugin::types::HookCapability`]）。
 fn hook_cache_key(directive: &PluginDirective) -> String {
     let sorted_params: BTreeMap<&str, &str> = directive
         .params
@@ -247,8 +249,9 @@ impl PluginPipeline {
         let mut current_body = resolved_body.map(str::to_string);
         let mut current_vars = serde_json::Map::new();
         // 请求局部 Hook 结果备忘录（03 §3.1 `cache_scope=request`：同一请求内同指令复用，
-        // 跨请求绝不复用——套件级复用专属 suite 作用域）
-        let mut request_cache: HashMap<String, super::PluginPatch> = HashMap::new();
+        // 跨请求绝不复用——套件级复用专属 suite 作用域）。
+        // `None` = 降级哨兵：同请求内同一失败指令不重试、不重复告警（审查 D1/D5 收口）。
+        let mut request_cache: HashMap<String, Option<super::PluginPatch>> = HashMap::new();
 
         for directive in &ordered {
             let Some((exe_path, hook)) = registry
@@ -303,6 +306,9 @@ impl PluginPipeline {
 
             match hook.cache_scope {
                 PluginCacheScope::Suite => {
+                    // D6 裁决（审查收口）：失败降级不写套件缓存槽——后续请求按各自现场
+                    // 重试（自愈语义：临时性故障如网关抖动可在下一请求恢复），代价是
+                    // 持续故障时每请求各记一条降级告警（属各请求现场的如实记录，非缺陷）。
                     let cache_key = hook_cache_key(directive);
                     let slot = suite_cache.slot_for(&cache_key);
                     let mut guard = slot.lock().await;
@@ -346,15 +352,20 @@ impl PluginPipeline {
                 }
                 PluginCacheScope::Request => {
                     let cache_key = hook_cache_key(directive);
-                    if let Some(cached) = request_cache.get(&cache_key) {
-                        apply_patch_to_view(
-                            cached,
-                            &mut acc,
-                            &mut current_headers,
-                            &mut current_body,
-                            &mut current_vars,
-                        );
-                        continue;
+                    match request_cache.get(&cache_key) {
+                        // 降级哨兵命中：同请求内已判定失败，不重试、不重复告警
+                        Some(None) => continue,
+                        Some(Some(cached)) => {
+                            apply_patch_to_view(
+                                cached,
+                                &mut acc,
+                                &mut current_headers,
+                                &mut current_body,
+                                &mut current_vars,
+                            );
+                            continue;
+                        }
+                        None => {}
                     }
                     match Self::invoke_hook_once(
                         directive,
@@ -371,7 +382,7 @@ impl PluginPipeline {
                     .await
                     {
                         HookInvokeStep::Patch(patch) => {
-                            request_cache.insert(cache_key, patch.clone());
+                            request_cache.insert(cache_key, Some(patch.clone()));
                             apply_patch_to_view(
                                 &patch,
                                 &mut acc,
@@ -380,7 +391,11 @@ impl PluginPipeline {
                                 &mut current_vars,
                             );
                         }
-                        HookInvokeStep::Continue => continue,
+                        // 降级放行：写入哨兵，同请求内后续同指令直接跳过（D1/D5）
+                        HookInvokeStep::Continue => {
+                            request_cache.insert(cache_key, None);
+                            continue;
+                        }
                         HookInvokeStep::Break => break,
                     }
                 }
@@ -418,6 +433,9 @@ impl PluginPipeline {
         if outcome.blocking_error.is_none() {
             outcome.patch = Some(acc);
         } else {
+            // 阻断时保留已成功插件的 patch.warnings 现场（审查 D4 收口：绝不静默丢弃）
+            let mut acc = acc;
+            outcome.warnings.append(&mut acc.warnings);
             outcome.patch = None;
         }
         outcome

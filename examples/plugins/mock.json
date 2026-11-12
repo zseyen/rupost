@@ -1,0 +1,8 @@
+[
+  { "method": "POST", "path": "/post", "variants": [
+    { "condition": null, "status": 200, "headers": { "Content-Type": "application/json" }, "response_body": "{\"echo\":true,\"order_id\":9527}" }
+  ] },
+  { "method": "GET", "path": "/get", "variants": [
+    { "condition": null, "status": 200, "headers": { "Content-Type": "application/json" }, "response_body": "{\"origin\":\"127.0.0.1\"}" }
+  ] }
+]

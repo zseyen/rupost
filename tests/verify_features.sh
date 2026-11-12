@@ -675,7 +675,8 @@ else
     echo -e "${RED}[ERROR] 插件管线 / 快照上限旗标验证失败！${NC}"; kill $PLUGIN_MOCK_PID; exit 1
 fi
 
-# c) 必选插件缺失：默认阻断 exit 1；--strict-plugins 下即使 200 也判失败 exit 1
+# c) 必选插件缺失：默认（未传任何降级旗标）阻断 exit 1 并列出搜索路径；
+#    --strict-plugins 的整体判失败门禁由单测与 runner 门禁测试覆盖，此处不重复传旗标
 MISS_HTTP="$PLUGIN_WS/missing.http"
 printf '%s\n' "### blocked" "@auth no-such-plugin" "GET {{base_url}}/guarded" "" "# @assert status == 200" > "$MISS_HTTP"
 (cd "$PLUGIN_WS" && $PLUGIN_BIN t missing.http --env dev --allow-project-plugins) > /dev/null 2>&1 && BLOCKED=0 || BLOCKED=$?

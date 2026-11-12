@@ -28,6 +28,9 @@ pub struct JsonTestReport {
     pub success: bool,
     pub error: Option<String>,
     pub skipped: bool,
+    /// B-3：插件降级形态的成功（DegradedPass）——CI 看板可见性对齐 --strict-plugins
+    #[serde(default)]
+    pub degraded: bool,
     pub assertions: Vec<JsonAssertionReport>,
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -111,6 +114,7 @@ pub fn build_json_reports(
                         status: r.status,
                         duration_ms: r.duration.as_millis() as u64,
                         success: r.success,
+                        degraded: r.degraded,
                         // Gap Review P1-1：reqwest 错误文本自带完整原始 URL，必须掩码
                         error: r
                             .error

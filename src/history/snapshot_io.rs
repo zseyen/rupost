@@ -54,12 +54,17 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                     url: req.url.clone(),
                     headers: header_map_to_pairs(&req.headers),
                     body: req.body.clone(),
+                    // B-6：@timeout 往返（重放复现原超时语义，不再退回 30s 默认）
+                    timeout_ms: req
+                        .timeout
+                        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
                 },
                 None => SnapshotRequest {
                     method: r.method.clone(),
                     url: r.url.clone(),
                     headers: Vec::new(),
                     body: None,
+                    timeout_ms: None,
                 },
             };
             let file_path_str = crate::utils::path_guard::normalize_posix_path(

@@ -22,6 +22,7 @@ pub fn save_current_snapshot(state: &mut AppState) {
             status: resp.status.code(),
             headers: resp.headers.clone(),
             body: resp.body.clone(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -32,6 +33,7 @@ pub fn save_current_snapshot(state: &mut AppState) {
         timestamp: chrono::Utc::now(),
         source_file: state.editor_file_path.clone(),
         entries: vec![entry],
+        masking: None,
     };
     let dir = state.workspace_root.join("snapshots");
     if let Err(e) = std::fs::create_dir_all(&dir) {

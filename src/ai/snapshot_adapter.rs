@@ -86,6 +86,8 @@ fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
         success: e.success,
         error: e.error.as_ref().map(|err| err.message.clone()),
         skipped: false,
+        // DegradedPass（可选插件降级形态的成功）在 triage 报告中如实呈现
+        degraded: e.outcome == crate::history::model::ExecutionOutcome::DegradedPass,
         assertions: e
             .assertions
             .iter()
@@ -148,6 +150,7 @@ mod tests {
                     url: "https://u:p@api.example.com/pay?token=raw_query_secret".to_string(),
                     headers: vec![],
                     body: None,
+                    timeout_ms: None,
                 },
                 response: None,
                 error: Some(ExecutionErrorDetail {
@@ -211,6 +214,7 @@ mod tests {
                     url: "https://api.example.com/gw?token=forged_mask_secret".to_string(),
                     headers: vec![],
                     body: None,
+                    timeout_ms: None,
                 },
                 response: Some(SnapshotResponse {
                     status: 504,

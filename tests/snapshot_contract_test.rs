@@ -370,6 +370,7 @@ fn test_mask_snapshot_entry_preserves_and_masks_multi_value_set_cookie_headers()
             status: 200,
             headers: resp_headers,
             body: "ok".to_string(),
+            body_truncated: None,
         },
     );
 
@@ -471,6 +472,7 @@ fn test_snapshot_writes_protect_symlinks_and_enforce_0600_permissions() {
         timestamp: chrono::Utc::now(),
         source_file: Some("contract_test".to_string()),
         entries: vec![],
+        masking: None,
     };
     write_snapshot_suite(&suite, &link_suite).unwrap();
 
@@ -556,6 +558,7 @@ fn test_redaction_contract_headers_query_body_and_ai_parity() {
             status: 200,
             headers: resp_headers,
             body: req_body.to_string(),
+        body_truncated: None,
         },
     );
     mask_snapshot_entry(&mut legacy_entry);
@@ -694,6 +697,7 @@ fn test_redaction_contract_headers_query_body_and_ai_parity() {
                 ("Content-Type".to_string(), "application/json".to_string()),
             ],
             body: Some(req_body.to_string()),
+            timeout_ms: None,
         },
         response: Some(SnapshotResponse {
             status: 200,

@@ -267,7 +267,7 @@ impl PluginPipeline {
                     directive.name
                 );
                 let block_msg = format!(
-                    "插件 '{}' 未安装。搜索路径: $PATH 各目录、~/.rupost/plugins、./.rupost/plugins（需 --allow-project-plugins）",
+                    "插件 '{}' 未安装。搜索路径: $PATH 各目录、~/.rupost/plugins、./.rupost/plugins（需 --allow-project-plugins）。处方（三选一）：① 安装该插件；② 改用内置宏等价能力；③ --allow-missing-plugins 显式降级",
                     directive.name
                 );
                 if Self::gate_degradation(

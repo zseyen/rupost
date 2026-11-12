@@ -230,6 +230,7 @@ fn test_offline_json_report_to_html_generation() {
         success: true,
         error: None,
         skipped: false,
+        degraded: false,
         assertions: vec![assert_item],
         warnings: vec![],
         diagnose_report: None,

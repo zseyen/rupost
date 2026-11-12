@@ -122,6 +122,13 @@ impl ReplayExecutor {
             "[*]".bold().blue(),
             suite.entries.len()
         );
+        // B-2（02 §4）：masked 快照消费前必须声明"数据不完整"——验签/Diff 结论降级
+        if suite.masking.as_deref() == Some("secrets") {
+            println!(
+                "{} 该快照为脱敏形态（masking=secrets）：敏感值已替换为 [REDACTED]，body 比对与验签类结论按数据不完整降级",
+                "[!]".bold().yellow()
+            );
+        }
         if let Some(target) = &self.target_url {
             println!(
                 "{} Overriding target URL base to: {}",
@@ -316,8 +323,11 @@ impl ReplayExecutor {
         let status_matched = expected_status == actual_status;
 
         // 5. T4 Smart Diff：body 深比较（默认排除列表 + 用户 --ignore-fields 合并）；
-        // 仅状态码相等且未启用 --status-only 时参与
-        let (body_matched, body_diff) = if status_matched && !self.status_only {
+        // 仅状态码相等且未启用 --status-only 时参与。
+        // B-2：录制时被截断的响应体（body_truncated）不参与 diff——截断 JSON 前缀
+        // 必然解析失败，参与比对只会产生系统性假 "body changed"
+        let truncated = recorded_resp.body_truncated == Some(true);
+        let (body_matched, body_diff) = if status_matched && !self.status_only && !truncated {
             let mut keys: Vec<String> = DEFAULT_IGNORE_FIELDS
                 .iter()
                 .map(|s| s.to_string())
@@ -327,6 +337,12 @@ impl ReplayExecutor {
         } else {
             (None, None)
         };
+        if truncated && status_matched {
+            println!(
+                "  {} Body 因录制时截断（body_truncated）不参与比对，仅锁定 status/headers",
+                "[i]".yellow()
+            );
+        }
         let matched = status_matched && body_matched.unwrap_or(true);
 
         if status_matched {

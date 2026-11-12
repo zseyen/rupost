@@ -425,6 +425,7 @@ mod tests {
             success: false,
             error: None,
             skipped: false,
+            degraded: false,
             assertions: vec![JsonAssertionReport {
                 raw: "status == 200".to_string(),
                 passed: false,

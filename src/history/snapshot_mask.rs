@@ -189,6 +189,7 @@ mod tests {
                     ("Content-Type".to_string(), "application/json".to_string()),
                 ],
                 body: Some(r#"{"password": "hunter2", "city": "Shanghai"}"#.to_string()),
+                timeout_ms: None,
             },
             response: None,
             error: Some(ExecutionErrorDetail {

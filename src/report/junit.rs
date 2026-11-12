@@ -162,6 +162,15 @@ impl JUnitTestSuites {
                     case.skipped = Some(JUnitSkipped {
                         message: Some("skipped by selector or @skip".to_string()),
                     });
+                } else if r.degraded && r.success {
+                    // B-3：插件降级形态的成功 → <skipped>（非 failure：断言本身通过；
+                    // 看板可见性对齐 --strict-plugins 的整体判失败，消灭"绿看板红 job"矛盾）
+                    s_skip += 1;
+                    case.skipped = Some(JUnitSkipped {
+                        message: Some(
+                            "plugin degraded: request passed with degraded plugins (--strict-plugins fails the suite)".to_string(),
+                        ),
+                    });
                 } else if let Some(err) = &r.error {
                     // 请求级异常（网络/DNS/超时）→ <error>（评审 P1-3：区分 failure/error）
                     s_err += 1;
@@ -299,6 +308,7 @@ mod tests {
             success: true,
             error: None,
             skipped: false,
+            degraded: false,
             assertions: vec![],
             warnings: vec![],
             response_body_snippet: None,

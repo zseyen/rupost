@@ -67,6 +67,7 @@ fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
                 success: false,
                 error: None,
                 skipped: false,
+                degraded: false,
                 assertions: vec![rupost::report::JsonAssertionReport {
                     raw: "status == 200".to_string(),
                     passed: false,
@@ -89,6 +90,7 @@ fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
                 success: false,
                 error: None,
                 skipped: false,
+                degraded: false,
                 assertions: vec![rupost::report::JsonAssertionReport {
                     raw: "status == 200".to_string(),
                     passed: false,
@@ -335,6 +337,7 @@ fn test_cli_ai_triage_accepts_snapshot_and_hidden_legacy_alias_and_rejects_confl
                 url: "https://api.example.com/v1/orders/42".to_string(),
                 headers: vec![],
                 body: None,
+                timeout_ms: None,
             },
             response: Some(rupost::history::model::SnapshotResponse {
                 status: 504,

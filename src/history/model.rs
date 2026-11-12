@@ -112,6 +112,10 @@ pub struct SnapshotSuite {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub source_file: Option<String>,
     pub entries: Vec<SnapshotEntry>,
+    /// B-2：来源契约的 masking 标记透传（"secrets" → replay 警告"数据不完整"，
+    /// 02 §4：掩码模式验签/Diff 结论必须降级声明）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masking: Option<String>,
 }
 
 fn default_snapshot_version() -> u32 {
@@ -127,6 +131,11 @@ pub struct ResponseSnapshot {
     pub headers: reqwest::header::HeaderMap,
 
     pub body: String,
+
+    /// B-2：录制时响应体是否被上限截断（截断条目 replay 跳过 body diff，
+    /// 消灭"截断 JSON 前缀必然比对失败"的系统性假失败）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_truncated: Option<bool>,
 }
 
 impl From<HistoryEntry> for SnapshotEntry {
@@ -141,6 +150,7 @@ impl From<HistoryEntry> for SnapshotEntry {
                     .response
                     .body
                     .unwrap_or_else(|| "Old snapshot: body not recorded".to_string()),
+                body_truncated: None,
             }),
             error: None,
         }
@@ -295,6 +305,9 @@ pub struct SnapshotRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// B-6：`@timeout` 往返（毫秒）。缺失 = 旧快照，重放退回 client 默认（serde default 兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// 黑匣子响应镜像（256KB 截断保护 + 截断前完整 Body 的 SHA-256 供离线验真）
@@ -441,14 +454,14 @@ fn header_pairs_to_map(pairs: &[(String, String)]) -> reqwest::header::HeaderMap
 }
 
 impl SnapshotRequest {
-    /// 黑匣子请求镜像 → 重放格式的 RequestSnapshot（timeout 不可考，回退 None）
+    /// 黑匣子请求镜像 → 重放格式的 RequestSnapshot（B-6：timeout 往返复现原超时语义）
     pub fn to_history_request(&self) -> RequestSnapshot {
         RequestSnapshot {
             method: self.method.clone(),
             url: self.url.clone(),
             headers: header_pairs_to_map(&self.headers),
             body: self.body.clone(),
-            timeout: None,
+            timeout: self.timeout_ms.map(std::time::Duration::from_millis),
         }
     }
 }
@@ -471,10 +484,15 @@ impl ExecutionSnapshotFile {
                         status: r.status,
                         headers: header_pairs_to_map(&r.headers),
                         body: r.body.clone(),
+                        body_truncated: Some(r.body_truncated),
                     }),
                     error: e.error.clone(),
                 })
                 .collect(),
+            masking: match self.masking {
+                MaskingMode::Secrets => Some("secrets".to_string()),
+                MaskingMode::None => None,
+            },
         }
     }
 }

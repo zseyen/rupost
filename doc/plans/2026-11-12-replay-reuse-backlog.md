@@ -42,11 +42,11 @@
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
 | B-1 | ✅ 已落地（2026-11-13：`src/runner/executor_factory.rs` 共享工厂（`discover_plugin_registry` 拆层 DRY + `build_interactive_executor[_with]`）；TUI/Web 三构建点收口；装配守护 e2e 含防假守护对照） | `src/runner/executor_factory.rs`、`src/runner/suite_setup.rs`、`src/tui/handlers/actions/execution.rs`、`src/web/handlers/run.rs` | 注册表发现拆层为独立工厂函数，TUI/Web 经共享工厂装配本机注册表（项目级默认隔离 + env 通道一致） | 本机已装插件在 TUI/Web 真实生效（`tests/interactive_executor_test.rs`） | ✅ |
-| B-2 | replay 感知 masking / body_truncated | `replayer.rs:24,398-429`；`model.rs:459-480`（masking 被丢弃） | masked 快照 → 警告或严格拒绝；截断条目跳过 body diff 只锁 status/headers 并注明原因 | 两类系统性假失败消灭 | 🔧 |
-| B-3 | 报告 degraded 呈现 | `src/report/` 全目录零 degraded 字段 | JUnit → `<skipped>` 或 failure 注记；JSON/HTML 同步 | `--strict-plugins` 红 job 与看板不再互相矛盾 | 🔧 |
-| B-4 | "未安装"文案补指引 | `pipeline.rs:264-268` vs `:171-174` | 与 RuntimeMissing 三选一处方对齐 | 首跑失败消息含 `--allow-missing-plugins` 指引 | 🔧 |
-| B-5 | replay 输入防线 | `snapshot_legacy.rs:29`（`read_to_string` 全量） | 64MB 上限 + `ensure_compatible_schema()` 版本门（与 triage 对齐，`triage.rs:183-197`） | 超大/未来版本快照显式拒绝而非静默错读 | 🔧 |
-| B-6 | 黑匣子自足性补全 | `model.rs:292-298`（@timeout 丢失）；`snapshot_io.rs:91-100`（error 仅无响应时录） | 快照请求镜像补 `@timeout`；有响应但断言失败补 error Detail | 超时类现场可忠实重放；失败 kind/耗时可追溯 | 🔧 |
+| B-2 | replay 感知 masking / body_truncated | `replayer.rs:24,398-429`；`model.rs:459-480`（masking 被丢弃） | masked 快照 → 警告或严格拒绝；截断条目跳过 body diff 只锁 status/headers 并注明原因 | 两类系统性假失败消灭 | ✅ 已落地（2026-11-13：`SnapshotSuite.masking`/`ResponseSnapshot.body_truncated` 透传 + replay 两级消费——masked 警告"数据不完整"、截断条目跳过 body diff 注明原因；`tests/replay_contract_test.rs` 4 用例） |
+| B-3 | 报告 degraded 呈现 | `src/report/` 全目录零 degraded 字段 | JUnit → `<skipped>` 或 failure 注记；JSON/HTML 同步 | `--strict-plugins` 红 job 与看板不再互相矛盾 | ✅ 已落地（2026-11-13：JUnit degraded→`<skipped message="plugin degraded...">`（断言通过非 failure）+ JSON 报告 `degraded` 字段（snapshot_adapter 按 DegradedPass 填充）；schema 精确字段测试同步演进；e2e `test_degraded_pass_visible_in_junit_and_json_reports`） |
+| B-4 | "未安装"文案补指引 | `pipeline.rs:264-268` vs `:171-174` | 与 RuntimeMissing 三选一处方对齐 | 首跑失败消息含 `--allow-missing-plugins` 指引 | ✅ 已落地（2026-11-13：未安装 blocking 文案补三选一处方，与 runtime_missing 对齐；`test_missing_plugin_blocking_message_includes_prescription`） |
+| B-5 | replay 输入防线 | `snapshot_legacy.rs:29`（`read_to_string` 全量） | 64MB 上限 + `ensure_compatible_schema()` 版本门（与 triage 对齐，`triage.rs:183-197`） | 超大/未来版本快照显式拒绝而非静默错读 | ✅ 已落地（2026-11-13：`MAX_REPLAY_SNAPSHOT_BYTES` 64MB 体积门 + schema 主版本门（2.0+ 显式拒绝防静默错读）+ legacy version≤2 门；replay_contract 2 用例） |
+| B-6 | 黑匣子自足性补全 | `model.rs:292-298`（@timeout 丢失）；`snapshot_io.rs:91-100`（error 仅无响应时录） | 快照请求镜像补 `@timeout`；有响应但断言失败补 error Detail | 超时类现场可忠实重放；失败 kind/耗时可追溯 | ◐ 部分落地（2026-11-13：`SnapshotRequest.timeout_ms` 往返 ✅——快照记录 @timeout、重放复现原超时语义；error Detail 部分 **deferred**：有响应断言失败的条目填充 error 涉及 02 §2 契约语义裁决（error 字段从"仅无响应"扩到"断言失败"属语义修改非字段追加），留待契约评审后实施） |
 
 ## 3. P2 · 安全对齐
 

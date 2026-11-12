@@ -150,3 +150,70 @@ async fn test_junit_default_output_file_and_prompt() {
         "junit prompt (P1-4): {stdout}"
     );
 }
+
+/// B-3（免重填审查）：插件降级形态的成功（DegradedPass）在 CI 报告中必须可见——
+/// JUnit 呈现为 <skipped>（非 failure：断言本身通过），JSON 报告携带 degraded 字段；
+/// 消灭 "--strict-plugins 红 job 与全绿看板" 的归因矛盾。
+#[tokio::test]
+async fn test_degraded_pass_visible_in_junit_and_json_reports() {
+    use wiremock::matchers::{method, path};
+    let server = wiremock::MockServer::start().await;
+    // 403 兜底（插件缺席原样外发命中）——断言锁 403 → success+degraded
+    wiremock::Mock::given(method("GET"))
+        .and(path("/guarded"))
+        .respond_with(wiremock::ResponseTemplate::new(403).set_body_string("no plugin"))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let fake_home = dir.path().join("home");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    let case = dir.path().join("deg.http");
+    std::fs::write(
+        &case,
+        format!(
+            "### guarded\n@auth no-such-plugin-b3 ?optional\nGET {}/guarded\n\n# @assert status == 403\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let out_path = dir.path().join("deg-junit.xml");
+    let out = std::process::Command::new(rupost_bin())
+        .current_dir(dir.path())
+        .env("HOME", &fake_home)
+        .args([
+            "t",
+            case.to_str().unwrap(),
+            "--allow-missing-plugins",
+            "--report",
+            "junit",
+            "--report-file",
+            out_path.to_str().unwrap(),
+            "--save-snapshot",
+            dir.path().join("deg-snap.json").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "降级 + 403 断言通过 → exit 0: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let xml = std::fs::read_to_string(&out_path).unwrap();
+    assert!(
+        xml.contains("<skipped"),
+        "degraded 条目必须在 JUnit 中呈现为 <skipped>: {xml}"
+    );
+    assert!(
+        xml.contains("plugin degraded"),
+        "skipped 必须注明降级原因: {xml}"
+    );
+
+    let snap = std::fs::read_to_string(dir.path().join("deg-snap.json")).unwrap();
+    assert!(
+        snap.contains("degraded_pass"),
+        "快照三态必须记录 DegradedPass"
+    );
+}

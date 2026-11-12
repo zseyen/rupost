@@ -60,8 +60,8 @@
 
 | ID | 工作项 | 证据锚点 | 修复方向 | 验收标准 | 状态 |
 |---|---|---|---|---|---|
-| E-1 | 插件权威文档重写 | `doc/architecture/features/plugin_and_extensibility.md:83`（仍是 Wasm 旧设计） | 对齐 Stdio IPC/JSON manifest 现实 + README 插件章节 | 插件作者有唯一可信现行文档 | 🔧 |
-| E-2 | `plugin schema` 增强 | `plugin_route.rs:255-271`（仅 hooks 参数平铺） | 补 `@` 指令枚举 / 内置宏（`$sha256` 族）/ manifest schema / VSCode 挂接最小示例 | IDE 补全端到端可演示（场景 A 兑现） | 🔧 |
+| E-1 | 插件权威文档重写 | `doc/architecture/features/plugin_and_extensibility.md:83`（仍是 Wasm 旧设计） | 对齐 Stdio IPC/JSON manifest 现实 + README 插件章节 | 插件作者有唯一可信现行文档 | ✅ 已落地（2026-11-13：`doc/architecture/features/plugin_and_extensibility.md` 全面重写——废弃 Wasm/plugin.toml 旧设计声明 + Stdio IPC 现架构摘要 + 作者五步指南 + 安全不变量表 + 不做项登记） |
+| E-2 | `plugin schema` 增强 | `plugin_route.rs:255-271`（仅 hooks 参数平铺） | 补 `@` 指令枚举 / 内置宏（`$sha256` 族）/ manifest schema / VSCode 挂接最小示例 | IDE 补全端到端可演示（场景 A 兑现） | ✅ 已落地（2026-11-13：`plugin schema` 四段输出——pluginDirectives（参数+阶段序+?optional）/ directiveSyntax 枚举 / builtinMacros（$hmac_sha256 等全宏表）/ manifestSchema（runtime/commands/hooks/保留字枚举）——场景 A 的 IDE 补全原料齐备） |
 | E-3 | generate/bootstrap 凭据回填增强 | `generator/http.rs:171-180,78-84`（T2 不命中即弃值） | `--keep-credentials`（0600 本机回放）或缺失变量交互式写入 .env | 免去"翻 history 抄 token 填 .env" | ✅ 已落地（2026-11-13：`--keep-credentials`（generate/ai bootstrap）——T2 溯源不命中时保留字面凭据免手工回填，`generate_with_policy/ex` 链路透传） |
 | E-4 | `{{var}}` 未解析门禁 | `resolver.rs:44,282-304`（字面量发送 + 事后警告） | `--strict-vars` 报错停止（默认维持警告不破坏既有语义） | 漏配变量不再打注定失败的请求 | ✅ 已落地（2026-11-13：`--strict-vars`——未解析 `{{var}}` 拒绝外发（executor 拦截 + 可读错误指名变量），默认语义不回退防假守护对照） |
 | E-5 | 观测面补全 | `report/json.rs`（无 waterfall）；`reporter.rs:66-74` | JSON 报告补 timing_waterfall；终端渲染 `plugin_duration_us` | 离线 HTML 复渲染不退化；开发者看得见插件耗时 | ✅ 已落地（2026-11-13：JSON 报告 `timing` 分段（恒序列化保键集稳定，schema 精确字段测试演进）+ 终端 `plugin_duration_us` 渲染（"plugin +Xms"）） |

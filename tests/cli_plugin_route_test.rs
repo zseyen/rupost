@@ -184,8 +184,12 @@ fn test_cli_plugin_route_after_cmd_and_builtin_plugin_precedence() {
     assert!(builtin_out.status.success());
     let stdout = String::from_utf8_lossy(&builtin_out.stdout);
     assert!(
-        stdout.contains("rupost plugin directive parameters"),
+        stdout.contains("rupost .http language & plugin schema"),
         "{stdout}"
+    );
+    assert!(
+        stdout.contains("builtinMacros") && stdout.contains("manifestSchema"),
+        "schema must include builtin macros and manifest schema (E-2): {stdout}"
     );
     assert!(!stdout.contains("hijacked"), "{stdout}");
 }

@@ -262,11 +262,94 @@ pub fn handle_plugin_command(
                     hook.parameters_schema.clone(),
                 );
             }
+            // E-2：面向 IDE 补全的完整 schema——指令枚举、内置宏、manifest schema
+            // 与插件参数四段齐备（场景 A 兑现：键入 "@" 即可弹出候选与参数模板）
+            let directive_enum: Vec<&str> = ["auth", "transform", "sign", "plugin"].to_vec();
+            let builtin_macros = serde_json::json!({
+                "$hmac_sha256": {
+                    "signature": "$hmac_sha256(key, msg)",
+                    "description": "HMAC-SHA256 hex 摘要（RFC 4231 向量守护）"
+                },
+                "$sha256": {
+                    "signature": "$sha256(msg)",
+                    "description": "SHA-256 hex 摘要"
+                },
+                "$random_int": {
+                    "signature": "$random_int(min, max)",
+                    "description": "闭区间随机整数（含边界）"
+                },
+                "$timestamp_ms": {
+                    "signature": "$timestamp_ms",
+                    "description": "当前 Unix 毫秒时间戳"
+                },
+                "$timestamp_s": {
+                    "signature": "$timestamp_s",
+                    "description": "当前 Unix 秒时间戳"
+                }
+            });
+            let manifest_schema = serde_json::json!({
+                "type": "object",
+                "required": ["manifest_version", "name", "version", "description"],
+                "properties": {
+                    "manifest_version": {"const": "1.0"},
+                    "name": {"type": "string"},
+                    "version": {"type": "string"},
+                    "description": {"type": "string", "maxLength": 80},
+                    "runtime": {
+                        "type": "object",
+                        "properties": {
+                            "interpreter": {"type": "string"},
+                            "min_version": {"type": "string"},
+                            "modules": {"type": "array", "items": {"type": "string"}}
+                        }
+                    },
+                    "commands": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "usage", "description"],
+                            "properties": {
+                                "name": {"type": "string"},
+                                "usage": {"type": "string"},
+                                "description": {"type": "string"},
+                                "requires_tty": {"type": "boolean"}
+                            }
+                        }
+                    },
+                    "hooks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["directive", "stage"],
+                            "properties": {
+                                "directive": {"type": "string"},
+                                "alias": {"type": "string"},
+                                "stage": {"enum": ["prepare", "transform", "sign"]},
+                                "cache_scope": {"enum": ["none", "request", "suite"]},
+                                "requires_env": {"type": "array", "items": {"type": "string"}},
+                                "parameters_schema": {"type": "object"}
+                            }
+                        }
+                    }
+                }
+            });
             let schema = serde_json::json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "title": "rupost plugin directive parameters",
-                "type": "object",
-                "properties": defs,
+                "title": "rupost .http language & plugin schema",
+                "pluginDirectives": {
+                    "type": "object",
+                    "properties": defs,
+                    "stageOrder": ["prepare", "transform", "sign"],
+                    "optionalSuffix": "?optional"
+                },
+                "directiveSyntax": {
+                    "type": "string",
+                    "pattern": "^@(auth|transform|sign|plugin) <plugin-alias> [params...] [?optional]$",
+                    "enum": directive_enum,
+                    "description": "阶段不可逆：auth(prepare) -> transform -> sign；同阶段按书写行序 FIFO"
+                },
+                "builtinMacros": builtin_macros,
+                "manifestSchema": manifest_schema
             });
             println!("{}", serde_json::to_string_pretty(&schema)?);
         }

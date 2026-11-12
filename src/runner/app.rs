@@ -1,18 +1,15 @@
 use crate::Result;
 use crate::RupostError;
-use crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES;
-use crate::history::save_batch_snapshot;
 use crate::runner::on_failure;
 use crate::runner::selector;
 use crate::runner::suite_setup::{build_suite_executor, load_suite_context};
 use crate::runner::{
-    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestReporter,
-    TestResult, WorkflowGraph,
+    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestResult,
+    WorkflowGraph,
 };
-use colored::Colorize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct TestSuiteOptions {
     pub paths: Vec<String>,
@@ -92,17 +89,28 @@ impl Default for TestSuiteOptions {
     }
 }
 
-/// 测试套件执行产出：失败判定 + 完整批量结果（报告文件输出的数据载体）。
-/// `has_failure` 与 `batch_results` 的推导口径（skipped 视为成功、fail-fast 截断的
-/// 未执行文件不进入结果）由 run_test_suite 单点维护，派发层不做重复判定。
+/// 测试套件执行产出：失败判定 + 完整批量结果 + 耗时与降级计数（纯领域数据，无渲染副作用）。
 #[derive(Debug)]
 pub struct TestSuiteOutcome {
     pub has_failure: bool,
     pub batch_results: Vec<(PathBuf, Vec<TestResult>)>,
+    pub duration: Duration,
+    pub degraded_count: usize,
+    /// 执行期生成的非致命提示（由外层呈现器按输出模式打印至 stdout/stderr）。
+    pub notices: Vec<SuiteNotice>,
+    /// 经选择器规整后的输入路径列表（供快照记录 source_paths）。
+    pub resolved_paths: Vec<String>,
 }
 
-/// 执行批处理测试流程，返回执行产出（失败判定与完整批量结果）
-pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcome> {
+/// 套件执行期产生的结构化提示（解耦 runner 与终端 I/O）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuiteNotice {
+    Stderr(String),
+    TerminalStdout(String),
+}
+
+/// 纯领域批处理测试执行用例（零 stdout/stderr 渲染，零快照/报告落盘）。
+pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteOutcome> {
     // 0. 单请求选择器（DX-Debug R1）：--only 与 path#n 片段，二者互斥且仅支持单一文件路径
     let plan = selector::build_selector_plan(&options.paths, options.only.as_deref())?;
     let selector = plan.selector;
@@ -116,11 +124,13 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     // 1. 递归扫描文件
     let scanned_files = DirectoryScanner::scan(&paths)?;
     if scanned_files.is_empty() {
-        // 机器可读输出纪律：该提示走 stderr，避免污染 --report json 的 stdout
-        eprintln!("No test files found.");
         return Ok(TestSuiteOutcome {
             has_failure: false,
             batch_results: Vec::new(),
+            duration: Duration::ZERO,
+            degraded_count: 0,
+            notices: vec![SuiteNotice::Stderr("No test files found.".to_string())],
+            resolved_paths: paths,
         });
     }
 
@@ -128,6 +138,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     //    @depends-on 只能落在这些输入路径的目录之下（依赖路径合理性校验）
     let sandbox_roots = DependencyResolver::sandbox_roots_from_inputs(&paths);
     let mut files_map = DependencyResolver::resolve_and_parse(&scanned_files, &sandbox_roots)?;
+    let mut notices = Vec::new();
 
     // 3. 执行序：单请求模式收窄到目标文件（依赖文件不执行、不走 DAG）；
     //    否则拓扑排序解析依赖
@@ -143,24 +154,21 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
         })?;
         let applied = selector::apply_selector(file, sel)?;
         if applied.duplicate_names > 0 {
-            eprintln!(
+            notices.push(SuiteNotice::Stderr(format!(
                 "[!] @name 在文件内出现 {} 次，已执行首个（第 {} 条）",
                 applied.duplicate_names + 1,
                 applied.selected_number
-            );
+            )));
         }
         let name_part = applied
             .selected_name
             .as_ref()
             .map(|n| format!("（@{n}）"))
             .unwrap_or_default();
-        // [i] 提示仅在 terminal 模式输出，保持 --report json 的 stdout 纯净可解析
-        if !options.report.eq_ignore_ascii_case("json") {
-            println!(
-                "[i] 单请求模式：执行第 {} 条{}，其余 {} 条已跳过",
-                applied.selected_number, name_part, applied.skipped_count
-            );
-        }
+        notices.push(SuiteNotice::TerminalStdout(format!(
+            "[i] 单请求模式：执行第 {} 条{}，其余 {} 条已跳过",
+            applied.selected_number, name_part, applied.skipped_count
+        )));
         let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         deps.insert(target.clone(), Vec::new());
         (vec![target], deps)
@@ -181,8 +189,8 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     };
 
     // 4 & 5. 加载配置上下文与构建 TestExecutor（含环境变量、Cookie 策略与插件装配）
-    let mut var_context = load_suite_context(&options);
-    let executor = build_suite_executor(&options)?;
+    let mut var_context = load_suite_context(options);
+    let executor = build_suite_executor(options)?;
     let batch_executor = BatchExecutor::new(executor);
 
     // 6. 执行批处理
@@ -207,90 +215,32 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     let mut batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
 
-    // 6.5 失败钩子（DX-Debug R7）：渲染前触发，使"无 trace 头"警告进入报告与 explain 上下文
+    // 6.5 失败钩子（DX-Debug R7）：触发后使警告进入结果上下文
     if let Some(hook_cmd) = &options.on_failure {
         on_failure::fire_failure_hooks(&mut batch_results, hook_cmd).await;
     }
 
-    // 7. 渲染与汇报结果。
-    // --strict-plugins CI 门禁（03 §10.5）：任何插件降级 → 整体判失败；
-    // 默认排障模式下降级只计 DegradedPass，不阻塞 exit 0（与任务使命第 4 条一致）
+    // 7. 失败与降级汇总判定（纯计算）
     let degraded_count = count_degraded_non_teardown(&batch_results);
     let any_degraded = degraded_count > 0;
-    if any_degraded {
-        eprintln!(
-            "[WARN] {degraded_count} 个请求以降级形态发送{}",
-            if options.strict_plugins {
-                "（--strict-plugins：整体判失败，阻断假阳性流入生产）"
-            } else {
-                "（现场数据已完整录入快照；CI 门禁请加 --strict-plugins）"
-            }
-        );
-    }
     let has_failure = batch_results
         .iter()
         .any(|(_, res_list)| res_list.iter().any(|r| !r.success))
         || (options.strict_plugins && any_degraded);
 
-    if options.report.eq_ignore_ascii_case("json") {
-        // Gap Review P3-4：JSON 模式下 explain/triage 无法渲染，显式提示而非静默忽略
-        if options.explain || options.triage {
-            eprintln!(
-                "{} --explain/--triage 仅在终端报告模式下渲染（--report json 输出保持纯净，已忽略）",
-                "⚠".yellow()
-            );
-        }
-        crate::report::json::report_json(&batch_results, &mut std::io::stdout())?;
-    } else {
-        let reporter = TestReporter::new(options.verbose);
-        let mut explain_session = crate::ai::explain::ExplainSession::new();
-        // AI 客户端每轮构建一次（避免逐请求重建连接池）；无 Key 时由会话打印一次性提示
-        let ai_client = if options.explain {
-            // 与 --triage 同源走 B4 配置链（env > ai.toml > 本地探测），避免只有
-            // ai.toml/Ollama 的用户在 --explain 下永远拿不到归因；未配置降 None
-            crate::ai::config::resolve()
-                .await
-                .ok()
-                .map(|resolved| resolved.client)
-        } else {
-            None
-        };
-        for (path, file_results) in &batch_results {
-            let path_str = path.to_string_lossy().to_string();
-            reporter.print_header(&path_str, file_results.len());
-            for r in file_results {
-                reporter.print_result(r);
-                if options.explain {
-                    explain_session
-                        .explain_failure_with_client(r, ai_client.as_deref())
-                        .await;
-                }
-            }
-        }
-        TestReporter::print_batch_summary(&batch_results, duration);
-        if options.triage {
-            crate::ai::triage::run_inline_triage(&batch_results).await;
-        }
-    }
-
-    // 保存快照（黑匣子契约 Schema v1.0，02 §2；--env 记入 environment 字段）
-    if let Some(snapshot_path) = &options.save_snapshot {
-        save_batch_snapshot(
-            &batch_results,
-            &paths,
-            snapshot_path,
-            options.mask_snapshot,
-            options.env.as_deref(),
-            options
-                .max_snapshot_body_bytes
-                .unwrap_or(DEFAULT_MAX_SNAPSHOT_BODY_BYTES),
-        )?;
-    }
-
     Ok(TestSuiteOutcome {
         has_failure,
         batch_results,
+        duration,
+        degraded_count,
+        notices,
+        resolved_paths: paths,
     })
+}
+
+/// 向后兼容包装：直接委托 [`execute_test_suite`]。
+pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcome> {
+    execute_test_suite(&options).await
 }
 
 /// 统计非 `@teardown` 请求的插件降级数（与 `snapshot_io.rs` 一致，teardown 不计入降级告警与 `--strict-plugins` 门禁）
@@ -314,32 +264,8 @@ mod tests {
     async fn test_run_test_suite_empty_paths() {
         let options = TestSuiteOptions {
             paths: vec![],
-            mode: "sequential".to_string(),
-            concurrency: 4,
-            report: "terminal".to_string(),
-            report_file: None,
-            explain: false,
-            triage: false,
-            fail_fast: false,
-            env: None,
-            var: vec![],
-            env_file: None,
-            verbose: false,
             no_cookies: true,
-            cookie_file: None,
-            debug: false,
-            debug_on_failure: false,
-            default_scheme: "http".to_string(),
-            save_snapshot: None,
-            mask_snapshot: false,
-            max_snapshot_body_bytes: None,
-            only: None,
-            on_failure: None,
-            allow_missing_plugins: false,
-            strict_plugins: false,
-            plugin_timeout_secs: 5,
-            plugin_env: vec![],
-            allow_project_plugins: false,
+            ..Default::default()
         };
         let res = run_test_suite(options).await;
         assert!(res.is_ok());
@@ -347,6 +273,24 @@ mod tests {
         let outcome = res.unwrap();
         assert!(!outcome.has_failure);
         assert!(outcome.batch_results.is_empty());
+        assert_eq!(outcome.degraded_count, 0);
+        assert_eq!(outcome.duration, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_execute_test_suite_empty_paths_returns_structured_notice() {
+        let options = TestSuiteOptions {
+            paths: vec![],
+            no_cookies: true,
+            ..Default::default()
+        };
+        let outcome = execute_test_suite(&options).await.unwrap();
+        assert!(!outcome.has_failure);
+        assert!(outcome.batch_results.is_empty());
+        assert_eq!(
+            outcome.notices,
+            vec![SuiteNotice::Stderr("No test files found.".to_string())]
+        );
     }
 
     #[test]

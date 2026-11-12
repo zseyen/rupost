@@ -49,13 +49,12 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
             let explain_enabled =
                 explain || rupost::security::fs::env_flag_enabled("RUPOST_AI_EXPLAIN");
-            let env_label = env.clone();
             let options = rupost::runner::TestSuiteOptions {
                 paths,
                 mode,
                 concurrency,
-                report: report.clone(),
-                report_file: report_file.clone(),
+                report,
+                report_file,
                 explain: explain_enabled,
                 triage,
                 fail_fast,
@@ -79,34 +78,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 plugin_env,
                 allow_project_plugins,
             };
-            let outcome = rupost::runner::run_test_suite(options).await?;
-
-            // 报告文件输出（表现层职责，UseCase 不再隐式落盘）：
-            // 覆盖提示走 stderr；"已生成"提示仅在 HTML 格式或 verbose 时走 stdout。
-            // 空扫描（无 .http/.md）恢复旧语义：不产生报告文件（审查 P1）
-            if !outcome.batch_results.is_empty()
-                && let Some(written) = rupost::report::write_report_files(
-                    &outcome.batch_results,
-                    &report,
-                    report_file.as_deref(),
-                    env_label.as_deref(),
-                )?
-            {
-                if written.overwritten {
-                    eprintln!("[!] 报告文件已存在，将覆盖: {}", written.path.display());
-                }
-                let is_html = matches!(written.format, rupost::report::ReportFileFormat::Html);
-                let is_junit = matches!(written.format, rupost::report::ReportFileFormat::Junit);
-                // M1（评审 P1-4）：junit 落盘纳入"已生成"提示（此前静默写文件）
-                if (is_html && (verbose || report.eq_ignore_ascii_case("html")))
-                    || (is_junit
-                        && (verbose
-                            || report.eq_ignore_ascii_case("junit")
-                            || report.eq_ignore_ascii_case("xml")))
-                {
-                    println!("  报告已生成至: {}", written.path.display());
-                }
-            }
+            let outcome = rupost::runner::execute_test_suite(&options).await?;
+            super::suite_presenter::present_suite_outcome(&options, &outcome).await?;
 
             if outcome.has_failure {
                 std::process::exit(1);

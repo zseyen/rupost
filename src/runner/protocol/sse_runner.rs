@@ -170,6 +170,7 @@ impl SseRunner {
         request_snapshot: RequestSnapshot,
         probe_result: Option<(Duration, Duration)>,
         middlewares: crate::middleware::MiddlewarePipeline,
+        observer: std::sync::Arc<dyn crate::runner::observer::ExecutionObserver>,
     ) -> TestResult {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let default_log_name = format!("sse_{}.log", timestamp);
@@ -365,8 +366,7 @@ impl SseRunner {
         ));
 
         // [History] 保存历史记录 (Best Effort)
-        use crate::history::recorder::record_history;
-        record_history(request_snapshot, &final_response, source);
+        observer.on_record_history(request_snapshot, &final_response, source);
 
         // 构造最终测试结果
         let mut test_result = TestResult::success(

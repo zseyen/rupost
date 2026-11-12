@@ -55,6 +55,21 @@ pub fn record_history(request: RequestSnapshot, response: &Response, source: Opt
     offload_blocking_if_multithread(append_history);
 }
 
+/// 基于 [`crate::runner::observer::ExecutionObserver`] 的历史记录观察者适配器。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HistoryObserver;
+
+impl crate::runner::observer::ExecutionObserver for HistoryObserver {
+    fn on_record_history(
+        &self,
+        request: RequestSnapshot,
+        response: &Response,
+        source: Option<String>,
+    ) {
+        record_history(request, response, source);
+    }
+}
+
 /// 在 Tokio 多线程运行时内通过 `block_in_place` 卸载同步阻塞 I/O（如 `File::lock`），
 /// 在单线程运行时或非 Tokio 上下文中直接同步执行（避免 `block_in_place` panic）。
 fn offload_blocking_if_multithread<F: FnOnce()>(f: F) {

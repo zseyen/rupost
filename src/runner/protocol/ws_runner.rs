@@ -30,6 +30,7 @@ impl WsRunner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: MiddlewarePipeline,
+        observer: std::sync::Arc<dyn crate::runner::observer::ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -361,8 +362,7 @@ impl WsRunner {
         };
 
         // 保存历史记录 (WebSocket 专用)
-        use crate::history::recorder::record_history;
-        record_history(request_snapshot, &summary_response, None);
+        observer.on_record_history(request_snapshot, &summary_response, None);
 
         test_result
     }
@@ -631,6 +631,7 @@ impl WsRunner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: &MiddlewarePipeline,
+        observer: &std::sync::Arc<dyn crate::runner::observer::ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -644,6 +645,7 @@ impl WsRunner {
             request_number,
             context,
             middlewares.clone(),
+            observer.clone(),
             stream_sender,
         )
         .await)

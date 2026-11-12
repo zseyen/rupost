@@ -4,6 +4,7 @@ use crate::http::url::resolve_final_url;
 use crate::middleware::{CookieMiddleware, MiddlewarePipeline};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::WsRunner;
+use crate::runner::observer::ExecutionObserver;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
@@ -24,6 +25,7 @@ impl Runner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: &MiddlewarePipeline,
+        observer: &Arc<dyn ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -39,6 +41,7 @@ impl Runner {
                     request_number,
                     context,
                     middlewares,
+                    observer,
                     stream_sender,
                     debug,
                     debug_on_failure,
@@ -53,6 +56,7 @@ impl Runner {
                     request_number,
                     context,
                     middlewares,
+                    observer,
                     stream_sender,
                     debug,
                     debug_on_failure,
@@ -70,6 +74,7 @@ pub struct TestExecutor {
     cookie_middleware: Option<Arc<CookieMiddleware>>,
     routing_middleware: Option<Arc<crate::middleware::routing::RoutingMiddleware>>,
     middlewares: MiddlewarePipeline,
+    observer: Arc<dyn ExecutionObserver>,
     pub debug: bool,
     pub debug_on_failure: bool,
     pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
@@ -122,6 +127,7 @@ impl TestExecutor {
             cookie_middleware: None,
             routing_middleware: None,
             middlewares: MiddlewarePipeline::new(),
+            observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
@@ -152,6 +158,12 @@ impl TestExecutor {
         self.plugin_registry = registry;
         self.plugin_options = options;
         self.suite_hook_cache = suite_hook_cache;
+        self
+    }
+
+    /// Inject a custom [`ExecutionObserver`] (e.g., `NoopExecutionObserver` in tests).
+    pub fn with_observer(mut self, observer: Arc<dyn ExecutionObserver>) -> Self {
+        self.observer = observer;
         self
     }
 
@@ -202,6 +214,7 @@ impl TestExecutor {
                 pipeline.push_arc(cookie_middleware);
                 pipeline
             },
+            observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
@@ -225,6 +238,7 @@ impl TestExecutor {
                 pipeline.push_arc(cookie_middleware);
                 pipeline
             },
+            observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
             stream_sender: None,
@@ -408,6 +422,7 @@ impl TestExecutor {
                 request_number,
                 context,
                 &self.middlewares,
+                &self.observer,
                 self.stream_sender.clone(),
                 self.debug,
                 self.debug_on_failure,

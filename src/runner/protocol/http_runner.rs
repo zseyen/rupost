@@ -4,6 +4,7 @@ use crate::history::model::RequestSnapshot;
 use crate::http::Client;
 use crate::middleware::MiddlewarePipeline;
 use crate::parser::types::ParsedRequest;
+use crate::runner::observer::ExecutionObserver;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
 use std::time::{Duration, Instant};
@@ -19,6 +20,7 @@ impl HttpRunner {
         request_number: usize,
         context: &mut VariableContext,
         middlewares: &MiddlewarePipeline,
+        observer: &std::sync::Arc<dyn ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -128,6 +130,7 @@ impl HttpRunner {
                         request_snapshot,
                         probe_result,
                         middlewares.clone(),
+                        observer.clone(),
                     )
                     .await);
                 }
@@ -176,8 +179,7 @@ impl HttpRunner {
                     });
 
                 // [History] 异步保存历史记录 (Best Effort)
-                use crate::history::recorder::record_history;
-                record_history(request_snapshot.clone(), &response_obj, source);
+                observer.on_record_history(request_snapshot.clone(), &response_obj, source);
 
                 // 2. 变量捕获（失败项收集为警告，不影响其余捕获）
                 let capture_warnings = VariableCapture::capture_normal(

@@ -7,6 +7,7 @@ mod parser;
 mod plugin_exec;
 mod plugin_route;
 mod runner;
+mod suite_presenter;
 
 use clap::{CommandFactory, Parser};
 

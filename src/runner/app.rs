@@ -215,14 +215,9 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     // 7. 渲染与汇报结果。
     // --strict-plugins CI 门禁（03 §10.5）：任何插件降级 → 整体判失败；
     // 默认排障模式下降级只计 DegradedPass，不阻塞 exit 0（与任务使命第 4 条一致）
-    let any_degraded = batch_results
-        .iter()
-        .any(|(_, res_list)| res_list.iter().any(|r| r.degraded));
+    let degraded_count = count_degraded_non_teardown(&batch_results);
+    let any_degraded = degraded_count > 0;
     if any_degraded {
-        let degraded_count: usize = batch_results
-            .iter()
-            .map(|(_, res_list)| res_list.iter().filter(|r| r.degraded).count())
-            .sum();
         eprintln!(
             "[WARN] {degraded_count} 个请求以降级形态发送{}",
             if options.strict_plugins {
@@ -298,6 +293,19 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     })
 }
 
+/// 统计非 `@teardown` 请求的插件降级数（与 `snapshot_io.rs` 一致，teardown 不计入降级告警与 `--strict-plugins` 门禁）
+fn count_degraded_non_teardown(batch_results: &[(PathBuf, Vec<TestResult>)]) -> usize {
+    batch_results
+        .iter()
+        .map(|(_, res_list)| {
+            res_list
+                .iter()
+                .filter(|r| r.degraded && !r.is_teardown)
+                .count()
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +347,41 @@ mod tests {
         let outcome = res.unwrap();
         assert!(!outcome.has_failure);
         assert!(outcome.batch_results.is_empty());
+    }
+
+    #[test]
+    fn test_count_degraded_non_teardown_excludes_teardown() {
+        let mut normal_ok = TestResult::skipped(1, None, "GET".into(), "/ok".into());
+        normal_ok.degraded = false;
+        normal_ok.is_teardown = false;
+
+        let mut normal_degraded = TestResult::skipped(2, None, "GET".into(), "/deg".into());
+        normal_degraded.degraded = true;
+        normal_degraded.is_teardown = false;
+
+        let mut teardown_degraded = TestResult::skipped(3, None, "DELETE".into(), "/clean".into());
+        teardown_degraded.degraded = true;
+        teardown_degraded.is_teardown = true;
+
+        let batch = vec![
+            (
+                PathBuf::from("a.http"),
+                vec![normal_ok, normal_degraded.clone()],
+            ),
+            (PathBuf::from("b.http"), vec![teardown_degraded]),
+        ];
+        assert_eq!(count_degraded_non_teardown(&batch), 1);
+
+        // 仅有 teardown 降级时，总数必须为 0（不触发 any_degraded / --strict-plugins）
+        let teardown_only = vec![(
+            PathBuf::from("c.http"),
+            vec![{
+                let mut r = TestResult::skipped(1, None, "DELETE".into(), "/t".into());
+                r.degraded = true;
+                r.is_teardown = true;
+                r
+            }],
+        )];
+        assert_eq!(count_degraded_non_teardown(&teardown_only), 0);
     }
 }

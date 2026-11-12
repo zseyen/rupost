@@ -47,7 +47,58 @@ pub fn record_history(request: RequestSnapshot, response: &Response, source: Opt
         },
     };
 
-    if let Err(e) = get_storage().append(&history_entry) {
-        warn!("Failed to save request history: {}", e);
+    let append_history = || {
+        if let Err(e) = get_storage().append(&history_entry) {
+            warn!("Failed to save request history: {}", e);
+        }
+    };
+    offload_blocking_if_multithread(append_history);
+}
+
+/// 在 Tokio 多线程运行时内通过 `block_in_place` 卸载同步阻塞 I/O（如 `File::lock`），
+/// 在单线程运行时或非 Tokio 上下文中直接同步执行（避免 `block_in_place` panic）。
+fn offload_blocking_if_multithread<F: FnOnce()>(f: F) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::MultiThread
+            ) =>
+        {
+            tokio::task::block_in_place(f);
+        }
+        _ => f(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_offload_blocking_outside_tokio() {
+        let mut ran = false;
+        offload_blocking_if_multithread(|| {
+            ran = true;
+        });
+        assert!(ran);
+    }
+
+    #[tokio::test]
+    async fn test_offload_blocking_in_current_thread_runtime() {
+        let mut ran = false;
+        offload_blocking_if_multithread(|| {
+            ran = true;
+        });
+        assert!(ran);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_offload_blocking_in_multi_thread_runtime() {
+        let mut ran = false;
+        offload_blocking_if_multithread(|| {
+            ran = true;
+        });
+        assert!(ran);
     }
 }

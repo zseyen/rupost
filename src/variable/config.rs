@@ -50,16 +50,47 @@ impl ConfigLoader {
         }
     }
 
+    /// 从指定路径加载脱敏策略，区分“文件不存在”（静默回退）与“读取/解析失败”（返回告警并回退内置默认策略）。
+    fn load_redaction_policy_from_path(
+        path: &Path,
+    ) -> (crate::exporter::redact::RedactionPolicy, Option<String>) {
+        if !path.exists() {
+            return (crate::exporter::redact::RedactionPolicy::builtin(), None);
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    crate::exporter::redact::RedactionPolicy::builtin(),
+                    Some(format!(
+                        "[!] 读取 {} 失败: {e}，已回退到内置默认脱敏策略",
+                        path.display()
+                    )),
+                );
+            }
+        };
+        match crate::exporter::redact::RedactionPolicy::from_toml_str(&content) {
+            Ok(policy) => (policy, None),
+            Err(e) => (
+                crate::exporter::redact::RedactionPolicy::builtin(),
+                Some(format!(
+                    "[!] 解析 {} 脱敏策略失败: {e}，已回退到内置默认脱敏策略",
+                    path.display()
+                )),
+            ),
+        }
+    }
+
     /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
     pub fn find_and_load_redaction_policy() -> crate::exporter::redact::RedactionPolicy {
-        if let Some(path) = Self::find_config_path()
-            && let Ok(content) = fs::read_to_string(path)
-            && let Ok(policy) = crate::exporter::redact::RedactionPolicy::from_toml_str(&content)
-        {
-            policy
-        } else {
-            crate::exporter::redact::RedactionPolicy::builtin()
+        let Some(path) = Self::find_config_path() else {
+            return crate::exporter::redact::RedactionPolicy::builtin();
+        };
+        let (policy, warning) = Self::load_redaction_policy_from_path(&path);
+        if let Some(w) = warning {
+            eprintln!("{w}");
         }
+        policy
     }
 
     /// 单个 toml 路径的分类加载（走查缺口 #6c：存在但损坏必须区分于不存在——
@@ -661,5 +692,46 @@ plain = "no-ref"
         let policy = ConfigLoader::find_and_load_redaction_policy();
         assert!(policy.is_sensitive("Authorization"));
         assert!(!policy.is_sensitive("next_token"));
+    }
+
+    #[test]
+    fn test_load_redaction_policy_from_path_distinguishes_missing_and_malformed() {
+        // 1. 文件不存在 -> 静默回退内置默认策略（无 warning）
+        let missing = std::path::PathBuf::from("/tmp/rupost-nonexistent-redaction-policy.toml");
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(&missing);
+        assert!(warning.is_none(), "缺失文件不应产生告警: {warning:?}");
+        assert!(policy.is_sensitive("Authorization"));
+
+        // 2. 损坏的 TOML -> 产生可见 [!] 告警并安全回退内置默认策略
+        let mut malformed = NamedTempFile::new().unwrap();
+        malformed
+            .write_all(b"[export.redaction\nbroken = [")
+            .unwrap();
+        malformed.flush().unwrap();
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(malformed.path());
+        let w = warning.expect("损坏配置必须产生可见告警");
+        assert!(w.contains("[!]"), "{w}");
+        assert!(policy.is_sensitive("Authorization"));
+
+        // 3. 读取失败（传入目录路径） -> 产生可见 [!] 告警并安全回退内置默认策略
+        let dir = tempfile::tempdir().unwrap();
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(dir.path());
+        let w = warning.expect("读取失败必须产生可见告警");
+        assert!(w.contains("[!]"), "{w}");
+        assert!(policy.is_sensitive("Authorization"));
+
+        // 4. 合法配置 -> 正常加载自定义策略且无告警
+        let mut valid = NamedTempFile::new().unwrap();
+        valid
+            .write_all(
+                br#"[export.redaction]
+sensitive_keys = ["x_custom_secret"]
+"#,
+            )
+            .unwrap();
+        valid.flush().unwrap();
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(valid.path());
+        assert!(warning.is_none(), "合法配置不应产生告警: {warning:?}");
+        assert!(policy.is_sensitive("x_custom_secret"));
     }
 }

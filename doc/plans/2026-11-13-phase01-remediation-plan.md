@@ -1084,7 +1084,7 @@ jj split src/report src/cli src/runner tests/contract_drift_test.rs tests/html_r
 
 ### WP-P3a（Phase 3①）：OpenAPI(JSON) 导入
 
-> **状态（2026-11-13 范围裁决）：暂缓——移交社区（命令插件形态），核心不实施。本节保留现场核验记录与设计骨架供社区作者参考；执行顺序中已移除。**
+> **状态（2026-11-13 范围裁决）：暂缓——移交社区（命令插件形态），核心不实施。本节保留现场核验记录与设计骨架供社区作者参考；执行顺序中已移除。核验基准：2026-11-13 审查（git `25402b30`），随 HEAD 演进社区作者需以现场为准复核。**
 
 **目的：** `rupost import openapi <spec.json> -o out.md`：把 JSON spec 转成单一可审查 Markdown（复用既有 `ImportFormat::OpenApi` 检测；实现后 web `/api/v1/import` 免费获得）。
 
@@ -1177,7 +1177,7 @@ jj split src/importer src/cli tests/openapi_import_test.rs -m "feat(importer,cli
 
 ### WP-P3b（Phase 3②）：`export k6` 场景草稿导出
 
-> **状态（2026-11-13 范围裁决）：暂缓——移交社区（命令插件形态），核心不实施。本节保留现场核验记录与设计骨架供社区作者参考；执行顺序中已移除。**
+> **状态（2026-11-13 范围裁决）：暂缓——移交社区（命令插件形态），核心不实施。本节保留现场核验记录与设计骨架供社区作者参考；执行顺序中已移除。核验基准：2026-11-13 审查（git `25402b30`），随 HEAD 演进社区作者需以现场为准复核。**
 
 **目的：** `rupost export k6 <file> -o script.js`：文档 → 可运行的 k6 脚本骨架（与 curl/httpie/wget 同 UX、同旗标）。
 
@@ -1283,17 +1283,27 @@ echo "rupost bin: ${RUPOST_BIN:-unset}"
 3. **扩展缝指引**：import/export 管线不开放插件扩展点（评估报告 §5）；转换类工具走命令插件形态。
 4. **社区扩展方向参考**：OpenAPI 导入（`openapi2md`）与 k6 导出（`k6gen`）——设计骨架与现场核验（importer/exporter 字段与语义）见评估报告 §6 与本计划暂缓节；使用与版本协调见评估报告 §7/§8。
 
-**验证（手动，逐条记录）：**
+**验证（手动，逐条记录；审查修正 G1：用**项目级** `.rupost/plugins/` 而非家目录——`.gitignore` 已覆盖 `.rupost`（:2），零仓库污染、零家目录残留，顺带演练项目闸门）：**
 
 ```bash
-cp 示例两文件 ~/.rupost/plugins/ && chmod 755 ~/.rupost/plugins/rupost-plugin-cmd-hello
-rupost plugin list            # cmd-hello = ready
-rupost cmd-hello a b          # 输出 args: a b / workspace / rupost bin 三行
-rupost --help                 # Extensions 区块出现 cmd-hello
+mkdir -p ./.rupost/plugins
+cp examples/plugins/rupost-plugin-cmd-hello* ./.rupost/plugins/
+chmod 755 ./.rupost/plugins/rupost-plugin-cmd-hello
+rupost --allow-project-plugins plugin list   # cmd-hello = ready
+rupost --allow-project-plugins cmd-hello a b # 输出 args: a b / workspace / rupost bin 三行（TOFU 首跑确认属预期）
+rupost --help                                # Extensions 区块出现 cmd-hello
 bash -n examples/plugins/rupost-plugin-cmd-hello
+# 清理（闸门演练完毕，不把测试样例留在开发者默认环境）：
+rm -rf ./.rupost/plugins/rupost-plugin-cmd-hello*
 ```
 
-（TOFU 首跑确认属预期行为，指南写明。）
+**Windows 形态登记（审查 G1）：** 本示例为 sh 脚本，仅 Unix 可执行——Windows 作者需 `.cmd`/`.exe` 同名包装（发现器已探测三后缀）或 WSL；指南写明此差异，示例不做跨平台双份（保持最小）。
+
+**与 WP-AST 的顺序门（审查 G1）：** 指南中"进阶：`$RUPOST_BIN ast`"一节**仅在 WP-AST 已合入后写入手册**；若 PL1 先于 AST 执行，该句改为"规划中（见执行计划 WP-AST）"——文档不得描述不存在的命令。
+
+**与 WP-PL2 的协同（审查 G1）：** PL2 落地后，其测试套件**必须**对 `examples/plugins/*.json` 全量跑 `plugin validate` 断言合法（跨平台锁定示例正确性，CI 免手动）。
+
+**可选交付（审查 G4，社区承接面）：** 新增 `doc/community-plugins.md` 轻量索引页（表格：插件名/一句话/链接/维护者，纯 PR 维护零基建，初始收录 cmd-hello 作样板）并在指南与 README 各加一行链接——没有发现渠道，社区写了插件别人也找不到。
 
 **提交：** `docs(plugins): add command-plugin example (cmd-hello) and author guide`
 
@@ -1310,17 +1320,22 @@ bash -n examples/plugins/rupost-plugin-cmd-hello
 
 **行为契约：**
 
-- `rupost plugin validate path/to/manifest.json` → 合法：`✓ ready: <name> v<version>（commands: N, hooks: M）` exit 0；
+- `rupost plugin validate path/to/manifest.json` → 合法：`✓ ready: <name> v<version>（commands: N, hooks: M）` exit 0（输出风格对齐 `plugin list` 的 ✓/✗ + 中文处方）；
 - 违规：逐条处方式输出（保留字阶段 / description >80 / 可执行缺失 / 路径逃逸 / manifest_version ≠ 1.0 / JSON 解析失败）exit 1；
+- **警告级（不阻断，审查 G2 新增三项）：**
+  1. **命名契约**：文件名不符合 `rupost-plugin-*.json`（`is_manifest_file`，registry.rs:41）→ 警告"发现器将**永远不会**看到此清单"——validate 是单文件工具，必须替作者把发现期约定讲出来；
+  2. **内置名冲突**：`commands[].name` 与 13 个内置子命令同名（`builtin_subcommand_names()`）→ 警告"该命令永不可达（路由内置优先）"；
+  3. **空清单**：commands 与 hooks 均为空 → 警告"清单无任何能力面"。
 - **静态校验**：绝不执行插件本体、不触发 TOFU、不写缓存。
 
 **先写测试（Red：子命令不存在 → clap 编译期即红；可先以 `todo!()` 占位转运行期红）：**
 
-四用例（复制 `examples/plugins/rupost-plugin-echo-sign.json` 为合法基线）：
+五用例（复制 `examples/plugins/rupost-plugin-echo-sign.json` 为合法基线，description 41 字符合法）：
 1. 合法 → exit 0 + "ready"；
 2. description 81 字符 → exit 1 + 处方含 "description"；
 3. hook stage 用保留字 `harvest` → exit 1 + 处方含 "保留字"；
-4. 同目录无可执行 → exit 1 + 处方含可执行缺失语义。
+4. 同目录无可执行 → exit 1 + 处方含可执行缺失语义；
+5. **协同锁定（审查 G2）**：对 `examples/plugins/` 下全部 `*.json` 跑 validate → 全部 exit 0（跨平台守护示例清单正确性；Windows CI 可跑——静态校验不执行插件）。
 
 **验证与提交：**
 
@@ -1335,13 +1350,16 @@ jj split src/cli src/plugin tests -m "feat(plugin): add plugin validate subcomma
 
 **目的：** 清掉评估报告 §1.2 登记的两处漂移，并把"插件扩展方式"讲清楚——社区决定做什么之前，先让作者看懂能做什么。
 
-**文件：**
+**文件（审查 G3 修正：`RUPOST_ENV` 漂移实测不止 03——`rg -ln RUPOST_ENV doc/` 另命中 06-mvp 文档；本计划与评估报告中的引用属"描述修复"合法保留）：**
 
-- `doc/plans/2026-11-10-cross-scenario-engine-and-plugins/03-plugin-spi-and-degradation.md`（`RUPOST_ENV` bullet 删除，文末登记"RUPOST_ENV 未实现，登记不做"）
+- `doc/plans/2026-11-10-cross-scenario-engine-and-plugins/03-plugin-spi-and-degradation.md`（:344 `RUPOST_ENV` bullet 删除，文末勘误登记"RUPOST_ENV 未实现，登记不做"）
+- `doc/plans/2026-11-10-cross-scenario-engine-and-plugins/06-mvp-implementation-plan-personas-and-scenarios.md`（同步勘误，**先 rg 定位具体行**）
 - `src/exporter/mod.rs`（三处措辞：`Available export plugins:` → `Available export targets (built-in):`；两处 `view available plugins.` → `view available targets.`——已核验无测试锁定旧文案）
 - `doc/architecture/features/plugin_and_extensibility.md`（若 WP-PL1 已补矩阵则仅核对一致性）
 
-**验证：** `rg -n "RUPOST_ENV" 03-*.md` 归零（仅剩登记行）；`rg -n "export plugins" src/exporter/` 归零；`cargo test --workspace` 无文案破坏（已核验无锁定）。
+**修订惯例（审查 G3）：** 设计文档按项目既有**勘误（errata）惯例**处理——正文就地修正 + 行内/文末标注勘误日期，不静默改写历史（先例：progress_summary 2026-10-29 勘误）。
+
+**验证：** `rg -ln "RUPOST_ENV" doc/plans/2026-11-10-cross-scenario-engine-and-plugins/` 归零（勘误登记行除外）；`rg -n "export plugins" src/exporter/` 归零；`cargo test --workspace` 无文案破坏（已核验无锁定）。
 
 **提交：** `docs(plugins): fix doc drift (RUPOST_ENV) and clarify export target naming`
 

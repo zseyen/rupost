@@ -1,0 +1,10 @@
+[
+  { "method": "POST", "path": "/charge", "variants": [
+    { "condition": { "source": "Header", "key": "Authorization", "operator": "Equals", "expected_value": "Bearer demo-secret-token-xyz" },
+      "status": 500, "headers": { "Content-Type": "application/json" }, "response_body": "{\"error\":\"gateway declined\"}" },
+    { "condition": null, "status": 401, "headers": { "Content-Type": "application/json" }, "response_body": "{\"error\":\"missing or wrong token\"}" }
+  ] },
+  { "method": "GET", "path": "/ok", "variants": [
+    { "condition": null, "status": 200, "headers": { "Content-Type": "application/json" }, "response_body": "{\"ok\":true}" }
+  ] }
+]

@@ -212,6 +212,38 @@ rupost replay snap.json --target http://staging.example.com
 
 > 录制侧：批量/单文件测试加 `--save-snapshot` 可在测试同时录制快照（详见 `rupost t --help`）。
 
+### 7.3 故障复现包（Incident Bundle）
+
+历史导出面向"事后补录"；复现包面向"失败当时"——一次失败的测试直接产出
+脱敏、可重放、可移交的目录工件：
+
+```bash
+rupost t payments.http --env staging \
+  --incident-out artifacts/payment-failure \
+  --mask-secret-value "$PAYMENT_TOKEN"
+
+rupost replay artifacts/payment-failure/snapshot.json --target http://staging.example.com
+rupost ai triage --snapshot artifacts/payment-failure/snapshot.json
+```
+
+目录契约（三文件）：
+
+* `manifest.json` — Incident schema 1.0：来源路径、环境、通过/失败/跳过计数、工件清单与脱敏声明；
+* `report.json` — JSON 报告（与 `--report json` 同契约，可直接 `ai triage`）；
+* `snapshot.json` — 执行快照 Schema v1.0，**强制** `masking: "secrets"`（键名 + 显式值双重掩码）。
+
+安全语义与边界：
+
+* **仅失败时创建**：全绿运行即使给了 `--incident-out` 也不建目录（stderr 一条说明）；
+* **绝不覆盖**：目标目录必须不存在，已存在或为符号链接一律拒绝（exit 2）；
+* **绝不写原始凭据**：`--mask-secret-value` 的显式值全表面替换为 `[REDACTED]`，无关闭脱敏的开关；
+* **不复制源 `.http`/`.md`**（避免文档内字面凭据二次落盘），重放所需一切都在 `snapshot.json`；
+* 快照包含整套非 teardown 交互（登录等上游依赖是重放的必要上下文），不只摘失败请求；
+* 掩码后 body diff/验签类结论按"数据不完整"降级（`replay` 加载时会明示警告）；
+* 退出码契约：全绿 0 / 测试失败 1 / 工件创建失败 2（工件 I/O 故障不掩盖测试结果）。
+
+完整生命周期见 [examples/incident_bundle/README.md](../../examples/incident_bundle/README.md)。
+
 ---
 
 ## 8. 调试成果沉淀 (D7)
@@ -371,6 +403,8 @@ $ rupost t suite/ --on-failure 'stern deploy/api --since 5m --grep $RUPOST_FAILE
 | 报告落盘 | `rupost t ... --report-file report.json` |
 | JUnit CI 报告 | `rupost t ... --report junit --report-file report.xml` |
 | 成果沉淀 | `rupost ai bootstrap --from history -o regression.http` |
+| 失败产出复现包 | `rupost t ... --incident-out <DIR> --mask-secret-value <VAL>` |
+| 消费复现包 | `rupost replay <DIR>/snapshot.json -t <url>` ／ `rupost ai triage --snapshot <DIR>/snapshot.json` |
 
 ---
 

@@ -1,0 +1,7 @@
+### charge payment
+# @assert status == 200
+POST {{base_url}}/charge
+Authorization: Bearer demo-secret-token-xyz
+Content-Type: application/json
+
+{"amount":100,"currency":"USD"}

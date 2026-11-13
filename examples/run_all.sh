@@ -6,7 +6,7 @@
 set -e
 
 # 注册全局清理 Trap，确保脚本因 error 意外退出或被中断时后台 Mock 进程一定能被清理
-trap 'echo -e "\n${YELLOW}[*] 正在释放后台仿真 Mock 服务进程...${NC}"; kill $LLM_MOCK_PID $SSE_MOCK_PID $PLUGIN_MOCK_PID 2>/dev/null || true' EXIT
+trap 'echo -e "\n${YELLOW}[*] 正在释放后台仿真 Mock 服务进程...${NC}"; kill $LLM_MOCK_PID $SSE_MOCK_PID $PLUGIN_MOCK_PID $INCIDENT_MOCK_PID 2>/dev/null || true' EXIT
 
 # 定义终端色彩
 GREEN='\033[0;32m'
@@ -133,6 +133,40 @@ if command -v python3 &>/dev/null; then
 else
     echo -e "\n${YELLOW}[i] 未检测到 python3，跳过插件示例（安装 python3 后可跑通插件 Stdio IPC 闭环）${NC}"
 fi
+
+# 5.6 故障复现包闭环（WP-4，本地 loopback Mock，零公网零真实凭据）
+echo -e "\n${BLUE}>>> 第五阶段(续)：故障复现包闭环（incident bundle）${NC}"
+INCIDENT_WS=$(mktemp -d /tmp/rupost_incident_example_XXXXXX)
+$RUPOST_BIN mock examples/incident_bundle/mock.json --port 8095 > /tmp/incident_mock_run.log 2>&1 &
+INCIDENT_MOCK_PID=$!
+sleep 2
+# 期望失败用例：exit 1 + 三文件工件 + 强制脱敏（manifest 声明 secrets 且原始凭据零泄漏）
+INCIDENT_OUT="$INCIDENT_WS/payment-failure"
+INCIDENT_EXIT=0
+$RUPOST_BIN t examples/incident_bundle/payments.http --var base_url=http://127.0.0.1:8095 --incident-out "$INCIDENT_OUT" --mask-secret-value demo-secret-token-xyz > /dev/null 2>&1 || INCIDENT_EXIT=$?
+if [ "$INCIDENT_EXIT" -eq 1 ] \
+    && [ -f "$INCIDENT_OUT/manifest.json" ] && [ -f "$INCIDENT_OUT/report.json" ] && [ -f "$INCIDENT_OUT/snapshot.json" ] \
+    && ! grep -q "demo-secret-token-xyz" "$INCIDENT_OUT"/manifest.json "$INCIDENT_OUT"/report.json "$INCIDENT_OUT"/snapshot.json \
+    && grep -q '"masking": *"secrets"' "$INCIDENT_OUT"/manifest.json; then
+    echo -e "${GREEN}[✓] 故障复现包闭环验证成功（失败 exit 1 + 三文件 + 强制脱敏）(PASS)${NC}"
+    TOTAL=$((TOTAL + 1)); PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}[✗] 故障复现包闭环验证失败 (FAIL)${NC}"
+    TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+fi
+# 成功对照：全绿运行即使给了 --incident-out 也不创建目录
+GREEN_EXIT=0
+$RUPOST_BIN t examples/incident_bundle/green.http --var base_url=http://127.0.0.1:8095 --incident-out "$INCIDENT_WS/should-not-exist" > /dev/null 2>&1 || GREEN_EXIT=$?
+if [ "$GREEN_EXIT" -eq 0 ] && [ ! -e "$INCIDENT_WS/should-not-exist" ]; then
+    echo -e "${GREEN}[✓] 复现包成功对照验证成功（全绿不建目录）(PASS)${NC}"
+    TOTAL=$((TOTAL + 1)); PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}[✗] 复现包成功对照验证失败 (FAIL)${NC}"
+    TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+fi
+kill $INCIDENT_MOCK_PID || true
+INCIDENT_MOCK_PID=""
+rm -rf "$INCIDENT_WS"
 
 # 6. 打印最终执行结果
 echo -e "\n${BLUE}======================================================================${NC}"

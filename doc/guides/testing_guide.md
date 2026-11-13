@@ -130,13 +130,14 @@ chmod +x tests/verify_features.sh
 ### 3.2 脚本核心验证逻辑
 为了摆脱公共网络不稳定的影响，该集成脚本将整体测试转化为**纯本地自闭环测试**：
 1.  自动在当前工作区编译出最新的 release 二进制。
-2.  在当前目录下的合法测试路径 `./tests_temp_dir/` 创建临时测试沙箱。
+2.  在 `mktemp -d` 隔离工作区中创建临时测试沙箱——绝不移动/覆盖仓库根的 `rupost.toml`/`.env`，历史记录同样收进工作区（`RUPOST_HISTORY_DIR`）。
 3.  验证 `rupost init` 命令能否成功在空目录下初始化 `rupost.toml`，并测试防覆盖校验是否生效。
 4.  在后台拉起 Mock 服务器。
 5.  触发 Mock 路径参数捕获（`:id` 动态渲染）与 `X-Role: Admin` / `Guest` 变体多路条件匹配。
 6.  对本地处于活动状态的 Mock 服务端口执行 `rupost diagnose` 网络诊断，检验条形时延图与状态分析。
-7.  在该 Mock 服务上跑包含 Fork-Join DAG 拓扑关系的并行测试。验证前置步骤获取的 `global.token` 变量能够被单向克隆（State Cloning）传递到子节点的上下文，并能级联覆盖本地的 `.env` 配置变量。
-8.  一键清理全部后台进程与临时测试工作区。
+7.  在该 Mock 服务上跑包含 Fork-Join DAG 拓扑关系的并行测试。以 **mock 变体语义判别 + 严格 exit 0** 断言业务事实：`Authorization` 精确变体证明登录捕获的 token 真实传递（State Cloning），`X-Test-Key=env-val` 精确变体证明 `.env` 真实覆盖 toml 配置——任一失守即非零退出，不以文件名出现为成功条件。
+8.  `trap cleanup EXIT INT TERM` 幂等清理全部**本脚本启动**的进程与临时工作区——绝不 `killall`，开发者独立进程零干扰；先起独立 `rupost mock` 再跑脚本，脚本结束后该进程必须仍存活。
+9.  全部 Mock 端口经 `RUPOST_TEST_PORT_BASE` 可平移（默认 9000–9005），固定 `sleep` 换为有限重试健康探针；端口被占用立即给出可读错误而非误杀其他进程。
 
 ---
 
@@ -147,6 +148,11 @@ chmod +x tests/verify_features.sh
 ```bash
 cargo test
 ```
+
+CI 侧：Web 前端无依赖原生单测已进独立 `web-assets` job（`node --test tests/web/app_test.mjs`，
+与本地 `make test-web` 同口径）。差异化 Phase 0/1 批次新增守护：
+* `tests/incident_bundle_test.rs` — 故障复现包端到端契约（失败 exit 1 + 三文件 + manifest 契约精确 + 原始凭据零泄漏 + `replay` 直接消费 + 全绿不建目录 + 目标已存在/symlink 拒绝保护）；
+* `tests/web_session_reuse_test.rs::test_web_session_does_not_share_captured_variables_between_clients` — Web 双浏览器会话隔离守护（A1：跨客户端不得互读 Cookie 或 `@capture` 变量；已通过临时破坏隔离验证会确定性变红）。
 
 ### 4.2 运行代码覆盖率统计
 **一键入口（推荐）**：仓库根目录提供 `make coverage`（DX 批交付，本地可选、不进 CI 门禁）：

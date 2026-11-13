@@ -7,7 +7,7 @@
 //!
 //! P0 隔离守护（差异化执行计划 A1）：两个浏览器会话不得互读 Cookie 或
 //! @capture 变量——服务端按 `Cookie: rupost_session=<opaque>` 划分会话边界，
-//! 首次执行下发 `Set-Cookie`，无 Cookie/非法/过期一律等价新会话。
+//! 首次执行下发 `Set-Cookie` 并随每次执行滑动续期（WP-R1），无 Cookie/非法/过期一律等价新会话。
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -290,4 +290,32 @@ async fn test_web_session_does_not_share_captured_variables_between_clients() {
         a_run["success"].as_bool().unwrap(),
         "Client A 凭自身会话必须成功: {a_run}"
     );
+}
+
+/// WP-R1（缺口 1）滑动续期守护：携带有效会话 Cookie 的后续执行响应必须重发
+/// Set-Cookie（同 ID；Max-Age=1800 随响应重新起算）——活跃会话不得因 Cookie
+/// 固定倒计时在 30 分钟硬过期。
+/// 反假守护：把 run.rs json_session_response 恢复 `.filter(|h| h.created)`
+/// （仅首次下发）时，本测试必须稳定变红。
+#[tokio::test]
+async fn test_web_session_cookie_renewed_on_active_use() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/login"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"token":"tok-r1"}"#))
+        .mount(&server)
+        .await;
+
+    let app = create_web_router(WebServerConfig::default());
+    let login_block = format!(
+        "### login\nPOST {}/login\nContent-Type: application/json\n\n{{}}\n\n@capture auth_token from body.token\n",
+        server.uri()
+    );
+
+    let (_, first) = run_block_full(&app, "login.http", &login_block, None, None).await;
+    let cookie = first.expect("首次执行必须下发会话 Cookie");
+
+    let (_, renewed) = run_block_full(&app, "login.http", &login_block, None, Some(&cookie)).await;
+    let renewed = renewed.expect("活跃会话的后续执行必须重发 Set-Cookie 滑动续期");
+    assert_eq!(renewed, cookie, "续期必须保持同一会话 ID（不得轮换）");
 }

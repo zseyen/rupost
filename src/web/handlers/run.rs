@@ -66,8 +66,10 @@ fn session_finish(
         .persist_execution(&handle.id, exported, deltas);
 }
 
-/// 统一响应封装（WP-1 helper 2/3）：首次创建会话的成功与业务失败响应都附
-/// `Set-Cookie`；执行前失败（只读拒绝、解析错误等，未创建会话）不附。
+/// 统一响应封装（WP-1 helper 2/3 + WP-R1 滑动续期）：到达会话层的每次执行响应
+/// （成功与业务失败）都重发 `Set-Cookie`——浏览器 `Max-Age` 随每次执行重新起算，
+/// 与服务端滑动 TTL 对齐，活跃会话不得因固定倒计时在 30 分钟硬过期；
+/// 执行前失败（只读拒绝、解析错误等，未创建会话）不附。
 fn json_session_response<T: serde::Serialize>(
     status: StatusCode,
     body: ApiResponse<T>,
@@ -75,7 +77,6 @@ fn json_session_response<T: serde::Serialize>(
 ) -> Response {
     let mut resp = (status, Json(body)).into_response();
     if let Some(v) = handle
-        .filter(|h| h.created)
         .map(|h| session_set_cookie_value(&h.id))
         .and_then(|c| HeaderValue::from_str(&c).ok())
     {

@@ -381,3 +381,53 @@ Content-Type: application/json
         );
     }
 }
+
+/// WP-R3（缺口 3）：--env 必须贯通到 manifest.environment 与 snapshot.environment。
+/// 反假守护：把 src/cli/suite_presenter.rs 中传给 create_incident_bundle 的
+/// options.env.as_deref() 临时改为 None，本测试必须稳定变红；验证后恢复。
+#[tokio::test]
+async fn test_incident_manifest_carries_env_from_cli_flag() {
+    let server = MockServer::start().await;
+    mount_failing_charge(&server).await;
+
+    let workdir = tempdir().unwrap();
+    let history = tempdir().unwrap();
+    let artifact_root = tempdir().unwrap();
+    write_failing_fixture(workdir.path(), &server.uri());
+    // --env 需要可解析的环境名：最小 rupost.toml 声明 staging
+    std::fs::write(
+        workdir.path().join("rupost.toml"),
+        format!("[environments.staging]\nbase_url = \"{}\"\n", server.uri()),
+    )
+    .unwrap();
+
+    let incident_path = artifact_root.path().join("with-env");
+    let out = run_rupost(
+        workdir.path(),
+        history.path(),
+        &[
+            "t".into(),
+            "payments.http".into(),
+            "--env".into(),
+            "staging".into(),
+            "--incident-out".into(),
+            incident_path.to_string_lossy().into_owned(),
+            "--mask-secret-value".into(),
+            SECRET_TOKEN.into(),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let manifest_bytes = std::fs::read(incident_path.join("manifest.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest["environment"], "staging", "manifest: {manifest}");
+
+    let snap_bytes = std::fs::read(incident_path.join("snapshot.json")).unwrap();
+    let snap: serde_json::Value = serde_json::from_slice(&snap_bytes).unwrap();
+    assert_eq!(snap["environment"], "staging");
+}

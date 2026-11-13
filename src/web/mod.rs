@@ -2,6 +2,7 @@ pub mod assets;
 pub mod handlers;
 pub mod importer;
 pub mod server;
+pub mod session;
 pub mod store;
 pub mod types;
 

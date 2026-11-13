@@ -193,6 +193,10 @@ pub struct RequestMetadata {
     /// WebSocket 二进制帧解码器（@decoder，可选）
     pub decoder: Option<String>,
 
+    /// WP-P2a：请求方法行的 1-based 行号（稳定定位 `<path>#L<行号>`；
+    /// .http 与 .md 双解析路径均回填；缺席为 None）
+    pub source_line: Option<usize>,
+
     /// 是否开启网络诊断（@diagnose）
     pub diagnose: bool,
 
@@ -328,6 +332,30 @@ pub type ParseResult<T> = Result<T, ParseError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WP-P2a：source_line 契约——方法行的 1-based 行号，.md 与 .http 双路径锁定
+    #[test]
+    fn test_source_line_contract_md_and_http() {
+        // .md 围栏：行4 与行10 的 GET
+        let md = "前言\n\n```http\nGET http://x/ok\n\n# @assert status == 200\n```\n\n```http\nGET http://x/boom\n\n# @assert status == 200\n```\n";
+        let parsed = crate::parser::parse_document_by_path("doc.md", md).unwrap();
+        assert_eq!(parsed.requests.len(), 2);
+        assert_eq!(parsed.requests[0].metadata.source_line, Some(4));
+        assert_eq!(parsed.requests[1].metadata.source_line, Some(10));
+
+        // .http ### 分隔：### 在行1/5（不进块内容），方法行 3 与 6
+        let http =
+            "### first\n# @assert status == 200\nGET http://x/a\n\n### second\nGET http://x/b\n";
+        let parsed = crate::parser::parse_document_by_path("a.http", http).unwrap();
+        assert_eq!(parsed.requests.len(), 2);
+        assert_eq!(parsed.requests[0].metadata.source_line, Some(3));
+        assert_eq!(parsed.requests[1].metadata.source_line, Some(6));
+
+        // 无分隔符直起：方法行在行1
+        let bare = "GET http://x/c\n";
+        let parsed = crate::parser::parse_document_by_path("b.http", bare).unwrap();
+        assert_eq!(parsed.requests[0].metadata.source_line, Some(1));
+    }
 
     #[test]
     fn test_parsed_request_new() {

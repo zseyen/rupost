@@ -229,6 +229,7 @@ async fn test_r7_failure_switches_to_diagnose_tab() {
     };
 
     let failed = rupost::runner::types::TestResult {
+        source_line: None,
         request_number: 1,
         name: None,
         method: "GET".to_string(),

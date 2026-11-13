@@ -1095,6 +1095,7 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
     };
 
     let fail_result = TestResult {
+        source_line: None,
         request_number: 1,
         name: Some("TimeoutReq".to_string()),
         method: "GET".to_string(),

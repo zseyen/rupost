@@ -67,6 +67,9 @@ pub struct TestResult {
     /// 不影响 success 判定，但必须对用户可见，避免静默假通过。
     pub warnings: Vec<String>,
 
+    /// WP-P2a：请求方法行的 1-based 行号（稳定定位 `<path>#L<行号>`；SSE/WS 路径暂缺为 None）
+    pub source_line: Option<usize>,
+
     /// M3：是否为 @teardown 清理请求（快照导出默认排除；报告/终端可区分）
     pub is_teardown: bool,
 
@@ -115,6 +118,7 @@ impl TestResult {
             diagnose_report: None,
             request: None,
             warnings: Vec::new(),
+            source_line: None,
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
@@ -148,6 +152,7 @@ impl TestResult {
             diagnose_report: None,
             request: None,
             warnings: Vec::new(),
+            source_line: None,
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
@@ -179,6 +184,7 @@ impl TestResult {
             diagnose_report: None,
             request: None,
             warnings: Vec::new(),
+            source_line: None,
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,

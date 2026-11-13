@@ -44,8 +44,9 @@ impl MarkdownFileParser {
             let split_result = Self::split_mock_variants(&block.content);
 
             if let Some((request_part, variants_part)) = split_result {
+                // WP-P2a：block.line_number 是围栏开行，块内容首行 = 围栏 + 1
                 let parsed_opt =
-                    HttpFileParser::parse_request_block(&request_part, block.line_number)?;
+                    HttpFileParser::parse_request_block(&request_part, block.line_number + 1)?;
                 if let Some(mut req) = parsed_opt {
                     if req.metadata.name.is_none() {
                         req.metadata.name = block.preceding_header.clone();
@@ -75,6 +76,10 @@ impl MarkdownFileParser {
                     if req.base_path.is_none() {
                         req.base_path = base_path.clone();
                     }
+                    // WP-P2a：parse_content 内部从 1 计数，换算回文档行号
+                    // （内容首行 = 围栏 + 1 = line_number + 1，relative 1 对应 +1）
+                    req.metadata.source_line =
+                        req.metadata.source_line.map(|n| n + block.line_number);
                 }
 
                 parsed_file.requests.extend(block_parsed.requests);
@@ -246,7 +251,8 @@ impl MarkdownFileParser {
                     blocks.push(ExtractedCodeBlock {
                         content: current_code.clone(),
                         preceding_header: current_header.clone(),
-                        line_number: 1, // 缺省从 1 开始
+                        // WP-P2a：真实行号由 assign_fence_lines 回填（先占位）
+                        line_number: 1,
                     });
 
                     in_code_block = false;
@@ -257,7 +263,39 @@ impl MarkdownFileParser {
             }
         }
 
+        assign_fence_lines(content, &mut blocks);
         blocks
+    }
+}
+
+/// WP-P2a：扫描原文围栏开行，按出现顺序为 http 围栏块回填真实 1-based 行号
+/// （pulldown-cmark 事件流不携带行号）。围栏标记 ```/~~~ 均支持；
+/// 计数与块数不一致（畸形文档/缩进围栏误判）时放弃回填，保持占位值——
+/// 宁可退化不可误导。
+fn assign_fence_lines(content: &str, blocks: &mut [ExtractedCodeBlock]) {
+    let mut opens: Vec<usize> = Vec::new();
+    let mut in_fence = false;
+    let mut marker = "";
+    for (idx, line) in (1..).zip(content.lines()) {
+        let trimmed = line.trim_start();
+        if !in_fence {
+            if trimmed.starts_with("```") {
+                in_fence = true;
+                marker = "```";
+                opens.push(idx);
+            } else if trimmed.starts_with("~~~") {
+                in_fence = true;
+                marker = "~~~";
+                opens.push(idx);
+            }
+        } else if trimmed.starts_with(marker) {
+            in_fence = false;
+        }
+    }
+    if opens.len() == blocks.len() {
+        for (block, line) in blocks.iter_mut().zip(opens) {
+            block.line_number = line;
+        }
     }
 }
 

@@ -300,6 +300,7 @@ mod tests {
     fn passing(n: usize) -> JsonTestReport {
         JsonTestReport {
             request_number: n,
+            source_line: None,
             name: Some(format!("case{n}")),
             method: "GET".to_string(),
             url: "http://x/api".to_string(),

@@ -348,6 +348,7 @@ impl WsRunner {
             timing: None,
             diagnose_report: None,
             request: Some(request_snapshot.clone()),
+            source_line: None, // WS 路径暂缺行号（登记后补）
             warnings: {
                 capture_warnings.sort();
                 capture_warnings.dedup();

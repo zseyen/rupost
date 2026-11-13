@@ -53,6 +53,9 @@ pub struct JsonTestReport {
     /// 仅在失败请求 (!success) 且存在响应体时记录脱敏 + 512B 截断后的响应片段
     #[serde(default)]
     pub response_body_snippet: Option<String>,
+    /// WP-P2a：请求方法行的 1-based 行号（稳定定位 `<path>#L<行号>`；缺席为 null）
+    #[serde(default)]
+    pub source_line: Option<usize>,
 }
 
 /// 单条断言的 JSON 报告（保留 expected/actual/stream_event_index 供 E2/E5 分诊）
@@ -143,6 +146,8 @@ pub fn build_json_reports_with_secrets(
                         name: r.name.clone(),
                         method: r.method.clone(),
                         url: mask_explicit(crate::ai::redactor::redact_url(&r.url)),
+                        // WP-P2a：稳定定位行号（构造器缺省 None 的字段显式透传）
+                        source_line: r.source_line,
                         status: r.status,
                         duration_ms: r.duration.as_millis() as u64,
                         success: r.success,

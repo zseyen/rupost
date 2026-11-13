@@ -228,6 +228,7 @@ fn test_offline_json_report_to_html_generation() {
 
     let test_item = JsonTestReport {
         request_number: 1,
+        source_line: None,
         name: Some("query_user".to_string()),
         method: "GET".to_string(),
         url: "https://api.example.com/users/42".to_string(),

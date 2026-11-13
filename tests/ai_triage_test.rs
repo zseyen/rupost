@@ -59,6 +59,7 @@ fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
         results: vec![
             rupost::report::JsonTestReport {
                 request_number: 1,
+                source_line: None,
                 name: Some("GetProfile".to_string()),
                 method: "GET".to_string(),
                 url: "http://127.0.0.1:18080/v1/users/10".to_string(),
@@ -83,6 +84,7 @@ fn sample_failed_reports() -> Vec<rupost::report::JsonFileReport> {
             },
             rupost::report::JsonTestReport {
                 request_number: 2,
+                source_line: None,
                 name: Some("UpdateProfile".to_string()),
                 method: "POST".to_string(),
                 url: "http://127.0.0.1:18080/v1/users/20".to_string(),

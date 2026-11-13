@@ -99,6 +99,7 @@ async fn test_batch_json_report_schema_exact_fields() {
         "request_number",
         "response_body_snippet",
         "skipped",
+        "source_line",
         "status",
         "success",
         "timing",

@@ -78,6 +78,8 @@ fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
 
     JsonTestReport {
         request_number: e.request_number,
+        // 快照 Schema v1.0 不携带行号，triage 链路恒 None
+        source_line: None,
         name: e.name.clone(),
         method: e.request.method.clone(),
         url: e.request.url.clone(),

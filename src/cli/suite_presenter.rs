@@ -62,6 +62,12 @@ pub async fn present_suite_outcome(
             reporter.print_header(&path_str, file_results.len());
             for r in file_results {
                 reporter.print_result(r);
+                // WP-P2a：失败请求的稳定定位（json 模式走字段，终端给行号）
+                if !r.success
+                    && let Some(line) = r.source_line
+                {
+                    println!("    {path_str}:{line}");
+                }
                 if options.explain {
                     explain_session
                         .explain_failure_with_client(r, ai_client.as_deref())

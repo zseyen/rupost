@@ -109,7 +109,9 @@ impl HttpFileParser {
     fn split_by_separator(content: &str) -> Vec<(String, usize)> {
         let mut blocks = Vec::new();
         let mut current_block = String::new();
-        let mut block_start_line = 1;
+        // WP-P2a：块起始行 = 首个被追加进块内容的行（`###` 分隔行不进块内容，
+        // 记分隔符行会使块内行号整体偏移 -1）；0 = 尚未追加任何行
+        let mut block_start_line: usize = 0;
 
         // 用于状态感知型拆分的局部状态变量
         let mut has_req_line = false;
@@ -152,7 +154,7 @@ impl HttpFileParser {
             if should_split && !current_block.trim().is_empty() {
                 blocks.push((current_block.clone(), block_start_line));
                 current_block.clear();
-                block_start_line = current_line;
+                block_start_line = 0; // 新块待首个追加行再记录
                 has_req_line = false;
                 last_req_method = None;
                 has_empty_line_after_req_line = false;
@@ -173,6 +175,9 @@ impl HttpFileParser {
 
             // 显式分隔符行本身不需要被加入到请求文本中
             if !trimmed.starts_with("###") {
+                if block_start_line == 0 {
+                    block_start_line = current_line;
+                }
                 current_block.push_str(line);
                 current_block.push('\n');
             }
@@ -277,6 +282,8 @@ impl HttpFileParser {
 
         // 解析请求行（方法 + URL）
         let (request_line, req_line_num) = http_lines[line_index];
+        // WP-P2a：方法行号已在此算出（req_line_num），存入稳定定位字段
+        request.metadata.source_line = Some(req_line_num);
         Self::parse_request_line(request_line.trim(), req_line_num, &mut request)?;
         line_index += 1;
 

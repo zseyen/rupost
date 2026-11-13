@@ -35,6 +35,7 @@ impl HttpRunner {
         let name = parsed.name().map(|s| s.to_string());
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
+        let source_line = parsed.metadata.source_line;
         let is_sse_requested = parsed.is_sse_stream();
         let sse_timeout = parsed.metadata.sse_timeout;
         let sse_max_events = parsed.metadata.sse_max_events;
@@ -207,6 +208,7 @@ impl HttpRunner {
                     response_obj.clone(),
                 );
                 test_result.request = Some(request_snapshot);
+                test_result.source_line = source_line;
                 test_result.assertions = assertion_results;
                 // 构建期警告（畸形 JSON 降级等）在前，捕获警告在后
                 let mut all_warnings = build_warnings;
@@ -261,6 +263,7 @@ impl HttpRunner {
                     start.elapsed(),
                 );
                 test_result.request = Some(request_snapshot);
+                test_result.source_line = source_line;
                 let run_diagnose = enable_diagnose || debug || debug_on_failure;
                 // 传输层失败恰是最需要诊断的场景：用宽容版诊断保证 DNS/TCP
                 // 阶段性失败也能产出带 connection_error 分类的部分瀑布（D2 拆分）

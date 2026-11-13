@@ -1,7 +1,8 @@
 pub use crate::security::redact::{
     DEFAULT_SNIPPET_MAX_BYTES, assertion_targets_sensitive_key, is_sensitive_key,
-    mask_inline_secrets, mask_pii, redact_and_truncate_body, redact_free_text, redact_header_value,
-    redact_url, truncate_utf8_safe,
+    mask_inline_secrets, mask_pii, order_secret_values, redact_and_truncate_body,
+    redact_explicit_secrets, redact_explicit_secrets_ordered, redact_free_text,
+    redact_header_value, redact_url, truncate_utf8_safe,
 };
 use regex::Regex;
 use serde_json::Value;

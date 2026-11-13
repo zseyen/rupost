@@ -141,18 +141,10 @@ pub fn mask_execution_snapshot_entry(
     entry: &mut crate::history::model::ExecutionSnapshotEntry,
     secret_values: &[String],
 ) {
-    // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式。
-    // P2-3（review）：按长度降序——先短后长会把长值打成 [REDACTED] 混合残片致长值失配
-    let mut ordered: Vec<&str> = secret_values.iter().map(String::as_str).collect();
-    ordered.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式（SSOT in security::redact）。
+    let ordered = crate::security::redact::order_secret_values(secret_values);
     let redact_values = |text: &str| -> String {
-        let mut out = text.to_string();
-        for v in ordered.iter() {
-            if !v.is_empty() {
-                out = out.replace(v, "[REDACTED]");
-            }
-        }
-        out
+        crate::security::redact::redact_explicit_secrets_ordered(text, &ordered)
     };
     let mask_pairs = |headers: &mut Vec<(String, String)>| {
         for (name, value) in headers.iter_mut() {

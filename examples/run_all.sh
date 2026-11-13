@@ -137,13 +137,31 @@ fi
 # 5.6 故障复现包闭环（WP-4，本地 loopback Mock，零公网零真实凭据）
 echo -e "\n${BLUE}>>> 第五阶段(续)：故障复现包闭环（incident bundle）${NC}"
 INCIDENT_WS=$(mktemp -d /tmp/rupost_incident_example_XXXXXX)
-$RUPOST_BIN mock examples/incident_bundle/mock.json --port 8095 > /tmp/incident_mock_run.log 2>&1 &
+INCIDENT_PORT="${RUPOST_INCIDENT_MOCK_PORT:-8095}"
+$RUPOST_BIN mock examples/incident_bundle/mock.json --port "$INCIDENT_PORT" > "$INCIDENT_WS/mock.log" 2>&1 &
 INCIDENT_MOCK_PID=$!
-sleep 2
+INCIDENT_READY=0
+for _ in $(seq 1 40); do
+    if ! kill -0 "$INCIDENT_MOCK_PID" 2>/dev/null; then
+        echo -e "${RED}[ERROR] 复现包 Mock 启动即退出（端口 ${INCIDENT_PORT} 被占用或配置错误）${NC}"
+        cat "$INCIDENT_WS/mock.log" 2>/dev/null || true
+        exit 1
+    fi
+    if curl -s -o /dev/null "http://127.0.0.1:${INCIDENT_PORT}/ok"; then
+        INCIDENT_READY=1
+        break
+    fi
+    sleep 0.2
+done
+if [ "$INCIDENT_READY" -ne 1 ]; then
+    echo -e "${RED}[ERROR] 复现包 Mock 未在超时内就绪（端口 ${INCIDENT_PORT}）${NC}"
+    cat "$INCIDENT_WS/mock.log" 2>/dev/null || true
+    exit 1
+fi
 # 期望失败用例：exit 1 + 三文件工件 + 强制脱敏（manifest 声明 secrets 且原始凭据零泄漏）
 INCIDENT_OUT="$INCIDENT_WS/payment-failure"
 INCIDENT_EXIT=0
-$RUPOST_BIN t examples/incident_bundle/payments.http --var base_url=http://127.0.0.1:8095 --incident-out "$INCIDENT_OUT" --mask-secret-value demo-secret-token-xyz > /dev/null 2>&1 || INCIDENT_EXIT=$?
+$RUPOST_BIN t examples/incident_bundle/payments.http --var "base_url=http://127.0.0.1:${INCIDENT_PORT}" --incident-out "$INCIDENT_OUT" --mask-secret-value demo-secret-token-xyz > /dev/null 2>&1 || INCIDENT_EXIT=$?
 if [ "$INCIDENT_EXIT" -eq 1 ] \
     && [ -f "$INCIDENT_OUT/manifest.json" ] && [ -f "$INCIDENT_OUT/report.json" ] && [ -f "$INCIDENT_OUT/snapshot.json" ] \
     && ! grep -q "demo-secret-token-xyz" "$INCIDENT_OUT"/manifest.json "$INCIDENT_OUT"/report.json "$INCIDENT_OUT"/snapshot.json \
@@ -156,7 +174,7 @@ else
 fi
 # 成功对照：全绿运行即使给了 --incident-out 也不创建目录
 GREEN_EXIT=0
-$RUPOST_BIN t examples/incident_bundle/green.http --var base_url=http://127.0.0.1:8095 --incident-out "$INCIDENT_WS/should-not-exist" > /dev/null 2>&1 || GREEN_EXIT=$?
+$RUPOST_BIN t examples/incident_bundle/green.http --var "base_url=http://127.0.0.1:${INCIDENT_PORT}" --incident-out "$INCIDENT_WS/should-not-exist" > /dev/null 2>&1 || GREEN_EXIT=$?
 if [ "$GREEN_EXIT" -eq 0 ] && [ ! -e "$INCIDENT_WS/should-not-exist" ]; then
     echo -e "${GREEN}[✓] 复现包成功对照验证成功（全绿不建目录）(PASS)${NC}"
     TOTAL=$((TOTAL + 1)); PASSED=$((PASSED + 1))

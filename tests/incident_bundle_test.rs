@@ -321,3 +321,63 @@ async fn test_incident_out_refuses_symlink_target() {
         );
     }
 }
+
+/// 回归（问题 1）：当失败响应体的非敏感键、错误信息或断言实际值中回显了
+/// `--mask-secret-value` 指定的凭据时，manifest/report/snapshot 三文件均不得泄漏原文。
+#[tokio::test]
+async fn test_incident_bundle_redacts_explicit_secret_value_in_report_body_and_assertions() {
+    let server = MockServer::start().await;
+    let echoed_secret = "custom-opaque-secret-998877";
+    Mock::given(method("POST"))
+        .and(path("/echo-fail"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .set_body_string(format!(r#"{{"gateway_echo":"{echoed_secret}"}}"#)),
+        )
+        .mount(&server)
+        .await;
+
+    let workdir = tempdir().unwrap();
+    let history = tempdir().unwrap();
+    let artifact_root = tempdir().unwrap();
+    let suite = format!(
+        r#"### echo failure
+# @assert status == 200
+# @assert body.gateway_echo == "ok"
+POST {}/echo-fail
+Content-Type: application/json
+
+{{"payload":"{echoed_secret}"}}
+"#,
+        server.uri()
+    );
+    std::fs::write(workdir.path().join("echo.http"), suite).unwrap();
+
+    let incident_path = artifact_root.path().join("echo-failure");
+    let out = run_rupost(
+        workdir.path(),
+        history.path(),
+        &[
+            "t".into(),
+            "echo.http".into(),
+            "--incident-out".into(),
+            incident_path.to_string_lossy().into_owned(),
+            "--mask-secret-value".into(),
+            echoed_secret.into(),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "failing suite must exit 1, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    for name in ["manifest.json", "report.json", "snapshot.json"] {
+        let content = std::fs::read_to_string(incident_path.join(name)).unwrap();
+        assert!(
+            !content.contains(echoed_secret),
+            "explicit secret value leaked into {name}: {content}"
+        );
+    }
+}

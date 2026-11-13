@@ -19,7 +19,7 @@ rupost test docs/payments.md --env staging \
   --mask-secret-value "$PAYMENT_TOKEN"
 
 rupost replay artifacts/payment-failure/snapshot.json --target http://localhost:8080
-rupost ai triage artifacts/payment-failure/snapshot.json
+rupost ai triage --snapshot artifacts/payment-failure/snapshot.json
 ```
 
 `--incident-out` 仅在运行失败时生成工件；成功运行不创建目录。工件始终开启键名和显式值脱敏，绝不提供关闭脱敏的开关。

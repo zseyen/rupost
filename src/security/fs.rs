@@ -202,8 +202,8 @@ fn create_unique_private_staging_dir(parent: &Path) -> Result<PathBuf> {
 
 /// 以"staging 目录 + rename 发布"整目录原子地创建私有目录工件集（WP-3 复现包原语）。
 ///
-/// - `target` 必须不存在：已存在（含符号链接）一律返回 `SecurityViolation`，
-///   绝不覆盖既有内容；后续 `rename` 的 fail-if-exists 语义提供第二道防线；
+/// - `target` 必须不存在且具备合法末级目录名：已存在（含符号链接）或以 `.` / `..` / `/`
+///   收尾一律返回 `SecurityViolation`，绝不覆盖既有内容也不提前创建无效父目录；
 /// - `populate` 在 0700 私有 staging 目录内写入全部文件（建议逐文件走
 ///   [`write_private_file_atomic`]，得到 0600 文件）；
 /// - `populate` 或最终 rename 任一步失败：staging 目录被清理、`target` 保持不存在、
@@ -213,10 +213,16 @@ pub fn publish_private_dir_atomically<F>(target: &Path, populate: F) -> Result<(
 where
     F: FnOnce(&Path) -> Result<()>,
 {
-    if target.as_os_str().is_empty() {
-        return Err(RupostError::SecurityViolation(
-            "私有目录工件目标路径不能为空".to_string(),
-        ));
+    if target.as_os_str().is_empty()
+        || !matches!(
+            target.components().next_back(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return Err(RupostError::SecurityViolation(format!(
+            "私有目录工件目标路径非法（必须包含末级目录名）: {}",
+            target.display()
+        )));
     }
     if let Ok(meta) = std::fs::symlink_metadata(target) {
         return Err(RupostError::SecurityViolation(format!(
@@ -533,5 +539,27 @@ mod tests {
         })
         .unwrap();
         assert!(target.join("m.json").is_file());
+    }
+
+    /// 拒绝 `.` / `..` / `/` 等无普通末级目录名的目标路径，且不得提前创建父目录
+    #[test]
+    fn test_publish_refuses_dot_target_without_creating_parent() {
+        let dir = TempDir::new().unwrap();
+        for bad_target in [
+            PathBuf::from("."),
+            PathBuf::from(".."),
+            dir.path().join("orphan_parent").join(".."),
+        ] {
+            let err = publish_private_dir_atomically(&bad_target, |_| Ok(())).unwrap_err();
+            assert!(
+                matches!(err, RupostError::SecurityViolation(_)),
+                "bad_target={}: {err:?}",
+                bad_target.display()
+            );
+        }
+        assert!(
+            !dir.path().join("orphan_parent").exists(),
+            "无效目标路径不得提前创建父目录"
+        );
     }
 }

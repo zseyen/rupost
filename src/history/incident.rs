@@ -111,9 +111,13 @@ pub fn create_incident_bundle(
             max_snapshot_body_bytes,
         )?;
 
-        // 2. report.json：复用 JSON 报告契约（writer 注入式 → 缓冲 → 私有原子写入）
+        // 2. report.json：复用 JSON 报告契约并应用显式 secret_values 脱敏（writer 注入式 → 缓冲 → 私有原子写入）
         let mut report_buf = Vec::new();
-        crate::report::json::report_json(batch_results, &mut report_buf)?;
+        crate::report::json::report_json_with_secrets(
+            batch_results,
+            secret_values,
+            &mut report_buf,
+        )?;
         write_private_file_atomic(&staging.join(IncidentArtifactNames::REPORT), &report_buf)?;
 
         // 3. manifest.json 最后写（完整性声明以全部工件已落盘为前提）

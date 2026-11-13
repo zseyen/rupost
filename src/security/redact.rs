@@ -551,6 +551,40 @@ pub fn redact_url(raw_url: &str) -> String {
     BUILTIN_POLICY.redact_url(raw_url)
 }
 
+/// 将显式密钥值列表去空并按长度降序排列（按值掩码 SSOT）。
+///
+/// 必须先长后短：若短串是长串的前缀/子串，先替换短串会把长串打成
+/// `[REDACTED]` 混合残片，导致长串后续无法匹配。
+pub fn order_secret_values(secret_values: &[String]) -> Vec<&str> {
+    let mut ordered: Vec<&str> = secret_values
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
+        .collect();
+    ordered.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    ordered
+}
+
+/// 使用已按长度降序排列的显式密钥清单，将 `text` 中出现的原始密钥替换为 `[REDACTED]`。
+pub fn redact_explicit_secrets_ordered(text: &str, ordered_secrets: &[&str]) -> String {
+    if ordered_secrets.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for secret in ordered_secrets {
+        if !secret.is_empty() {
+            out = out.replace(secret, "[REDACTED]");
+        }
+    }
+    out
+}
+
+/// 对 `text` 中的显式密钥值列表执行按长度降序的 `[REDACTED]` 替换。
+pub fn redact_explicit_secrets(text: &str, secret_values: &[String]) -> String {
+    let ordered = order_secret_values(secret_values);
+    redact_explicit_secrets_ordered(text, &ordered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

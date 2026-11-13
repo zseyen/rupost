@@ -175,6 +175,74 @@ pub fn env_flag_enabled(name: &str) -> bool {
     })
 }
 
+/// 在 `parent` 下创建唯一命名的私有 staging 目录（Unix `0700`，`create_new` 语义不冲突）。
+/// 仅服务于 [`publish_private_dir_atomically`] 的整目录原子发布。
+fn create_unique_private_staging_dir(parent: &Path) -> Result<PathBuf> {
+    const MAX_ATTEMPTS: usize = 16;
+    for _ in 0..MAX_ATTEMPTS {
+        let seq = ATOMIC_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".rupost_staging.{}.{seq}", std::process::id()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(RupostError::IoError(e)),
+        }
+    }
+    Err(RupostError::IoError(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "无法生成唯一的私有 staging 目录",
+    )))
+}
+
+/// 以"staging 目录 + rename 发布"整目录原子地创建私有目录工件集（WP-3 复现包原语）。
+///
+/// - `target` 必须不存在：已存在（含符号链接）一律返回 `SecurityViolation`，
+///   绝不覆盖既有内容；后续 `rename` 的 fail-if-exists 语义提供第二道防线；
+/// - `populate` 在 0700 私有 staging 目录内写入全部文件（建议逐文件走
+///   [`write_private_file_atomic`]，得到 0600 文件）；
+/// - `populate` 或最终 rename 任一步失败：staging 目录被清理、`target` 保持不存在、
+///   无任何临时残留；
+/// - 成功后 `target` 为 0700 私有目录。
+pub fn publish_private_dir_atomically<F>(target: &Path, populate: F) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    if target.as_os_str().is_empty() {
+        return Err(RupostError::SecurityViolation(
+            "私有目录工件目标路径不能为空".to_string(),
+        ));
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(target) {
+        return Err(RupostError::SecurityViolation(format!(
+            "目标路径已存在，拒绝覆盖（符号链接同样拒绝）: {} ({:?})",
+            target.display(),
+            meta.file_type()
+        )));
+    }
+    let parent = match target.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    std::fs::create_dir_all(parent)?;
+
+    let staging = create_unique_private_staging_dir(parent)?;
+    let result = (|| -> Result<()> {
+        populate(&staging)?;
+        std::fs::rename(&staging, target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +406,132 @@ mod tests {
         std::fs::write(&regular, b"x").unwrap();
         assert!(!is_trusted_dir(&regular));
         assert!(ensure_private_dir(&regular).is_err());
+    }
+
+    /// 发布原语 happy path：populate 写入 → 目标 0700、文件 0600、无 staging 残留
+    #[test]
+    fn test_publish_private_dir_atomically_success() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("bundle");
+        publish_private_dir_atomically(&target, |staging| {
+            write_private_file_atomic(&staging.join("a.json"), b"{}")?;
+            write_private_file_atomic(&staging.join("b.json"), b"[]")?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(target.is_dir());
+        let names: Vec<_> = std::fs::read_dir(&target)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"a.json".to_string()));
+        assert!(names.contains(&"b.json".to_string()));
+        assert_eq!(std::fs::read(target.join("a.json")).unwrap(), b"{}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700);
+            let file_mode = std::fs::metadata(target.join("a.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(file_mode, 0o600);
+        }
+
+        // 父目录内不得残留 staging 临时目录
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".rupost_staging")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "staging leftover: {leftovers:?}");
+    }
+
+    /// 目标已存在：拒绝覆盖（SecurityViolation），既有内容一个字节不动
+    #[test]
+    fn test_publish_refuses_existing_target_and_preserves_content() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("existing");
+        std::fs::create_dir(&target).unwrap();
+        let sentinel = target.join("sentinel.txt");
+        std::fs::write(&sentinel, b"do-not-touch").unwrap();
+
+        let err = publish_private_dir_atomically(&target, |_| Ok(())).unwrap_err();
+        assert!(
+            matches!(err, RupostError::SecurityViolation(_)),
+            "must be SecurityViolation: {err:?}"
+        );
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"do-not-touch");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_publish_refuses_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let victim = dir.path().join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        let sentinel = victim.join("sentinel.txt");
+        std::fs::write(&sentinel, b"do-not-touch").unwrap();
+
+        let link = dir.path().join("link");
+        symlink(&victim, &link).unwrap();
+
+        let err = publish_private_dir_atomically(&link, |_| Ok(())).unwrap_err();
+        assert!(matches!(err, RupostError::SecurityViolation(_)), "{err:?}");
+        // symlink 未被替换、victim 内容原样
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"do-not-touch");
+    }
+
+    /// populate 失败：目标不存在、staging 无残留（失败不留半成品）
+    #[test]
+    fn test_publish_failure_leaves_no_staging_nor_target() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("bundle");
+        let result = publish_private_dir_atomically(&target, |staging| {
+            write_private_file_atomic(&staging.join("partial.json"), b"{}")?;
+            Err(RupostError::SecurityViolation("boom".to_string()))
+        });
+        assert!(result.is_err());
+        assert!(!target.exists(), "failed publish must not create target");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".rupost_staging")
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "staging leftover: {leftovers:?}");
+    }
+
+    /// 父目录不存在时自动建立（嵌套路径一步到位）
+    #[test]
+    fn test_publish_creates_missing_parents() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("level1").join("level2").join("bundle");
+        publish_private_dir_atomically(&target, |staging| {
+            write_private_file_atomic(&staging.join("m.json"), b"{}")?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(target.join("m.json").is_file());
     }
 }

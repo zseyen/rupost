@@ -19,4 +19,9 @@ pub use snapshot_legacy::{
 };
 pub use snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entry};
 pub mod gc;
+pub mod incident;
 pub use gc::{perform_clear, perform_prune};
+pub use incident::{
+    INCIDENT_SCHEMA_VERSION, IncidentArtifactNames, IncidentManifest, create_incident_bundle,
+    failure_counts,
+};

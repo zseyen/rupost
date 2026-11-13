@@ -133,6 +133,8 @@
 **执行顺序：批一 WP-R3 → WP-R1 → WP-R2 → 批二 WP-P2a → WP-AST → WP-P2b → WP-P3a → WP-P3b → 批三 WP-R5 → WP-R6 → WP-R7 → WP-R8（可裁剪）→ WP-R9 → WP-R4**（缺口修复先行；Phase 2 的漂移依赖定位字段先落，故 P2a 在 P2b 前，AST 桥暴露 source_line 亦排 P2a 之后；Phase 3 两个 WP 相互独立；批三依赖 R2 已落（R7/R8），其余相互独立；WP-R4 文档收尾最后覆盖全三批。每个 WP 独立提交）。
 本计划文档已入库（提交 `docs(plans): add phase 0/1 remediation plan (gaps 1-4)`，59159329）；状态行随 WP-R4 收尾更新。
 
+> **审查记录（2026-11-13，执行前核对）：** 剩余 11 个 WP 的前提已对当前 HEAD 实测核对——P2a（http_runner.rs:202/:255 `mut` 绑定精确命中、解析器未 Serialize、json.rs 无 source_line）、AST（builtin 名单 plugin_route.rs:376-384、env 注入 plugin_exec.rs:207-211）、P2b（incident 块锚点 suite_presenter.rs:129-137 成立；TestSuiteOptions 构造点 html_report×3 + dispatch×1）、R5（run_all.sh 8080×7 / sleep×3，incident 段已有 `RUPOST_INCIDENT_MOCK_PORT`）、R6（manifest 10 字段、无 digests）、R7（run.rs:338/344 前提成立）、R8（app.js escapeHtml/runSuite 存在）、R9（src/web 计数 0）——全部成立。**两处骨架已按现场事实修正并写入对应 WP**：P3a（ImportRequest 无 output 字段、ImportResponse 产出 markdown_blocks 向量）、P3b（逐请求 CommandExporter 架构 → file_preamble 默认方法；管线变量已插值 → 取消 `__ENV.VAR` 映射与 check() 翻译，凭据纪律 `--redact`）。P2a 附带必做项确认：`report_schema_test.rs` 采用精确键集合断言，`source_line` 必须显式登记。R4 范围确认：批一（R1/R2/R3）尚未入 CHANGELOG，随 R4 登记。
+
 ### WP-R3（缺口 3）：`--env` 贯通 CLI e2e（热身，纯测试）
 
 **目的：** 锁定 `--env` 从 CLI 到 manifest/snapshot 的端到端贯通。现状实现已贯通，本 WP 是纯覆盖补齐——**不写任何生产代码**。
@@ -641,7 +643,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 jj split src/parser src/runner src/report src/cli tests/source_location_test.rs -m "feat(parser,report): stable source location for requests (path#L<line>)"
 ```
 
-（注意：`tests/report_schema_test.rs` 若锁了 JSON 键精确集，需把 `source_line` 登记为合法追加键——schema 只追加不改语义，更新该测试属契约内变更，提交信息不变。）
+（**必做项（审查确认）**：`tests/report_schema_test.rs` 采用**精确键集合断言**且明确要求新增字段显式更新契约——`source_line` 落地时必须同步登记该测试，否则其必红；属 schema 只追加的契约内变更。）
 
 ### WP-AST（AST 桥，使能器）：`rupost ast` JSON 契约与 `RUPOST_BIN` 注入
 
@@ -1084,14 +1086,22 @@ jj split src/report src/cli src/runner tests/contract_drift_test.rs tests/html_r
 **文件：**
 
 - 新增 `src/importer/openapi.rs`（含内容契约单测）
-- 修改 `src/importer/mod.rs`（注册进 MultiFormatImporter 分发；**检测逻辑已存在勿改**）
+- 修改 `src/importer/mod.rs`（分发加显式 `ImportFormat::OpenApi` 臂；**自动检测逻辑已存在勿改**）
 - 修改 `src/cli/commands/import.rs`（`ImportCommands::OpenApi`）、`src/cli/dispatch.rs`（分发分支）
+- e2e（新建 `tests/openapi_import_test.rs`）
 
-**先写测试（Red：`openapi` 模块不存在，编译失败即红证据；或按注释临时以 `todo!()` 占位先编译后断言失败）。放入 `src/importer/openapi.rs` 的 `#[cfg(test)] mod tests`：**
+**现场核验记录（2026-11-13 审查，实测当前 HEAD）：**
+
+- `ImportRequest` 实际字段 = `format / content / templatize_host / generate_mock`（**无 output**；输出落盘由 CLI 参数层处理）——importer/mod.rs:43-51；
+- `ImportResponse` 实际字段 = `detected_format / markdown_blocks: Vec<String> / total_imported / warnings`（**无 content**）——importer/mod.rs:55-60；
+- `Har/OpenApi/Postman` 现状落入 `other =>` 回退**按 RawHttp 尝试**（mod.rs:127-133）——本 WP 增加显式 `ImportFormat::OpenApi` 臂替换之；
+- 其他 importer 的实现形状 = `parse(&self, content, templatize_host) -> Result<ImportResponse>`（curl.rs/httpie.rs 同款）；`-o` 防覆盖在 CLI 参数层（`ImportCurlArgs.output`，已存在拒绝）——import.rs:14-45。
+
+**先写测试（Red：`openapi` 模块不存在，编译失败即红证据）。放入 `src/importer/openapi.rs` 的 `#[cfg(test)] mod tests`：**
 
 ```rust
 /// WP-P3a：OpenAPI(JSON) → 可审查 Markdown 的内容契约（contains 断言，非全文相等）。
-/// 反假守护：临时把 paths 遍历返回空 Vec，本测试必须稳定变红。
+/// 反假守护：临时删除分发中的显式 OpenApi 臂（回退 RawHttp），本测试必须稳定变红。
 #[test]
 fn test_openapi_import_content_contract() {
     let spec = r#"{
@@ -1121,12 +1131,13 @@ fn test_openapi_import_content_contract() {
       "security": [ { "bearer": [] } ]
     }"#;
     let request = crate::importer::ImportRequest {
-        content: spec.to_string(),
         format: crate::importer::ImportFormat::OpenApi,
-        output: None, // 字段名/形态以 ImportRequest 现场定义为准，仅内容契约锁定
-    };
-    let resp = crate::importer::openapi::import_openapi(&request).unwrap();
-    let md = &resp.content;
+        content: spec.to_string(),
+        templatize_host: false,
+        generate_mock: false,
+    }; // 字段集实测：format/content/templatize_host/generate_mock（无 output）
+    let resp = crate::importer::MultiFormatImporter.import(&request);
+    let md = resp.markdown_blocks.join("\n"); // 生成物是 markdown_blocks 向量（无 content 字段）
     assert!(md.contains("# @name getUser"), "operationId → @name: {md}");
     assert!(md.contains("{{base_url}}/users/{{id}}"), "路径参数必须模板化: {md}");
     assert!(md.contains("Authorization: Bearer {{token}}"), "bearer 必须模板化: {md}");
@@ -1134,123 +1145,95 @@ fn test_openapi_import_content_contract() {
     assert!(md.contains("# @assert status == 201"), "{md}");
     assert!(md.contains("\"user\": \"admin\""), "body example 必须落地: {md}");
     assert!(!md.contains("verbose"), "可选 query 缺省省略: {md}");
-    assert!(md.contains("### POST /tokens") || md.contains("POST {{base_url}}/tokens"), "{md}");
 }
 ```
+
+（`MultiFormatImporter.import` 的返回形态以现场为准——若为 `Result` 按现场加 unwrap；**内容断言契约不得改**。）
 
 **实施步骤（Green）：**
 
-1. `src/importer/openapi.rs`：`pub fn import_openapi(request: &ImportRequest) -> crate::Result<ImportResponse>`（与 curl.rs/httpie.rs 同构——先读这两个文件确认 trait/分发接入方式与 ImportResponse 字段）。解析用 `serde_json::Value` 导航（不建 typed 树），生成规则照 §2.5。**只支持 JSON**：内容首查 `serde_json::from_str::<serde_json::Value>` 失败即返回可读错误（"本批仅支持 JSON spec，YAML 登记未做"）。
-2. `src/importer/mod.rs`：在 MultiFormatImporter 分发处新增 `ImportFormat::OpenApi => openapi::import_openapi(...)` 分支（**勿动 :82-87 的自动检测**）。
-3. `src/cli/commands/import.rs`：`ImportCommands` 追加 `OpenApi { spec: String, output: Option<String> }`（`spec` 为 spec 文件路径）；`src/cli/dispatch.rs` Import match 增加分支：读文件 → 构造 `ImportRequest { format: OpenApi, .. }` → 走与 curl 相同的导入执行链路（防覆盖自动继承）。
-4. e2e（追加到 `tests/web_api_integration_test.rs` 或新建 `tests/openapi_import_test.rs`，形态为纯 `#[test]` 子进程，无网络）：
+1. `src/importer/openapi.rs`：`OpenApiImporter`，`parse(&self, content: &str, templatize_host: bool) -> Result<ImportResponse>`（与 curl/httpie 同款签名）；serde_json::Value 导航（不建 typed 树）；生成规则照 §2.5；**仅 JSON**——`serde_json::from_str::<Value>` 失败即返回可读错误（"本批仅支持 JSON spec，YAML 登记未做"）。
+2. `src/importer/mod.rs`：match 增加显式臂 `ImportFormat::OpenApi => OpenApiImporter.parse(&req.content, req.templatize_host)?,`（把 OpenApi 从 `other =>` 回退中摘出）。
+3. CLI：`ImportCommands::OpenApi(ImportOpenApiArgs)`——`spec: String`（spec **文件路径**）、`output: Option<String>`（已存在拒绝，对齐 ImportCurlArgs 语义）、`templatize_host: bool`；dispatch 读 spec 文件 → `ImportRequest { format: OpenApi, .. }` → import → `markdown_blocks.join("\n")` 写 output / 缺省 stdout。
+4. e2e `tests/openapi_import_test.rs`（纯 `#[test]` 子进程，无网络）：spec.json → `import openapi spec.json -o out.md` success + 内容标记断言；rerun 同命令 → 防覆盖非零且 out.md 不变。
 
-```rust
-#[test]
-fn test_import_openapi_cli_generates_and_refuses_overwrite() {
-    // 写 spec.json（同上单测的 spec 字符串）；tmpdir 为 cwd
-    // run(["import", "openapi", "spec.json", "-o", "out.md"]) → success
-    //   out.md contains "# @name getUser" 且 contains "{{base_url}}/users/{{id}}"
-    // rerun 同命令 → 非零（防覆盖）；out.md 内容不变（先缓存首跑内容对比）
-    // 加 --force？ import 若无 --force 旗标则保持"必须先删"语义，与 curl 一致即可
-}
-```
-
-（注意 `import` 是同步命令，无需 tokio。）
-
-**必须避免：** 不新增依赖（禁 serde_yaml）；不动自动检测逻辑；生成物必须是纯 Markdown 文本（禁止私有格式）；不做请求体 schema 深度合成。
+**必须避免：** 不新增依赖（禁 serde_yaml）；不动自动检测逻辑；生成物必须是纯 Markdown 文本；不做请求体 schema 深度合成。
 
 **验证与提交：**
 
 ```bash
 cargo test --lib importer::openapi
-cargo test --test openapi_import_test    # 或对应文件名
+cargo test --test openapi_import_test
 cargo test --test web_api_integration_test   # web import 自动识别回归
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-jj split src/importer src/cli tests -m "feat(importer,cli): openapi json spec import to reviewable markdown"
+jj split src/importer src/cli tests/openapi_import_test.rs -m "feat(importer,cli): openapi json spec import to reviewable markdown"
 ```
-
-（`tests` 目录若新建文件只含本 WP 测试，`jj split` 时精确给出文件名。）
 
 ### WP-P3b（Phase 3②）：`export k6` 场景草稿导出
 
-**目的：** `rupost export k6 <file.http> -o script.js`：文档 → 可运行的 k6 脚本骨架（复用 export 既有 UX 与旗标）。
+**目的：** `rupost export k6 <file> -o script.js`：文档 → 可运行的 k6 脚本骨架（与 curl/httpie/wget 同 UX、同旗标）。
 
-**文件：**
+**现场核验记录（2026-11-13 审查，三处架构事实修正原骨架）：**
 
-- 新增 `src/exporter/k6.rs`（含内容契约单测）
-- 修改 `src/exporter/mod.rs`（注册 target "k6"——**先发现**：`rg -n '"wget"' src/exporter/ src/utils/` 找 target 分发点，照 curl/httpie/wget 同款模式接入）
-- e2e 追加（新 `tests/k6_export_test.rs` 或并入既有 exporter 相关测试文件）
+- export 管线是**逐请求** `CommandExporter::export_one(&ExportableRequest, &ExportOptions) -> Result<String>`（exporter/plugin.rs:19），**文件级包装（imports/options）没有挂点** → trait 加默认方法 `file_preamble() -> Option<String> { None }`（OCP：curl/httpie/wget 零改动，k6 覆写）；
+- 管线经 `RequestPreparer` **变量已插值**（mod.rs:110 起 var_context 装配，ExportableRequest.url 是解析后绝对 URL）→ `{{var}} → __ENV.VAR` 映射**不成立**，凭据纪律 = **`--redact`**（既有脱敏管线在 export 内生效：`redact_secrets: opts.redact`）；
+- `ExportableRequest`（types.rs:7-26）**不含断言** → v1 草稿**不含 `check()`**，status 期望以注释承载（登记：断言进导出管线不做）；`@skip`/teardown 已被 preparer 排除（白得）；`source_location`（"file:line"）现成可作注释。
 
-**先写测试（Red：模块不存在编译失败即红证据）。`src/exporter/k6.rs` 的 `#[cfg(test)] mod tests`：**
+**文件：** `src/exporter/plugin.rs`（trait 默认方法）、`src/exporter/mod.rs`（preamble 装配一次）、新增 `src/exporter/plugins/k6.rs`、`new_builtin()` 注册、e2e `tests/k6_export_test.rs`。
+
+**先写测试（Red：模块不存在编译失败即红证据）。`src/exporter/plugins/k6.rs` 的 `#[cfg(test)] mod tests`：**
 
 ```rust
 /// WP-P3b：k6 场景草稿内容契约（contains 断言）。
-/// 反假守护：临时让生成器恒返回空 String，本测试必须稳定变红。
+/// 反假守护：临时让 file_preamble 返回 None，imports 断言必须稳定变红。
 #[test]
-fn test_k6_export_content_contract() {
-    let doc = "### ok\n# @assert status == 200\nGET {{base_url}}/ok\n\n### login\n# @assert status == 200\nPOST {{base_url}}/login\nAuthorization: Bearer {{token}}\n\n{\"u\":1}\n";
-    let js = super::export_k6(doc).unwrap();
-    assert!(js.contains("import http from 'k6/http'"), "{js}");
-    assert!(js.contains("import { check } from 'k6'"), "{js}");
-    assert!(js.contains("vus: 1") && js.contains("iterations: 1"), "负载模型必须为 stub: {js}");
-    assert!(js.contains("${BASE_URL}/ok"), "{{base_url}} 必须映射 BASE_URL: {js}");
-    assert!(js.contains("__ENV.TOKEN"), "{{token}} → __ENV.TOKEN: {js}");
-    assert!(js.contains("check("), "status 断言必须生成 check: {js}");
-    assert!(js.contains("status == 200"), "check 标签保留断言原文: {js}");
+fn test_k6_fragment_and_preamble_contract() {
+    use crate::exporter::types::{ExportOptions, ExportableRequest};
+    let req = ExportableRequest {
+        name: Some("ok".into()),
+        source_location: Some("s.http:3".into()),
+        method: "GET".into(),
+        url: "http://127.0.0.1:8080/ok".into(),
+        headers: vec![("Authorization".into(), "[REDACTED]".into())],
+        body: None,
+        timeout_secs: None,
+        is_sse: false,
+        warnings: Vec::new(),
+    };
+    let opts = ExportOptions { compact: false, redact_secrets: true };
+    let k6 = super::K6Exporter;
+    let frag = k6.export_one(&req, &opts).unwrap();
+    assert!(frag.contains("http.get(\"http://127.0.0.1:8080/ok\")"), "{frag}");
+    assert!(frag.contains("// s.http:3"), "source_location 注释: {frag}");
+
+    let pre = k6.file_preamble().unwrap();
+    assert!(pre.contains("import http from 'k6/http'"), "{pre}");
+    assert!(pre.contains("vus: 1") && pre.contains("iterations: 1"), "负载模型必须为 stub: {pre}");
 }
 ```
 
-**生成规则（§2.5 全文照办），输出模板骨架：**
-
-```js
-// Generated by `rupost export k6` — 场景草稿：负载模型（vus/stages/thresholds）由使用者按需扩展
-import http from 'k6/http';
-import { check } from 'k6';
-
-export const options = { vus: 1, iterations: 1 };
-
-const BASE_URL = __ENV.BASE_URL || '';
-
-export default function () {
-  // #N <name 或 method url>
-  const res1 = http.get(`${BASE_URL}/ok`);
-  check(res1, { 'status == 200': (r) => r.status === 200 });
-}
-```
-
-映射细则：`{{var}}` → `__ENV.VAR`（大写化）；请求头 → `params.headers`；请求体 → `params.body`；`status == N` 以外断言 → `// TODO: @assert <raw>` 注释；`@skip`/teardown 排除；`@capture`/`@depends-on` → 注释提示手动编排。
+（ExportableRequest/ExportOptions 字段以现场定义为准；断言契约不得改。）
 
 **实施步骤（Green）：**
 
-1. `src/exporter/k6.rs`：`pub fn export_k6(document: &str) -> crate::Result<String>`（内部走 `crate::parser::parse_document_by_path` 解析，复用 `source_line`/`metadata`）。
-2. `src/exporter/mod.rs`：按"发现"关键词定位 target 分发（curl/httpie/wget 各在何处匹配），新增 `"k6"` 分支调 `k6::export_k6`；`--output` 落盘与防覆盖语义与其他 target 一致（若 exporter 层已有统一 `-o` 防覆盖，自动继承；测试锁定）。
-3. e2e `tests/k6_export_test.rs`（纯 `#[test]` 子进程）：
+1. `src/exporter/plugin.rs`：trait 追加默认方法 `/// 文件级前导（imports/options 等脚本包装）；默认 None 不影响既有 target（OCP）` `fn file_preamble(&self) -> Option<String> { None }`。
+2. 新增 `src/exporter/plugins/k6.rs`：`K6Exporter`——`name()=="k6"`、`description()`；`export_one` 返回单请求片段：注释 `// {source_location} {name}` + `http.<verb>(...)`（headers/body 进 params）；`file_preamble` 返回 imports + `options = { vus: 1, iterations: 1 }`（stub 注释"负载模型自行扩展"）+ `BASE_URL` 提示注释。
+3. `src/exporter/mod.rs`：`run_export` 逐请求装配前（`rendered_commands` 建立后）`if let Some(pre) = exporter.file_preamble() { rendered_commands.push(pre) }`——仅一次；curl/httpie/wget 返回 None 零影响。
+4. `new_builtin()` 注册 `K6Exporter`（`--list` 自动收录）。
+5. e2e `tests/k6_export_test.rs`（纯 `#[test]` 子进程）：写含 `Authorization: Bearer real-token-xyz` 的 suite.http → `export k6 suite.http -o out.js --redact` → success；out.js 含 `import http from 'k6/http'`；**不含 `real-token-xyz`**（--redact 生效）；rerun 无 `--force` → 防覆盖非零；`--force` → success。
 
-```rust
-#[test]
-fn test_export_k6_cli_writes_and_refuses_overwrite() {
-    // tmpdir 写 suite.http（含 {{base_url}} 与 status 断言）
-    // run(["export", "k6", "suite.http", "-o", "out.js"]) → success；out.js 含 "k6/http"
-    // rerun 同命令 → 防覆盖非零；out.js 不变
-    // run(["export", "k6", "suite.http", "-o", "out.js", "--force"]) → success
-}
-```
-
-**必须避免：** 不生成 vus/stages/thresholds 数值模型；不引入 JS 模板引擎（字符串拼接即可）；不做全量 @assert 翻译（仅 status）；`--redact` 旗标行为与其他 target 对齐即可，不单独实现。
+**必须避免：** 不生成 vus/stages/thresholds 数值模型（stub 注释除外）；不做断言翻译（断言不在导出管线——登记不做）；不新增依赖；`{{var}} → __ENV.VAR` 映射随插值语义一并取消（勿 resurrect）。
 
 **验证与提交：**
 
 ```bash
-cargo test --lib exporter::k6
+cargo test --lib exporter::plugins::k6
 cargo test --test k6_export_test
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 jj split src/exporter tests/k6_export_test.rs -m "feat(exporter): k6 scenario draft export (export k6 <file>)"
 ```
-
-
 
 ### WP-R5（缺口 5 收尾）：run_all.sh 端口平移与健康探针
 

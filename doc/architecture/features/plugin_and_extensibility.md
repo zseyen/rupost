@@ -74,3 +74,44 @@
 - TLS 后端为 aws-lc-rs（reqwest `rustls` feature）——**musl 构建需 cmake + C 工具链**（CI musl-static job 已含）；
 - reqwest HTTPS 证书源为系统 store（rustls-platform-verifier）：**scratch 镜像内需自带 CA bundle 或设 `SSL_CERT_FILE`**；Alpine（装 ca-certificates）不受影响；
 - WSS 走 webpki-roots 内嵌 CA，无系统依赖。
+
+## 6. Web 工作台的辅助定位与扩展缝（2026-11-13 定位裁决）
+
+**定位裁决**：Web 层（`src/web/`）是**辅助执行 + 辅助创建**的薄表现层——与 CLI/TUI 平级，
+共享同一领域引擎（`execute_all` / `create_incident_bundle` 等领域函数为唯一事实来源），
+自身永不拥有执行逻辑、永不演化为平行产品。预留扩展缝的目的：后续接入者挂载更复杂的
+功能时**接在缝上**，而不是让 Web 层自我膨胀成平台。
+
+### 6.1 两组既有职责
+
+| 定位 | 既有端点/能力 |
+|---|---|
+| 辅助执行 | `/api/v1/run/block`（单块调试）、`/api/v1/run/suite`（整篇套件）、`/api/v1/mock/simulate`（规则仿真）、套件失败复现包（`incident` 开关，见 `doc/plans/2026-11-13-phase01-remediation-plan.md` WP-R2） |
+| 辅助创建 | `/api/v1/files` + `/save`（活文档读写）、`/api/v1/import` + `/import/curl`（curl → 可执行 .http） |
+
+### 6.2 四条预留扩展缝
+
+| # | 缝 | 接口 | 现有实现 | 接入形态 |
+|---|---|---|---|---|
+| 1 | 前端整体可替换 | `web::AssetProvider` trait | `EmbeddedAssetProvider`（内嵌）/ `LocalDirAssetProvider`（`--static-dir`） | 零 Rust 改动挂载第三方前端 |
+| 2 | 文档来源可替换 | `web::DocumentStore` trait | `LocalFsDocumentStore` | 新存储实现（Git/远端/DB），端点零改动 |
+| 3 | HTTP API 本身 | `/api/v1/*` + schema 只追加纪律（`#[serde(default)]`，不改既有字段语义） | `ApiResponse` 信封 | 第三方程序（IDE 插件/CI 看板/脚本）直接消费 |
+| 4 | 引擎级扩展 | 插件 Stdio IPC（本文 §2） | hooks/commands/失败分类学 | 执行期行为的唯一入口；经 `build_interactive_executor` 统一装配，**CLI/TUI/Web 三入口同时受益** |
+
+### 6.3 接入路由准则
+
+| 想加的能力 | 接哪条缝 | 反例（错误做法） |
+|---|---|---|
+| 更丰富的 UI/交互 | 缝 1（`--static-dir` 换前端） | 往内嵌 `app.js` 堆功能 |
+| 文档存取新来源 | 缝 2（实现 `DocumentStore`） | handler 内写死新存储 |
+| 脚本/IDE/看板自动化 | 缝 3（消费 `/api/v1`） | 把看板内嵌进 RuPost |
+| 执行期行为（签名/认证/改写/钩子） | 缝 4（插件） | runner/web 加特判 |
+| 新工件格式/导出 | 领域层新模块（`history/incident.rs` 先例） | 在 web handler 落盘 |
+| 需要客户端给路径/密钥的能力 | CLI（信任边界正确的入口） | 塞进 Web API |
+
+**核心准则一句话**：能力放进领域层或插件，入口挂在表现层，Web 永远只做"已有能力的薄封装"。
+
+### 6.4 两条守门红线
+
+1. **Web API 不接收文件系统路径、不接受密钥值**——任何新端点想要这两样，说明能力属于 CLI 或信任边界需要重设计。范例：复现包开关（WP-R2）把能力压缩为 1 bit，路径由服务端管辖（`<working_dir>/.rupost/incidents/`），密钥值通道恒关（浏览器不是可信 secret 通道）。
+2. **表现层不许出现第二份领域逻辑**——依赖方向机械化守卫：`history` 不得依赖 `web/cli/tui`；handler 只解析与调用领域函数；接手时用 `rg` 抽查依赖方向。

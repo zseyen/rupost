@@ -126,5 +126,31 @@ pub async fn present_suite_outcome(
         }
     }
 
+    // WP-4 故障复现包（在报告与普通快照呈现之后）：仅失败时创建；
+    // 强制脱敏、目标必须不存在；成功全绿不写目录只说明。
+    // 工件 I/O 失败经专用错误变体 exit 2，不掩盖测试本身的 exit 1 结果。
+    if let Some(incident_out) = &options.incident_out {
+        if outcome.has_failure {
+            rupost::history::create_incident_bundle(
+                &outcome.batch_results,
+                &outcome.resolved_paths,
+                options.env.as_deref(),
+                &options.mask_secret_values,
+                options
+                    .max_snapshot_body_bytes
+                    .unwrap_or(DEFAULT_MAX_SNAPSHOT_BODY_BYTES),
+                std::path::Path::new(incident_out),
+            )
+            .map_err(|e| rupost::RupostError::IncidentBundleError(e.to_user_friendly_string()))?;
+            eprintln!(
+                "[i] 故障复现包已生成: {incident_out}（强制脱敏；可用 `rupost replay {incident_out}/snapshot.json --target <URL>` 重放，`rupost ai triage --snapshot {incident_out}/snapshot.json` 分诊）"
+            );
+        } else {
+            eprintln!(
+                "[i] --incident-out 已提供，但本次运行全绿：未创建复现包目录（仅失败时产出）"
+            );
+        }
+    }
+
     Ok(())
 }

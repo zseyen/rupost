@@ -64,6 +64,11 @@ pub struct TestArgs {
     #[arg(long, value_name = "FILE")]
     pub save_snapshot: Option<String>,
 
+    /// WP-4 故障复现包：仅在运行失败时创建该目录（manifest/report/snapshot 三文件，
+    /// 强制脱敏、绝不覆盖——目录必须不存在；与 --save-snapshot 相互独立）
+    #[arg(long, value_name = "DIR")]
+    pub incident_out: Option<String>,
+
     /// Mask headers/body secrets in the saved snapshot (opt-in; keep off for replay body-diff fidelity)
     #[arg(long)]
     pub mask_secrets: bool,

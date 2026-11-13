@@ -33,6 +33,9 @@ pub struct TestSuiteOptions {
     pub debug_on_failure: bool,
     pub default_scheme: String,
     pub save_snapshot: Option<String>,
+    /// WP-4 故障复现包输出目录（`--incident-out`）：仅运行失败时由表现层
+    /// 创建（强制脱敏、目标必须不存在）；runner 纯执行层不写任何工件
+    pub incident_out: Option<String>,
     /// Secrets Masker（opt-in）：快照 headers/body 掩码后再落盘
     pub mask_snapshot: bool,
     /// S-3 按值掩码：--mask-secret-value <VAL>（可多次；独立于 --mask-secrets 生效）
@@ -89,6 +92,7 @@ impl Default for TestSuiteOptions {
             debug_on_failure: false,
             default_scheme: "http".to_string(),
             save_snapshot: None,
+            incident_out: None,
             mask_snapshot: false,
             mask_secret_values: Vec::new(),
             max_snapshot_body_bytes: None,

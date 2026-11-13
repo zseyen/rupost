@@ -246,6 +246,42 @@ pub fn handle_plugin_command(
                 }
             }
         }
+        crate::cli::PluginCommands::Validate { path } => {
+            // WP-PL2：作者分发前静态体检——复用发现期校验 + 三个作者工具级警告
+            match rupost::plugin::registry::validate_manifest_file(std::path::Path::new(&path)) {
+                Ok((vm, mut warnings)) => {
+                    let builtin = builtin_subcommand_names();
+                    for cmd in &vm.manifest.commands {
+                        if builtin.contains(cmd.name.as_str()) {
+                            warnings.push(format!(
+                                "命令 '{}' 与内置子命令同名——路由内置优先，该插件命令永不可达",
+                                sanitize_manifest_text(&cmd.name, 80)
+                            ));
+                        }
+                    }
+                    println!(
+                        "✓ ready: {} v{}（commands: {}, hooks: {}）",
+                        sanitize_manifest_text(&vm.manifest.name, 80),
+                        sanitize_manifest_text(&vm.manifest.version, 40),
+                        vm.manifest.commands.len(),
+                        vm.manifest.hooks.len()
+                    );
+                    for w in &warnings {
+                        println!("  ⚠ {}", sanitize_manifest_text(w, 200));
+                    }
+                }
+                Err((name, reason)) => {
+                    let label = name
+                        .map(|n| format!("{}: ", sanitize_manifest_text(&n, 80)))
+                        .unwrap_or_default();
+                    return Err(rupost::RupostError::Other(format!(
+                        "✗ failed: {}{}",
+                        label,
+                        sanitize_manifest_text(&reason, 300)
+                    )));
+                }
+            }
+        }
         crate::cli::PluginCommands::Schema => {
             let cache_path = registry_cache_path();
             let registry = PluginRegistry::load_or_discover(&options, &cache_path)?;

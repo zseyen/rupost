@@ -101,11 +101,11 @@ fn collect_plugin_roots(
     roots
 }
 
-struct ValidatedManifest {
-    exe_canon: PathBuf,
-    manifest_canon: PathBuf,
-    manifest: PluginManifest,
-    warnings: Vec<String>,
+pub struct ValidatedManifest {
+    pub exe_canon: PathBuf,
+    pub manifest_canon: PathBuf,
+    pub manifest: PluginManifest,
+    pub warnings: Vec<String>,
 }
 
 fn has_reserved_stage(manifest: &PluginManifest) -> bool {
@@ -226,6 +226,36 @@ fn parse_and_validate_manifest(
         manifest,
         warnings,
     })
+}
+
+/// WP-PL2：作者分发前离线校验（单文件、静态——绝不执行插件本体、不触发 TOFU、不写缓存）。
+/// root 取 manifest 父目录（与发现期同源的路径囚禁校验）。
+pub fn validate_manifest_file(
+    manifest_path: &Path,
+) -> std::result::Result<(ValidatedManifest, Vec<String>), (Option<String>, String)> {
+    let root = manifest_path
+        .parent()
+        .map(Path::canonicalize)
+        .transpose()
+        .map_err(|e| (None, format!("canonicalize 失败: {e}")))?
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let vm = parse_and_validate_manifest(&root, manifest_path)?;
+    let mut warnings = vm.warnings.clone();
+    // 作者工具级补充（审查 G2）：发现器按 `rupost-plugin-*.json` 文件名扫描——
+    // 单文件校验必须替作者把这条发现期约定讲出来，否则 validate 通过但永远不可见
+    let file_name = manifest_path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !is_manifest_file(&file_name) {
+        warnings.push(
+            "文件名不符合 rupost-plugin-*.json 命名契约——发现器将永远不会看到此清单".to_string(),
+        );
+    }
+    if vm.manifest.commands.is_empty() && vm.manifest.hooks.is_empty() {
+        warnings.push("manifest 未声明任何 commands 或 hooks——无能力面".to_string());
+    }
+    Ok((vm, warnings))
 }
 
 fn validate_cached_entry(entry: &CachedPluginEntry) -> bool {

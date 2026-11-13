@@ -117,6 +117,13 @@ pub enum PluginCommands {
     /// List installed plugin commands and lifecycle hooks
     List,
 
+    /// Statically validate a plugin manifest (author tool; never executes the plugin)
+    Validate {
+        /// Path to the manifest JSON file (rupost-plugin-<name>.json)
+        #[arg(value_name = "MANIFEST")]
+        path: String,
+    },
+
     /// Export aggregated JSON Schema of all hook parameters (IDE IntelliSense)
     Schema,
 }

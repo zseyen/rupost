@@ -62,7 +62,7 @@
 
 1. **编写**：参考 `examples/plugins/rupost-plugin-echo-sign`（Python）与同名 manifest；
 2. **放置**：`$PATH` 各目录 / `~/.rupost/plugins` / `./.rupost/plugins`（需放行）；
-3. **验证**：`rupost plugin list`（三态 + 处方）、`rupost plugin schema`（指令/宏/manifest schema，供 IDE 补全）；
+3. **验证**：`rupost plugin validate <manifest.json>`（分发前静态体检：合法 ✓/违规 ✗ 处方式输出 + 警告级提示——命名契约/内置名冲突/空清单；不执行插件、不触发 TOFU）、`rupost plugin list`（三态 + 处方）、`rupost plugin schema`（指令/宏/manifest schema，供 IDE 补全）；
 4. **调试**：插件 stderr 在失败时经 16KB 截断入 warnings（终端/报告/快照三处同文）；
 5. **降级约定**：`?optional` 唯一声明语法；兜底鉴权唯一合法机制 = 用户手写静态 Header。
 

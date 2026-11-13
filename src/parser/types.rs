@@ -355,6 +355,16 @@ mod tests {
         let bare = "GET http://x/c\n";
         let parsed = crate::parser::parse_document_by_path("b.http", bare).unwrap();
         assert_eq!(parsed.requests[0].metadata.source_line, Some(1));
+
+        // 审查修正 B1 回归：混合语言文档——python 围栏在前，http 围栏行号不受错位
+        let mixed = "前言\n\n```python\nprint(1)\n```\n\n```http\nGET http://x/a\n```\n";
+        let parsed = crate::parser::parse_document_by_path("m.md", mixed).unwrap();
+        assert_eq!(parsed.requests.len(), 1);
+        assert_eq!(
+            parsed.requests[0].metadata.source_line,
+            Some(8),
+            "python 围栏在前时 http 方法行仍在行 8"
+        );
     }
 
     #[test]

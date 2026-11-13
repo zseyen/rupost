@@ -279,14 +279,24 @@ fn assign_fence_lines(content: &str, blocks: &mut [ExtractedCodeBlock]) {
     for (idx, line) in (1..).zip(content.lines()) {
         let trimmed = line.trim_start();
         if !in_fence {
-            if trimmed.starts_with("```") {
-                in_fence = true;
-                marker = "```";
-                opens.push(idx);
+            let marker_candidate = if trimmed.starts_with("```") {
+                "```"
             } else if trimmed.starts_with("~~~") {
+                "~~~"
+            } else {
+                ""
+            };
+            if !marker_candidate.is_empty() {
                 in_fence = true;
-                marker = "~~~";
-                opens.push(idx);
+                marker = marker_candidate;
+                // 审查修正 B1：与 extract_code_blocks 收集口径严格对齐——只统计
+                // http/rest 围栏（info 首 token，镜像 pulldown lang_token 逻辑）。
+                // 否则混合语言文档（```python 在前）计数错位 → 整体放弃回填。
+                let info = &trimmed[marker.len()..];
+                let lang = info.split_whitespace().next().unwrap_or("").to_lowercase();
+                if lang == "http" || lang == "rest" {
+                    opens.push(idx);
+                }
             }
         } else if trimmed.starts_with(marker) {
             in_fence = false;

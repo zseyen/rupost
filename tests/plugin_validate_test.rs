@@ -168,3 +168,24 @@ fn test_validate_all_example_plugin_manifests() {
         "示例清单必须全部通过 validate: {failures:?}"
     );
 }
+
+/// 审查修正 B2 回归：裸相对文件名（cwd 内）——parent 为空串时必须退化到 cwd，
+/// 而非报 "canonicalize 失败"
+#[test]
+fn test_validate_bare_relative_filename() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legal(dir.path(), "bare", "bare relative filename demo");
+    let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(dir.path())
+        .args(["plugin", "validate"])
+        .arg("rupost-plugin-bare.json")
+        .output()
+        .expect("spawn rupost");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("✓ ready: bare"));
+}

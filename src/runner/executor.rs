@@ -347,16 +347,26 @@ impl TestExecutor {
 
         // 检测渲染后仍残留的占位符（未定义变量），收集为可见警告避免静默假通过
         let unresolved = VariableResolver::unresolved_placeholders(&parsed);
-        // E-4：--strict-vars 下未解析变量 → 拒绝外发（可读错误指名变量）
-        if self.strict_vars && !unresolved.is_empty() {
+        // E-4：--strict-vars 下未解析变量 → 拒绝外发（可读错误指名变量）。
+        // P2-5（review）：base_url/baseUrl 除外——交由下方 BaseUrlNotConfigured
+        // 专用分支（错误形态/处方一致：--env/--var base_url）
+        let strict_unresolved: Vec<&String> = unresolved
+            .iter()
+            .filter(|v| v.as_str() != "base_url" && v.as_str() != "baseUrl")
+            .collect();
+        if self.strict_vars && !strict_unresolved.is_empty() {
             return TestResult::error(
                 request_number,
                 parsed.name().map(|s| s.to_string()),
                 parsed.method_or_default().to_string(),
                 parsed.url.clone(),
                 format!(
-                    "变量未解析（--strict-vars 拒绝外发）: {}——请补齐 --var/.env/rupost.toml 或 --var-state",
-                    unresolved.join(", ")
+                    "变量未解析（--strict-vars 拒绝外发；合法 {{{{}}}} 字面量亦会被拦截，请酌情关闭）: {}——请补齐 --var/.env/rupost.toml 或 --var-state",
+                    strict_unresolved
+                        .iter()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
                 start.elapsed(),
             );

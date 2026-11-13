@@ -34,7 +34,7 @@
 | R-1 | ✅ 已落地（2026-11-13：`--with-deps` opt-in 旗标 + `WorkflowGraph::closure_execution_order` 祖先闭包拓扑序；传递依赖 e2e + 既有语义防假守护对照） | `src/runner/app.rs`、`src/runner/engine/workflow.rs` | selector 分支计算目标文件祖先闭包，按拓扑序先执行；`--with-deps` 显式开关（保护既有 `--only` 契约） | `--only @get_order --with-deps` 自动先跑登录文件，`{{auth_token}}` 有值；无依赖文件零行为变化 | ✅ |
 | R-2 | ✅ 已落地（2026-11-13：`src/variable/var_state.rs`（0600 原子写 + 损坏可报告）+ `--var-state [FILE]`（默认 `.rupost/vars.json`）双向接线；回灌只补缺、显式值恒优先；TUI 落盘留批后续） | `src/variable/var_state.rs`、`src/runner/{app.rs,suite_setup.rs}` | 套件结束捕获变量落盘（0600 原子写），启动回灌最低优先级层 | 跨运行免重跑登录 e2e（`tests/var_state_test.rs`：删登录文件后凭回灌成功 + `--var` 优先级防假守护） | ✅ |
 | R-3 | ✅ 已落地（2026-11-13：`handle_request_finished` 捕获合并移出 Ok 分支——响应到达即承接；lib 层守护 `test_capture_merge_survives_failed_assertions`） | `src/tui/state/stream.rs` | 断言红/失败分支不影响捕获变量承接 | 登录 200 但断言红，token 仍被下游复用 | ✅ |
-| R-4 | Web 轨道会话/变量延续 | `web/handlers/run.rs:79-87`（每次 ephemeral） | cookie bridge + variables 挂 `AppState`，复用 TUI 机制 | Web 逐块调试带登录链文档可复用会话 | 🔧 |
+| R-4 | Web 轨道会话/变量延续 | `web/handlers/run.rs:79-87`（每次 ephemeral） | cookie bridge + variables 挂 `AppState`，复用 TUI 机制 | Web 逐块调试带登录链文档可复用会话 | ✅ 已落地（2026-11-13：AppState 增 `cookie_bridge`/`run_variables` 会话资产（内存态，服务生命周期）；run_block/run_suite 双 handler 回灌（只补缺，extra_variables 恒优先）+ cookie 导入导出 + 变量增量合并（跳过 `__` 保留前缀）；e2e `tests/web_session_reuse_test.rs` 三用例（复用/无会话诚实失败/显式覆盖防假守护）） |
 | R-5 | ✅ 已落地（2026-11-13：replay mismatch 分支 401 → "疑似会话过期"再获取指引（`test_replay_401_emits_session_expiry_hint`）+ 套件汇总 401 失败集中提示） | `src/runner/engine/replayer.rs`、`src/cli/suite_presenter.rs` | 两级提示（逐条 + 汇总） | 过期不再是一串裸 mismatch | ✅ |
 
 ## 2. P1 · 行为级正确性（错误行为/错误结论）
@@ -112,3 +112,14 @@
 - **P1-9** E-2 宏表与 resolver SSOT 对齐（删 `$timestamp_s`，补 `$uuid/$timestamp/$timestamp_iso`）
 - **P1-10** registry.rs 两段描述已回滚行为的假文档 → 改写为已知取舍说明
 - **P2 顺手**：S-3 值替换长度降序、`ensure_dir` doc 归位、commands schema 补 `requires_env`
+
+## 审查修复登记（第二批，2026-11-13 P2 项 + R-4）
+
+- **R-4 落地**（见上表翻转）：Web 会话延续补齐——免重填三轨道在 Web 轨道闭环。
+- **P2-4**：S-3 e2e 断言收紧（精确 `"masking": "secrets"` 解析断言）。
+- **P2-5**：E-4 strict_vars 对 base_url/baseUrl 特判（交由 BaseUrlNotConfigured 专用处方分支，错误形态一致）+ 错误消息注明字面量 `{{}}` 拦截语义；交互入口（TUI/Web）默认 strict_vars=false——选项面透传登记为备忘。
+- **P2-6**：`--strict-vars` help 注明"body/URL 中合法 `{{ }}` 字面量也会被拦截"。
+- **P2-7**：终端插件耗时渲染改 `div_ceil`（<1ms 显示 +1ms，不再 +0ms）。
+- **P2-8**：`test_json_timing_subkeys_and_skipped_form_key_parity`——JsonTiming 子键精确锁定 + skipped 形态键集合一致性。
+- **P2-9**：manifest description ≤80 校验落地（registry 校验与 schema manifestSchema 对齐，03 §6.4）+ 拒绝测试（含路径修正：`.rupost/plugins`）。
+- **review 遗留说明**：P1-7 后端为 aws-lc-rs（非 ring）、musl 需 cmake（CI 已装）——CHANGELOG/E-1 已修正声明；P2-2 Windows history 权限靠 ACL 兜底（CHANGELOG 已登记）；P2-3 值替换长度降序已落。

@@ -173,6 +173,17 @@ fn parse_and_validate_manifest(
             format!("不支持的 manifest_version: {}", manifest.manifest_version),
         ));
     }
+    // P2-9（review，03 §6.4）：description ≤80 字符——渲染净化上限，
+    // schema（plugin schema manifestSchema）与注册校验对齐
+    if manifest.description.chars().count() > 80 {
+        return Err((
+            Some(manifest.name),
+            format!(
+                "manifest description 超长（{} > 80 字符，03 §6.4 渲染净化上限）",
+                manifest.description.chars().count()
+            ),
+        ));
+    }
     if has_reserved_stage(&manifest) {
         return Err((
             Some(manifest.name),

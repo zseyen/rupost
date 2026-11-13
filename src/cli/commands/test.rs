@@ -92,7 +92,8 @@ pub struct TestArgs {
     #[arg(long)]
     pub with_deps: bool,
 
-    /// E-4：未解析 {{var}} 拒绝外发（默认警告 + 字面量发送；CI 可开启硬门禁）
+    /// E-4：未解析 {{var}} 拒绝外发（默认警告 + 字面量发送；CI 可开启硬门禁）。
+    /// 注意：body/URL 中合法的 {{ }} 字面量（webhook 模板等）也会被拦截
     #[arg(long)]
     pub strict_vars: bool,
 

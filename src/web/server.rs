@@ -49,6 +49,12 @@ pub struct AppState {
     pub readonly: bool,
     pub default_env: Option<String>,
     pub allowed_hosts: Vec<String>,
+    /// R-4（免重填）：跨请求会话资产——cookie 桥（上次运行的导出状态，内存态，
+    /// 服务生命周期内延续；不落盘不污染本机 cookie 罐）
+    pub cookie_bridge: Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+    /// R-4：跨请求捕获变量（@capture / 插件 set_variables 的运行期产物，
+    /// 只增合并；显式 extra_variables 恒优先）
+    pub run_variables: Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
 }
 
 /// 检查 Host 标头是否属于安全白名单（本地基础名单 + 用户自定义名单，防御 DNS Rebinding）
@@ -107,6 +113,8 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         readonly: config.readonly,
         default_env: config.default_env,
         allowed_hosts: config.allowed_hosts,
+        cookie_bridge: Arc::new(std::sync::Mutex::new(None)),
+        run_variables: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     let api_router = Router::new()

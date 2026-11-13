@@ -909,3 +909,35 @@ fn test_collect_missing_env_warnings_deduplicated_and_respects_allowlists() {
     auth.insert("CMD_SECRET".to_string());
     assert!(reg.collect_missing_env_warnings(&used, &auth).is_empty());
 }
+
+/// P2-9（review）：manifest description >80 字符必须拒绝注册（与 plugin schema
+/// manifestSchema 的 maxLength 对齐——03 §6.4 渲染净化上限）。
+#[test]
+fn test_manifest_description_over_80_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join(".rupost").join("plugins");
+    let long_desc = "x".repeat(81);
+    let raw = serde_json::json!({
+        "manifest_version": "1.0",
+        "name": "long-desc",
+        "version": "0.1.0",
+        "description": long_desc,
+        "commands": [],
+        "hooks": []
+    });
+    fixture_plugin(&plugin_dir, "long-desc", Some(&raw.to_string()));
+    let opts = DiscoverOptions {
+        allow_project_plugins: true,
+        project_root: Some(dir.path().to_path_buf()),
+    };
+    let reg = PluginRegistry::discover_with_roots(&opts, Some(&[])).unwrap();
+    assert!(
+        reg.find_command("long-desc").is_none(),
+        "超长 description 必须拒绝注册"
+    );
+    assert!(
+        reg.warnings.iter().any(|w| w.contains("超长")),
+        "拒绝原因必须指明超长: {:?}",
+        reg.warnings
+    );
+}

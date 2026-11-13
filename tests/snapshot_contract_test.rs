@@ -1068,7 +1068,9 @@ async fn test_mask_secret_value_hits_custom_headers() {
         "词表外自定义 header 的密钥值必须被按值掩码: {content}"
     );
     assert!(content.contains("[REDACTED]"));
-    assert!(
-        content.contains("masking\": \"secrets") || content.contains("\"masking\": \"secrets\"")
+    let snap_val: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(
+        snap_val["masking"], "secrets",
+        "值掩码独立生效时 masking 标记必须联动 secrets"
     );
 }

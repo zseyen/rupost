@@ -66,7 +66,7 @@ impl TestReporter {
         // E-5：插件耗时可见性——时延隔离口径（duration 含插件耗时）下，
         // 单独呈现 plugin_duration 供开发者核对插件冷启动占比
         let plugin_part = match result.plugin_duration_us {
-            Some(us) if us > 0 => format!(" (plugin +{}ms)", us / 1000),
+            Some(us) if us > 0 => format!(" (plugin +{}ms)", us.div_ceil(1000)),
             _ => String::new(),
         };
         println!(

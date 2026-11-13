@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **免重填收尾（replay-reuse R-4 + review P2 项）**：①Web 轨道会话延续（R-4 落地）——`AppState` 增 `cookie_bridge`/`run_variables` 内存会话资产，run_block/run_suite 双 handler 回灌（只补缺、extra_variables 恒优先）+ cookie 导入导出 + 捕获增量合并（跳过 `__` 保留前缀）；三用例 e2e（跨块复用 / 无会话诚实失败 / 显式覆盖防假守护）；②`--strict-vars` 错误形态一致性——base_url/baseUrl 特判交由 BaseUrlNotConfigured 专用处方；错误消息注明合法 `{{ }}` 字面量拦截语义；③终端插件耗时 `div_ceil` 渲染（<1ms 显示 +1ms）；④manifest description ≤80 注册校验落地（与 plugin schema manifestSchema / 03 §6.4 对齐）+ 拒绝测试；⑤`test_json_timing_subkeys_and_skipped_form_key_parity`（timing 子键锁定 + skipped 形态键集一致）；⑥S-3 e2e masking 断言收紧为精确解析断言。
+
 - **免重填主线批 7（replay-reuse E-1/E-2，生态文档）**：①插件权威档案 `plugin_and_extensibility.md` 全面重写——废弃 Wasm/plugin.toml 旧设计（此前宣称"核心尚未接入运行时"与现实断裂），对齐 Stdio IPC 现架构 + 作者五步指南；②`plugin schema` 升级为四段统一 schema（pluginDirectives 参数+阶段序、directiveSyntax 枚举、builtinMacros 内置宏表、manifestSchema manifest 校验）——场景 A"键入 @ 弹出候选与参数模板"的 IDE 原料齐备。
 
 - **TLS 后端统一切换 rustls（replay-reuse C-1，容器叙事工程事实化；P1-7/P1-8 review 修正声明与边界）**：reqwest `default-tls`(openssl-sys)→`rustls` feature——**后端为 aws-lc-rs（C/汇编实现，musl 构建需 cmake）**，消除 openssl-sys 依赖；tokio-tungstenite `rustls-tls-native-roots`→`rustls-tls-webpki-roots`——WSS 在无 `/etc/ssl/certs` 环境可用；CI `musl-static` job 安装 `musl-tools + cmake`（静态链接断言 + ≤20MB 体积预算 DoD）。**边界登记（P1-8）**：reqwest HTTPS 走 `rustls-platform-verifier`（系统证书 store）——scratch 镜像内 HTTPS 需自带 CA bundle 或 `SSL_CERT_FILE`；Alpine（有 ca-certificates 包）不受影响。rustls 后端下全量 70 套件 + examples/run_all.sh 外网用例全绿验证。

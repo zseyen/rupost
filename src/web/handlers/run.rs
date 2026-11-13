@@ -82,8 +82,29 @@ pub async fn run_block_handler(
     }
     var_context.insert("__default_scheme", "http");
 
-    // 4. 原位单块调试执行（采用无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）
+    // 4. 原位单块调试执行（采用无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
+    // R-4（免重填）：会话资产延续——cookie 桥导入 + 捕获变量回灌（显式值恒优先）
     let executor = crate::runner::executor_factory::build_interactive_executor();
+    if let Some(state_json) = state
+        .cookie_bridge
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        let _ = executor.import_cookie_state(state_json);
+    }
+    {
+        let session_vars = state
+            .run_variables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (k, v) in session_vars.iter() {
+            if var_context.get(k).is_none() {
+                var_context.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let pre_run_keys = var_context.variables().clone();
     let result = executor
         .execute_one(
             target_request,
@@ -92,6 +113,28 @@ pub async fn run_block_handler(
             Some(req.file_path.clone()),
         )
         .await;
+
+    // R-4：cookie 导出回桥 + 变量增量合并（新增/变化的捕获值留待下次请求复用）
+    if let Ok(Some(state_json)) = executor.export_cookie_state() {
+        *state
+            .cookie_bridge
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(state_json);
+    }
+    {
+        let mut session_vars = state
+            .run_variables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (k, v) in var_context.variables() {
+            if k.starts_with("__") {
+                continue;
+            }
+            if pre_run_keys.get(k) != Some(v) {
+                session_vars.insert(k.clone(), v.clone());
+            }
+        }
+    }
 
     // 5. 提取响应信息与网络瀑布流
     let timing_waterfall = TimingWaterfall::from_test_result(&result);
@@ -182,9 +225,30 @@ pub async fn run_suite_handler(
     }
     var_context.insert("__default_scheme", "http");
 
-    // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）
+    // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
+    // R-4（免重填）：会话资产延续——cookie 桥导入 + 捕获变量回灌（显式值恒优先）
     let start_time = std::time::Instant::now();
     let executor = crate::runner::executor_factory::build_interactive_executor();
+    if let Some(state_json) = state
+        .cookie_bridge
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        let _ = executor.import_cookie_state(state_json);
+    }
+    {
+        let session_vars = state
+            .run_variables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (k, v) in session_vars.iter() {
+            if var_context.get(k).is_none() {
+                var_context.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let pre_run_keys = var_context.variables().clone();
     let results = match executor.execute_all(parsed_file, &mut var_context).await {
         Ok(r) => r,
         Err(e) => {
@@ -194,6 +258,28 @@ pub async fn run_suite_handler(
             );
         }
     };
+
+    // R-4：cookie 导出回桥 + 变量增量合并（同 run_block 语义）
+    if let Ok(Some(state_json)) = executor.export_cookie_state() {
+        *state
+            .cookie_bridge
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(state_json);
+    }
+    {
+        let mut session_vars = state
+            .run_variables
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (k, v) in var_context.variables() {
+            if k.starts_with("__") {
+                continue;
+            }
+            if pre_run_keys.get(k) != Some(v) {
+                session_vars.insert(k.clone(), v.clone());
+            }
+        }
+    }
 
     // 5. 聚合统计（skipped 语义与 CLI 报告对齐：不计入通过率分母）
     let mut passed = 0;

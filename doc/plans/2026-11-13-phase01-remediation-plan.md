@@ -20,13 +20,20 @@
 | 3 | `--env` → manifest.environment 无 CLI e2e | 领域层单测已锁，但 CLI→领域这一跳没有端到端覆盖 | 子进程 e2e：`--env staging` → manifest 与 snapshot 的 `environment` 均为 `staging` |
 | 4 | exit 2 语义重叠 | clap 参数错误 / AST 解析错误 / 工件创建失败共享退出码 2，脚本无法区分 | 文档登记三来源的 stderr 鉴别前缀与 CI 判读规则（文档型 WP，无代码改动） |
 
-### 批二：Phase 2/3 MVP
+### 批二：Phase 2 MVP + AST 桥
 
 | 批次 | 内容 | 性质 |
 | --- | --- | --- |
 | Phase 2 MVP | ① 请求来源行号与稳定定位（`<path>#L<行号>`，终端 `path:line` + JSON `source_line`）② 契约漂移基线门禁（`--contract-baseline`：首跑建基线、复跑报漂移并更新） | 新能力 |
 | AST 桥（使能器） | `rupost ast <FILE>` 输出 AstDocument JSON v1.0 + 插件环境注入 `RUPOST_BIN`——插件命令复用核心解析器，消除第三方转换工具的解析分叉（评估见 [插件承载能力评估](2026-11-13-plugin-readiness-assessment.md) §6） | 新能力（插件生态使能） |
-| Phase 3 MVP | ① OpenAPI(JSON) 导入为可审查 Markdown（复用既有 `ImportFormat::OpenApi` 格式与自动检测——现状只有检测无实现）② `export k6` 场景草稿导出（与 curl/httpie/wget 同 UX 的新 target） | 新能力 |
+
+### 批四：插件基座（Phase 3 移交社区后的基座建设）
+
+| 批次 | 内容 | 性质 |
+| --- | --- | --- |
+| PL1 | 命令型插件最小示例（`cmd-hello`：argv 直通 / `RUPOST_BIN` / `RUPOST_WORKSPACE` 演示）+ 作者指南"命令插件"节与社区扩展方向参考（OpenAPI 导入 / k6 导出，引用评估报告 §7/§8） | 生态使能 |
+| PL2 | `rupost plugin validate <MANIFEST>`：作者分发前离线校验（复用发现期校验逻辑：命名契约/字段硬校验/保留字/可执行存在），处方式输出 | 生态使能 |
+| PL3 | 文档漂移修复（03 文档 `RUPOST_ENV` 未实现声明清除、export target "plugins" 措辞澄清为内置 targets）+ 指南"两种插件形态"矩阵与扩展缝指引 | 文档治理 |
 
 ### 批三：卫生与生态收尾
 
@@ -48,8 +55,9 @@
 | A-R4 | debug_guide / 示例 README 中三来源 exit-2 鉴别表与 CI 判读规则可查 |
 | A-P2a | 失败请求在终端报告输出 `doc.md:10` 形态定位、JSON 报告新增 `source_line` 字段；`.md` 与 `.http` 两条解析路径都有表驱动锁定 |
 | A-P2b | `--contract-baseline` 首跑建基线（stderr 提示）、复跑报漂移（`⚠ 契约漂移: N 条…`）并更新基线；基线文件字段精确集 = `schema_version` + `contracts[]{id, assertion, passed}`，无任何响应 actual 值；漂移不改变退出码 |
-| A-P3a | OpenAPI JSON spec → `rupost import openapi spec.json -o out.md` 产出可审查 Markdown（路径参数/凭据模板化、status 断言、防覆盖）；web `/api/v1/import` 复用同一实现 |
-| A-P3b | `.http` → `rupost export k6 <file> -o script.js` 产出可运行脚本骨架（`check()` 断言、`__ENV` 模板变量、负载模型为 stub 注释）；`-o` 防覆盖（`--force` 覆写） |
+| A-PL1 | `examples/plugins/` 出现命令型最小示例（cmd-hello）；`plugin list` 显示 ready；`rupost cmd-hello a b` 输出 argv 与内核上下文；`rupost --help` Extensions 区块收录；作者指南含"命令插件"节与社区扩展方向参考 |
+| A-PL2 | `rupost plugin validate` 对合法 manifest 通过（exit 0）；description 超长 / 保留字阶段 / 可执行缺失 / 版本不符四类违规各给出处方式输出且非零；静态校验不触发 TOFU、不执行插件本体 |
+| A-PL3 | 03 文档 `RUPOST_ENV` 未实现声明清零；`export --list` 与错误文案改为 "export targets (built-in)" 语义；指南含"两种插件形态"矩阵与扩展缝指引（import/export 管线不开放插件扩展） |
 | A-R6 | `RUPOST_EXAMPLE_PORT_BASE=18080 ./examples/run_all.sh` 与默认端口两场景全 PASS；脚本内无写死的 8080/8090/8095 |
 | A-R7 | 失败运行产出的 manifest 含 `artifact_digests`，恰覆盖 report/snapshot 两文件且 sha256 与文件字节独立计算一致；schema 契约测试键集同步（10→11） |
 | A-R8 | 32 个服务端命名假目录 + 一次真实失败 incident 运行 → 最旧被裁剪、非命名目录与 symlink 不被触碰；CLI 通道不受影响 |
@@ -60,7 +68,7 @@
 
 - **TUI 不加复现包 / 契约漂移入口**：TUI 面向单请求调试（已有 Ctrl+S 快照覆盖）。
 - **Phase 2 边界**：不做 heading-slug 锚点（行号即定位）；摘要**不存任何 actual 值**（动态字段问题从根上规避，无需掩码）；漂移只打 stderr 摘要，不改变退出码（三值契约 0/1/2 不动）；快照 Schema v1.0 不动。
-- **Phase 3 边界**：OpenAPI 仅支持 **JSON spec**（YAML 需评估 serde_yaml 新依赖，登记不做）；请求体只取 `example`/`examples`/`default`，不做 schema 深度合成；k6 只产场景草稿——**不生成负载模型（vus/stages/thresholds）、不实现虚拟用户/分布式调度/指标库**（战略"明确不做"延续）。
+- **Phase 3 移交社区（2026-11-13 范围裁决）**：OpenAPI 导入与 k6 导出**核心不实施**，由社区以**命令插件形态**承载（命名建议 `openapi2md` / `k6gen`；AST 桥 §2.7 为解析地基，评估报告 §7/§8 为作者手册）；核心侧转为基座建设（批四 PL1~PL3）。**管线扩展点维持不开放**（评估报告路径 B 维持不做）；若社区规模需求出现再立项。
 - **P2/P3 示例不接入 run_all.sh**（维持登记）；**run_all.sh 端口平移（缺口 5）与 manifest 完整性摘要（缺口 6）已纳入批三**（WP-R5/WP-R6）——注意摘要（digest）只防损坏，**密钥签名级防篡改仍不做**。
 - 不扩第四个退出码值；不动 `session.rs` 存储结构、CLI `--incident-out` 语义、`verify_features.sh`。
 - 不做云服务/账号/团队空间。
@@ -98,19 +106,14 @@
 - **漂移语义**：基线 `passed=true` → 本次 `false` 为 newly_broken；反向为 fixed；基线无此键为 new。只打 stderr 摘要，退出码不变。
 - 基线文件写入走 `security::fs::write_private_file_atomic`（0600，可覆写更新）；读取缺失文件 = 首跑（无基线）。
 
-### 2.5 互操作契约（Phase 3）
+### 2.5 互操作契约（Phase 3 → 移交社区，2026-11-13 范围裁决）
 
-- **OpenAPI**：实现挂在**既有** `ImportFormat::OpenApi` 之上——枚举与自动检测已存在（importer/mod.rs:33、:82-87），**现状只有检测没有实现**（src/importer/ 下仅 curl.rs/httpie.rs/raw.rs）。仅支持 JSON spec；生成物为**单一可审查 Markdown**（非私有集合）：
-  - 路径参数 `{x}` → `{{x}}`；bearer securityScheme → `Authorization: Bearer {{token}}`；server base → `{{base_url}}`；
-  - 请求体取 `example`/`examples`/`default`，否则 `{}` + ImportResponse warning；
-  - 响应取最低 2xx 码 → `# @assert status == <code>`，无 2xx → 无断言 + warning；
-  - `operationId` → `# @name`；防覆盖复用 import 既有链路（curl 同款）。
-  - 实现后 web `/api/v1/import` 因自动检测已存在而免费获得该能力。
-- **k6**：以 export 子系统**新 target `"k6"`** 交付（`rupost export k6 <file> -o out.js`，与 curl/httpie/wget 完全同 UX，`--force`/`--redact`/`--name` 等旗标自动继承）。产物为场景草稿：
-  - `options` 恒为 `{ vus: 1, iterations: 1 }` stub + 注释声明"负载模型由使用者扩展"；
-  - `{{base_url}}` → `` `${BASE_URL}` ``（`BASE_URL = __ENV.BASE_URL || ''`）；其余 `{{var}}` → `__ENV.VAR`；
-  - `status == N` 断言 → `check()`；其余 `@assert` → JS 注释 `// TODO: @assert <raw>`；
-  - `@skip` 与 teardown 请求排除；`@capture` → 注释提示"k6 中变量传递为脚本职责，需手动编排"。
+Phase 3 两项（OpenAPI 导入 / k6 导出）**核心不实施**，移交社区以命令插件形态承载：
+
+- **裁决依据**：[插件承载能力评估](2026-11-13-plugin-readiness-assessment.md) §2/§6——命令通道基座已齐、AST 桥（§2.7）为语义地基、管线扩展点不开放（路径 B 维持不做，规模需求出现再立项）；
+- **核心侧转为基座建设**：批四 PL1（命令型示例 + 作者指南）/ PL2（`plugin validate`）/ PL3（文档漂移与形态澄清）；
+- **原核心实现契约作废归档**：OpenAPI 分支 / markdown_blocks / CommandExporter `file_preamble` 等设计不再实施；其中**现场核验记录**（ImportRequest 字段、RawHttp 回退、逐请求 exporter、变量插值语义）对社区作者仍有价值，保留于 §3 各暂缓 WP 节内与 git 历史；
+- **社区实现指引**：命名建议 `openapi2md` / `k6gen`；AST 桥（§2.7）为解析地基；评估报告 §7（使用方案）/ §8（版本协调）为作者手册。
 
 ### 2.6 批三固定决策（卫生与生态收尾）
 
@@ -130,7 +133,7 @@
 
 ## 3. 工作包
 
-**执行顺序：批一 WP-R3 → WP-R1 → WP-R2 → 批二 WP-P2a → WP-AST → WP-P2b → WP-P3a → WP-P3b → 批三 WP-R5 → WP-R6 → WP-R7 → WP-R8（可裁剪）→ WP-R9 → WP-R4**（缺口修复先行；Phase 2 的漂移依赖定位字段先落，故 P2a 在 P2b 前，AST 桥暴露 source_line 亦排 P2a 之后；Phase 3 两个 WP 相互独立；批三依赖 R2 已落（R7/R8），其余相互独立；WP-R4 文档收尾最后覆盖全三批。每个 WP 独立提交）。
+**执行顺序：批一 WP-R3 → WP-R1 → WP-R2 → 批二 WP-P2a → WP-AST → WP-P2b → 批四 WP-PL1 → WP-PL2 → WP-PL3 → 批三 WP-R5 → WP-R6 → WP-R7 → WP-R8（可裁剪）→ WP-R9 → WP-R4**（缺口修复先行；Phase 2 的漂移依赖定位字段先落，故 P2a 在 P2b 前，AST 桥暴露 source_line 亦排 P2a 之后；Phase 3 已移交社区（WP-P3a/P3b 暂缓，见各节状态横幅）；批四插件基座依赖 AST 桥（PL1 指南引用）但不依赖 P2b；批三依赖 R2 已落（R7/R8），其余相互独立；WP-R4 文档收尾最后覆盖全部批次。每个 WP 独立提交）。
 本计划文档已入库（提交 `docs(plans): add phase 0/1 remediation plan (gaps 1-4)`，59159329）；状态行随 WP-R4 收尾更新。
 
 > **审查记录（2026-11-13，执行前核对）：** 剩余 11 个 WP 的前提已对当前 HEAD 实测核对——P2a（http_runner.rs:202/:255 `mut` 绑定精确命中、解析器未 Serialize、json.rs 无 source_line）、AST（builtin 名单 plugin_route.rs:376-384、env 注入 plugin_exec.rs:207-211）、P2b（incident 块锚点 suite_presenter.rs:129-137 成立；TestSuiteOptions 构造点 html_report×3 + dispatch×1）、R5（run_all.sh 8080×7 / sleep×3，incident 段已有 `RUPOST_INCIDENT_MOCK_PORT`）、R6（manifest 10 字段、无 digests）、R7（run.rs:338/344 前提成立）、R8（app.js escapeHtml/runSuite 存在）、R9（src/web 计数 0）——全部成立。**两处骨架已按现场事实修正并写入对应 WP**：P3a（ImportRequest 无 output 字段、ImportResponse 产出 markdown_blocks 向量）、P3b（逐请求 CommandExporter 架构 → file_preamble 默认方法；管线变量已插值 → 取消 `__ENV.VAR` 映射与 check() 翻译，凭据纪律 `--redact`）。P2a 附带必做项确认：`report_schema_test.rs` 采用精确键集合断言，`source_line` 必须显式登记。R4 范围确认：批一（R1/R2/R3）尚未入 CHANGELOG，随 R4 登记。
@@ -1081,6 +1084,8 @@ jj split src/report src/cli src/runner tests/contract_drift_test.rs tests/html_r
 
 ### WP-P3a（Phase 3①）：OpenAPI(JSON) 导入
 
+> **状态（2026-11-13 范围裁决）：暂缓——移交社区（命令插件形态），核心不实施。本节保留现场核验记录与设计骨架供社区作者参考；执行顺序中已移除。**
+
 **目的：** `rupost import openapi <spec.json> -o out.md`：把 JSON spec 转成单一可审查 Markdown（复用既有 `ImportFormat::OpenApi` 检测；实现后 web `/api/v1/import` 免费获得）。
 
 **文件：**
@@ -1172,6 +1177,8 @@ jj split src/importer src/cli tests/openapi_import_test.rs -m "feat(importer,cli
 
 ### WP-P3b（Phase 3②）：`export k6` 场景草稿导出
 
+> **状态（2026-11-13 范围裁决）：暂缓——移交社区（命令插件形态），核心不实施。本节保留现场核验记录与设计骨架供社区作者参考；执行顺序中已移除。**
+
 **目的：** `rupost export k6 <file> -o script.js`：文档 → 可运行的 k6 脚本骨架（与 curl/httpie/wget 同 UX、同旗标）。
 
 **现场核验记录（2026-11-13 审查，三处架构事实修正原骨架）：**
@@ -1234,6 +1241,110 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 jj split src/exporter tests/k6_export_test.rs -m "feat(exporter): k6 scenario draft export (export k6 <file>)"
 ```
+
+### WP-PL1（批四①）：命令型插件最小示例 + 作者指南
+
+**目的：** 社区作者目前只有 hook 型样板（echo-sign），命令型插件（OpenAPI 导入 / k6 导出的承载形态）零示例——补最小可跑示例与指南节，让"他人用插件实现功能"有可抄起点。
+
+**文件：**
+
+- 新增 `examples/plugins/rupost-plugin-cmd-hello`（sh，零依赖）与 `examples/plugins/rupost-plugin-cmd-hello.json`
+- 修改 `doc/architecture/features/plugin_and_extensibility.md`（§3 补"命令插件"节）
+
+**示例内容（照此实现）：**
+
+`rupost-plugin-cmd-hello`（chmod 755）：
+```sh
+#!/bin/sh
+# 命令插件最小示例：argv 直通 + 内核上下文注入演示
+echo "args: $*"
+echo "workspace: ${RUPOST_WORKSPACE:-unset}"
+echo "rupost bin: ${RUPOST_BIN:-unset}"
+```
+
+`rupost-plugin-cmd-hello.json`：
+```json
+{
+  "manifest_version": "1.0",
+  "name": "cmd-hello",
+  "version": "0.1.0",
+  "description": "minimal command-plugin example (argv & kernel context demo)",
+  "commands": [
+    { "name": "cmd-hello", "usage": "rupost cmd-hello [args...]",
+      "description": "argv passthrough & kernel context demo", "requires_env": [] }
+  ]
+}
+```
+
+**作者指南补节要点（plugin_and_extensibility.md §3）：**
+
+1. **两种插件形态矩阵**：hook = 请求管线行为扩展（prepare/transform/sign，发包前、不可改 URL/method、不消费响应）；command = CLI 工具扩展（argv 直通、stdio 继承、可 TTY、`RUPOST_BIN`/`RUPOST_WORKSPACE` 上下文）。
+2. **命令插件五步指南**（浓缩自评估报告 §7.1-7.4）：写可执行（任意语言）→ 写同名 manifest → 拷入搜索目录 → `plugin list` 验证 → TOFU 首跑确认；进阶：经 `$RUPOST_BIN ast <file>` 消费核心解析 AST（解析语义零分叉）。
+3. **扩展缝指引**：import/export 管线不开放插件扩展点（评估报告 §5）；转换类工具走命令插件形态。
+4. **社区扩展方向参考**：OpenAPI 导入（`openapi2md`）与 k6 导出（`k6gen`）——设计骨架与现场核验（importer/exporter 字段与语义）见评估报告 §6 与本计划暂缓节；使用与版本协调见评估报告 §7/§8。
+
+**验证（手动，逐条记录）：**
+
+```bash
+cp 示例两文件 ~/.rupost/plugins/ && chmod 755 ~/.rupost/plugins/rupost-plugin-cmd-hello
+rupost plugin list            # cmd-hello = ready
+rupost cmd-hello a b          # 输出 args: a b / workspace / rupost bin 三行
+rupost --help                 # Extensions 区块出现 cmd-hello
+bash -n examples/plugins/rupost-plugin-cmd-hello
+```
+
+（TOFU 首跑确认属预期行为，指南写明。）
+
+**提交：** `docs(plugins): add command-plugin example (cmd-hello) and author guide`
+
+### WP-PL2（批四②）：`rupost plugin validate` 子命令
+
+**目的：** 作者分发前离线校验 manifest——把发现期已存在的校验（命名契约/字段硬校验/保留字/可执行存在与囚禁）开放为作者工具，处方式输出（与 `plugin list` 三态同语言）。
+
+**文件：**
+
+- 修改 `src/cli/commands/mod.rs`（`PluginCommands::Validate { path: String }`）
+- 修改 `src/plugin/registry.rs`（`parse_and_validate_manifest`（:118）按需提为可对单文件调用的粒度——**先读现场签名**再决定提函数或薄包装）
+- 修改 `src/cli/plugin_route.rs`（分发分支）
+- 测试追加 `tests/cli_plugin_route_test.rs`（或新建 `tests/plugin_validate_test.rs`）
+
+**行为契约：**
+
+- `rupost plugin validate path/to/manifest.json` → 合法：`✓ ready: <name> v<version>（commands: N, hooks: M）` exit 0；
+- 违规：逐条处方式输出（保留字阶段 / description >80 / 可执行缺失 / 路径逃逸 / manifest_version ≠ 1.0 / JSON 解析失败）exit 1；
+- **静态校验**：绝不执行插件本体、不触发 TOFU、不写缓存。
+
+**先写测试（Red：子命令不存在 → clap 编译期即红；可先以 `todo!()` 占位转运行期红）：**
+
+四用例（复制 `examples/plugins/rupost-plugin-echo-sign.json` 为合法基线）：
+1. 合法 → exit 0 + "ready"；
+2. description 81 字符 → exit 1 + 处方含 "description"；
+3. hook stage 用保留字 `harvest` → exit 1 + 处方含 "保留字"；
+4. 同目录无可执行 → exit 1 + 处方含可执行缺失语义。
+
+**验证与提交：**
+
+```bash
+cargo test --test cli_plugin_route_test
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+jj split src/cli src/plugin tests -m "feat(plugin): add plugin validate subcommand for authors"
+```
+
+### WP-PL3（批四③）：文档漂移修复与扩展方式澄清（纯文档）
+
+**目的：** 清掉评估报告 §1.2 登记的两处漂移，并把"插件扩展方式"讲清楚——社区决定做什么之前，先让作者看懂能做什么。
+
+**文件：**
+
+- `doc/plans/2026-11-10-cross-scenario-engine-and-plugins/03-plugin-spi-and-degradation.md`（`RUPOST_ENV` bullet 删除，文末登记"RUPOST_ENV 未实现，登记不做"）
+- `src/exporter/mod.rs`（三处措辞：`Available export plugins:` → `Available export targets (built-in):`；两处 `view available plugins.` → `view available targets.`——已核验无测试锁定旧文案）
+- `doc/architecture/features/plugin_and_extensibility.md`（若 WP-PL1 已补矩阵则仅核对一致性）
+
+**验证：** `rg -n "RUPOST_ENV" 03-*.md` 归零（仅剩登记行）；`rg -n "export plugins" src/exporter/` 归零；`cargo test --workspace` 无文案破坏（已核验无锁定）。
+
+**提交：** `docs(plugins): fix doc drift (RUPOST_ENV) and clarify export target naming`
+
 
 ### WP-R5（缺口 5 收尾）：run_all.sh 端口平移与健康探针
 
@@ -1454,14 +1565,14 @@ CI 判读规则：测试结果只看 0/1；exit 2 一律视为"配置/工具/工
    - **Fixed**：Web 会话 Cookie 滑动续期（活跃会话不再因 Max-Age 固定倒计时 30 分钟硬过期）；
    - **Added**：Web 工作台套件失败可产出复现包（`RunSuiteRequest.incident` 开关，服务端管辖路径 `.rupost/incidents/`，客户端零路径输入，masking=secrets 强制）；
    - **Added（Phase 2）**：请求稳定定位（`<path>#L<行号>`，终端 `path:line` + JSON `source_line`）与契约漂移基线门禁 `--contract-baseline`（首跑建基线、复跑报漂移；摘要只含确定性字段）；
-   - **Added（Phase 3）**：`import openapi`（JSON spec → 可审查 Markdown，复用既有 OpenApi 格式检测）与 `export k6`（场景草稿骨架，负载模型 stub）；
+   - **Added（插件基座）**：`plugin validate` 子命令 + 命令型插件最小示例（cmd-hello）+ 作者指南命令插件节（AST 桥/版本协调）+ 文档漂移修复（RUPOST_ENV、export target 措辞）；**Phase 3（OpenAPI 导入 / k6 导出）移交社区**（评估报告 §4/§6）；
    - **Added（AST 桥）**：`rupost ast`（AstDocument JSON v1.0 只读命令）+ 插件环境注入 `RUPOST_BIN`——插件命令复用核心解析器，消除第三方转换工具的解析分叉（插件生态使能器）；
    - **test/docs**：`--env`→manifest/snapshot 的 CLI e2e；exit 2 三来源鉴别表；
    - **Added（批三）**：`run_all.sh` 端口平移与健康探针（`RUPOST_EXAMPLE_PORT_BASE`）；复现包完整性摘要 `artifact_digests`（digest 防损坏，签名登记不做）；Web 复现包保留上限（最旧裁剪 32 个，仅 Web 通道）；工作台 incident 复选框（若 R8 未裁剪）。
 6. `progress_summary.md` 进度概览表顶部追加一行（只记已完成事实：四缺口修复形态 + Phase 2/3 MVP 交付物文件清单 + 守护测试名 + 反假守护记录）。
 7. `README.md` 核心特性列表追加三行（各一句、链接对应指南）：文档契约门禁（稳定定位 + `--contract-baseline` 漂移基线）、OpenAPI 导入（`import openapi`，JSON spec → 可审查 Markdown）、k6 场景草稿（`export k6`）。
 8. `testing_guide.md`：新增"契约漂移门禁（`--contract-baseline`）"小节（两连跑用法 + stderr 语义）；§4.1 测试登记追加 `source_location_test.rs`、`contract_drift_test.rs`、`openapi_import_test.rs`、`k6_export_test.rs`、`ast_command_test.rs`。
-9. 最后把本文件顶部 `**状态：**` 改为 `Completed (C-R0~C-R4 与 C-P2a/P2b、C-P3a/P3b 全过)`。
+9. 最后把本文件顶部 `**状态：**` 改为 `Completed (C-R0~C-R4、C-P2a/P2b、C-PL1~PL3 全过)`。
 
 **验证与提交：**
 
@@ -1497,8 +1608,9 @@ jj split doc/guides examples/incident_bundle/README.md README.md CHANGELOG.md do
 | C-P2a | 来源定位绿（解析层单测 + e2e） | `.md` 与 `.http` 任一路径未覆盖 / `report_schema_test` 未登记追加键 / 快照 schema 被改动 |
 | C-AST | `rupost ast` JSON 契约绿（含 schema 键集锁） | 直接 derive 解析器类型（内部命名泄漏）/ stdout 出现非 JSON 噪音 / `RUPOST_BIN` 未注入或指向错误 |
 | C-P2b | 契约漂移绿（单元表驱动 + e2e） | 基线文件含 actual/响应值 / 漂移改变退出码 / 基线写入不走 0600 原子写 |
-| C-P3a | OpenAPI 导入绿（内容契约单测 + CLI e2e） | YAML 被实现 / 新增依赖 / 生成物为私有格式 / 防覆盖缺失 |
-| C-P3b | k6 导出绿（内容契约单测 + CLI e2e） | 生成了 vus/stages/thresholds 数值模型 / 全量断言翻译 / 新增依赖 |
+| C-PL1 | 命令型示例 ready + 手动验证三行输出 + Extensions 收录 | 示例未手动验证 / 指南缺命令插件节 |
+| C-PL2 | validate 绿（合法 + 四类违规处方） | 处方不可读 / 触发插件执行或 TOFU / 改动运行时行为 |
+| C-PL3 | 漂移清零 + 形态矩阵落地 | `RUPOST_ENV` 仍在正文 / export 文案仍称 plugins 且无 built-in 限定 |
 | C-R5 | run_all.sh 默认/偏移双端口场景全 PASS | 任一场景 FAIL 或脚本仍存在写死端口 |
 | C-R6 | digests 绿（单测 + CLI e2e） | snapshot/report 任一未入表 / schema 契约键数未同步 / 文档用"签名"表述 |
 | C-R7 | 保留上限绿（单测 + web e2e） | 误删非命名目录 / 触碰 symlink / CLI 通道被裁剪 |

@@ -291,7 +291,7 @@
      - 在 `src/cli/dispatch.rs` 中按 03 §6.1 裁决序实现 `args[0]` 拦截：
        - 向 `PluginRegistry` 查表寻址；
        - 命中后拉起子进程，直连 `std::process::Stdio::inherit()`（TTY 独占）+ **来源横幅（路径 + sha256 前 16 位）与首次 TOFU 确认**（03 §6.2）；
-       - 注入上下文环境变量（`RUPOST_WORKSPACE`、`RUPOST_ENV`、`RUPOST_CONFIG_DIR`），**其余环境按白名单裁剪**（03 §6.2）；
+       - 注入上下文环境变量（`RUPOST_WORKSPACE`、`RUPOST_CONFIG_DIR`、`RUPOST_BIN`），**其余环境按白名单裁剪**（03 §6.2；勘误 2026-11-13：原列 `RUPOST_ENV` 未实现，见 03 文末勘误）；
        - 退出码信号感知穿透；
      - 在 `src/cli/mod.rs` 中优化 `--help` 输出，动态展示已安装的 `EXTENSIONS` 分组（**manifest 文本字段渲染前白名单净化**，03 §6.4）；
   3. **Refactor & JJ 提交**：

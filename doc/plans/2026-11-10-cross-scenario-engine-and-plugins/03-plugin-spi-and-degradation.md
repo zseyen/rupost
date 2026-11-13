@@ -341,8 +341,8 @@ pub struct PluginPatch {
 * **环境变量白名单（v2.1.0 裁决）**：子进程默认仅继承 `PATH/HOME/LANG/TERM/TMPDIR + RUPOST_*`；manifest `requires_env` 声明额外需要的变量，运行时可用 `--plugin-env <VAR>` 显式放行。**全量环境继承废除**（防止堡垒机上的 AWS 凭据/API Key 经第三方插件外泄）；
 * **注入的上下文环境变量**：
   * `RUPOST_WORKSPACE`：当前工作区绝对路径；
-  * `RUPOST_ENV`：当前激活的环境标签（如 `--env staging`）；
   * `RUPOST_CONFIG_DIR`：配置与插件注册表目录路径；
+  * `RUPOST_BIN`：内核自身绝对路径（2026-11-13 WP-AST 新增——插件经 `$RUPOST_BIN ast <file>` 消费核心解析 AST）；
 * **退出码穿透（信号感知）**：`Some(code)` → 原值穿透（不受 01 §2.1 三值契约约束，该契约仅约束内置命令）；`None`（信号终止）→ `128 + signal`（Unix 惯例），废除 `status.code().unwrap_or(1)` 折叠。
 
 ### 6.3 双模路由流程
@@ -510,3 +510,9 @@ DeepSeek Harness (`dsh`) 是由 DeepSeek 官方构建的智能体运行时框架
 
 ### 10.6 快照防 OOM 截断限额 (Snapshot Lightweight Limit)
 * 默认单响应体录入上限设为 `256KB`（可通过 `--max-snapshot-body-bytes` 调整）。超限响应体执行截断，并标记 `body_truncated: true`，同时记录完整报文的 `body_sha256` 校验和，确保快照文件轻盈（控制在 5MB 以内）。
+
+---
+
+## 勘误（2026-11-13，WP-PL3）
+
+* §6.2 原声明的注入变量 `RUPOST_ENV`（"当前激活的环境标签"）**从未实现，登记不做**——实际注入为 `RUPOST_WORKSPACE` / `RUPOST_CONFIG_DIR` / `RUPOST_BIN`（以 `src/cli/plugin_exec.rs` 为准）。

@@ -15,7 +15,7 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
 
     // 1. 处理 --list 选项
     if opts.list || opts.target.as_deref() == Some("list") {
-        println!("Available export plugins:");
+        println!("Available export targets (built-in):");
         for (name, aliases, desc) in registry.list() {
             let alias_str = if aliases.is_empty() {
                 String::new()
@@ -29,14 +29,14 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
 
     let target = opts.target.as_deref().ok_or_else(|| {
         RupostError::Other(
-            "Missing export target. Use 'rupost export --list' to view available plugins."
+            "Missing export target. Use 'rupost export --list' to view available targets."
                 .to_string(),
         )
     })?;
 
     let exporter = registry.find(target).ok_or_else(|| {
         RupostError::Other(format!(
-            "Unsupported export target '{}'. Use 'rupost export --list' to view available plugins.",
+            "Unsupported export target '{}'. Use 'rupost export --list' to view available targets.",
             target
         ))
     })?;

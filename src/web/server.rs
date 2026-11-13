@@ -53,6 +53,8 @@ pub struct AppState {
     /// （cookie 桥 + 捕获变量；进程内存储，`Cookie: rupost_session=<opaque>`
     /// 划分边界，跨客户端零共享；--dev 宽松 CORS 不构成共享身份的理由）
     pub sessions: Arc<crate::web::session::WebSessionStore>,
+    /// WP-R2：Web 复现包输出根（服务端管辖路径，客户端零路径输入）
+    pub incident_root: std::path::PathBuf,
 }
 
 /// 检查 Host 标头是否属于安全白名单（本地基础名单 + 用户自定义名单，防御 DNS Rebinding）
@@ -112,6 +114,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         default_env: config.default_env,
         allowed_hosts: config.allowed_hosts,
         sessions: Arc::new(crate::web::session::WebSessionStore::default()),
+        incident_root: config.working_dir.join(".rupost").join("incidents"),
     };
 
     let api_router = Router::new()

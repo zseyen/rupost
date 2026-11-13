@@ -100,6 +100,10 @@ pub struct RunSuiteRequest {
     pub path: String,
     #[serde(default)]
     pub env: Option<String>,
+    /// WP-R2：失败时产出故障复现包（布尔开关；输出位置由服务端决定，
+    /// **绝不接受客户端路径**——浏览器可控的文件系统路径是注入/滥用面）
+    #[serde(default)]
+    pub incident: Option<bool>,
 }
 
 /// 套件单条请求执行摘要
@@ -125,6 +129,9 @@ pub struct RunSuiteResponse {
     pub skipped: usize,
     pub duration_ms: u64,
     pub items: Vec<SuiteItemResult>,
+    /// WP-R2：故障复现包目录（仅失败 + incident 开关时为 Some；路径由服务端管辖）
+    #[serde(default)]
+    pub incident_dir: Option<String>,
 }
 
 /// 单条规则匹配诊断

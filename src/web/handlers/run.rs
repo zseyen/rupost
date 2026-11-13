@@ -311,7 +311,7 @@ pub async fn run_suite_handler(
     let mut failed = 0;
     let mut skipped = 0;
     let mut items = Vec::new();
-    for r in results {
+    for r in &results {
         if r.skipped {
             skipped += 1;
         } else if r.success {
@@ -331,6 +331,37 @@ pub async fn run_suite_handler(
         });
     }
 
+    // WP-R2：故障复现包（仅失败时；服务端管辖路径，客户端零路径输入；浏览器
+    // 不是可信 secret 通道——secret_values 恒空，仅键名掩码，masking=secrets 仍强制）
+    let mut incident_dir: Option<String> = None;
+    if req.incident == Some(true) && failed > 0 {
+        let target = state.incident_root.join(format!(
+            "{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S"),
+            &uuid::Uuid::new_v4().simple().to_string()[..8],
+        ));
+        let batch = vec![(std::path::PathBuf::from(&req.path), results)];
+        if let Err(e) = crate::history::create_incident_bundle(
+            &batch,
+            std::slice::from_ref(&req.path),
+            state.default_env.as_deref(),
+            &[],
+            crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+            &target,
+        ) {
+            // fail-closed 镜像 CLI exit-2 语义：工件失败不静默
+            return json_err_session_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Incident bundle creation failed: {}",
+                    e.to_user_friendly_string()
+                ),
+                Some(&handle),
+            );
+        }
+        incident_dir = Some(crate::utils::path_guard::normalize_posix_path(&target));
+    }
+
     let response = RunSuiteResponse {
         path: req.path,
         total: items.len(),
@@ -339,6 +370,7 @@ pub async fn run_suite_handler(
         skipped,
         duration_ms: start_time.elapsed().as_millis() as u64,
         items,
+        incident_dir,
     };
 
     json_session_response(StatusCode::OK, ApiResponse::ok(response), Some(&handle))

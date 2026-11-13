@@ -114,6 +114,16 @@ CLOSE
         res.error
     );
 
+    // WP-P2a 补全（WS 路径）：source_line = 方法行（GET）的 1-based 行号。
+    // 行号台账（parse_file trim 后）：1 ###（分隔行，不进块内容）/ 2 @websocket /
+    //           3-4 @assert / 5 @capture / 6 GET
+    assert_eq!(
+        res.source_line,
+        Some(6),
+        "WS 请求的方法行必须携带稳定定位行号: {:?}",
+        res.source_line
+    );
+
     // 验证所有的断言均已通过
     assert!(
         !res.assertions.is_empty(),

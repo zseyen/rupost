@@ -121,6 +121,7 @@ impl HttpRunner {
                         stream_sender,
                         warnings: build_warnings,
                         connect_span,
+                        source_line,
                     };
                     return Ok(crate::runner::SseRunner::execute(
                         response,

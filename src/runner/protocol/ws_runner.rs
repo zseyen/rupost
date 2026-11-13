@@ -37,6 +37,7 @@ impl WsRunner {
     ) -> TestResult {
         let start_time = Instant::now();
         let name = parsed.name().map(|s| s.to_string());
+        let source_line = parsed.metadata.source_line;
         let initial_url = parsed.url.clone();
 
         let request_snapshot = RequestSnapshot::from_parsed(&parsed);
@@ -348,7 +349,7 @@ impl WsRunner {
             timing: None,
             diagnose_report: None,
             request: Some(request_snapshot.clone()),
-            source_line: None, // WS 路径暂缺行号（登记后补）
+            source_line, // WP-P2a 补全：与 HTTP/SSE 同源
             warnings: {
                 capture_warnings.sort();
                 capture_warnings.dedup();

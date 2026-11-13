@@ -96,7 +96,7 @@ rupost "$RUPOST_BIN" ast suite.http        # → AstDocument JSON v1.0（stdout 
 1. **写可执行文件**（任意语言；与 manifest 同目录、同名去 `.json`；Windows 作者提供 `.cmd`/`.exe` 同名包装或用 WSL——发现器探测三后缀）；
 2. **写同名静态 manifest**（`manifest_version` 恒 "1.0"、description ≤80 字符、文件名必须 `rupost-plugin-*.json`——发现器按此约定扫描）；
 3. **放置**：`$PATH` / `~/.rupost/plugins` / 项目 `./.rupost/plugins`（`--allow-project-plugins` 放行；验证命令用此形态时旗标写法为 `rupost plugin --allow-project-plugins list`）；
-4. **验证**：`rupost plugin list`（✓ ready）；`rupost --help` Extensions 区块收录（PATH/home 安装形态）；
+4. **验证**：`rupost plugin list`（✓ ready）；`rupost --help` Extensions 区块收录（PATH/home 安装形态；`--help` 在 clap 解析前短路、命令行旗标不可得——项目级插件经 `RUPOST_ALLOW_PROJECT_PLUGINS=1` 环境通道显示）；
 5. **首跑**：TOFU 交互确认一次（路径 + SHA-256 指纹入 `~/.rupost/tofu-commands.txt`）；CI/非 TTY 先在交互终端确认，否则 fail-closed。
 
 **进阶（解析零分叉）**：需要理解 `.http/.md` 的工具，经 `$RUPOST_BIN ast <file>` 消费核心 AST（§3.1）——不要自行实现解析。

@@ -28,6 +28,8 @@ pub struct SseRunnerOptions {
     pub warnings: Vec<String>,
     /// M7-A 连接器采集的单连接时序（连接复用时为 None）
     pub connect_span: Option<crate::http::timing_connector::ConnectSpan>,
+    /// WP-P2a 补全：请求方法行的 1-based 行号（http_runner 从 parsed 预提取捎带）
+    pub source_line: Option<usize>,
 }
 
 /// 单个 SSE 事件的处理上下文。
@@ -378,6 +380,7 @@ impl SseRunner {
             options.url,
             final_response.clone(),
         );
+        test_result.source_line = options.source_line;
         test_result.assertions = assertion_results;
         // 构建期警告（请求级）在前，逐事件捕获警告在后；排序去重避免同一
         // capture 在每个事件上重复刷屏

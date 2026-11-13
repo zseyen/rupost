@@ -1,3 +1,4 @@
+pub mod ast_json;
 pub mod http_file;
 pub mod markdown_file;
 pub mod metadata;
@@ -5,6 +6,7 @@ pub mod mock_variant;
 pub mod types;
 
 // Re-export commonly used types
+pub use ast_json::{AST_SCHEMA_VERSION, AstDocument, AstRequest, to_ast_document};
 pub use http_file::HttpFileParser;
 pub use markdown_file::MarkdownFileParser;
 pub use mock_variant::MockVariantParser;

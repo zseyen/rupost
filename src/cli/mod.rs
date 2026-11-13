@@ -15,8 +15,9 @@ use clap::{CommandFactory, Parser};
 // 未被 mod.rs 直接消费的类型会触发 unused_imports，显式豁免）
 #[allow(unused_imports)]
 pub use commands::{
-    AiCommands, Commands, DiagnoseArgs, ExportArgs, GenerateArgs, HistoryCommands, ImportCommands,
-    ImportCurlArgs, InitArgs, MockArgs, PluginCommands, ReplayArgs, TestArgs, TuiArgs, WebArgs,
+    AiCommands, AstArgs, Commands, DiagnoseArgs, ExportArgs, GenerateArgs, HistoryCommands,
+    ImportCommands, ImportCurlArgs, InitArgs, MockArgs, PluginCommands, ReplayArgs, TestArgs,
+    TuiArgs, WebArgs,
 };
 pub use dispatch::dispatch;
 #[allow(unused_imports)]

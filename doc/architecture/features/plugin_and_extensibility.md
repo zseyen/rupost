@@ -66,6 +66,19 @@
 4. **调试**：插件 stderr 在失败时经 16KB 截断入 warnings（终端/报告/快照三处同文）；
 5. **降级约定**：`?optional` 唯一声明语法；兜底鉴权唯一合法机制 = 用户手写静态 Header。
 
+### 3.1 AST 桥：复用核心解析器（WP-AST，2026-11-13）
+
+命令插件需要理解 `.http/.md` 文档时，**不要自行实现解析**（断言语义/变量约定极易与核心漂移）——经内核注入的 `RUPOST_BIN` 自调只读命令获取稳定 AST：
+
+```bash
+rupost "$RUPOST_BIN" ast suite.http        # → AstDocument JSON v1.0（stdout 纯 JSON）
+```
+
+* **契约**：顶层 4 键（`schema_version`/`source_path`/`dependencies`/`requests`）；请求级含 `method`/`url`（**未插值原文**，`{{var}}` 原样）/`headers`（保序）/`body`/`name`/`skip`/`assertions`（原文）/`captures`（原始声明）/`source_line`（方法行 1-based 行号）；
+* **版本协调**：读后第一步校验 `schema_version` 前缀 `"1."`；1.x 内字段只增不改——按已知键白名单取用，容忍未知字段；作者六条守则与错位场景见评估报告 §8；
+* **`RUPOST_BIN`**：内核执行插件命令时注入（`current_exe()`，取不到时退化 `rupost`）——永远用它而不是裸 `rupost`，杜绝 PATH 陈旧二进制漂移；
+* **`ast` 是只读命令**：不发网络、不写历史；插件内自调时必须捕获子进程 stdout（自己的 stdout 只允许输出最终产物）。
+
 ## 4. 登记不做项（P2/生态期，有裁决背书）
 
 `@pipeline`/`@use` 语法、在线插件市场、热重载、MCP Server、RLIMIT 配额、`plugin sync --regenerate`、`plugin validate`/doctor、TUI/Web 的 `@` 补全、`fallback.builtin` 降级链、Windows shebang 透明代理。

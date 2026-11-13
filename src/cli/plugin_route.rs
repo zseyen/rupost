@@ -376,7 +376,7 @@ pub fn handle_plugin_command(
 pub fn builtin_subcommand_names() -> BTreeSet<String> {
     [
         "test", "history", "generate", "diagnose", "mock", "init", "replay", "export", "web", "ai",
-        "import", "plugin", "tui",
+        "import", "plugin", "tui", "ast",
     ]
     .into_iter()
     .map(String::from)

@@ -275,6 +275,17 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             )
             .await?;
         }
+        Some(Commands::Ast(args)) => {
+            // WP-AST：AstDocument v1.0 只读导出——stdout 仅 JSON（日志走 stderr），
+            // 缺失文件/解析错误走既有错误链（非零退出）
+            let content = std::fs::read_to_string(&args.file)?;
+            let parsed = rupost::parser::parse_document_by_path(&args.file, &content)?;
+            let doc = rupost::parser::to_ast_document(&parsed, &args.file);
+            let json = serde_json::to_vec_pretty(&doc)?;
+            use std::io::Write as _;
+            std::io::stdout().write_all(&json)?;
+            println!();
+        }
         Some(Commands::Web(args)) => {
             let store: std::sync::Arc<dyn rupost::web::DocumentStore> =
                 std::sync::Arc::new(rupost::web::LocalFsDocumentStore::new(&args.dir));

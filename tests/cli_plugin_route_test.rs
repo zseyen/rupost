@@ -556,3 +556,42 @@ fn test_missing_env_warning_on_plugin_command_and_suite_startup() {
         "test 启动应输出 HOOK_SECRET_KEY 告警: {test_stderr}"
     );
 }
+
+/// WP-AST 守护：插件命令必须收到内核注入的 `RUPOST_BIN`（评估报告 §6/§8——
+/// 插件经 `$RUPOST_BIN ast <file>` 消费核心解析 AST，杜绝 PATH 陈旧二进制漂移）。
+#[test]
+fn test_cli_plugin_receives_rupost_bin_for_ast_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_home = dir.path().join("home");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    // CHECK_ENV_PRESENT：RUPOST_BIN 缺席/为空时插件 exit 2——注入断言内建在插件协议里
+    let touch_file = dir.path().join("ran.txt");
+    let bin = install_cli_plugin(
+        dir.path(),
+        "bincap",
+        &format!(
+            "CHECK_ENV_PRESENT=RUPOST_BIN\nTOUCH={}\n",
+            touch_file.display()
+        ),
+    );
+    preseed_tofu(&fake_home, &bin);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(dir.path())
+        .env("HOME", &fake_home)
+        .env_remove("RUPOST_BIN") // 防父环境泄漏造成假绿：缺席判定必须由内核注入兜底
+        .args(["--allow-project-plugins", "bincap"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "RUPOST_BIN 已注入时插件必须成功（缺席则 exit 2）: exit={:?} stdout={} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        touch_file.is_file(),
+        "插件本体必须被真实执行（TOFU 预置放行）"
+    );
+}

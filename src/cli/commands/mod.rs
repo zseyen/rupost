@@ -17,6 +17,14 @@ mod web;
 pub use ai::AiCommands;
 pub use diagnose::DiagnoseArgs;
 pub use export::ExportArgs;
+
+/// `rupost ast`：文档 AST JSON 导出（AstDocument v1.0，插件生态桥）
+#[derive(Parser, Debug)]
+pub struct AstArgs {
+    /// Path to the .http/.md document
+    #[arg(value_name = "FILE")]
+    pub file: String,
+}
 pub use generate::GenerateArgs;
 pub use history::HistoryCommands;
 pub use import::{ImportCommands, ImportCurlArgs};
@@ -27,7 +35,7 @@ pub use test::TestArgs;
 pub use tui::TuiArgs;
 pub use web::WebArgs;
 
-use clap::Subcommand;
+use clap::{Parser, Subcommand};
 
 #[derive(Subcommand)]
 // TestArgs 聚合全部测试旗标（批 1-5 免重填/安全线持续扩充），与轻量 variant 的
@@ -68,6 +76,9 @@ pub enum Commands {
     /// Export requests from .http/.md files to external CLI commands (e.g. curl, httpie, wget)
     #[command(alias = "exp")]
     Export(ExportArgs),
+
+    /// Dump the parsed document AST as stable JSON (AstDocument v1.0; plugin ecosystem bridge)
+    Ast(AstArgs),
 
     /// 启动活文档工作台 Web 服务
     #[command(alias = "w")]

@@ -207,6 +207,12 @@ pub async fn launch_plugin_command(
         "RUPOST_WORKSPACE",
         std::env::current_dir().unwrap_or_default(),
     );
+    // WP-AST：内核自身路径——插件可经 `$RUPOST_BIN ast <file>` 消费核心解析 AST
+    //（取不到 exe 时退化为 PATH 名，不阻断启动）
+    cmd.env(
+        "RUPOST_BIN",
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("rupost")),
+    );
     if let Some(home) = dirs::home_dir() {
         cmd.env("RUPOST_CONFIG_DIR", home.join(".rupost"));
     }

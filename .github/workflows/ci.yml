@@ -88,7 +88,20 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # Job 4: C-1 容器叙事守护——musl 静态链接 + 体积预算断言（scratch/Alpine 可用的工程事实化）
+  # Job 4: WP-2 可信度——Web 前端无依赖原生单测（本地 make test-web 的 CI 事实化，
+  # 独立 Ubuntu job：node --test 零 npm 依赖，不进三平台 matrix）
+  web-assets:
+    name: Web Frontend Tests (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run web frontend tests
+        run: node --test tests/web/app_test.mjs
+
+  # Job 5: C-1 容器叙事守护——musl 静态链接 + 体积预算断言（scratch/Alpine 可用的工程事实化）
   musl-static:
     name: musl Static Build & Size Budget
     runs-on: ubuntu-latest

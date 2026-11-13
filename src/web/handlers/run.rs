@@ -335,31 +335,54 @@ pub async fn run_suite_handler(
     // 不是可信 secret 通道——secret_values 恒空，仅键名掩码，masking=secrets 仍强制）
     let mut incident_dir: Option<String> = None;
     if req.incident == Some(true) && failed > 0 {
-        let target = state.incident_root.join(format!(
+        let bundle_name = format!(
             "{}-{}",
             chrono::Utc::now().format("%Y%m%dT%H%M%S"),
             &uuid::Uuid::new_v4().simple().to_string()[..8],
-        ));
+        );
+        let target = state.incident_root.join(&bundle_name);
+        let rel_display = crate::utils::path_guard::normalize_posix_path(
+            std::path::Path::new(".rupost/incidents").join(&bundle_name),
+        );
         let batch = vec![(std::path::PathBuf::from(&req.path), results)];
-        if let Err(e) = crate::history::create_incident_bundle(
-            &batch,
-            std::slice::from_ref(&req.path),
-            state.default_env.as_deref(),
-            &[],
-            crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
-            &target,
-        ) {
-            // fail-closed 镜像 CLI exit-2 语义：工件失败不静默
-            return json_err_session_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Incident bundle creation failed: {}",
-                    e.to_user_friendly_string()
-                ),
-                Some(&handle),
-            );
+        let resolved_paths = vec![req.path.clone()];
+        let env_owned = target_env.map(str::to_string);
+
+        let bundle_res = tokio::task::spawn_blocking(move || {
+            crate::history::create_incident_bundle(
+                &batch,
+                &resolved_paths,
+                env_owned.as_deref(),
+                &[],
+                crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+                &target,
+            )
+        })
+        .await;
+
+        match bundle_res {
+            Ok(Ok(())) => {
+                incident_dir = Some(rel_display);
+            }
+            Ok(Err(e)) => {
+                // fail-closed 镜像 CLI exit-2 语义：工件失败不静默
+                return json_err_session_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!(
+                        "Incident bundle creation failed: {}",
+                        e.to_user_friendly_string()
+                    ),
+                    Some(&handle),
+                );
+            }
+            Err(e) => {
+                return json_err_session_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Incident bundle task failed: {e}"),
+                    Some(&handle),
+                );
+            }
         }
-        incident_dir = Some(crate::utils::path_guard::normalize_posix_path(&target));
     }
 
     let response = RunSuiteResponse {

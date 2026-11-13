@@ -990,8 +990,11 @@ async fn test_web_suite_incident_bundle_emitted_on_failure() {
     };
     let app = create_web_router(config);
 
-    // Red 阶段即可编译：serde 对未知键 incident 静默忽略 → incident_dir 缺失 → 断言失败变红
-    let payload = serde_json::json!({ "path": "fail.http", "incident": true });
+    let payload = serde_json::json!({
+        "path": "fail.http",
+        "env": "staging",
+        "incident": true
+    });
     let req = Request::builder()
         .uri("/api/v1/run/suite")
         .method("POST")
@@ -1009,20 +1012,24 @@ async fn test_web_suite_incident_bundle_emitted_on_failure() {
     let incident_dir = data["incident_dir"]
         .as_str()
         .expect("失败 + incident 开关必须返回 incident_dir");
-    let dir = std::path::Path::new(incident_dir);
+    // 路径最小暴露：返回相对于工作目录的 POSIX 路径，不暴露服务端绝对路径
+    assert!(
+        incident_dir.starts_with(".rupost/incidents/"),
+        "incident_dir 必须返回相对工作目录的 POSIX 路径: {incident_dir}"
+    );
+    let dir = tmp.path().join(incident_dir);
     for f in ["manifest.json", "report.json", "snapshot.json"] {
         assert!(dir.join(f).is_file(), "missing artifact: {f}");
     }
-    // 路径注入免疫：位置必须落在服务端管辖目录（contains 判定跨平台安全）
-    assert!(
-        incident_dir.contains(".rupost/incidents"),
-        "incident_dir 必须位于服务端管辖目录: {incident_dir}"
-    );
-    // 强制脱敏声明 + 环境贯通（web 默认无 default_env → null）
+    // 强制脱敏声明 + req.env 贯通到 manifest 与 snapshot
     let manifest_bytes = std::fs::read(dir.join("manifest.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
     assert_eq!(manifest["masking"], "secrets");
-    assert_eq!(manifest["environment"], serde_json::Value::Null);
+    assert_eq!(manifest["environment"], "staging");
+
+    let snap_bytes = std::fs::read(dir.join("snapshot.json")).unwrap();
+    let snap: serde_json::Value = serde_json::from_slice(&snap_bytes).unwrap();
+    assert_eq!(snap["environment"], "staging");
 }
 
 /// WP-R2 成功对照：无开关（失败）或全绿（有开关）都不得产出目录。

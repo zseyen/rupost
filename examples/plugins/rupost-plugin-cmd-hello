@@ -1,0 +1,7 @@
+#!/bin/sh
+# 命令插件最小示例：argv 直通 + 内核上下文注入演示（WP-PL1）
+# 用法：rupost cmd-hello [args...]
+# 进阶：插件内经 "$RUPOST_BIN" ast <file> 消费核心解析 AST（见作者指南 §3.1）
+echo "args: $*"
+echo "workspace: ${RUPOST_WORKSPACE:-unset}"
+echo "rupost bin: ${RUPOST_BIN:-unset}"

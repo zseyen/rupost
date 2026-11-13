@@ -79,6 +79,32 @@ rupost "$RUPOST_BIN" ast suite.http        # → AstDocument JSON v1.0（stdout 
 * **`RUPOST_BIN`**：内核执行插件命令时注入（`current_exe()`，取不到时退化 `rupost`）——永远用它而不是裸 `rupost`，杜绝 PATH 陈旧二进制漂移；
 * **`ast` 是只读命令**：不发网络、不写历史；插件内自调时必须捕获子进程 stdout（自己的 stdout 只允许输出最终产物）。
 
+### 3.2 命令型插件（WP-PL1，2026-11-13）
+
+**两种插件形态矩阵**——先选形态再动手：
+
+| | hook 型（请求管线） | command 型（CLI 工具） |
+| :-- | :-- | :-- |
+| 扩展什么 | 请求管线行为（签名/认证/改写） | CLI 工具（任意转换/生成） |
+| 执行时机 | 每个请求发包前（prepare/transform/sign） | 用户敲 `rupost <命令名>` 时 |
+| 能改什么 | headers/body/变量（**不可**改 URL/method，**不**消费响应） | 一切（独立进程，stdio 直通可交互） |
+| 入口声明 | manifest `hooks`（`@<directive> <alias>`） | manifest `commands`（顶层子命令路由） |
+| 典型用途 | SigV4、OAuth 注入 | 文档转换、代码生成 |
+
+**命令插件五步**（最小示例：`examples/plugins/rupost-plugin-cmd-hello`，sh + manifest 两个文件）：
+
+1. **写可执行文件**（任意语言；与 manifest 同目录、同名去 `.json`；Windows 作者提供 `.cmd`/`.exe` 同名包装或用 WSL——发现器探测三后缀）；
+2. **写同名静态 manifest**（`manifest_version` 恒 "1.0"、description ≤80 字符、文件名必须 `rupost-plugin-*.json`——发现器按此约定扫描）；
+3. **放置**：`$PATH` / `~/.rupost/plugins` / 项目 `./.rupost/plugins`（`--allow-project-plugins` 放行；验证命令用此形态时旗标写法为 `rupost plugin --allow-project-plugins list`）；
+4. **验证**：`rupost plugin list`（✓ ready）；`rupost --help` Extensions 区块收录（PATH/home 安装形态）；
+5. **首跑**：TOFU 交互确认一次（路径 + SHA-256 指纹入 `~/.rupost/tofu-commands.txt`）；CI/非 TTY 先在交互终端确认，否则 fail-closed。
+
+**进阶（解析零分叉）**：需要理解 `.http/.md` 的工具，经 `$RUPOST_BIN ast <file>` 消费核心 AST（§3.1）——不要自行实现解析。
+
+**扩展缝指引**：`import`/`export` 管线**不开放**插件扩展点（2026-11-13 评估裁决）；转换类工具一律走命令插件形态。
+
+**社区扩展方向参考**（2026-11-13 范围裁决移交社区）：OpenAPI 导入（建议命令名 `openapi2md`）与 k6 场景草稿（`k6gen`）——设计骨架与核心侧现场核验（importer/exporter 字段、变量插值语义）见 `doc/plans/2026-11-13-phase01-remediation-plan.md` 暂缓节与 [插件承载能力评估](../../doc/plans/2026-11-13-plugin-readiness-assessment.md) §6；使用方案与版本协调见同报告 §7/§8。
+
 ## 4. 登记不做项（P2/生态期，有裁决背书）
 
 `@pipeline`/`@use` 语法、在线插件市场、热重载、MCP Server、RLIMIT 配额、`plugin sync --regenerate`、`plugin validate`/doctor、TUI/Web 的 `@` 补全、`fallback.builtin` 降级链、Windows shebang 透明代理。

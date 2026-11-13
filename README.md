@@ -23,6 +23,7 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **极致效率**：支持 curl 与 httpie 风格的命令行输入，并提供极短的别名（`t`, `h`, `g`）以提升操作流转速度。
 - **交互式终端 TUI 模式**：内置基于 Model-View-Update 单向数据流与自适应布局的交互式调试终端。支持文件与请求历史双 Tab 状态解耦切换、基于内存预折行 (Pre-wrapping) 算法的长 Response/WS/SSE 日志高精度垂直滚动、路径显示配置切换、以及历史快照一键 Enter 反向还原代码并重新加载运行。
 - **底层架构**：遵循 Clean Architecture 设计模式，代码结构清晰，易于扩展与维护。
+- **插件生态**：hook（请求管线签名/认证/改写）与 command（CLI 工具扩展）双形态；命令型最小示例与作者指南见 [插件与扩展](file:///doc/architecture/features/plugin_and_extensibility.md)，社区插件索引见 [community-plugins.md](file:///doc/community-plugins.md)。
 
 ---
 

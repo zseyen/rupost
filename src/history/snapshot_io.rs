@@ -95,10 +95,37 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 }
             });
 
+            // A1（裁决 2026-11-14）：error 语义扩展——三形态全覆盖：
+            // ① 网络错（无响应）→ 既有 classify_error_kind 分类；
+            // ② 有响应但断言失败 → kind=AssertionFailed + 失败断言摘要
+            //   （error != null ⇔ 网络异常 的旧假设作废；消费端判据 = response 缺失，
+            //    replay/transport_error_entry 已按 response.is_none() 判定，不受影响）；
+            // ③ 成功 → None。
             let error = if r.response.is_none() {
                 r.error.as_ref().map(|err_msg| ExecutionErrorDetail {
                     kind: classify_error_kind(err_msg),
                     message: err_msg.clone(),
+                    duration_ms: r.duration.as_millis() as u64,
+                    occurred_at: chrono::Utc::now(),
+                })
+            } else if !r.success {
+                let failed: Vec<String> = r
+                    .assertions
+                    .iter()
+                    .filter(|a| !a.passed)
+                    .map(|a| match &a.actual {
+                        Some(act) => format!("{} (expected {}, got {})", a.raw, a.expected, act),
+                        None => a.raw.clone(),
+                    })
+                    .collect();
+                let message = if failed.is_empty() {
+                    "assertions failed".to_string()
+                } else {
+                    failed.join("; ")
+                };
+                Some(ExecutionErrorDetail {
+                    kind: "AssertionFailed".to_string(),
+                    message,
                     duration_ms: r.duration.as_millis() as u64,
                     occurred_at: chrono::Utc::now(),
                 })
@@ -312,6 +339,110 @@ mod tests {
         // 100 + 200 + 5000 + 700 + 30000 = 36000
         assert_eq!(snap.entries[1].duration_us, 36_000);
         assert_eq!(snap.entries[1].plugin_duration_us, Some(30_000));
+    }
+
+    /// A1（裁决 2026-11-14）：error 语义扩展——有响应但断言失败的条目也填
+    /// error（kind=AssertionFailed + 失败断言摘要）；三形态守护：
+    /// ① 504+断言失败 → error=Some(AssertionFailed)、response 保留；
+    /// ② 网络错（无响应）→ 维持既有分类；
+    /// ③ 成功 → error 恒 None。
+    #[test]
+    fn test_error_detail_covers_assertion_failures_three_forms() {
+        let dir = TempDir::new().unwrap();
+        let snap_path = dir.path().join("snap.json");
+
+        // ① 有响应 + 断言失败（504 实得，期望 200）
+        let mut failed_504 = TestResult::success(
+            1,
+            Some("slow-upstream".into()),
+            "GET".into(),
+            "https://api.example.com/slow".into(),
+            Response::new(
+                504,
+                HeaderMap::new(),
+                "{\"error\":\"gateway timeout\"}".into(),
+                Duration::from_millis(5100),
+                Duration::from_millis(5000),
+                Duration::from_millis(100),
+            )
+            .unwrap(),
+        );
+        failed_504.success = false;
+        failed_504
+            .assertions
+            .push(crate::assertion::AssertionResult {
+                raw: "status == 200".to_string(),
+                passed: false,
+                actual: Some("504".to_string()),
+                expected: "200".to_string(),
+                message: Some("expected 200, got 504".to_string()),
+                stream_event_index: None,
+            });
+
+        // ② 网络错（无响应）
+        let net_err = TestResult::error(
+            2,
+            Some("net-fail".into()),
+            "GET".into(),
+            "https://api.example.com/net".into(),
+            "Connection refused".into(),
+            Duration::from_millis(3),
+        );
+
+        // ③ 成功
+        let ok = TestResult::success(
+            3,
+            Some("ok".into()),
+            "GET".into(),
+            "https://api.example.com/ok".into(),
+            Response::new(
+                200,
+                HeaderMap::new(),
+                "{}".into(),
+                Duration::from_millis(5),
+                Duration::from_millis(5),
+                Duration::ZERO,
+            )
+            .unwrap(),
+        );
+
+        let batch = vec![(PathBuf::from("case.http"), vec![failed_504, net_err, ok])];
+        save_batch_snapshot(
+            &batch,
+            &[],
+            &snap_path,
+            false,
+            &[],
+            None,
+            DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+        )
+        .unwrap();
+
+        let snap = read_execution_snapshot(&snap_path).unwrap();
+        assert_eq!(snap.entries.len(), 3);
+
+        // 形态 ①：断言失败 → error=Some(AssertionFailed) + 失败摘要 + response 保留
+        let e1 = &snap.entries[0];
+        assert_eq!(e1.outcome, ExecutionOutcome::Fail);
+        let err1 = e1
+            .error
+            .as_ref()
+            .expect("断言失败必须填充 error（A1 裁决）");
+        assert_eq!(err1.kind, "AssertionFailed");
+        assert!(
+            err1.message.contains("status == 200") && err1.message.contains("504"),
+            "error.message 必须携带失败断言摘要: {}",
+            err1.message
+        );
+        assert!(e1.response.is_some(), "有响应条目 response 镜像保留");
+
+        // 形态 ②：网络错维持既有分类
+        let e2 = &snap.entries[1];
+        let err2 = e2.error.as_ref().expect("网络错必须有 error");
+        assert_eq!(err2.kind, "ConnectionRefused");
+
+        // 形态 ③：成功 → error 恒 None
+        assert!(snap.entries[2].error.is_none(), "成功条目 error 恒 None");
     }
 
     #[test]

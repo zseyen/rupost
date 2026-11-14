@@ -311,3 +311,19 @@ rupost ai triage --snapshot ./incident-dump.json
 1. **未掩码（masking=none）**：截断时 = 截断前完整原始 body 的 SHA-256（离线验真）；未截断 = null。
 2. **掩码（masking=secrets）**：恒有值 = 文件内掩码后 body 形态的 SHA-256（文件内自洽可验真）；截断+掩码组合时**原完整体摘要不可恢复**（登记取舍：掩码产物本就声明"数据不完整"）。
 本裁决为追加式语义澄清（不改字段形状），符合 §2.6 演进策略；消费端若需对原始字节验真，应使用未掩码快照。
+
+---
+
+## 附录二（2026-11-14 裁决登记）：`error` 字段语义扩展至断言失败
+
+契约评审裁决（B-6 解除 deferred）：`ExecutionSnapshotEntry.error` 的取值域从
+"仅网络异常（response 缺失）"**扩展**为三形态：
+1. **网络错**（response 缺失）：kind = 传输层分类（ConnectionTimeout/DnsResolutionFailed/
+   TlsHandshakeFailed/ConnectionRefused/HttpTransportError），维持既有语义；
+2. **断言失败**（response 存在且 success=false）：kind = `AssertionFailed`，message 携带
+   失败断言摘要（`raw (expected X, got Y)` 分号连接）；response 镜像照常保留；
+3. **成功**：恒 null。
+
+判定依据：消费端"网络异常"判据是 `response == null`（replay transport_error_entry 既有实现），
+不依赖 error 字段——语义扩展对既有消费者零破坏；error != null ⇔ 网络异常的旧隐含假设
+就此作废，本附录为唯一权威口径。

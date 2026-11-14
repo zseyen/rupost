@@ -51,6 +51,11 @@ replay-reuse 底账 22 项中 20 项完成（B-6◐、E-6 裁决 deferred）、c
      "容忍未知"原则处理（实际是"容忍缺失"，风险低）。
 - **ROI**: ★★★（收益直接、成本低、风险可控——唯一门槛是一次显式评审签字）
 - **建议**: 提交契约评审，批准后随下一批实施。
+- **裁决（2026-11-14）**：用户裁定"下游消费者误读"风险**暂时不存在**（无外部消费者；
+  in-repo 消费端 replay 的网络异常判定本就基于 `response.is_none()` 而非 error 字段，
+  与裁决一致）——评审门槛解除，**本项已实施**（断言失败条目 error=Some(AssertionFailed)
+  + 失败摘要；三形态守护测试 `test_error_detail_covers_assertion_failures_three_forms`），
+  B-6 翻 ✅。
 
 ### A2. E-6 captured_keys：快照记录捕获变量键名
 

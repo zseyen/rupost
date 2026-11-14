@@ -46,7 +46,7 @@
 | B-3 | 报告 degraded 呈现 | `src/report/` 全目录零 degraded 字段 | JUnit → `<skipped>` 或 failure 注记；JSON/HTML 同步 | `--strict-plugins` 红 job 与看板不再互相矛盾 | ✅ 已落地（2026-11-13：JUnit degraded→`<skipped message="plugin degraded...">`（断言通过非 failure）+ JSON 报告 `degraded` 字段（snapshot_adapter 按 DegradedPass 填充）；schema 精确字段测试同步演进；e2e `test_degraded_pass_visible_in_junit_and_json_reports`） |
 | B-4 | "未安装"文案补指引 | `pipeline.rs:264-268` vs `:171-174` | 与 RuntimeMissing 三选一处方对齐 | 首跑失败消息含 `--allow-missing-plugins` 指引 | ✅ 已落地（2026-11-13：未安装 blocking 文案补三选一处方，与 runtime_missing 对齐；`test_missing_plugin_blocking_message_includes_prescription`） |
 | B-5 | replay 输入防线 | `snapshot_legacy.rs:29`（`read_to_string` 全量） | 64MB 上限 + `ensure_compatible_schema()` 版本门（与 triage 对齐，`triage.rs:183-197`） | 超大/未来版本快照显式拒绝而非静默错读 | ✅ 已落地（2026-11-13：`MAX_REPLAY_SNAPSHOT_BYTES` 64MB 体积门 + schema 主版本门（2.0+ 显式拒绝防静默错读）+ legacy version≤2 门；replay_contract 2 用例） |
-| B-6 | 黑匣子自足性补全 | `model.rs:292-298`（@timeout 丢失）；`snapshot_io.rs:91-100`（error 仅无响应时录） | 快照请求镜像补 `@timeout`；有响应但断言失败补 error Detail | 超时类现场可忠实重放；失败 kind/耗时可追溯 | ◐ 部分落地（2026-11-13：`SnapshotRequest.timeout_ms` 往返 ✅——快照记录 @timeout、重放复现原超时语义；error Detail 部分 **deferred**：有响应断言失败的条目填充 error 涉及 02 §2 契约语义裁决（error 字段从"仅无响应"扩到"断言失败"属语义修改非字段追加），留待契约评审后实施） |
+| B-6 | 黑匣子自足性补全 | `model.rs:292-298`（@timeout 丢失）；`snapshot_io.rs:91-100`（error 仅无响应时录） | 快照请求镜像补 `@timeout`；有响应但断言失败补 error Detail | 超时类现场可忠实重放；失败 kind/耗时可追溯 | ✅ 全项落地（2026-11-13：`SnapshotRequest.timeout_ms` 往返——重放复现原超时语义；2026-11-14：**error Detail 经用户裁决解除 deferred**——断言失败条目 error=Some(AssertionFailed)+失败摘要，三形态守护测试 `test_error_detail_covers_assertion_failures_three_forms`，02 附录二登记权威口径；消费端 replay 判据=response.is_none() 不受影响） |
 
 ## 3. P2 · 安全对齐
 

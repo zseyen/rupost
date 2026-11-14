@@ -14,7 +14,7 @@ RuPost 会自动解析并执行其中包含在 ` ```http ` 语法块中的 API �
 # @sse
 # @assert status == 200
 # @assert stream.llm.content contains "Compiling"
-POST http://127.0.0.1:8080/build-stream
+POST {{base_url}}/build-stream
 Content-Type: application/json
 
 {
@@ -30,7 +30,7 @@ Content-Type: application/json
 # @test
 # @sse
 # @stream_to ./target/build_log_demo.txt overwrite
-POST http://127.0.0.1:8080/build-stream
+POST {{base_url}}/build-stream
 Content-Type: application/json
 
 {

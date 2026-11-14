@@ -231,8 +231,10 @@ replay-reuse 底账 22 项中 20 项完成（B-6◐、E-6 裁决 deferred）、c
 1. **包 1（立即，~2h）**：G14 推送 → D9 观察 musl 首跑 → G15 清理 → C8 挂接文档 → B6 冒烟步骤。
    ——全部 S 级，收尾已验证的工作并把低垂果实摘完。
 2. **包 2（下一批，~半天）**：B3/B4 TUI/Web 选项面透传（含 toml 段 schema/文档）。
-   ——TUI/Web 插件日常使用的必需补齐。
-3. **包 3（评审驱动）**：A1 error-Detail 提交契约评审，批准后半天实施。
+   ——TUI/Web 插件日常使用的必需补齐。**执行方案已定稿**：
+   [2026-11-14-wp-plugins-options-passthrough.md](./2026-11-14-wp-plugins-options-passthrough.md)
+   （设计 + 代码示例 + 4 场景 + T1–T9 测试计划）。
+3. ~~**包 3（评审驱动）**：A1 error-Detail~~ **已完成**（2026-11-14 裁决落地，`pnmkwzwr`，B-6 翻 ✅）。
 4. **独立立项**：C7 VSCode 扩展（最小版先行）。
 5. **维持现状**：A2/E-6（deferred）、B5（内存态）、E 组全部。
 

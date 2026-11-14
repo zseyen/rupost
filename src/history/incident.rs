@@ -17,6 +17,15 @@ use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// 工件完整性摘要（WP-R6）：只防传输损坏/无意篡改；防恶意篡改需密钥签名（登记不做）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArtifactDigest {
+    pub file: String,
+    /// 64 位小写 hex sha256（编码写法复用 snapshot_io 的 format!("{b:02x}") 模式）
+    pub sha256: String,
+    pub bytes: u64,
+}
+
 /// 复现包 manifest 契约版本（Incident schema 1.0；只追加字段，不改字段语义）
 pub const INCIDENT_SCHEMA_VERSION: &str = "1.0";
 
@@ -57,6 +66,10 @@ pub struct IncidentManifest {
     pub masking: MaskingMode,
     /// 快照响应体录入上限（字节）
     pub max_snapshot_body_bytes: u64,
+    /// WP-R6：工件完整性摘要（report/snapshot 两文件；manifest 自身无法自含——
+    /// 消费方语义：两工件摘要匹配 + manifest 存在即完整）
+    #[serde(default)]
+    pub artifact_digests: Vec<ArtifactDigest>,
 }
 
 /// 从批处理结果计算 (total, failed, skipped) 纯函数：
@@ -120,6 +133,27 @@ pub fn create_incident_bundle(
         )?;
         write_private_file_atomic(&staging.join(IncidentArtifactNames::REPORT), &report_buf)?;
 
+        // WP-R6：digests 先于 manifest 序列化计算（staging 字节 = 发布字节，rename 不改内容）
+        let mut digests = Vec::new();
+        for name in [
+            IncidentArtifactNames::REPORT,
+            IncidentArtifactNames::SNAPSHOT,
+        ] {
+            let bytes = std::fs::read(staging.join(name))?;
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            digests.push(ArtifactDigest {
+                file: name.to_string(),
+                sha256: hasher
+                    .finalize()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
+                bytes: bytes.len() as u64,
+            });
+        }
+
         // 3. manifest.json 最后写（完整性声明以全部工件已落盘为前提）
         let manifest = IncidentManifest {
             schema_version: INCIDENT_SCHEMA_VERSION.to_string(),
@@ -135,6 +169,7 @@ pub fn create_incident_bundle(
                 .collect(),
             masking: MaskingMode::Secrets,
             max_snapshot_body_bytes: max_snapshot_body_bytes as u64,
+            artifact_digests: digests,
         };
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
         write_private_file_atomic(
@@ -235,6 +270,11 @@ mod tests {
                 .collect(),
             masking: MaskingMode::Secrets,
             max_snapshot_body_bytes: 4096,
+            artifact_digests: vec![ArtifactDigest {
+                file: "snapshot.json".to_string(),
+                sha256: "ab".repeat(32),
+                bytes: 128,
+            }],
         };
         let v: serde_json::Value = serde_json::to_value(&manifest).unwrap();
         let expected_keys = [
@@ -248,6 +288,7 @@ mod tests {
             "artifacts",
             "masking",
             "max_snapshot_body_bytes",
+            "artifact_digests",
         ];
         let obj = v.as_object().expect("manifest must serialize to object");
         assert_eq!(

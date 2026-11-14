@@ -206,10 +206,11 @@ impl MarkdownFileParser {
         let mut current_header: Option<String> = None;
         let mut in_code_block = false;
         let mut current_code = String::new();
+        let mut current_line = 1usize;
         let mut is_capturing_header = false;
         let mut header_text = String::new();
 
-        for event in parser {
+        for (event, range) in parser.into_offset_iter() {
             match event {
                 // 标题开始
                 Event::Start(Tag::Heading { .. }) => {
@@ -237,12 +238,17 @@ impl MarkdownFileParser {
                 }
 
                 // 代码块开始：info string 只取首个 token 作为语言标签，
-                // ```http title="demo" 这类带属性的围栏此前因整串比较被忽略
+                // ```http title="demo" 这类带属性的围栏此前因整串比较被忽略；
+                // 使用 pulldown-cmark 原生 byte offset 精确换算围栏开行 1-based 行号。
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
                     let lang_token = lang.split_whitespace().next().unwrap_or("").to_lowercase();
                     if lang_token == "http" || lang_token == "rest" {
                         in_code_block = true;
                         current_code.clear();
+                        current_line = 1 + content[..range.start]
+                            .bytes()
+                            .filter(|&b| b == b'\n')
+                            .count();
                     }
                 }
 
@@ -251,8 +257,7 @@ impl MarkdownFileParser {
                     blocks.push(ExtractedCodeBlock {
                         content: current_code.clone(),
                         preceding_header: current_header.clone(),
-                        // WP-P2a：真实行号由 assign_fence_lines 回填（先占位）
-                        line_number: 1,
+                        line_number: current_line,
                     });
 
                     in_code_block = false;
@@ -263,49 +268,7 @@ impl MarkdownFileParser {
             }
         }
 
-        assign_fence_lines(content, &mut blocks);
         blocks
-    }
-}
-
-/// WP-P2a：扫描原文围栏开行，按出现顺序为 http 围栏块回填真实 1-based 行号
-/// （pulldown-cmark 事件流不携带行号）。围栏标记 ```/~~~ 均支持；
-/// 计数与块数不一致（畸形文档/缩进围栏误判）时放弃回填，保持占位值——
-/// 宁可退化不可误导。
-fn assign_fence_lines(content: &str, blocks: &mut [ExtractedCodeBlock]) {
-    let mut opens: Vec<usize> = Vec::new();
-    let mut in_fence = false;
-    let mut marker = "";
-    for (idx, line) in (1..).zip(content.lines()) {
-        let trimmed = line.trim_start();
-        if !in_fence {
-            let marker_candidate = if trimmed.starts_with("```") {
-                "```"
-            } else if trimmed.starts_with("~~~") {
-                "~~~"
-            } else {
-                ""
-            };
-            if !marker_candidate.is_empty() {
-                in_fence = true;
-                marker = marker_candidate;
-                // 审查修正 B1：与 extract_code_blocks 收集口径严格对齐——只统计
-                // http/rest 围栏（info 首 token，镜像 pulldown lang_token 逻辑）。
-                // 否则混合语言文档（```python 在前）计数错位 → 整体放弃回填。
-                let info = &trimmed[marker.len()..];
-                let lang = info.split_whitespace().next().unwrap_or("").to_lowercase();
-                if lang == "http" || lang == "rest" {
-                    opens.push(idx);
-                }
-            }
-        } else if trimmed.starts_with(marker) {
-            in_fence = false;
-        }
-    }
-    if opens.len() == blocks.len() {
-        for (block, line) in blocks.iter_mut().zip(opens) {
-            block.line_number = line;
-        }
     }
 }
 

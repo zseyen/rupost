@@ -234,13 +234,13 @@ pub fn validate_manifest_file(
     manifest_path: &Path,
 ) -> std::result::Result<(ValidatedManifest, Vec<String>), (Option<String>, String)> {
     // 审查修正 B2：裸相对文件名（如 `validate x.json`）的 parent 为空串——
-    // canonicalize("") 必然失败；此时以 cwd 为插件根（与发现期同一语义）
-    let root = match manifest_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        Some(p) => p
-            .canonicalize()
-            .map_err(|e| (None, format!("canonicalize 失败: {e}")))?,
-        None => std::env::current_dir().map_err(|e| (None, format!("canonicalize 失败: {e}")))?,
-    };
+    // 以 "." 兜底并统一 canonicalize，确保与 exe_canon（已 canonicalize）前缀一致
+    let root = manifest_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()
+        .map_err(|e| (None, format!("canonicalize 失败: {e}")))?;
     let vm = parse_and_validate_manifest(&root, manifest_path)?;
     let mut warnings = vm.warnings.clone();
     // 作者工具级补充（审查 G2）：发现器按 `rupost-plugin-*.json` 文件名扫描——

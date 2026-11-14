@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -94,6 +94,36 @@ pub struct VariableConfig {
     /// 所有环境配置
     #[serde(default)]
     pub environments: HashMap<String, Environment>,
+    /// B3（免重填主线）：TUI/Web 交互入口的插件与门禁选项（rupost.toml [plugins] 段）。
+    /// 仅交互入口消费——CLI 套件路径的旗标面不变（assemble_plugin_runtime 不读此段）。
+    /// 旧 toml 无该段 → None（追加式演进，零破坏）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<PluginTomlConfig>,
+}
+
+/// B3：`rupost.toml [plugins]` 段——TUI/Web 交互入口的插件运行时与门禁选项。
+/// 优先级：Web 请求覆盖 > toml [plugins] > `PluginRuntimeOptions::default()`；
+/// CLI 套件路径不受影响（旗标面完整）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PluginTomlConfig {
+    /// 插件缺失/失败时降级为警告跳过（默认 false：阻断 + 三选一处方）
+    #[serde(default)]
+    pub allow_missing_plugins: bool,
+    /// 严格门禁：发生任何降级 → 整体判失败（TUI run_results / Web 响应 success）
+    #[serde(default)]
+    pub strict_plugins: bool,
+    /// 单次插件调用超时秒数（None = 默认 5s）
+    #[serde(default)]
+    pub plugin_timeout_secs: Option<u64>,
+    /// 显式放行插件子进程环境变量（KEY 或 KEY=VALUE，语义同 --plugin-env）
+    #[serde(default)]
+    pub plugin_env: Vec<String>,
+    /// 放行工作区 ./.rupost/plugins（默认隔离；RUPOST_ALLOW_PROJECT_PLUGINS 通道仍生效）
+    #[serde(default)]
+    pub allow_project_plugins: bool,
+    /// E-4：未解析 {{var}} 拒绝外发
+    #[serde(default)]
+    pub strict_vars: bool,
 }
 
 impl VariableConfig {

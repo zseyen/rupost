@@ -24,6 +24,42 @@ fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
 /// 会话装载（WP-1 共享 helper 1/2）：解析会话 → 回灌捕获变量（显式
 /// extra_variables 恒优先，已存在的键不覆盖）→ 导入上游 cookie 桥态。
 /// 返回执行租约，供执行完成后 `session_finish` 持久化增量。
+/// B3（WP-2026-11-14-01）：请求覆盖 > toml [plugins] > 默认 的合并（单点 SSOT，
+/// run_block/run_suite 共用）；返回 (plugin_cfg, 警告)。
+fn resolve_plugin_options(
+    overrides: Option<&crate::web::types::PluginOverrides>,
+) -> (crate::variable::PluginTomlConfig, Vec<String>) {
+    let (mut cfg, warnings) = crate::variable::ConfigLoader::find_and_load_plugin_config();
+    if let Some(ov) = overrides {
+        if let Some(v) = ov.allow_missing_plugins {
+            cfg.allow_missing_plugins = v;
+        }
+        if let Some(v) = ov.strict_plugins {
+            cfg.strict_plugins = v;
+        }
+        if let Some(v) = ov.plugin_timeout_secs {
+            cfg.plugin_timeout_secs = Some(v);
+        }
+        if !ov.plugin_env.is_empty() {
+            cfg.plugin_env = ov.plugin_env.clone();
+        }
+        if let Some(v) = ov.strict_vars {
+            cfg.strict_vars = v;
+        }
+        if let Some(v) = ov.allow_project_plugins {
+            cfg.allow_project_plugins = v;
+        }
+    }
+    (cfg, warnings)
+}
+
+/// B3 strict 门禁：严格模式下降级形态的成功 → 判失败（与 CLI --strict-plugins 语义一致）
+fn apply_strict_plugins_gate(success: &mut bool, degraded: bool, strict_plugins: bool) {
+    if strict_plugins && degraded && *success {
+        *success = false;
+    }
+}
+
 fn session_begin(
     state: &AppState,
     cookie_header: Option<&str>,
@@ -170,7 +206,20 @@ pub async fn run_block_handler(
     // 4. 原位单块调试执行（无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
     // （显式值恒优先；跨客户端零共享）
-    let executor = crate::runner::executor_factory::build_interactive_executor();
+    // B3：请求覆盖 > toml [plugins] > 默认
+    let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
+    for w in &plugin_warnings {
+        tracing::warn!("web run: {w}");
+    }
+    let executor = crate::runner::executor_factory::build_interactive_executor_with_options(
+        &crate::plugin::DiscoverOptions {
+            allow_project_plugins: plugin_cfg.allow_project_plugins
+                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            project_root: None,
+        },
+        &plugin_cfg,
+        plugin_cfg.strict_vars,
+    );
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),
@@ -209,8 +258,15 @@ pub async fn run_block_handler(
         (HashMap::new(), None)
     };
 
+    // B3 strict 门禁：严格模式下降级形态的成功 → 判失败（与 CLI --strict-plugins 一致）
+    let mut block_success = result.success;
+    apply_strict_plugins_gate(
+        &mut block_success,
+        result.degraded,
+        plugin_cfg.strict_plugins,
+    );
     let response = RunBlockResponse {
-        success: result.success,
+        success: block_success,
         status: result.status,
         duration_ms: result.duration.as_millis() as u64,
         assertions,
@@ -281,9 +337,22 @@ pub async fn run_suite_handler(
     var_context.insert("__default_scheme", "http");
 
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
-    // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
+    // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
+    // B3：请求覆盖 > toml [plugins] > 默认
+    let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
+    for w in &plugin_warnings {
+        tracing::warn!("web run: {w}");
+    }
     let start_time = std::time::Instant::now();
-    let executor = crate::runner::executor_factory::build_interactive_executor();
+    let executor = crate::runner::executor_factory::build_interactive_executor_with_options(
+        &crate::plugin::DiscoverOptions {
+            allow_project_plugins: plugin_cfg.allow_project_plugins
+                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            project_root: None,
+        },
+        &plugin_cfg,
+        plugin_cfg.strict_vars,
+    );
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),
@@ -312,9 +381,12 @@ pub async fn run_suite_handler(
     let mut skipped = 0;
     let mut items = Vec::new();
     for r in &results {
+        // B3 strict 门禁：严格模式下降级形态的成功 → 计入失败（与 CLI 一致）
+        let mut success = r.success;
+        apply_strict_plugins_gate(&mut success, r.degraded, plugin_cfg.strict_plugins);
         if r.skipped {
             skipped += 1;
-        } else if r.success {
+        } else if success {
             passed += 1;
         } else {
             failed += 1;

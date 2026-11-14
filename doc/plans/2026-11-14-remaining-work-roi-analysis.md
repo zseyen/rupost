@@ -73,7 +73,7 @@ replay-reuse 底账 22 项中 20 项完成（B-6◐、E-6 裁决 deferred）、c
 
 ## 2. B 组：登记备忘但未接线的代码缺口
 
-### B3. TUI/Web 交互入口的插件/门禁选项面透传
+### B3. TUI/Web 交互入口的插件/门禁选项面透传 — ✅ 已落地（2026-11-14，WP-2026-11-14-01）
 
 - **内容**：`build_interactive_executor()` 当前用 `PluginRuntimeOptions::default()`——
   `allow_missing_plugins` / `strict_plugins` / `plugin_timeout` / `plugin_env` / `strict_vars`
@@ -114,7 +114,12 @@ replay-reuse 底账 22 项中 20 项完成（B-6◐、E-6 裁决 deferred）、c
 - **ROI**: ★★★（低成本补齐冒烟盲区）
 - **建议**: 随下一批随手落地。
 
-### B4. strict_vars 交互入口接线
+- **实施登记（WP-2026-11-14-01，T1–T8 全绿）**：`PluginTomlConfig`（`[plugins]` 段 serde 追加式）→
+  `find_and_load_plugin_config`/`load_plugin_config_from_path` 决策表 →
+  `build_interactive_executor_with_options`（zero-diff 逐字段守护 + env 豁免）→
+  TUI（tracing 告警 + strict 转发判失败）/ Web（`PluginOverrides` 请求级覆盖 + run_block 响应门禁 +
+  run_suite 聚合门禁）。
+### B4. strict_vars 交互入口接线 — ✅ 已落地（2026-11-14，随 B3 闭环）
 
 - **内容**：同 B3——`strict_vars` 仅 `suite_setup.rs:102`（CLI 套件路径）接线；
   TUI/Web 随 B3 的选项面一并可达。
@@ -220,7 +225,7 @@ replay-reuse 底账 22 项中 20 项完成（B-6◐、E-6 裁决 deferred）、c
 | C8 | schema 挂接文档 | S | M–H（IDE 立即可用） | ★★★ | 无 |
 | B6 | verify 补 Web 会话冒烟 | S | M（冒烟盲区） | ★★★ | 无 |
 | G15 | 工作区清理 | S | L（卫生） | ★★ | 无 |
-| B3/B4 | TUI/Web 选项面透传 | M | H（交互一等公民） | ★★★ | 无 |
+| B3/B4 | ✅ 已落地（WP-2026-11-14-01） | M | H（交互一等公民） | ★★★ | 无 |
 | A1 | error-Detail | M（含评审） | H（现场追溯） | ★★（评审门槛） | 契约评审 |
 | C7 | VSCode 扩展 | L | H（门面） | ★★（独立立项） | 无 |
 | A2 | E-6 captured_keys | S–M | L | ★ | 隐私评审 |

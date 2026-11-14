@@ -117,6 +117,34 @@ impl ConfigLoader {
     /// 返回 `(配置, 告警)`：配置损坏时 `config` 为 None 且 `告警` 携带根因
     /// （坏文件优先于静默回退——首个存在的配置损坏即停止，不再搜索其他位置）。
     /// 渲染决策留给调用方（CLI stderr / Web tracing / TUI 状态栏各不相同）。
+    /// B3（免重填主线）：读取 `rupost.toml [plugins]` 段——TUI/Web 交互入口专用单点。
+    /// 缺失/无段 → 默认；解析失败 → 默认 + 指名告警（与 find_and_load 告警策略一致）。
+    /// TUI/Web 均经此单点，禁止各自解析 toml。
+    pub fn find_and_load_plugin_config() -> (crate::variable::PluginTomlConfig, Vec<String>) {
+        let Some(path) = Self::find_config_path() else {
+            return (crate::variable::PluginTomlConfig::default(), Vec::new());
+        };
+        Self::load_plugin_config_from_path(&path)
+    }
+
+    /// 可注入路径变体（测试用，避免 set_current_dir 全局状态污染）
+    pub fn load_plugin_config_from_path<P: AsRef<Path>>(
+        path: P,
+    ) -> (crate::variable::PluginTomlConfig, Vec<String>) {
+        let mut warnings = Vec::new();
+        let path = path.as_ref();
+        match Self::load_from_path(path) {
+            Ok(config) => match config.plugins {
+                Some(cfg) => (cfg, warnings),
+                None => (crate::variable::PluginTomlConfig::default(), warnings),
+            },
+            Err(e) => {
+                warnings.push(format!("rupost.toml [plugins] 段解析失败，已回退默认: {e}"));
+                (crate::variable::PluginTomlConfig::default(), warnings)
+            }
+        }
+    }
+
     pub fn find_and_load() -> (Option<VariableConfig>, Vec<String>) {
         let mut warnings = Vec::new();
         let config =
@@ -302,6 +330,89 @@ fn apply_env_file(
 
 #[cfg(test)]
 mod tests {
+
+    /// T1（WP-2026-11-14-01）：[plugins] 段 serde round-trip——全字段/缺段/未知字段容忍。
+    #[test]
+    fn test_plugin_toml_config_roundtrip_and_missing_section() {
+        // 全字段
+        let full = r#"
+[environments.dev]
+base_url = "http://x"
+
+[plugins]
+allow_missing_plugins = true
+strict_plugins = false
+plugin_timeout_secs = 15
+plugin_env = ["AWS_ACCESS_KEY_ID", "VAULT_TOKEN=abc"]
+allow_project_plugins = true
+strict_vars = true
+"#;
+        let config: crate::variable::VariableConfig = toml::from_str(full).unwrap();
+        let plugins = config.plugins.expect("[plugins] 段必须被解析");
+        assert!(plugins.allow_missing_plugins);
+        assert!(!plugins.strict_plugins);
+        assert_eq!(plugins.plugin_timeout_secs, Some(15));
+        assert_eq!(
+            plugins.plugin_env,
+            vec![
+                "AWS_ACCESS_KEY_ID".to_string(),
+                "VAULT_TOKEN=abc".to_string()
+            ]
+        );
+        assert!(plugins.allow_project_plugins);
+        assert!(plugins.strict_vars);
+
+        // 缺段 → None（零破坏：旧 toml 兼容）
+        let legacy: crate::variable::VariableConfig = toml::from_str(
+            "[environments.dev]
+base_url = \"http://x\"",
+        )
+        .unwrap();
+        assert!(
+            legacy.plugins.is_none(),
+            "旧 toml 缺 [plugins] 段必须为 None"
+        );
+
+        // 未知字段容忍
+        let future: crate::variable::VariableConfig =
+            toml::from_str("[plugins]\nallow_missing_plugins = true\nfuture_field = \"whatever\"")
+                .unwrap();
+        assert!(future.plugins.unwrap().allow_missing_plugins);
+    }
+
+    /// T2（WP-2026-11-14-01）：find_and_load_plugin_config 决策表——
+    /// 合法段/缺段/无文件/损坏文件四形态（损坏 → 默认 + 指名告警）。
+    #[test]
+    fn test_find_and_load_plugin_config_decision_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("rupost.toml");
+
+        // 形态 1：合法段
+        std::fs::write(
+            &toml_path,
+            "[plugins]\nplugin_timeout_secs = 12\nallow_missing_plugins = true\n",
+        )
+        .unwrap();
+        let (cfg, warnings) = ConfigLoader::load_plugin_config_from_path(&toml_path);
+        assert_eq!(cfg.plugin_timeout_secs, Some(12));
+        assert!(cfg.allow_missing_plugins);
+        assert!(warnings.is_empty());
+
+        // 形态 2：无 [plugins] 段 → 默认
+        std::fs::write(&toml_path, "[environments.dev]\nbase_url = \"http://x\"").unwrap();
+        let (cfg2, _) = ConfigLoader::load_plugin_config_from_path(&toml_path);
+        assert_eq!(cfg2, crate::variable::PluginTomlConfig::default());
+
+        // 形态 3：损坏 toml → 默认 + 指名告警（不 panic）
+        std::fs::write(&toml_path, "[plugins\nbroken").unwrap();
+        let (cfg3, warnings3) = ConfigLoader::load_plugin_config_from_path(&toml_path);
+        assert_eq!(cfg3, crate::variable::PluginTomlConfig::default());
+        assert!(
+            warnings3.iter().any(|w| w.contains("[plugins]")),
+            "解析失败必须指名 [plugins] 段: {:?}",
+            warnings3
+        );
+    }
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;

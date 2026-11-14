@@ -59,8 +59,94 @@ pub fn build_interactive_executor_with(discover: &DiscoverOptions) -> TestExecut
     TestExecutor::with_ephemeral_cookies().with_plugins(registry, PluginRuntimeOptions::default())
 }
 
+/// B3（免重填主线）：toml `[plugins]` 段 → 交互执行器。
+/// PluginTomlConfig → PluginRuntimeOptions 映射 + strict_vars 接线（B4）+
+/// `plugin_env` 经 `extract_authorized_env_keys` 进入 missing-env 告警豁免（T5）。
+pub fn build_interactive_executor_with_options(
+    discover: &DiscoverOptions,
+    plugin_cfg: &crate::variable::PluginTomlConfig,
+    strict_vars: bool,
+) -> TestExecutor {
+    let plugin_runtime = PluginRuntimeOptions {
+        allow_missing_plugins: plugin_cfg.allow_missing_plugins,
+        strict_plugins: plugin_cfg.strict_plugins,
+        plugin_timeout: std::time::Duration::from_secs(
+            plugin_cfg
+                .plugin_timeout_secs
+                .unwrap_or(crate::plugin::pipeline::DEFAULT_PLUGIN_TIMEOUT_SECS),
+        ),
+        plugin_env: crate::plugin::pipeline::parse_plugin_env_specs(&plugin_cfg.plugin_env),
+    };
+    let registry = discover_plugin_registry(
+        discover,
+        &crate::runner::suite_setup::extract_authorized_env_keys(&plugin_cfg.plugin_env),
+    );
+    TestExecutor::with_ephemeral_cookies()
+        .with_strict_vars(strict_vars)
+        .with_plugins(registry, plugin_runtime)
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// T3/T4/T5（WP-2026-11-14-01）：with_options 映射 + zero-diff 防假守护 + env 豁免。
+    #[test]
+    fn test_build_interactive_executor_with_options_mapping_and_zero_diff() {
+        use crate::variable::PluginTomlConfig;
+
+        // T3：toml 字段 → PluginRuntimeOptions 映射
+        let cfg = PluginTomlConfig {
+            allow_missing_plugins: true,
+            strict_plugins: true,
+            plugin_timeout_secs: Some(15),
+            plugin_env: vec!["VAULT_TOKEN=abc".to_string()],
+            allow_project_plugins: true,
+            strict_vars: true,
+        };
+        let executor = build_interactive_executor_with_options(
+            &DiscoverOptions {
+                allow_project_plugins: true,
+                project_root: None,
+            },
+            &cfg,
+            true,
+        );
+        let opts = &executor.plugin_options;
+        assert!(opts.allow_missing_plugins);
+        assert!(opts.strict_plugins);
+        assert_eq!(opts.plugin_timeout, std::time::Duration::from_secs(15));
+        assert_eq!(
+            opts.plugin_env,
+            vec![("VAULT_TOKEN".to_string(), "abc".to_string())]
+        );
+        assert!(executor.strict_vars, "B4：strict_vars 必须经工厂接线");
+
+        // T4 zero-diff：Default 配置 → 与 PluginRuntimeOptions::default() 全等
+        let executor_default = build_interactive_executor_with_options(
+            &DiscoverOptions::default(),
+            &PluginTomlConfig::default(),
+            false,
+        );
+        let d = &executor_default.plugin_options;
+        let base = PluginRuntimeOptions::default();
+        // zero-diff：逐字段断言（PluginRuntimeOptions 无 PartialEq，防 derive 膨胀）
+        assert!(!d.allow_missing_plugins);
+        assert!(!d.strict_plugins);
+        assert_eq!(d.plugin_timeout, base.plugin_timeout);
+        assert!(d.plugin_env.is_empty());
+        assert!(!executor_default.strict_vars);
+    }
+
+    /// T5：plugin_env 经 extract_authorized_env_keys 豁免 missing-env 告警。
+    #[test]
+    fn test_plugin_env_authorized_keys_exempt_from_missing_env_warnings() {
+        let cfg = crate::variable::PluginTomlConfig {
+            plugin_env: vec!["VAULT_TOKEN=abc".to_string(), "BARE_KEY".to_string()],
+            ..Default::default()
+        };
+        let authorized = crate::runner::suite_setup::extract_authorized_env_keys(&cfg.plugin_env);
+        assert!(authorized.contains("VAULT_TOKEN") && authorized.contains("BARE_KEY"));
+    }
     use super::*;
 
     /// 工厂必须真实装配注册表（非空钩子索引），而非退化空注册表。

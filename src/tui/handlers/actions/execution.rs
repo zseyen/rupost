@@ -132,7 +132,21 @@ async fn trigger_file_execution(
 
     // R5：cookie 会话延续——桥接上一次运行的导出状态。
     // B-1 组合根收口：交互执行器经共享工厂装配本机插件注册表（免假性"未安装"阻断）
-    let mut executor = crate::runner::executor_factory::build_interactive_executor();
+    // B3（WP-2026-11-14-01）：toml [plugins] 段 → 交互执行器（告警走状态栏）
+    let (plugin_cfg, plugin_warnings) =
+        crate::variable::ConfigLoader::find_and_load_plugin_config();
+    for w in &plugin_warnings {
+        tracing::warn!("tui plugins config: {w}");
+    }
+    let mut executor = crate::runner::executor_factory::build_interactive_executor_with_options(
+        &crate::plugin::DiscoverOptions {
+            allow_project_plugins: plugin_cfg.allow_project_plugins
+                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            project_root: None,
+        },
+        &plugin_cfg,
+        plugin_cfg.strict_vars,
+    );
     executor.debug_on_failure = true; // R7：失败自动诊断（对齐 CLI --debug-on-failure）
     if let Some(state_json) = state
         .cookie_bridge
@@ -185,9 +199,20 @@ async fn trigger_file_execution(
     let cookie_file_path = state.cookie_file_path.clone();
     tokio::spawn(async move {
         // 结果回调走无界内部通道（FnMut 同步上下文不能 await），由转发 task 投递
-        let (res_tx, mut res_rx) = mpsc::unbounded_channel();
+        let (res_tx, mut res_rx) = mpsc::unbounded_channel::<(
+            crate::runner::types::TestResult,
+            std::collections::HashMap<String, String>,
+        )>();
+        // B3 strict 门禁：严格模式下降级形态的成功 → 判失败（与 CLI --strict-plugins 一致）
+        let strict_plugins = plugin_cfg.strict_plugins;
         let relay = tokio::spawn(async move {
-            while let Some((res, captured)) = res_rx.recv().await {
+            while let Some((mut res, captured)) = res_rx.recv().await {
+                if strict_plugins && res.degraded && res.success {
+                    res.success = false;
+                    res.warnings.push(
+                        "strict_plugins：降级形态判失败（--strict-plugins 语义）".to_string(),
+                    );
+                }
                 let _ = tx_clone
                     .send(TuiEvent::RequestResult {
                         result: Box::new(res),

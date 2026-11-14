@@ -218,6 +218,7 @@ async fn test_web_readonly_mode_blocks_request_execution() {
         raw_block: "GET http://127.0.0.1:59999/internal-probe\n".to_string(),
         env: None,
         extra_variables: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/block")
@@ -245,6 +246,7 @@ async fn test_web_run_block_native_http_file_parse() {
         raw_block: "# @name health-check\nGET http://127.0.0.1:59999/health\n".to_string(),
         env: None,
         extra_variables: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/block")
@@ -276,6 +278,7 @@ async fn test_web_run_block_and_mock_simulate() {
         raw_block: "GET http://127.0.0.1:59999/test-health\n\n?? status == 200".to_string(),
         env: None,
         extra_variables: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .header("host", "127.0.0.1")
@@ -749,6 +752,7 @@ GET {base}/never
         path: "suite.http".to_string(),
         env: None,
         incident: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -783,6 +787,7 @@ async fn test_web_run_suite_error_shapes() {
         path: "whatever.http".to_string(),
         env: None,
         incident: None,
+        plugin_overrides: None,
     };
 
     // 1. 只读模式 -> 403（SSRF 防线与 run/block 一致）
@@ -825,6 +830,7 @@ async fn test_web_run_suite_error_shapes() {
         path: "empty.http".to_string(),
         env: None,
         incident: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -846,6 +852,7 @@ async fn test_web_run_suite_error_shapes() {
         path: "empty.md".to_string(),
         env: None,
         incident: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")

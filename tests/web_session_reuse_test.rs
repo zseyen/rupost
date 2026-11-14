@@ -36,11 +36,24 @@ async fn run_block_full(
     extra: Option<serde_json::Value>,
     cookie: Option<&str>,
 ) -> (serde_json::Value, Option<String>) {
+    run_block_with_overrides(app, file_path, raw_block, extra, cookie, None).await
+}
+
+/// 带 plugin_overrides 的完整形态（T6/T7/T8 用）；返回 (业务数据, 会话 Cookie)
+async fn run_block_with_overrides(
+    app: &axum::Router,
+    file_path: &str,
+    raw_block: &str,
+    extra: Option<serde_json::Value>,
+    cookie: Option<&str>,
+    plugin_overrides: Option<serde_json::Value>,
+) -> (serde_json::Value, Option<String>) {
     let payload = json!({
         "file_path": file_path,
         "raw_block": raw_block,
         "env": null,
         "extra_variables": extra,
+        "plugin_overrides": plugin_overrides,
     });
     let mut builder = Request::builder()
         .uri("/api/v1/run/block")
@@ -318,4 +331,120 @@ async fn test_web_session_cookie_renewed_on_active_use() {
     let (_, renewed) = run_block_full(&app, "login.http", &login_block, None, Some(&cookie)).await;
     let renewed = renewed.expect("活跃会话的后续执行必须重发 Set-Cookie 滑动续期");
     assert_eq!(renewed, cookie, "续期必须保持同一会话 ID（不得轮换）");
+}
+
+/// T6（WP）：请求级 allow_missing_plugins 覆盖——缺失 ?optional 插件块降级成功。
+#[tokio::test]
+async fn test_web_plugin_overrides_allow_missing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/guarded"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("no plugin"))
+        .mount(&server)
+        .await;
+
+    let config = WebServerConfig::default();
+    let app = create_web_router(config);
+    let (block, _) = run_block_with_overrides(
+        &app,
+        "deg.http",
+        &format!(
+            "### guarded\n@auth no-such-plugin-t6 ?optional\nGET {}/guarded\n\n# @assert status == 403\n",
+            server.uri()
+        ),
+        None,
+        None,
+        Some(json!({"allow_missing_plugins": true})),
+    )
+    .await;
+    assert!(
+        block["success"].as_bool().unwrap(),
+        "请求级 allow_missing 覆盖必须使降级放行: {block}"
+    );
+}
+
+/// T7（WP）：请求级 plugin_timeout_secs=1 + sleep-3s 插件 → 熔断判失败（耗时 <2s）。
+#[tokio::test]
+async fn test_web_plugin_overrides_timeout() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/slow"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("late"))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let plugin_dir = dir.path().join(".rupost").join("plugins");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let exe = plugin_dir.join("rupost-plugin-slow-t7");
+    std::fs::write(
+        &exe,
+        "#!/bin/sh\ncat > /dev/null\nsleep 3\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::fs::write(
+        plugin_dir.join("rupost-plugin-slow-t7.json"),
+        r#"{"manifest_version":"1.0","name":"slow-t7","version":"0.1.0","description":"slow","commands":[],"hooks":[{"directive":"auth","alias":"slow-t7","stage":"prepare","cache_scope":"none","requires_env":[],"parameters_schema":{}}]}"#,
+    )
+    .unwrap();
+
+    let config = WebServerConfig::default();
+    let app = create_web_router(config);
+    let start = std::time::Instant::now();
+    let (block, _) = run_block_with_overrides(
+        &app,
+        "slow.http",
+        &format!("### slow\n@auth slow-t7\nGET {}/slow\n", server.uri()),
+        None,
+        None,
+        Some(json!({"allow_project_plugins": true, "plugin_timeout_secs": 1})),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "1s 超时必须熔断 3s 插件（实际 {:?}）",
+        elapsed
+    );
+    assert!(
+        !block["success"].as_bool().unwrap(),
+        "超时必须判失败: {block}"
+    );
+}
+
+/// T8（WP）：请求级 strict_vars=true + 未解析 var → success=false + 指名变量 + 门禁标注。
+#[tokio::test]
+async fn test_web_plugin_overrides_strict_vars() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/x"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let config = WebServerConfig::default();
+    let app = create_web_router(config);
+    let (block, _) = run_block_with_overrides(
+        &app,
+        "v.http",
+        &format!("### v\nGET {}/x?ns={{{{missing_var_t8}}}}\n", server.uri()),
+        None,
+        None,
+        Some(json!({"strict_vars": true})),
+    )
+    .await;
+    assert!(
+        !block["success"].as_bool().unwrap(),
+        "strict_vars 必须拒绝外发: {block}"
+    );
+    let block_str = block.to_string();
+    assert!(
+        block_str.contains("missing_var_t8") && block_str.contains("--strict-vars"),
+        "错误必须指名变量并注明门禁: {block_str}"
+    );
 }

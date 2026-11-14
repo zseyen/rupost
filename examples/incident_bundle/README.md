@@ -48,4 +48,5 @@ rupost t examples/incident_bundle/green.http \
 
 - 掩码后 body diff/验签类结论按"数据不完整"降级（replay 加载时会明示警告）；
 - 复现包含整套非 teardown 交互（登录等上游依赖是重放的必要上下文），不摘除非失败请求；
-- 退出码契约：全绿 0 / 测试失败 1 / 工件创建失败 2。
+- 退出码契约：全绿 0 / 测试失败 1 / 工件创建失败 2。exit 2 三来源鉴别（stderr 前缀）：
+  `error: ...`=clap 参数错误 / `[ERROR] 解析错误: ...`=AST 错误 / `[ERROR] 故障复现包创建失败: ...`=工件 I/O；CI 判读：exit 2 一律视为配置/路径问题，重跑无意义。

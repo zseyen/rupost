@@ -90,6 +90,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - `rupost test --report-file <FILE>`：JSON 报告落盘（不干扰终端输出）；报告升级为强类型 `JsonFileReport` 契约，失败项附带脱敏（复用 exporter 脱敏器 + JSON 敏感键掩码 + 512B UTF-8 安全截断）的响应体片段与断言 expected/actual。
 - `rupost ai assert "<自然语言>"`：AI 创作辅助命令，将自然语言期望翻译为标准 `@assert` 断言行（支持任意 OpenAI 兼容后端与本地 Ollama；密钥仅从 `RUPOST_AI_API_KEY`/`OPENAI_API_KEY` 环境变量读取，不落盘不入日志）。`--raw` 输出纯断言行供脚本追加。休眠的 `rupost-ai` crate 正式接线激活；通过 `rupost mock` 充当 OpenAI 兼容后端实现零 Key 离线 dogfooding 闭环（`tests/ai_assert_test.rs` + `tests/verify_features.sh` 步骤 7）。
 
+- **差异化主线批一：Web 工作台故障复现包**——套件运行请求带 `incident: true` 且失败时，在服务端管辖目录（`<工作区>/.rupost/incidents/<时间戳>-<uuid8>/`）产出三文件工件（manifest/report/snapshot，强制 masking=secrets、客户端零路径输入、目标必须不存在、fail-closed exit 2 镜像）；后端契约就绪、前端开关留用户自定义（`feat(web)` 1147b159）。
+- **`rupost ast` AST 桥（插件生态使能）**：AstDocument JSON v1.0 只读命令（顶层 4 键精确契约，`.http`/`.md` 双路径方法行号）+ 插件环境注入 `RUPOST_BIN`——命令插件复用核心解析器，解析语义零分叉；OpenAPI 导入 / k6 导出移交社区以命令插件承载，样板 `cmd-hello` 与作者指南（双形态矩阵/AST 桥/版本协调）就绪（`feat(parser,cli)` a757fec7、`docs(plugins)` 83736008）。
+- **`rupost plugin validate`**：作者分发前静态体检——复用发现期校验（保留字/超长/可执行缺失/路径囚禁）+ 警告级（命名契约/内置名冲突/空清单）；不执行插件、不触发 TOFU、不写缓存（`feat(plugin)` 6f13d55c）。
+- **复现包完整性摘要**：manifest 新增 `artifact_digests`（report/snapshot 的 sha256+bytes；digest 只防损坏，密钥签名登记不做）（`feat(history)` 280abb5b）。
+
 ### Changed
 
 - **报告文件输出上移表现层 + 格式判定显式优先**（分支收尾批次）：`run_test_suite` 返回 `TestSuiteOutcome { has_failure, batch_results }`（**破坏性 API 变更**：不再返回 bool，UseCase 不再隐式写报告文件）；渲染+落盘收敛为 `rupost::report::write_report_files` 门面。格式判定改为**显式 `--report` 永远优先**（忽略大小写，统一此前 stdout 精确匹配与文件判定忽略大小写的口径不一致）：`--report json --report-file x.html` 现在写 JSON（旧行为：扩展名压过显式格式静默写 HTML）；默认 terminal 按扩展名推断不变。报告文件已存在时 stderr 提示 `[!] 报告文件已存在，将覆盖`（允许覆盖不阻断，CI 友好；CLI 安全评估 P1-1 闭环）。空扫描提示 `No test files found.` 改 stderr（`--report json` stdout 纯净）。
@@ -165,6 +170,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - Markdown code fences with info strings like ```` ```http title="demo" ```` are recognized (language matched by first token).
 - The JSON report (`--report json`) now includes the per-request `warnings` field — CI consumers previously lost all capture/unresolved-variable warnings.
 - The `BaseUrlNotConfigured` suggestion now points to `--var` instead of the non-existent `-v` variable flag.
+
+- **Web 会话 Cookie 滑动续期**：活跃会话随每次执行响应重发 `Set-Cookie`（同 ID、`Max-Age` 重新起算），不再因固定倒计时 30 分钟硬过期；执行前失败（只读/解析错误）仍不触碰 Cookie（`fix(web)` aec0f738）。
+- **请求来源行号稳定定位**：`.http`（### 分隔行不进块内容，追加首行记账）与 `.md`（pulldown-cmark 原生 offsets 换算围栏行）双路径回填方法行 1-based 行号——终端失败输出 `path:line`、JSON 报告 `source_line` 字段、SSE/WS 路径同源贯通、导出注释 `source_location` 对齐方法行（`feat(parser,report)` d75dd6a1、`fix(runner)` ec830932、`fix(exporter)` c52db271）。
+- **示例与验证脚本可信度**：`examples/run_all.sh` 端口 `RUPOST_EXAMPLE_PORT_BASE` 可平移（LLM/SSE=+0、plugin=+10）+ 健康探针替代固定 sleep；`sse_demo.md` 测试块模板化 `{{base_url}}`（原硬编码 8080 使偏移端口必败）（`test(examples)` d4e826ce）。
+
+### Docs
+
+- **插件生态文档**：权威档案补命令插件节（双形态矩阵/五步指南/AST 桥/版本协调）、03/06 设计文档 `RUPOST_ENV` 未实现声明勘误、`export --list` 措辞澄清为内置 targets、`doc/community-plugins.md` 社区插件索引上线（`docs(plugins)` 83736008、b98940e3）。
+- **范围裁决归档**：Phase 3（OpenAPI 导入 / k6 导出）移交社区——核心不实施，插件承载基座（AST 桥 + 样板 + validate）就绪；设计骨架与现场核验保留于执行计划暂缓节（`docs(plans)` 39b6f245）。
 
 ### Removed
 

@@ -242,6 +242,16 @@ rupost ai triage --snapshot artifacts/payment-failure/snapshot.json
 * 掩码后 body diff/验签类结论按"数据不完整"降级（`replay` 加载时会明示警告）；
 * 退出码契约：全绿 0 / 测试失败 1 / 工件创建失败 2（工件 I/O 故障不掩盖测试结果）。
 
+**exit 2 鉴别表**（三个来源共享退出码 2；程序化区分靠 stderr 前缀）：
+
+| 来源 | stderr 形态 |
+| :-- | :-- |
+| clap 参数错误 | `error: unexpected argument ...`（以 `error: ` 开头） |
+| AST/解析错误（ParseError） | `[ERROR] 解析错误: ...` |
+| 复现包工件创建失败（IncidentBundleError） | `[ERROR] 故障复现包创建失败: ...` |
+
+CI 判读规则：测试结果只看 0/1；exit 2 一律视为"配置/工具/工件 I/O 问题"——重跑无意义，先修命令行参数或检查目标路径。三值契约（0/1/2）为既定外部契约（01 §2.1），不扩展第四值。
+
 完整生命周期见 [examples/incident_bundle/README.md](../../examples/incident_bundle/README.md)。
 
 ---

@@ -149,7 +149,7 @@ chmod +x tests/verify_features.sh
 cargo test
 ```
 
-CI 侧：Web 前端无依赖原生单测已进独立 `web-assets` job（`node --test tests/web/app_test.mjs`，
+`tests/incident_bundle_test.rs`（复现包契约+digests）、`tests/source_location_test.rs`（行号定位）、`tests/ast_command_test.rs`（AST 桥）、`tests/plugin_validate_test.rs`（作者校验）、`tests/cli_plugin_route_test.rs`（RUPOST_BIN 注入）、SSE/WS 行号断言（sse_assertion/websocket_integration 各一）均已入库；CI 侧：Web 前端无依赖原生单测已进独立 `web-assets` job（`node --test tests/web/app_test.mjs`，
 与本地 `make test-web` 同口径）。差异化 Phase 0/1 批次新增守护：
 * `tests/incident_bundle_test.rs` — 故障复现包端到端契约（失败 exit 1 + 三文件 + manifest 契约精确 + 原始凭据零泄漏 + `replay` 直接消费 + 全绿不建目录 + 目标已存在/symlink 拒绝保护）；
 * `tests/web_session_reuse_test.rs::test_web_session_does_not_share_captured_variables_between_clients` — Web 双浏览器会话隔离守护（A1：跨客户端不得互读 Cookie 或 `@capture` 变量；已通过临时破坏隔离验证会确定性变红）。

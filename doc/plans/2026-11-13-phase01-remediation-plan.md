@@ -133,7 +133,7 @@ Phase 3 两项（OpenAPI 导入 / k6 导出）**核心不实施**，移交社区
 
 ## 3. 工作包
 
-**执行顺序：批一 WP-R3 → WP-R1 → WP-R2 → 批二 WP-P2a → WP-AST → WP-P2b → 批四 WP-PL1 → WP-PL2 → WP-PL3 → 批三 WP-R5 → WP-R6 → WP-R7 → WP-R8（可裁剪）→ WP-R9 → WP-R4**（缺口修复先行；Phase 2 的漂移依赖定位字段先落，故 P2a 在 P2b 前，AST 桥暴露 source_line 亦排 P2a 之后；Phase 3 已移交社区（WP-P3a/P3b 暂缓，见各节状态横幅）；批四插件基座依赖 AST 桥（PL1 指南引用）但不依赖 P2b；批三依赖 R2 已落（R7/R8），其余相互独立；WP-R4 文档收尾最后覆盖全部批次。每个 WP 独立提交）。
+**执行顺序：批一 WP-R3 → WP-R1 → WP-R2 → 批二 WP-P2a → WP-AST → WP-P2b → 批四 WP-PL1 → WP-PL2 → WP-PL3 → WP-A(行号一致性小项) → 批三 WP-R5 → WP-R6 → WP-R7 → WP-R8（可裁剪）→ WP-R9 → WP-R4**（缺口修复先行；Phase 2 的漂移依赖定位字段先落，故 P2a 在 P2b 前，AST 桥暴露 source_line 亦排 P2a 之后；Phase 3 已移交社区（WP-P3a/P3b 暂缓，见各节状态横幅）；批四插件基座依赖 AST 桥（PL1 指南引用）但不依赖 P2b；批三依赖 R2 已落（R7/R8），其余相互独立；WP-R4 文档收尾最后覆盖全部批次。每个 WP 独立提交）。
 本计划文档已入库（提交 `docs(plans): add phase 0/1 remediation plan (gaps 1-4)`，59159329）；状态行随 WP-R4 收尾更新。
 
 > **审查记录（2026-11-13，执行前核对）：** 剩余 11 个 WP 的前提已对当前 HEAD 实测核对——P2a（http_runner.rs:202/:255 `mut` 绑定精确命中、解析器未 Serialize、json.rs 无 source_line）、AST（builtin 名单 plugin_route.rs:376-384、env 注入 plugin_exec.rs:207-211）、P2b（incident 块锚点 suite_presenter.rs:129-137 成立；TestSuiteOptions 构造点 html_report×3 + dispatch×1）、R5（run_all.sh 8080×7 / sleep×3，incident 段已有 `RUPOST_INCIDENT_MOCK_PORT`）、R6（manifest 10 字段、无 digests）、R7（run.rs:338/344 前提成立）、R8（app.js escapeHtml/runSuite 存在）、R9（src/web 计数 0）——全部成立。**两处骨架已按现场事实修正并写入对应 WP**：P3a（ImportRequest 无 output 字段、ImportResponse 产出 markdown_blocks 向量）、P3b（逐请求 CommandExporter 架构 → file_preamble 默认方法；管线变量已插值 → 取消 `__ENV.VAR` 映射与 check() 翻译，凭据纪律 `--redact`）。P2a 附带必做项确认：`report_schema_test.rs` 采用精确键集合断言，`source_line` 必须显式登记。R4 范围确认：批一（R1/R2/R3）尚未入 CHANGELOG，随 R4 登记。
@@ -1364,6 +1364,44 @@ jj split src/cli src/plugin tests -m "feat(plugin): add plugin validate subcomma
 **提交：** `docs(plugins): fix doc drift (RUPOST_ENV) and clarify export target naming`
 
 
+### WP-A（审查新增，行号一致性小项）：exporter source_location 对齐方法行
+
+**目的：** 同一请求在导出注释与 JSON 报告里指向不同的行——导出用 `parsed.line_number`（块首内容行，含 @assert 前导），报告/漂移基线用 `metadata.source_line`（方法行）。精确值已存在，应对齐。
+
+**改动（1 行）：** `src/exporter/preparer.rs:209`
+
+```rust
+// WP-A：对齐方法行（与 JSON 报告/契约基线同源）；解析器未回填时回退块首行
+let line_number = parsed.metadata.source_line.unwrap_or(parsed.line_number);
+```
+
+**回归断言（加入 preparer 测试模块；实测无其他测试锁定 source_location 值——export_integration_test 全部为 contains 前缀断言）：**
+
+```rust
+#[test]
+fn test_source_location_points_at_method_line() {
+    // 行号台账：1 ### t（分隔行，不进块内容）/ 2 @assert / 3 GET
+    let content = "### t\n# @assert status == 200\nGET http://x/api\n";
+    let mut parsed_file = crate::parser::HttpFileParser::parse_content(content).unwrap();
+    let parsed = parsed_file.requests.remove(0);
+    let mut context = VariableContext::new();
+    let ir = RequestPreparer::prepare_one(
+        parsed,
+        &mut context,
+        None,
+        Some("t.http"),
+        false,
+        &HashSet::new(),
+    )
+    .unwrap();
+    assert_eq!(ir.source_location.as_deref(), Some("t.http:3"));
+}
+```
+
+**边界决策**：只对齐 `ExportableRequest.source_location`（用户可见）；`SkippedItem.line_number`（内部 debug 日志）保持不动——最小变更。既有自测 `ParsedRequest::new(10)` metadata 缺省 None → 回退 10 不变。
+
+**提交**：`fix(exporter): point source_location at method line`
+
 ### WP-R5（缺口 5 收尾）：run_all.sh 端口平移与健康探针
 
 **目的：** examples 回归脚本对齐 `verify_features.sh` 的可信度。incident 段已由 `d8913f0f` 先行完成 env 端口（`RUPOST_INCIDENT_MOCK_PORT`）+ 有限重试探针；本批补齐 llm/sse/plugin 段。
@@ -1378,7 +1416,11 @@ EXAMPLE_PORT_BASE="${RUPOST_EXAMPLE_PORT_BASE:-8080}"
 LLM_PORT=$((EXAMPLE_PORT_BASE))
 PLUGIN_PORT=$((EXAMPLE_PORT_BASE + 10))
 ```
-2. LLM/SSE 段：两处 `--port 8080` → `--port "$LLM_PORT"`；三条 `run_case` 的 `--var base_url=http://127.0.0.1:8080` → `http://127.0.0.1:$LLM_PORT`；两处 `sleep 2` 换探针。llm_demo 与 sse_demo 共用同一端口顺序复用——保持同端口不变。
+2. LLM/SSE 段（**审查修正 E1：8080 共 7 处，逐行清单**——L85/L99 两处 echo 文案必须同步，否则"提示 8080 实际 18080"自相矛盾）：
+   - L85 `echo ...在端口 8080...` → `...在端口 ${LLM_PORT}...`
+   - L86/L100 `--port 8080` → `--port "$LLM_PORT"`
+   - L91/L92/L105 三条 `run_case ... --var base_url=http://127.0.0.1:8080` → `http://127.0.0.1:${LLM_PORT}`（双引号串内展开）
+   - 两处 `sleep 2` 换 `wait_port_ready`。llm_demo 与 sse_demo 共用同一端口顺序复用——保持同端口不变。
 3. Plugin 段：`--port 8090` → `--port "$PLUGIN_PORT"`；两条 `run_case` 同理；`sleep 2` 换探针。
 4. 顶部函数区提炼探针（与 `verify_features.sh` 的 `wait_mock_ready` 同款）：
 ```bash
@@ -1424,6 +1466,7 @@ pub struct ArtifactDigest {
 }
 ```
    `IncidentManifest` 追加 `#[serde(default)] pub artifact_digests: Vec<ArtifactDigest>`。
+   **derive 对齐（审查确认）**：`IncidentManifest` 现为 `Serialize, Deserialize, PartialEq`——`ArtifactDigest` 需同款（+Eq），否则 manifest 往返测试编译失败。
 2. `create_incident_bundle` 内，report 与 snapshot 落盘之后、manifest 序列化之前：
 ```rust
 let mut digests = Vec::new();
@@ -1447,6 +1490,24 @@ for name in [IncidentArtifactNames::REPORT, IncidentArtifactNames::SNAPSHOT] {
 - 扩展 `test_create_incident_bundle_end_to_end`：digests 恰含两文件、sha256 为 64 位小写 hex、与测试内独立计算（测试自己 `sha2` 哈希 report/snapshot 字节）一致；`manifest.json` 不在表中。
 - CLI e2e（`test_failed_run_emits_redacted_replayable_incident_bundle`）追加：`manifest["artifact_digests"]` 长度为 2，且独立哈希 `snapshot.json` 字节与表中条目相等。
 - `test_manifest_schema_fields_exact_contract` 断言键集同步。
+
+**e2e 断言骨架（追加到 test_failed_run_emits...；按 file 名查找，不依赖顺序）：**
+
+```rust
+    // WP-R6：digests 恰两文件（manifest 不自表）、hex 格式、独立计算一致
+    let digests = manifest["artifact_digests"].as_array().unwrap();
+    assert_eq!(digests.len(), 2);
+    let snap_digest = digests
+        .iter()
+        .find(|d| d["file"] == "snapshot.json")
+        .expect("snapshot digest 必在");
+    let raw = std::fs::read(&snapshot_path).unwrap();
+    use sha2::{Digest, Sha256}; // 集成测试可直接用 [dependencies] 的 sha2
+    let expect: String = Sha256::digest(&raw).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(snap_digest["sha256"], expect);
+    assert_eq!(snap_digest["bytes"], raw.len() as u64);
+    assert!(digests.iter().all(|d| d["file"] != "manifest.json"));
+```
 
 **反假守护：** 临时让 digests 返回空 vec → end-to-end 红 → 恢复。
 
@@ -1506,12 +1567,36 @@ fn prune_incident_dirs(root: &std::path::Path, max: usize) {
     }
 }
 ```
-2. 调用点：`run_suite_handler` 的 incident 分支内、`create_incident_bundle` 之前：`prune_incident_dirs(&state.incident_root, MAX_INCIDENT_BUNDLES);`
+2. 调用点（**审查修正：须在 `spawn_blocking` 闭包内**——并行改进后创建已入阻塞线程池；prune 属文件系统操作同池语义正确）：闭包前 `let incident_root = state.incident_root.clone();`，闭包内 `create_incident_bundle` 之前：
+   ```rust
+   // WP-R7：创建前裁剪最旧（并发双跑可轻微超上限——无锁容差，uuid 后缀防命名冲突，超限有界）
+   prune_incident_dirs(&incident_root, MAX_INCIDENT_BUNDLES);
+   ```
+   **取舍登记**：prune-before 意味着创建失败的运行也会裁剪旧包（可预测、稳态恰好 = max）；若改 prune-after 则失败不删但瞬时 max+1。
 3. lib 单测（run.rs 新建 `mod tests`）：
    - `is_server_named_incident` 表驱动：`20260101T000000-00000000` ok；长度 23 / 小写 `t` / 尾段含 `g` / 全数字无 `-` → false。
    - `prune_incident_dirs`：TempDir 内造 3 个假命名目录 + 1 个 `keepme` 普通目录 → `prune(max=2)` → 最旧删除、`keepme` 存活。
 4. Web e2e（红测可编译——实现前 prune 不存在，行为如旧 → 断言失败）：
-   预创建 32 个递增命名假目录（如 `20260101T0000NN-000000NN`，目录内放 sentinel 文件）→ 一次真实失败 incident 运行 → 断言：最早假目录消失、其余 31 + 新 bundle 存活、非命名目录不被触碰（A-R8）。
+   预创建 32 个递增命名假目录（**审查修正 E2：命名必须 hex 合法**——`20260101T000000-0000000${i:x}`，原示例 `NN` 字母落在数字/hex 字段会过不了自家判别器；各含 sentinel）→ 一次真实失败 incident 运行 → 断言：`…-00000000` 消失、其余 31 + 新 bundle 存活（合计 32）、非命名目录（`keepme`）不被触碰（A-R8）。
+
+   **e2e 骨架（复用 WP-R2 测试形态；mock /boom 500）：**
+
+   ```rust
+   let incident_root = tmp.path().join(".rupost").join("incidents");
+   std::fs::create_dir_all(&incident_root).unwrap();
+   for i in 0..32u32 {
+       let d = incident_root.join(format!("20260101T000000-0000000{i:x}"));
+       std::fs::create_dir(&d).unwrap();
+       std::fs::write(d.join("sentinel.txt"), "old").unwrap();
+   }
+   let keepme = incident_root.join("keepme");
+   std::fs::create_dir(&keepme).unwrap();
+   // … payload {"path":"fail.http","incident":true} 发起失败运行 …
+   assert!(!incident_root.join("20260101T000000-00000000").exists(), "最旧被裁剪");
+   assert!(incident_root.join("20260101T000000-00000001").join("sentinel.txt").is_file());
+   assert_eq!(std::fs::read_dir(&incident_root).unwrap().count(), 32);
+   assert!(keepme.is_dir(), "非命名目录不被触碰");
+   ```
 
 **反假守护：** 注释掉 prune 调用 → e2e 红 → 恢复。
 
@@ -1529,7 +1614,71 @@ jj split src/web/handlers/run.rs tests/web_api_integration_test.rs -m "fix(web):
 
 **前置阅读：** `src/web/assets/app.js` 的 `runSuite` 流程 + `tests/web/app_test.mjs` 头部 Micro-DOM 打桩说明（零 npm 依赖）。
 
-**改动：** 套件面板加复选框「失败时生成复现包」→ `runSuite` payload 带 `incident: true`；响应 `incident_dir` 非空时渲染一条提示（**必须走既有 `escapeHtml`**，与前端注入防线一致）。
+**改动（示例代码，实测对齐 app.js:247 runSuite 与 app_test.mjs fetch 严格路由桩）：**
+
+`app.js` 套件面板 HTML（渲染处追加复选框，默认不勾选——与 CLI 显式 opt-in 对齐）：
+
+```html
+<label style="font-size: 11px; color: var(--text-secondary);">
+  <input type="checkbox" id="incident-toggle" /> 失败时生成复现包
+</label>
+```
+
+`runSuite` payload 与结果渲染：
+
+```js
+      body: JSON.stringify({
+        path: currentFilePath,
+        incident: document.getElementById('incident-toggle')?.checked === true,
+      }),
+```
+
+```js
+      // 响应渲染段（suite 变量可用处）：incident_dir 非空时提示——escapeHtml 防线一致
+      if (suite.incident_dir) {
+        html += `<div class="timing-panel" style="margin-top: 6px;">
+          <span>[INCIDENT] ${escapeHtml(suite.incident_dir)}</span>
+          <span style="color: var(--text-secondary);">— 可用 rupost replay / ai triage 消费</span>
+        </div>`;
+      }
+```
+
+`tests/web/app_test.mjs` 用例（既有桩形态：严格 fetch 路由 + Micro-DOM）：
+
+```js
+test('runSuite forwards incident toggle and renders escaped incident_dir', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setCurrentFilePath('tests/suite.http');
+  getOrCreateElement('incident-toggle').checked = true;
+
+  global.fetch = async (url, init) => {
+    if (url === '/api/v1/run/suite') {
+      const payload = JSON.parse(init.body);
+      assert.equal(payload.incident, true, '复选框勾选必须透传 incident 标志');
+      return {
+        json: async () => ({
+          success: true,
+          data: { path: payload.path, total: 1, passed: 0, failed: 1, skipped: 0,
+                  duration_ms: 5, items: [],
+                  incident_dir: '.rupost/incidents/<script>alert(1)</script>' },
+        }),
+      };
+    }
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  await app.runSuite();
+  const debugOutput = getOrCreateElement('debug-output');
+  assert.match(debugOutput.innerHTML, /\[INCIDENT\]/, '必须渲染 incident 提示');
+  assert.ok(
+    !debugOutput.innerHTML.includes('<script>alert(1)</script>'),
+    'incident_dir 必须经 escapeHtml——注入防线一致'
+  );
+});
+```
 
 **测试：** `app_test.mjs` 按既有用例的打桩方式断言 payload 含 incident 标志与提示渲染；`make test-web` 绿。
 
@@ -1540,7 +1689,29 @@ jj split src/web/handlers/run.rs tests/web_api_integration_test.rs -m "fix(web):
 
 **现状核查：** `doc/architecture/directory_structure.md` §3.3 未覆盖 `src/web`（且未见 `src/history`、`src/security` 完整条目——执行时先 `ls src/` 对照，缺哪些补哪些；`src/web` 必补）。
 
-**内容：** web 条目写明"辅助执行 + 辅助创建的薄表现层"定位并指向 `plugin_and_extensibility.md` §6（四条扩展缝）；history 条目写明历史/工件层与"零 cli/web/tui 依赖"红线（含 `incident.rs`）；security 条目写明 `redact.rs`/`fs.rs` 两个 SSOT。
+**内容（示例条目，风格对齐既有文档；执行时先 `ls src/` 对照全部缺失项）：**
+
+```markdown
+### src/web/ — 活文档工作台（薄表现层）
+
+axum 路由与 handlers（单块/套件执行、保存、导入、Mock 仿真）、`session.rs`
+（按浏览器会话隔离的执行态：`Cookie: rupost_session` 划界、TTL/LRU）、
+`assets/`（内嵌前端）。定位为辅助执行 + 辅助创建的薄表现层——复杂业务一律
+下沉领域层；扩展缝见 plugin_and_extensibility.md §6（四条）。
+
+### src/history/ — 历史/工件层
+
+history.jsonl 记录器、快照 IO/掩码（Schema v1.0 SSOT）、`incident.rs`
+（故障复现包三文件工件）。**依赖红线：零 cli/web/tui 依赖**（CLI/Web 只做
+解析与呈现，工件创建在领域层）。
+
+### src/security/ — 安全原语 SSOT
+
+`redact.rs`（脱敏策略：RedactionPolicy/键名与按值掩码——全库唯一权威）、
+`fs.rs`（属主校验/私有目录/原子写入/整目录发布原语）。
+```
+
+**验证：** `grep -c "src/web" doc/architecture/directory_structure.md` 非零。
 
 **验证：** `grep -c "src/web" doc/architecture/directory_structure.md` 非零。
 

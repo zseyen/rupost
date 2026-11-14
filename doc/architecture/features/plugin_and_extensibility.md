@@ -107,7 +107,7 @@ rupost "$RUPOST_BIN" ast suite.http        # → AstDocument JSON v1.0（stdout 
 
 ## 4. 登记不做项（P2/生态期，有裁决背书）
 
-`@pipeline`/`@use` 语法、在线插件市场、热重载、MCP Server、RLIMIT 配额、`plugin sync --regenerate`、`plugin validate`/doctor、TUI/Web 的 `@` 补全、`fallback.builtin` 降级链、Windows shebang 透明代理。
+`@pipeline`/`@use` 语法、在线插件市场、热重载、MCP Server、RLIMIT 配额、`plugin sync --regenerate`、plugin doctor（交互式诊断；勘误 2026-11-14：validate 已交付，见 §3）、TUI/Web 的 `@` 补全、`fallback.builtin` 降级链、Windows shebang 透明代理。
 ## 5. 容器运行边界（C-1 review 登记）
 
 - TLS 后端为 aws-lc-rs（reqwest `rustls` feature）——**musl 构建需 cmake + C 工具链**（CI musl-static job 已含）；

@@ -72,6 +72,18 @@ pub struct IncidentManifest {
     pub artifact_digests: Vec<ArtifactDigest>,
 }
 
+/// WP-R6：sha256 → 64 位小写 hex（NIST 向量单测锚定编码，防"实现与测试同错互证"）
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// 从批处理结果计算 (total, failed, skipped) 纯函数：
 /// 与 CLI 报告/Web 套件聚合同口径——`skipped` 不计入失败分母。
 pub fn failure_counts(batch_results: &[(PathBuf, Vec<TestResult>)]) -> (usize, usize, usize) {
@@ -140,16 +152,9 @@ pub fn create_incident_bundle(
             IncidentArtifactNames::SNAPSHOT,
         ] {
             let bytes = std::fs::read(staging.join(name))?;
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(&bytes);
             digests.push(ArtifactDigest {
                 file: name.to_string(),
-                sha256: hasher
-                    .finalize()
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>(),
+                sha256: sha256_hex(&bytes),
                 bytes: bytes.len() as u64,
             });
         }
@@ -253,7 +258,21 @@ mod tests {
         }
     }
 
-    /// manifest 序列化契约：字段集合精确等于 10 个键（只增不改），取值符合 schema 1.0
+    /// NIST FIPS-180 已知向量：锚定 hex 编码（独立于实现的算法/编码正确性证明，
+    /// 消除"测试与实现共用 sha2 + 同编码写法"的同错互证盲区——子代理审查 P2）
+    #[test]
+    fn test_sha256_hex_nist_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    /// manifest 序列化契约：字段集合精确（只增不改），取值符合 schema 1.0
     #[test]
     fn test_manifest_schema_fields_exact_contract() {
         let manifest = IncidentManifest {

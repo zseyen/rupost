@@ -66,7 +66,7 @@ wait_mock_ready() {
             cat "$log" 2>/dev/null || true
             exit 1
         fi
-        if curl -s -o /dev/null "http://127.0.0.1:${port}/"; then
+        if curl -s -m 2 -o /dev/null "http://127.0.0.1:${port}/"; then
             return 0
         fi
         sleep 0.2

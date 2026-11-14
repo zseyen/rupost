@@ -148,18 +148,24 @@ async fn test_failed_run_emits_redacted_replayable_incident_bundle() {
         digests.iter().all(|d| d["file"] != "manifest.json"),
         "manifest 不入表: {manifest}"
     );
-    let snap_digest = digests
-        .iter()
-        .find(|d| d["file"] == "snapshot.json")
-        .expect("snapshot digest 必在");
-    let raw = std::fs::read(&snapshot_path).unwrap();
-    use sha2::{Digest, Sha256};
-    let expect: String = Sha256::digest(&raw)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    assert_eq!(snap_digest["sha256"], expect, "独立哈希必须一致");
-    assert_eq!(snap_digest["bytes"], raw.len() as u64);
+    // 每个工件独立哈希比对（审查修正：report.json 原先未被独立验证）
+    for (file, path) in [
+        ("snapshot.json", &snapshot_path),
+        ("report.json", &report_path),
+    ] {
+        let entry = digests
+            .iter()
+            .find(|d| d["file"] == file)
+            .unwrap_or_else(|| panic!("{file} digest 必在"));
+        let raw = std::fs::read(path).unwrap();
+        use sha2::{Digest, Sha256};
+        let expect: String = Sha256::digest(&raw)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(entry["sha256"], expect, "{file} 独立哈希必须一致");
+        assert_eq!(entry["bytes"], raw.len() as u64, "{file} bytes 必须一致");
+    }
 
     // 非空转前提：响应片段证明请求确实携带过 token（精确 Bearer mock 命中标记）
     let report_bytes = std::fs::read(&report_path).unwrap();

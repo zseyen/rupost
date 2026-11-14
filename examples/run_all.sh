@@ -52,7 +52,7 @@ wait_port_ready() {
             cat "$log" 2>/dev/null || true
             exit 1
         fi
-        if curl -s -o /dev/null "http://127.0.0.1:${port}/"; then
+        if curl -s -m 2 -o /dev/null "http://127.0.0.1:${port}/"; then
             return 0
         fi
         sleep 0.2
@@ -119,7 +119,8 @@ run_case "大模型流式 SSE 用例 (llm_demo.md)" "test examples/llm_and_sse/l
 run_case "大模型流式 HTTP 用例 (llm_demo.http)" "test examples/llm_and_sse/llm_demo.http --var base_url=http://127.0.0.1:${LLM_PORT}"
 
 # 关闭 LLM Mock
-kill $LLM_MOCK_PID || true
+kill $LLM_MOCK_PID 2>/dev/null || true
+wait $LLM_MOCK_PID 2>/dev/null || true   # WP-R5 审查修正：等异步终止完成再复用同端口
 LLM_MOCK_PID=""
 
 # (2) 启动通用 SSE Mock 网关 (sse_demo.md)

@@ -94,6 +94,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - **`rupost ast` AST 桥（插件生态使能）**：AstDocument JSON v1.0 只读命令（顶层 4 键精确契约，`.http`/`.md` 双路径方法行号）+ 插件环境注入 `RUPOST_BIN`——命令插件复用核心解析器，解析语义零分叉；OpenAPI 导入 / k6 导出移交社区以命令插件承载，样板 `cmd-hello` 与作者指南（双形态矩阵/AST 桥/版本协调）就绪（`feat(parser,cli)` a757fec7、`docs(plugins)` 83736008）。
 - **`rupost plugin validate`**：作者分发前静态体检——复用发现期校验（保留字/超长/可执行缺失/路径囚禁）+ 警告级（命名契约/内置名冲突/空清单）；不执行插件、不触发 TOFU、不写缓存（`feat(plugin)` 6f13d55c）。
 - **复现包完整性摘要**：manifest 新增 `artifact_digests`（report/snapshot 的 sha256+bytes；digest 只防损坏，密钥签名登记不做）（`feat(history)` 280abb5b）。
+- **测试与文档收尾**：exit 2 三来源鉴别表（debug_guide §7.3 + 示例 README）；`--env`→manifest/snapshot 贯通 e2e；directory_structure 补 generator/history/plugin/security/web 五模块条目（`docs` 81fc20e3、`fix(exporter)` c52db271）。
 
 ### Changed
 
@@ -171,7 +172,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - The JSON report (`--report json`) now includes the per-request `warnings` field — CI consumers previously lost all capture/unresolved-variable warnings.
 - The `BaseUrlNotConfigured` suggestion now points to `--var` instead of the non-existent `-v` variable flag.
 
-- **Web 会话 Cookie 滑动续期**：活跃会话随每次执行响应重发 `Set-Cookie`（同 ID、`Max-Age` 重新起算），不再因固定倒计时 30 分钟硬过期；执行前失败（只读/解析错误）仍不触碰 Cookie（`fix(web)` aec0f738）。
+- **Web 会话 Cookie 滑动续期**：活跃会话随每次执行响应重发 `Set-Cookie`（同 ID、`Max-Age` 重新起算），不再因固定倒计时 30 分钟硬过期；执行前失败（只读/解析错误）仍不触碰 Cookie（`fix(web)` 2c7f05e9）。
 - **请求来源行号稳定定位**：`.http`（### 分隔行不进块内容，追加首行记账）与 `.md`（pulldown-cmark 原生 offsets 换算围栏行）双路径回填方法行 1-based 行号——终端失败输出 `path:line`、JSON 报告 `source_line` 字段、SSE/WS 路径同源贯通、导出注释 `source_location` 对齐方法行（`feat(parser,report)` d75dd6a1、`fix(runner)` ec830932、`fix(exporter)` c52db271）。
 - **示例与验证脚本可信度**：`examples/run_all.sh` 端口 `RUPOST_EXAMPLE_PORT_BASE` 可平移（LLM/SSE=+0、plugin=+10）+ 健康探针替代固定 sleep；`sse_demo.md` 测试块模板化 `{{base_url}}`（原硬编码 8080 使偏移端口必败）（`test(examples)` d4e826ce）。
 

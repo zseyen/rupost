@@ -1421,7 +1421,7 @@ PLUGIN_PORT=$((EXAMPLE_PORT_BASE + 10))
    - L86/L100 `--port 8080` → `--port "$LLM_PORT"`
    - L91/L92/L105 三条 `run_case ... --var base_url=http://127.0.0.1:8080` → `http://127.0.0.1:${LLM_PORT}`（双引号串内展开）
    - 两处 `sleep 2` 换 `wait_port_ready`。llm_demo 与 sse_demo 共用同一端口顺序复用——保持同端口不变。
-3. Plugin 段：`--port 8090` → `--port "$PLUGIN_PORT"`；两条 `run_case` 同理；`sleep 2` 换探针。
+3. Plugin 段（**L121 mock / L127+L128 两条 run_case，共 4 处 8090**）：`--port 8090` → `--port "$PLUGIN_PORT"`；两条 `run_case` 的 `--var base_url=...:8090` 同理；`sleep 2` 换探针。
 4. 顶部函数区提炼探针（与 `verify_features.sh` 的 `wait_mock_ready` 同款）：
 ```bash
 wait_port_ready() {
@@ -1525,6 +1525,9 @@ jj split src/history/incident.rs tests/incident_bundle_test.rs -m "feat(history)
 
 ### WP-R7：Web 复现包保留上限（安全分析残余风险收口）
 
+> **状态（2026-11-14 范围裁决）：暂缓——属 Web 逻辑，移交用户自定义完善；核心不实施。本节设计保留备查。CLI 通道本就不做保留策略，当前无行为缺口。**
+
+
 **目的：** 封堵残余风险——`--dev`/局域网下恶意页面反复"失败运行 + incident=true"无限建目录（低危磁盘 DoS）。**仅 Web 通道**；CLI 显式路径不做保留策略（§2.6）。
 
 **文件：** `src/web/handlers/run.rs`（新私有 fn + 该文件首个 `mod tests`）、`tests/web_api_integration_test.rs`。
@@ -1611,6 +1614,9 @@ jj split src/web/handlers/run.rs tests/web_api_integration_test.rs -m "fix(web):
 ```
 
 ### WP-R8（前端开关转正，可裁剪）：工作台套件面板 incident 复选框
+
+> **状态（2026-11-14 范围裁决）：暂缓——属 Web 逻辑，移交用户自定义完善；后端契约（RunSuiteRequest.incident / Response.incident_dir）已就绪，前端可随时自行补。**
+
 
 **前置阅读：** `src/web/assets/app.js` 的 `runSuite` 流程 + `tests/web/app_test.mjs` 头部 Micro-DOM 打桩说明（零 npm 依赖）。
 

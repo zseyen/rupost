@@ -1756,7 +1756,9 @@ CI 判读规则：测试结果只看 0/1；exit 2 一律视为"配置/工具/工
 2. `examples/incident_bundle/README.md`：在"安全语义"末尾追加同款鉴别表（精简三行版）。
 3. `debug_guide.md` §7.3 再补一句 Web 入口说明：`Web 工作台：套件运行请求带 incident:true 时，失败同样产出复现包，位置由服务端决定（<工作区>/.rupost/incidents/），客户端不可指定路径。`
 4. `testing_guide.md` §4.1 的 CI 段落补一行：`退出码 2 的三来源鉴别见 debug_guide §7.3。`
-5. `CHANGELOG.md` [Unreleased] 增加合并 bullet（覆盖全批）：
+5. `CHANGELOG.md` [Unreleased] 增加合并 bullet（覆盖全批）。
+
+   > **协调注记（2026-11-14 审查后）**：CHANGELOG 由并行线共写——replay-reuse 线（B3/B4、B-6 error 语义等）已自行登记。本节草稿**只覆盖差异化主线**（批一 R1/R2/R3、插件基座、行号定位、WP-A/R6/R5），追加到既有条目之后，**严禁改写或删除他线条目**；登记前先 grep 防重复。
    - **Fixed**：Web 会话 Cookie 滑动续期（活跃会话不再因 Max-Age 固定倒计时 30 分钟硬过期）；
    - **Added**：Web 工作台套件失败可产出复现包（`RunSuiteRequest.incident` 开关，服务端管辖路径 `.rupost/incidents/`，客户端零路径输入，masking=secrets 强制）；
    - **Added（Phase 2）**：请求稳定定位（`<path>#L<行号>`，终端 `path:line` + JSON `source_line`）与契约漂移基线门禁 `--contract-baseline`（首跑建基线、复跑报漂移；摘要只含确定性字段）；

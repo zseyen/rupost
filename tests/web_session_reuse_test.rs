@@ -9,6 +9,8 @@
 //! @capture 变量——服务端按 `Cookie: rupost_session=<opaque>` 划分会话边界，
 //! 首次执行下发 `Set-Cookie` 并随每次执行滑动续期（WP-R1），无 Cookie/非法/过期一律等价新会话。
 
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use rupost::web::server::{WebServerConfig, create_web_router};
@@ -375,18 +377,11 @@ async fn test_web_plugin_overrides_timeout() {
 
     let dir = tempfile::tempdir().unwrap();
     let plugin_dir = dir.path().join(".rupost").join("plugins");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    let exe = plugin_dir.join("rupost-plugin-slow-t7");
-    std::fs::write(
-        &exe,
-        "#!/bin/sh\ncat > /dev/null\nsleep 3\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let _exe = common::mock_plugin::install_mock_executable(
+        &plugin_dir,
+        "rupost-plugin-slow-t7",
+        "READ_STDIN=\nSLEEP_MS=3000\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
+    );
     std::fs::write(
         plugin_dir.join("rupost-plugin-slow-t7.json"),
         r#"{"manifest_version":"1.0","name":"slow-t7","version":"0.1.0","description":"slow","commands":[],"hooks":[{"directive":"auth","alias":"slow-t7","stage":"prepare","cache_scope":"none","requires_env":[],"parameters_schema":{}}]}"#,

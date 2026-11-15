@@ -4,11 +4,15 @@
 //! 3. `BatchMode::Parallel` + `fail_fast` 取消慢插件进程组（含 grandchild），快速返回且子孙进程被杀死。
 //! 4. `BatchMode::Parallel` 多文件多阶段（Prepare -> Transform -> Sign）并发执行。
 
+mod common;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use rupost::history::read_execution_snapshot;
 use rupost::parser::HttpFileParser;
@@ -20,26 +24,19 @@ use rupost::variable::VariableContext;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn write_exec_script(dir: &Path, file_name: &str, body: &str) -> PathBuf {
-    let exe = dir.join(file_name);
-    std::fs::write(&exe, body).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    exe
-}
-
 fn install_hook_plugin(
     dir: &Path,
     name: &str,
     directive: &str,
     stage: PluginStage,
     cache_scope: PluginCacheScope,
-    script_body: &str,
+    directives: &str,
 ) -> (PathBuf, PluginManifest) {
-    let exe = write_exec_script(dir, &format!("rupost-plugin-{name}"), script_body);
+    let exe = common::mock_plugin::install_mock_executable(
+        dir,
+        &format!("rupost-plugin-{name}"),
+        directives,
+    );
     let manifest = PluginManifest {
         manifest_version: "1.0".to_string(),
         name: name.to_string(),
@@ -81,7 +78,7 @@ async fn test_dod_100_requests_suite_cache_spawns_at_most_twice() {
         PluginStage::Prepare,
         PluginCacheScope::Suite,
         &format!(
-            "#!/bin/sh\ncat > /dev/null\necho spawn >> \"{}\"\necho '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer suite-100\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}'\n",
+            "READ_STDIN=\nAPPEND_LINE={}|spawn\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer suite-100\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
             spawn_log.display()
         ),
     );
@@ -175,7 +172,7 @@ async fn test_dod_latency_isolation_plugin_duration_vs_ttfb() {
         "auth",
         PluginStage::Prepare,
         PluginCacheScope::None,
-        "#!/bin/sh\ncat > /dev/null\nsleep 3\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer slow-auth\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+        "READ_STDIN=\nSLEEP_MS=3000\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer slow-auth\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
 
     let http_file = dir.path().join("latency.http");
@@ -369,7 +366,7 @@ async fn test_dod_parallel_multi_stage_plugins_across_multiple_files() {
         "auth",
         PluginStage::Prepare,
         PluginCacheScope::Suite,
-        "#!/bin/sh\ncat > /dev/null\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer multi-auth\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer multi-auth\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
     let (tx_exe, tx_manifest) = install_hook_plugin(
         plugin_dir.path(),
@@ -377,7 +374,7 @@ async fn test_dod_parallel_multi_stage_plugins_across_multiple_files() {
         "transform",
         PluginStage::Transform,
         PluginCacheScope::None,
-        "#!/bin/sh\ncat > /dev/null\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Transformed\",\"yes\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Transformed\",\"yes\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
     let (sign_exe, sign_manifest) = install_hook_plugin(
         plugin_dir.path(),
@@ -385,7 +382,7 @@ async fn test_dod_parallel_multi_stage_plugins_across_multiple_files() {
         "sign",
         PluginStage::Sign,
         PluginCacheScope::None,
-        "#!/bin/sh\ncat > /dev/null\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Signed\",\"sig-multi\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Signed\",\"sig-multi\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
 
     let mut registry = PluginRegistry::new();

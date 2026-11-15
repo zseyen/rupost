@@ -4,6 +4,8 @@
 //! 本机已安装的非 optional 插件指令在两入口假性报"插件未安装"阻断。
 //! 工厂收口后：`build_interactive_executor` 装配真实注册表，表现层即调即走。
 
+mod common;
+
 use rupost::parser::types::{
     ParsedPluginDirective, ParsedPluginStage, ParsedRequest, RequestMetadata,
 };
@@ -15,18 +17,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn install_sh_plugin(root: &std::path::Path, name: &str) -> PathBuf {
     let dir = root.join(".rupost").join("plugins");
-    std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join(format!("rupost-plugin-{name}"));
-    std::fs::write(
-        &exe,
-        "#!/bin/sh\ncat > /dev/null\necho '{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Interactive\",\"yes\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}'\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let exe = common::mock_plugin::install_mock_executable(
+        &dir,
+        &format!("rupost-plugin-{name}"),
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Interactive\",\"yes\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
+    );
     let manifest = serde_json::json!({
         "manifest_version": "1.0", "name": name, "version": "0.1.0", "description": "interactive test",
         "commands": [],

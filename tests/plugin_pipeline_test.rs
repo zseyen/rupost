@@ -661,21 +661,15 @@ async fn test_pipeline_multistage_same_plugin_executes_distinct_stage_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let prep_calls = dir.path().join("prep_calls.txt");
     let sign_calls = dir.path().join("sign_calls.txt");
-    let exe = dir.path().join("rupost-plugin-dual-hook");
-    std::fs::write(
-        &exe,
-        format!(
-            "#!/bin/sh\ninput=$(cat)\nif echo \"$input\" | grep -q '\"stage\":\"prepare\"'; then\n  echo prep >> \"{}\"\n  echo '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer dual\"]]}}'\nelse\n  echo sign >> \"{}\"\n  echo '{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Dual-Sig\",\"ok\"]]}}'\nfi\n",
+    let exe = common::mock_plugin::install_mock_executable(
+        dir.path(),
+        "rupost-plugin-dual-hook",
+        &format!(
+            "READ_STDIN=\nON_STDIN_CONTAINS=\"stage\":\"prepare\"|{}|prep|{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer dual\"]]}}\nON_STDIN_ABSENT=\"stage\":\"prepare\"|{}|sign|{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Dual-Sig\",\"ok\"]]}}\n",
             prep_calls.display(),
             sign_calls.display()
         ),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    );
     let manifest = PluginManifest {
         manifest_version: "1.0".to_string(),
         name: "dual-hook".to_string(),

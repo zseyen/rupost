@@ -46,6 +46,7 @@ fn main() {
     let cfg_path = PathBuf::from(format!("{}.mock", exe.display()));
     let cfg = fs::read_to_string(&cfg_path).unwrap_or_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut last_stdin = String::new();
 
     for line in cfg.lines() {
         let line = line.trim_end_matches('\r');
@@ -57,7 +58,33 @@ fn main() {
         };
         match key {
             "READ_STDIN" => {
-                let _ = read_all_stdin();
+                let buf = read_all_stdin();
+                last_stdin = String::from_utf8_lossy(&buf).into_owned();
+            }
+            "ON_STDIN_CONTAINS" | "ON_STDIN_ABSENT" => {
+                let mut parts = val.splitn(4, '|');
+                let needle = parts.next().unwrap_or("");
+                let append_path = parts.next().unwrap_or("");
+                let append_text = parts.next().unwrap_or("");
+                let stdout_line = parts.next().unwrap_or("");
+                let matched = if key == "ON_STDIN_CONTAINS" {
+                    last_stdin.contains(needle)
+                } else {
+                    !last_stdin.contains(needle)
+                };
+                if matched {
+                    if !append_path.is_empty() {
+                        let mut f = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(append_path)
+                            .expect("open on_stdin append");
+                        writeln!(f, "{append_text}").expect("write on_stdin append");
+                    }
+                    if !stdout_line.is_empty() {
+                        println!("{}", expand_env(stdout_line));
+                    }
+                }
             }
             "CAPTURE_STDIN" => {
                 let buf = read_all_stdin();

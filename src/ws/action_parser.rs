@@ -1,3 +1,6 @@
+use crate::assertion::find_operator;
+use crate::parser::metadata::parse_duration;
+use crate::utils::jsonpath::parse_jsonpath_to_segments;
 use crate::ws::frame::{FrameDirection, WsAction, WsFrame, WsFrameType};
 use std::time::Duration;
 
@@ -78,7 +81,7 @@ impl WsActionParser {
                         let _ = lines.next(); // 消费这一行
                         let content = stripped.trim();
                         let content = content.trim_start_matches('=').trim();
-                        if let Ok(d) = crate::parser::metadata::parse_duration(content) {
+                        if let Ok(d) = parse_duration(content) {
                             timeout = d;
                         } else if let Ok(ms) = content.parse::<u64>() {
                             timeout = Duration::from_millis(ms);
@@ -179,10 +182,10 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>,
         // 与 @assert 共用最左运算符扫描（引号感知、支持 >= <= > < == != contains）。
         // 此前仅识别 == != contains 且按列表顺序 find：`$.price >= 100` 会被整串当作
         // jsonpath key 永远匹配不到，`contains "a==b"` 会在引号内误切。
-        if let Some((pos, op)) = crate::assertion::find_operator(condition) {
+        if let Some((pos, op)) = find_operator(condition) {
             let path_part = condition[..pos].trim();
             let val_part = condition[pos + op.len()..].trim();
-            let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(path_part);
+            let segments = parse_jsonpath_to_segments(path_part);
             if !segments.is_empty() {
                 return (
                     Some(segments),
@@ -191,7 +194,7 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>,
                 );
             }
         }
-        let segments = crate::utils::jsonpath::parse_jsonpath_to_segments(condition);
+        let segments = parse_jsonpath_to_segments(condition);
         if !segments.is_empty() {
             return (Some(segments), None, None);
         }

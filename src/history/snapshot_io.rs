@@ -8,6 +8,9 @@ use crate::history::model::{
     SnapshotResponse,
 };
 use crate::history::snapshot_mask::mask_execution_snapshot_entry;
+use crate::security::fs::write_private_file_atomic;
+use crate::utils::path_guard::normalize_posix_path;
+use crate::utils::text::truncate_utf8_prefix;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -69,9 +72,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                     timeout_ms: None,
                 },
             };
-            let file_path_str = crate::utils::path_guard::normalize_posix_path(
-                file_path.to_string_lossy().as_ref(),
-            );
+            let file_path_str = normalize_posix_path(file_path.to_string_lossy().as_ref());
 
             // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03 §10.6）
             let response = r.response.as_ref().map(|resp| {
@@ -242,7 +243,7 @@ pub(crate) fn header_map_to_pairs(map: &reqwest::header::HeaderMap) -> Vec<(Stri
 
 /// 响应体截断（UTF-8 边界安全）：多字节字符中点绝不 panic（SSOT 委托给 `utils::text::truncate_utf8_prefix`）。
 pub(crate) fn truncate_response_body(body: &str, max_bytes: usize) -> (String, bool) {
-    let (prefix, truncated) = crate::utils::text::truncate_utf8_prefix(body, max_bytes);
+    let (prefix, truncated) = truncate_utf8_prefix(body, max_bytes);
     (prefix.to_string(), truncated)
 }
 
@@ -252,7 +253,7 @@ pub fn write_execution_snapshot<P: AsRef<Path>>(
     path: P,
 ) -> Result<()> {
     let json = serde_json::to_string_pretty(snapshot)?;
-    crate::security::fs::write_private_file_atomic(path.as_ref(), json.as_bytes())
+    write_private_file_atomic(path.as_ref(), json.as_bytes())
 }
 
 /// 读取黑匣子契约快照

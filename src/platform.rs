@@ -6,6 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
+/// 工作区与用户目录下的默认状态目录名（`.rupost`）。
+pub const DEFAULT_RUPOST_DIR: &str = ".rupost";
+
 /// 解析当前用户主目录：优先读取非空 `HOME` 环境变量，未设置时回退到 `dirs::home_dir()`。
 ///
 /// 统一三端（Linux/macOS/Windows）行为，确保测试与隔离场景通过 `HOME` 覆盖时在 Windows 上同样生效。
@@ -20,12 +23,25 @@ pub fn home_dir() -> Option<PathBuf> {
 
 /// 返回用户级配置根目录（`$HOME/.rupost`）。
 pub fn rupost_dir() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".rupost"))
+    home_dir().map(|h| h.join(DEFAULT_RUPOST_DIR))
 }
 
 /// 返回 `$HOME/.rupost/<rel>` 路径。
 pub fn rupost_path(rel: impl AsRef<Path>) -> Option<PathBuf> {
     rupost_dir().map(|dir| dir.join(rel))
+}
+
+/// 返回项目级历史与日志根目录（优先读取 `RUPOST_HISTORY_DIR`，默认 `.rupost`）。
+pub fn history_dir() -> PathBuf {
+    std::env::var_os("RUPOST_HISTORY_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_RUPOST_DIR))
+}
+
+/// 返回项目级流式日志目录（`<history_dir>/logs`）。
+pub fn history_logs_dir() -> PathBuf {
+    history_dir().join("logs")
 }
 
 /// 读取路径的 POSIX 权限位（`mode & 0o777`）；非 Unix 平台返回 `Ok(None)`。

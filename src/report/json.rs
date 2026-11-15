@@ -5,6 +5,7 @@
 //! 消费方：`ai triage`（反序列化磁盘报告）、`--report json`（stdout/文件）、
 //! HTML 报告离线二次渲染（`ReportContext::from_json_file_reports`）。
 
+use crate::ai::redactor;
 use crate::runner::types::TestResult;
 use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
@@ -84,10 +85,9 @@ pub fn build_json_reports_with_secrets(
     results: &[(std::path::PathBuf, Vec<TestResult>)],
     secret_values: &[String],
 ) -> Vec<JsonFileReport> {
-    let ordered = crate::ai::redactor::order_secret_values(secret_values);
-    let mask_explicit = |s: String| -> String {
-        crate::ai::redactor::redact_explicit_secrets_ordered(&s, &ordered)
-    };
+    let ordered = redactor::order_secret_values(secret_values);
+    let mask_explicit =
+        |s: String| -> String { redactor::redact_explicit_secrets_ordered(&s, &ordered) };
 
     results
         .iter()
@@ -105,17 +105,17 @@ pub fn build_json_reports_with_secrets(
                             JsonAssertionReport {
                                 raw: mask_explicit(a.raw.clone()),
                                 passed: a.passed,
-                                message: crate::ai::redactor::redact_assertion_value(
+                                message: redactor::redact_assertion_value(
                                     &a.raw,
                                     a.message.as_deref(),
                                 )
                                 .map(mask_explicit),
-                                expected: crate::ai::redactor::redact_assertion_value(
+                                expected: redactor::redact_assertion_value(
                                     &a.raw,
                                     (!a.expected.is_empty()).then_some(a.expected.as_str()),
                                 )
                                 .map(mask_explicit),
-                                actual: crate::ai::redactor::redact_assertion_value(
+                                actual: redactor::redact_assertion_value(
                                     &a.raw,
                                     a.actual.as_deref(),
                                 )
@@ -131,9 +131,9 @@ pub fn build_json_reports_with_secrets(
                             .map(|resp| {
                                 // 先按显式值脱敏再做结构化键名脱敏与 512B 截断，避免截断边界露出半截密钥
                                 let pre_masked = mask_explicit(resp.body.clone());
-                                crate::ai::redactor::redact_and_truncate_body(
+                                redactor::redact_and_truncate_body(
                                     &pre_masked,
-                                    crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                                    redactor::DEFAULT_SNIPPET_MAX_BYTES,
                                 )
                             })
                             .filter(|s| !s.is_empty())
@@ -145,7 +145,7 @@ pub fn build_json_reports_with_secrets(
                         request_number: r.request_number,
                         name: r.name.clone(),
                         method: r.method.clone(),
-                        url: mask_explicit(crate::ai::redactor::redact_url(&r.url)),
+                        url: mask_explicit(redactor::redact_url(&r.url)),
                         // WP-P2a：稳定定位行号（构造器缺省 None 的字段显式透传）
                         source_line: r.source_line,
                         status: r.status,
@@ -162,7 +162,7 @@ pub fn build_json_reports_with_secrets(
                         error: r
                             .error
                             .as_deref()
-                            .map(crate::ai::redactor::redact_free_text)
+                            .map(redactor::redact_free_text)
                             .map(mask_explicit),
                         skipped: r.skipped,
                         assertions,
@@ -170,11 +170,11 @@ pub fn build_json_reports_with_secrets(
                         warnings: r
                             .warnings
                             .iter()
-                            .map(|w| mask_explicit(crate::ai::redactor::redact_free_text(w)))
+                            .map(|w| mask_explicit(redactor::redact_free_text(w)))
                             .collect(),
                         // diagnose 的 URL 来自 --debug 实测原始地址，出站前与顶层 url 同口径脱敏
                         diagnose_report: r.diagnose_report.clone().map(|mut diag| {
-                            diag.url = mask_explicit(crate::ai::redactor::redact_url(&diag.url));
+                            diag.url = mask_explicit(redactor::redact_url(&diag.url));
                             diag
                         }),
                         response_body_snippet,

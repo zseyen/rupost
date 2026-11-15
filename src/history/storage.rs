@@ -2,14 +2,14 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::history::model::HistoryEntry;
+use crate::platform;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
-const HISTORY_DIR: &str = ".rupost";
 const HISTORY_FILE: &str = "history.jsonl";
 // 20 MB soft limit for compaction
 const COMPACTION_THRESHOLD_BYTES: u64 = 20 * 1024 * 1024;
@@ -29,8 +29,7 @@ impl HistoryStorage {
 
 impl Default for HistoryStorage {
     fn default() -> Self {
-        let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| HISTORY_DIR.to_string());
-        let path = Path::new(&dir).join(HISTORY_FILE);
+        let path = platform::history_dir().join(HISTORY_FILE);
         Self { file_path: path }
     }
 }

@@ -179,8 +179,10 @@ impl SseRunner {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let default_log_name = format!("sse_{}.log", timestamp);
         let final_stream_to = options.stream_to.clone().unwrap_or_else(|| {
-            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
-            format!("{}/logs/{}", dir, default_log_name)
+            crate::platform::history_logs_dir()
+                .join(&default_log_name)
+                .to_string_lossy()
+                .into_owned()
         });
         let log_path = std::path::PathBuf::from(&final_stream_to);
 

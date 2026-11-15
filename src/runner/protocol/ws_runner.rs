@@ -46,8 +46,10 @@ impl WsRunner {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let default_log_name = format!("ws_{}_{}.log", timestamp, request_number);
         let log_path_str = parsed.metadata.stream_to.clone().unwrap_or_else(|| {
-            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
-            format!("{}/logs/{}", dir, default_log_name)
+            crate::platform::history_logs_dir()
+                .join(&default_log_name)
+                .to_string_lossy()
+                .into_owned()
         });
         let log_path = std::path::PathBuf::from(&log_path_str);
 

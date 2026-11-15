@@ -1,8 +1,8 @@
 //! 黑匣子契约快照与重放快照脱敏（02 §4 凭据掩码 SSOT）。
 
 use crate::security::redact::{
-    is_sensitive_key, mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text,
-    redact_header_value, redact_url,
+    is_sensitive_key, mask_body_secrets, mask_inline_secrets, mask_pii, order_secret_values,
+    redact_explicit_secrets_ordered, redact_free_text, redact_header_value, redact_url,
 };
 
 /// 自由文本脱敏 SSOT：URL 凭据 -> 内联键值/Bearer/Basic -> PII（邮箱/卡号/手机号）
@@ -142,10 +142,8 @@ pub fn mask_execution_snapshot_entry(
     secret_values: &[String],
 ) {
     // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式（SSOT in security::redact）。
-    let ordered = crate::security::redact::order_secret_values(secret_values);
-    let redact_values = |text: &str| -> String {
-        crate::security::redact::redact_explicit_secrets_ordered(text, &ordered)
-    };
+    let ordered = order_secret_values(secret_values);
+    let redact_values = |text: &str| -> String { redact_explicit_secrets_ordered(text, &ordered) };
     let mask_pairs = |headers: &mut Vec<(String, String)>| {
         for (name, value) in headers.iter_mut() {
             *value = redact_values(&redact_header_value(name, value));

@@ -100,7 +100,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - **Web 复现包保留上限**：`.rupost/incidents/` 服务端命名目录（`YYYYMMDDTHHMMSS-8hex`）创建前裁最旧至 32，非命名目录/symlink 不触碰（磁盘 DoS 残余收口）；CLI 显式路径不适用（`refactor(security)` d2565596）。
 - **测试隔离三件套（CI flake 根因修复）**：mock 插件编译产物共享缓存（原 9 个集成测试二进制各自 rustc 现编抢 CPU）、template_test cwd 突变互斥锁+RAII 恢复、插件 IPC 测试超时对负载倍增 5s→30s（`test(isolation)` ed546526）。
 - **脱敏原语归位**：ai/redactor 四个通用原语（mask_urls/redact_assertion_value/truncate_chars/redact_json_value）下沉 `security::redact`，report 层切换直连——消除 report→ai 层级错位（`refactor(security)` d2565596）。
-- **集成冒烟扩展**：verify_features.sh 增 Web 会话隔离+延续步（双 Cookie 划界，A 延续/B 诚实 401）；探针 curl `-m 2` 超时；插件指南补 schema 挂接编辑器示例（C8）；musl CI 首跑确认全绿（D9 闭环）（`test(verify)` e102f69f）。
+- **集成冒烟扩展**：verify_features.sh 增 Web 会话隔离+延续步（双 Cookie 划界，A 延续/B 诚实 401）+ web 就绪探针 `-m 2` 超时（mock 探针的 `-m 2` 已在 PR #15 probe hardening 落地）；插件指南补 schema 挂接编辑器示例（C8）；musl CI 首跑确认全绿（D9 闭环）（`test(verify)` e102f69f）。
 - **测试与文档收尾**：exit 2 三来源鉴别表（debug_guide §7.3 + 示例 README）；`--env`→manifest/snapshot 贯通 e2e；directory_structure 补 generator/history/plugin/security/web 五模块条目（`docs` 81fc20e3、`fix(exporter)` c52db271）。
 
 ### Changed

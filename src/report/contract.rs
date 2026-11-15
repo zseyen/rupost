@@ -26,6 +26,9 @@ pub struct ContractDrift {
     pub newly_broken: usize,
     pub fixed: usize,
     pub new: usize,
+    /// 基线有、本次缺失（服务端宕机全错运行/请求删除/文件改名）——
+    /// 审查 P2 修正：静默消失必须可见，防"空运行覆写基线"侵蚀漂移信号
+    pub removed: usize,
 }
 
 /// 批处理键（canonicalize 后的绝对路径）→ 相对展示路径：剥 cwd 前缀
@@ -46,6 +49,9 @@ fn display_path(path: &std::path::Path) -> String {
             }
         }
     }
+    // 审查 P3：剥离失败 = id 将以绝对路径入基线（跨机器/目录复跑全部变 new，
+    // 可移植性退化）——显式提示，不静默
+    eprintln!("[!] 契约 id 无法相对化（将写入绝对路径）: {s}");
     s
 }
 
@@ -97,6 +103,12 @@ pub fn diff_contracts(baseline: &ContractSummary, current: &ContractSummary) -> 
             Some(false) if e.passed => drift.fixed += 1,
             None => drift.new += 1,
             _ => {}
+        }
+    }
+    // 审查 P2 修正：基线有、本次缺失 = removed（防静默侵蚀）
+    for e in &baseline.contracts {
+        if !current.contracts.iter().any(|c| key(c) == key(e)) {
+            drift.removed += 1;
         }
     }
     drift
@@ -175,10 +187,25 @@ mod tests {
         ];
         for (base, current, expected, name) in cases {
             let d = diff_contracts(&base, &current);
-            assert_eq!(d.newly_broken, expected.0, "{name}");
-            assert_eq!(d.fixed, expected.1, "{name}");
-            assert_eq!(d.new, expected.2, "{name}");
+            assert_eq!(
+                (d.newly_broken, d.fixed, d.new),
+                (expected.0, expected.1, expected.2),
+                "{name}"
+            );
         }
+
+        // 审查 P2 修正案例：基线有、本次缺失 = removed（静默消失可见化）
+        let base = mk(&[
+            ("a#L1", "status == 200", true),
+            ("b#L2", "status == 404", false),
+        ]);
+        let current = mk(&[("a#L1", "status == 200", true)]);
+        let d = diff_contracts(&base, &current);
+        assert_eq!(
+            (d.newly_broken, d.fixed, d.new, d.removed),
+            (0, 0, 0, 1),
+            "missing entry must surface as removed"
+        );
     }
 
     /// schema 精确集：顶层两键、条目三键、无 actual 值

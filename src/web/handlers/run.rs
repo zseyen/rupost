@@ -22,7 +22,7 @@ use std::collections::HashMap;
 const MAX_INCIDENT_BUNDLES: usize = 32;
 
 /// 服务端命名判别：`YYYYMMDDTHHMMSS-8hex`（len==24）。只删匹配命名的目录，
-/// 绝不触碰用户手工放入 incident_root 的内容；symlink/文件一律跳过。
+/// 绝不触碰非服务端命名格式的条目（用户手工内容/symlink/文件一律跳过）。
 fn is_server_named_incident(name: &str) -> bool {
     let b = name.as_bytes();
     b.len() == 24

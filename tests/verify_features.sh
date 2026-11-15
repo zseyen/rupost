@@ -318,7 +318,7 @@ while [ "$WEB_RETRIES" -gt 0 ]; do
     if ! kill -0 "$WEB_PID" 2>/dev/null; then
         echo -e "${RED}[ERROR] web 启动即退出，日志：${NC}"; cat "$WORKSPACE/web.log"; exit 1
     fi
-    if curl -s -o /dev/null "http://127.0.0.1:${WEB_PORT}/api/v1/meta"; then break; fi
+    if curl -s -m 2 -o /dev/null "http://127.0.0.1:${WEB_PORT}/api/v1/meta"; then break; fi
     sleep 0.2; WEB_RETRIES=$((WEB_RETRIES - 1))
 done
 [ "$WEB_RETRIES" -gt 0 ] || { echo -e "${RED}[ERROR] web 未就绪${NC}"; exit 1; }

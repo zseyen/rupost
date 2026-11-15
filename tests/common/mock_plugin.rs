@@ -221,7 +221,11 @@ fn template_mock_bin() -> &'static Path {
                 "compile mock_plugin failed: {}",
                 String::from_utf8_lossy(&out.stderr)
             );
-            std::fs::rename(&tmp_bin, &bin).expect("publish mock plugin binary");
+            // Windows 冷缓存竞态兜底：他进程已发布同名产物时 rename 会因映像运行中失败
+            if std::fs::rename(&tmp_bin, &bin).is_err() && !bin.exists() {
+                panic!("publish mock plugin binary failed and no cache present");
+            }
+            let _ = std::fs::remove_file(&tmp_bin);
             let _ = std::fs::remove_file(&src);
             bin
         })

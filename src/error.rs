@@ -53,6 +53,11 @@ pub enum RupostError {
     #[error("故障复现包创建失败: {0}")]
     IncidentBundleError(String),
 
+    /// 契约基线工件读写失败（WP-P2b 退出码契约：与 IncidentBundleError 同源——
+    /// 工件 I/O 故障 exit 2，不与测试失败的 exit 1 混淆；损坏 JSON/不可写均入此）
+    #[error("契约基线工件错误: {0}")]
+    ContractBaselineError(String),
+
     #[error("{0}")]
     Other(String),
 }

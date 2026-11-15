@@ -57,9 +57,12 @@ mod tests {
         vars.insert("auth_token".to_string(), "tok-42".to_string());
         save_var_state(&path, &vars).unwrap();
 
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "var-state 落盘必须 0600");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "var-state 落盘必须 0600");
+        }
 
         let loaded = load_var_state(&path).unwrap().unwrap();
         assert_eq!(loaded.get("auth_token").map(String::as_str), Some("tok-42"));

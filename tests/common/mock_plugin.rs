@@ -180,7 +180,10 @@ pub fn install_mock_executable(dir: &Path, base_name: &str, directives: &str) ->
     std::fs::create_dir_all(dir).expect("create plugin dir");
     let exe_name = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
     let exe_path = dir.join(exe_name);
-    std::fs::copy(template_mock_bin(), &exe_path).expect("copy mock executable");
+    // 使用硬链接避免并行测试 fork() 期间继承 O_WRONLY 句柄，导致 Linux execve 报 ETXTBSY (os error 26)
+    if std::fs::hard_link(template_mock_bin(), &exe_path).is_err() {
+        std::fs::copy(template_mock_bin(), &exe_path).expect("copy mock executable");
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

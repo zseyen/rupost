@@ -182,6 +182,7 @@ fn create_unique_private_staging_dir(parent: &Path) -> Result<PathBuf> {
     for _ in 0..MAX_ATTEMPTS {
         let seq = ATOMIC_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let candidate = parent.join(format!(".rupost_staging.{}.{seq}", std::process::id()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {

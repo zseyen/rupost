@@ -121,8 +121,10 @@ jobs:
         run: cargo build --release --target x86_64-unknown-linux-musl --bin rupost
       - name: Verify Static Linking (no dynamic deps)
         run: |
-          file target/x86_64-unknown-linux-musl/release/rupost | grep -q "statically linked" || {
-            echo "::error::binary is not statically linked"; exit 1
+          FILE_OUT=$(file target/x86_64-unknown-linux-musl/release/rupost)
+          echo "$FILE_OUT"
+          echo "$FILE_OUT" | grep -qE "statically linked|static-pie linked" || {
+            echo "::error::binary is not statically linked: $FILE_OUT"; exit 1
           }
       - name: Size Budget Assertion (≤20MB, 01 §1 DoD)
         run: |

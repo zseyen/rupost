@@ -85,13 +85,9 @@ async fn test_var_state_persists_captured_token_across_runs() {
         state_raw.contains("tok-cross"),
         "捕获的 token 必须进 var-state 文件: {state_raw}"
     );
-    use std::os::unix::fs::PermissionsExt;
-    let mode = fs::metadata(dir.path().join("state.json"))
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "var-state 必须落盘 0600");
+    if let Some(mode) = rupost::security::fs::unix_mode(&dir.path().join("state.json")).unwrap() {
+        assert_eq!(mode, 0o600, "var-state 必须落盘 0600");
+    }
 
     // 第二跑：移除登录文件（模拟不重跑登录），仅靠回灌
     fs::remove_file(&login).unwrap();

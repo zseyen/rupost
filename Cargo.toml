@@ -126,3 +126,9 @@ debug = 0
 
 [profile.test.package."*"]
 debug = 0
+
+# Release 统一开启符号剥离与 Thin LTO，保证本地与 CI musl 静态产物满足 ≤20MB 体积预算
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1

@@ -57,10 +57,7 @@ mod tests {
         vars.insert("auth_token".to_string(), "tok-42".to_string());
         save_var_state(&path, &vars).unwrap();
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        if let Some(mode) = crate::security::fs::unix_mode(&path).unwrap() {
             assert_eq!(mode, 0o600, "var-state 落盘必须 0600");
         }
 

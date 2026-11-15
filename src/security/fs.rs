@@ -8,6 +8,36 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static ATOMIC_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// 读取路径的 POSIX 权限位（`mode & 0o777`）；非 Unix 平台返回 `Ok(None)`。
+/// 统一封装平台差异，避免业务与测试代码散落 `#[cfg(unix)]` + `PermissionsExt`。
+pub fn unix_mode(path: &Path) -> std::io::Result<Option<u32>> {
+    let meta = std::fs::metadata(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(Some(meta.permissions().mode() & 0o777))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        Ok(None)
+    }
+}
+
+/// 设置路径的 POSIX 权限位；非 Unix 平台安全忽略并返回 `Ok(())`。
+pub fn set_unix_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+        Ok(())
+    }
+}
+
 /// 校验路径是否为当前用户独占的普通文件（拒绝 symlink、目录及他人可读/写/执行权限）。
 pub fn is_owner_only_regular_file(path: &Path) -> bool {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
@@ -562,5 +592,20 @@ mod tests {
             !dir.path().join("orphan_parent").exists(),
             "无效目标路径不得提前创建父目录"
         );
+    }
+
+    #[test]
+    fn test_unix_mode_and_set_unix_mode() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("perm.txt");
+        std::fs::write(&file, b"ok").unwrap();
+        set_unix_mode(&file, 0o600).unwrap();
+        if let Some(mode) = unix_mode(&file).unwrap() {
+            assert_eq!(mode, 0o600);
+        }
+        set_unix_mode(&file, 0o755).unwrap();
+        if let Some(mode) = unix_mode(&file).unwrap() {
+            assert_eq!(mode, 0o755);
+        }
     }
 }

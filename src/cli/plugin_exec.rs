@@ -187,41 +187,45 @@ pub async fn launch_plugin_command(
         eprintln!("[WARN] {warning}");
     }
 
-    let mut cmd = tokio::process::Command::new(exe_path);
-    cmd.args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    cmd.env_clear();
-    for key in rupost::plugin::PLUGIN_ENV_ALLOWLIST {
-        if let Ok(value) = std::env::var(key) {
-            cmd.env(key, value);
-        }
-    }
-    for (key, value) in std::env::vars().filter(|(k, _)| k.starts_with("RUPOST_")) {
-        cmd.env(key, value);
-    }
-    for (key, value) in rupost::plugin::parse_plugin_env_specs(allow_env) {
-        cmd.env(key, value);
-    }
-    cmd.env(
-        "RUPOST_WORKSPACE",
-        std::env::current_dir().unwrap_or_default(),
-    );
-    // WP-AST：内核自身路径——插件可经 `$RUPOST_BIN ast <file>` 消费核心解析 AST
-    //（取不到 exe 时退化为 PATH 名，不阻断启动）
-    cmd.env(
-        "RUPOST_BIN",
-        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("rupost")),
-    );
-    if let Some(dir) = platform::rupost_dir() {
-        cmd.env("RUPOST_CONFIG_DIR", dir);
-    }
+    let env_overrides = rupost::plugin::parse_plugin_env_specs(allow_env);
+    let workspace = std::env::current_dir().unwrap_or_default();
+    let rupost_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("rupost"));
+    let config_dir = platform::rupost_dir();
 
-    match cmd.status().await {
+    let mut child = match rupost::plugin::driver::spawn_plugin_process(exe_path, |cmd| {
+        cmd.args(args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        rupost::plugin::driver::apply_plugin_env(cmd, &env_overrides);
+        cmd.env("RUPOST_WORKSPACE", &workspace);
+        // WP-AST：内核自身路径——插件可经 `$RUPOST_BIN ast <file>` 消费核心解析 AST
+        //（取不到 exe 时退化为 PATH 名，不阻断启动）
+        cmd.env("RUPOST_BIN", &rupost_bin);
+        if let Some(ref dir) = config_dir {
+            cmd.env("RUPOST_CONFIG_DIR", dir);
+        }
+    })
+    .await
+    {
+        Ok(child) => child,
+        Err(rupost::plugin::driver::PluginSpawnError::RuntimeMissing {
+            interpreter,
+            detail,
+        }) => {
+            eprintln!("[!] 插件命令缺少运行时解释器 '{interpreter}': {detail}");
+            return 1;
+        }
+        Err(rupost::plugin::driver::PluginSpawnError::Io(e)) => {
+            eprintln!("[!] 插件命令启动失败: {e}");
+            return 1;
+        }
+    };
+
+    match child.wait().await {
         Ok(status) => status.code_or_signal(),
         Err(e) => {
-            eprintln!("[!] 插件命令启动失败: {e}");
+            eprintln!("[!] 等待插件命令结束失败: {e}");
             1
         }
     }

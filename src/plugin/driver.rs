@@ -6,6 +6,8 @@
 //! - 时延隔离：`plugin_duration_us` 单独计时，绝不混入物理网络秒表
 
 use std::collections::VecDeque;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,9 +18,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub use super::protocol::{
     MAX_PLUGIN_PAYLOAD_BYTES, PluginFailureKind, PluginInvocationOutcome, parse_plugin_output,
 };
+use super::registry::resolve_interpreter_in_path;
 use crate::Result;
 
 const MAX_STDERR_TAIL_BYTES: usize = 64 * 1024;
+const WINDOWS_ERROR_BAD_EXE_FORMAT: i32 = 193;
 
 /// 以独立进程组启动插件子进程（03 §10.2 进程树清剿）
 #[cfg(unix)]
@@ -166,6 +170,169 @@ async fn spawn_with_etxtbsy_retry(
     unreachable!()
 }
 
+/// 解析出的 Shebang 声明（供 Windows 透明桥接与跨平台 RuntimeMissing 归因共用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShebangSpec {
+    pub program: String,
+    pub display_interpreter: String,
+    pub args: Vec<String>,
+}
+
+/// 从脚本首行解析 `#!` Shebang 声明（支持 `#!/usr/bin/env [-S] <interp> [args...]` 与显式路径 `#!/path/to/<interp> [args...]`）。
+pub fn parse_shebang_line(first_line: &str) -> Option<ShebangSpec> {
+    let rest = first_line.trim_end_matches('\r').strip_prefix("#!")?;
+    let mut parts = rest.split_whitespace();
+    let first = parts.next()?;
+    let is_env = first == "env" || first.ends_with("/env");
+
+    let (program_raw, remaining_args): (&str, Vec<String>) = if is_env {
+        let mut interp: Option<&str> = None;
+        for part in parts.by_ref() {
+            if !part.starts_with('-') {
+                interp = Some(part);
+                break;
+            }
+        }
+        let chosen = interp.unwrap_or(first);
+        (chosen, parts.map(str::to_string).collect())
+    } else {
+        (first, parts.map(str::to_string).collect())
+    };
+
+    let program = sanitize_extracted_token(program_raw)?;
+    let display_raw = Path::new(&program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&program);
+    let display_interpreter =
+        sanitize_extracted_token(display_raw).unwrap_or_else(|| program.clone());
+
+    Some(ShebangSpec {
+        program,
+        display_interpreter,
+        args: remaining_args,
+    })
+}
+
+/// 读取文件首部 512 字节并解析 `#!` Shebang 声明。
+pub fn parse_shebang(executable: &Path) -> Option<ShebangSpec> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(executable).ok()?;
+    let mut buf = [0u8; 512];
+    let n = file.read(&mut buf).ok()?;
+    let head = String::from_utf8_lossy(&buf[..n]);
+    head.lines().next().and_then(parse_shebang_line)
+}
+
+fn is_bad_exe_format(err: &std::io::Error) -> bool {
+    cfg!(windows) && err.raw_os_error() == Some(WINDOWS_ERROR_BAD_EXE_FORMAT)
+}
+
+/// 统一裁剪插件子进程环境变量白名单（03 §6.2 SSOT）：仅 allowlist + RUPOST_* + 显式放行覆盖项。
+pub fn apply_plugin_env(cmd: &mut tokio::process::Command, env_overrides: &[(String, String)]) {
+    cmd.env_clear();
+    for key in super::types::PLUGIN_ENV_ALLOWLIST {
+        if let Ok(value) = std::env::var(key) {
+            cmd.env(key, value);
+        }
+    }
+    for (key, value) in std::env::vars().filter(|(k, _)| k.starts_with("RUPOST_")) {
+        cmd.env(key, value);
+    }
+    for (key, value) in env_overrides {
+        cmd.env(key, value);
+    }
+}
+
+/// 插件进程启动失败类型（用于区分可诊断的运行时缺失与硬性 I/O 故障）
+#[derive(Debug)]
+pub enum PluginSpawnError {
+    RuntimeMissing { interpreter: String, detail: String },
+    Io(std::io::Error),
+}
+
+fn resolve_shebang_for_bad_exe_format(
+    executable: &Path,
+    path_env: Option<&OsStr>,
+    raw_err: &std::io::Error,
+) -> std::result::Result<(PathBuf, ShebangSpec), Option<PluginFailureKind>> {
+    let Some(spec) = parse_shebang(executable) else {
+        return Err(None);
+    };
+    match resolve_interpreter_in_path(&spec.program, path_env) {
+        Some(interp_exe) => Ok((interp_exe, spec)),
+        None => Err(Some(PluginFailureKind::RuntimeMissing {
+            interpreter: spec.display_interpreter,
+            detail: format!(
+                "启动失败（Shebang 解释器 '{}' 未找到）: {raw_err}",
+                spec.program
+            ),
+        })),
+    }
+}
+
+/// 跨平台插件进程启动器（Hook 管道与 CLI 子命令共用）：
+/// 1. 应对 Linux 并发写后即执行的短暂 `ETXTBSY (os error 26)`；
+/// 2. `ENOENT` 自动映射到 `RuntimeMissing`；
+/// 3. Windows `os error 193`（`ERROR_BAD_EXE_FORMAT`）若检测为 `#!` Shebang 脚本，
+///    则透明桥接解释器重启，或在解释器不存在时映射为 `RuntimeMissing`。
+pub async fn spawn_plugin_process<F>(
+    executable: &Path,
+    mut configure_cmd: F,
+) -> std::result::Result<tokio::process::Child, PluginSpawnError>
+where
+    F: FnMut(&mut tokio::process::Command),
+{
+    let mut cmd = tokio::process::Command::new(executable);
+    configure_cmd(&mut cmd);
+
+    match spawn_with_etxtbsy_retry(&mut cmd).await {
+        Ok(child) => Ok(child),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(PluginSpawnError::RuntimeMissing {
+                interpreter: infer_missing_interpreter(executable),
+                detail: format!("启动失败（ENOENT）: {e}"),
+            })
+        }
+        Err(e) if is_bad_exe_format(&e) => {
+            let path_env = std::env::var_os("PATH");
+            let (interp_exe, spec) =
+                match resolve_shebang_for_bad_exe_format(executable, path_env.as_deref(), &e) {
+                    Ok(pair) => pair,
+                    Err(Some(PluginFailureKind::RuntimeMissing {
+                        interpreter,
+                        detail,
+                    })) => {
+                        return Err(PluginSpawnError::RuntimeMissing {
+                            interpreter,
+                            detail,
+                        });
+                    }
+                    _ => return Err(PluginSpawnError::Io(e)),
+                };
+
+            let mut shebang_cmd = tokio::process::Command::new(&interp_exe);
+            shebang_cmd.args(&spec.args).arg(executable);
+            configure_cmd(&mut shebang_cmd);
+
+            match spawn_with_etxtbsy_retry(&mut shebang_cmd).await {
+                Ok(child) => Ok(child),
+                Err(e2) if e2.kind() == std::io::ErrorKind::NotFound || is_bad_exe_format(&e2) => {
+                    Err(PluginSpawnError::RuntimeMissing {
+                        interpreter: spec.display_interpreter,
+                        detail: format!(
+                            "启动失败（Shebang 解释器 '{}' 不可执行）: {e2}",
+                            spec.program
+                        ),
+                    })
+                }
+                Err(e2) => Err(PluginSpawnError::Io(e2)),
+            }
+        }
+        Err(e) => Err(PluginSpawnError::Io(e)),
+    }
+}
+
 /// 执行一次插件 Stdio IPC 调用：
 /// `payload` 为内核序列化的输入 JSON 字符串；返回 [`PluginInvocationOutcome`]。
 pub async fn invoke_plugin(
@@ -187,42 +354,32 @@ pub async fn invoke_plugin(
     }
 
     let started = Instant::now();
-    let mut cmd = tokio::process::Command::new(executable);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    configure_process_group(cmd.as_std_mut());
-
-    // 环境白名单（03 §6.2）：仅 allowlist + RUPOST_* + requires_env/--plugin-env 显式放行
-    cmd.env_clear();
-    for key in super::types::PLUGIN_ENV_ALLOWLIST {
-        if let Ok(value) = std::env::var(key) {
-            cmd.env(key, value);
-        }
-    }
-    for (key, value) in std::env::vars().filter(|(k, _)| k.starts_with("RUPOST_")) {
-        cmd.env(key, value);
-    }
-    for (key, value) in env_overrides {
-        cmd.env(key, value);
-    }
-
-    let mut child = match spawn_with_etxtbsy_retry(&mut cmd).await {
+    let mut child = match spawn_plugin_process(executable, |cmd| {
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        configure_process_group(cmd.as_std_mut());
+        apply_plugin_env(cmd, env_overrides);
+    })
+    .await
+    {
         Ok(child) => child,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let interpreter = infer_missing_interpreter(executable);
+        Err(PluginSpawnError::RuntimeMissing {
+            interpreter,
+            detail,
+        }) => {
             return Ok(PluginInvocationOutcome {
                 output: None,
                 failure: Some(PluginFailureKind::RuntimeMissing {
                     interpreter,
-                    detail: format!("启动失败（ENOENT）: {e}"),
+                    detail,
                 }),
                 duration_us: started.elapsed().as_micros() as u64,
                 stderr_tail: String::new(),
             });
         }
-        Err(e) => {
+        Err(PluginSpawnError::Io(e)) => {
             return Err(crate::RupostError::PluginError(format!(
                 "插件 {} 启动失败: {e}",
                 executable.display()
@@ -430,31 +587,8 @@ fn sanitize_extracted_token(raw: &str) -> Option<String> {
 }
 
 fn infer_missing_interpreter(executable: &std::path::Path) -> String {
-    use std::io::Read;
-    if let Ok(mut file) = std::fs::File::open(executable) {
-        let mut buf = [0u8; 256];
-        if let Ok(n) = file.read(&mut buf) {
-            let head = String::from_utf8_lossy(&buf[..n]);
-            if let Some(first_line) = head.lines().next()
-                && let Some(rest) = first_line.strip_prefix("#!")
-            {
-                let mut parts = rest.split_whitespace();
-                if let Some(first) = parts.next() {
-                    let is_env = first == "env" || first.ends_with("/env");
-                    let candidate = if is_env {
-                        parts.find(|p| !p.starts_with('-')).unwrap_or(first)
-                    } else {
-                        std::path::Path::new(first)
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or(first)
-                    };
-                    if let Some(tok) = sanitize_extracted_token(candidate) {
-                        return tok;
-                    }
-                }
-            }
-        }
+    if let Some(spec) = parse_shebang(executable) {
+        return spec.display_interpreter;
     }
     executable
         .file_name()
@@ -567,4 +701,86 @@ fn classify_nonzero_exit(code: i32, stderr_tail: &str) -> PluginFailureKind {
     }
 
     PluginFailureKind::ExitNonZero(code, stderr_tail.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_shebang_line_variants() {
+        let env_py = parse_shebang_line("#!/usr/bin/env python3\r").unwrap();
+        assert_eq!(env_py.program, "python3");
+        assert_eq!(env_py.display_interpreter, "python3");
+        assert!(env_py.args.is_empty());
+
+        let env_s = parse_shebang_line("#!/usr/bin/env -S node --no-warnings").unwrap();
+        assert_eq!(env_s.program, "node");
+        assert_eq!(env_s.display_interpreter, "node");
+        assert_eq!(env_s.args, vec!["--no-warnings"]);
+
+        let explicit = parse_shebang_line("#!/nonexistent/bin/fake_python_xyz -u").unwrap();
+        assert_eq!(explicit.program, "/nonexistent/bin/fake_python_xyz");
+        assert_eq!(explicit.display_interpreter, "fake_python_xyz");
+        assert_eq!(explicit.args, vec!["-u"]);
+
+        assert!(parse_shebang_line("MZ\u{0090}\x00not a shebang").is_none());
+    }
+
+    #[test]
+    fn test_resolve_shebang_for_bad_exe_format_distinguishes_non_shebang_missing_and_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let fake_node = bin_dir.join(format!("node{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&fake_node, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path_env = std::env::join_paths([&bin_dir]).unwrap();
+        let dummy_err = std::io::Error::from_raw_os_error(WINDOWS_ERROR_BAD_EXE_FORMAT);
+
+        // 1. 非 Shebang 损坏文件：返回 Err(None)（透传硬启动失败，不伪装成 RuntimeMissing）
+        let corrupt_bin = dir.path().join("corrupt.exe");
+        std::fs::write(&corrupt_bin, b"MZ-broken").unwrap();
+        assert_eq!(
+            resolve_shebang_for_bad_exe_format(
+                &corrupt_bin,
+                Some(path_env.as_os_str()),
+                &dummy_err
+            ),
+            Err(None)
+        );
+
+        // 2. 显式不存在解释器路径的 Shebang：映射为 RuntimeMissing（绝不回退 PATH）
+        let bad_shebang = dir.path().join("bad_shebang.py");
+        std::fs::write(
+            &bad_shebang,
+            "#!/nonexistent/bin/fake_python_xyz\nprint('{}')\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            resolve_shebang_for_bad_exe_format(
+                &bad_shebang,
+                Some(path_env.as_os_str()),
+                &dummy_err
+            ),
+            Err(Some(PluginFailureKind::RuntimeMissing { ref interpreter, .. }))
+                if interpreter == "fake_python_xyz"
+        ));
+
+        // 3. `#!/usr/bin/env -S node --no-warnings` 且 PATH 命中 node：返回解析后的解释器与参数
+        let node_script = dir.path().join("plugin_node");
+        std::fs::write(&node_script, "#!/usr/bin/env -S node --no-warnings\n").unwrap();
+        let (resolved, spec) = resolve_shebang_for_bad_exe_format(
+            &node_script,
+            Some(path_env.as_os_str()),
+            &dummy_err,
+        )
+        .expect("env shebang in PATH must resolve");
+        assert_eq!(resolved, fake_node);
+        assert_eq!(spec.args, vec!["--no-warnings"]);
+    }
 }

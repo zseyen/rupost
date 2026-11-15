@@ -708,6 +708,98 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
+fn has_explicit_path_separator(interp: &str) -> bool {
+    interp.contains('/') || interp.contains('\\') || Path::new(interp).components().count() > 1
+}
+
+fn interpreter_candidates(dir: &Path, interp: &str, probe_windows_exts: bool) -> Vec<PathBuf> {
+    let base = dir.join(interp);
+    if !probe_windows_exts || Path::new(interp).extension().is_some() {
+        return vec![base];
+    }
+    let mut out = Vec::with_capacity(4);
+    for ext in ["exe", "cmd", "bat"] {
+        let mut os = base.as_os_str().to_os_string();
+        os.push(format!(".{ext}"));
+        out.push(PathBuf::from(os));
+    }
+    out.push(base);
+    out
+}
+
+fn explicit_interpreter_candidates(interp: &str, probe_windows_exts: bool) -> Vec<PathBuf> {
+    let base = PathBuf::from(interp);
+    if !probe_windows_exts || base.extension().is_some() {
+        return vec![base];
+    }
+    let mut out = Vec::with_capacity(4);
+    for ext in ["exe", "cmd", "bat"] {
+        let mut os = base.as_os_str().to_os_string();
+        os.push(format!(".{ext}"));
+        out.push(PathBuf::from(os));
+    }
+    out.push(base);
+    out
+}
+
+fn resolve_interpreter_with_count_impl(
+    interp: &str,
+    path_env: Option<&OsStr>,
+    probe_windows_exts: bool,
+) -> std::result::Result<PathBuf, usize> {
+    let interp = interp.trim();
+    if interp.is_empty() {
+        return Err(0);
+    }
+
+    if has_explicit_path_separator(interp) {
+        return explicit_interpreter_candidates(interp, probe_windows_exts)
+            .into_iter()
+            .find(|cand| is_executable_file(cand))
+            .ok_or(1);
+    }
+
+    let Some(raw_path) = path_env.filter(|p| !p.is_empty()) else {
+        return Err(0);
+    };
+
+    let dirs: Vec<PathBuf> = std::env::split_paths(raw_path)
+        .filter(|d| !d.as_os_str().is_empty())
+        .collect();
+    let searched_dirs = dirs.len();
+
+    for dir in &dirs {
+        if let Some(found) = interpreter_candidates(dir, interp, probe_windows_exts)
+            .into_iter()
+            .find(|cand| is_executable_file(cand))
+        {
+            return Ok(found);
+        }
+    }
+
+    // Windows 官方安装包通常仅安装 python.exe 而无 python3.exe：
+    // 在独立扫描完 python3.* 后再按相同 PATH 顺序回退探测 python.*，且不重复累加 searched_dirs。
+    if probe_windows_exts && interp == "python3" {
+        for dir in &dirs {
+            if let Some(found) = interpreter_candidates(dir, "python", true)
+                .into_iter()
+                .find(|cand| is_executable_file(cand))
+            {
+                return Ok(found);
+            }
+        }
+    }
+
+    Err(searched_dirs)
+}
+
+/// 解析运行时解释器可执行文件路径（SSOT：供 `preflight_runtime` 与 Shebang 桥接共用）。
+/// - 含路径分隔符时仅校验显式路径（绝不越权回退到 `$PATH`）；
+/// - Windows 下自动探测 `.exe` / `.cmd` / `.bat` 后缀，并为 `python3` 回退探测 `python`。
+pub fn resolve_interpreter_in_path(interp: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
+    resolve_interpreter_with_count_impl(interp, path_env, cfg!(windows)).ok()
+}
+
 /// 零子进程运行时解释器预检（03 §3.1.1：仅对 PATH 目录做 stat + Unix `mode & 0o111 != 0` 校验，绝不 spawn `--version`）。
 pub fn preflight_runtime(
     runtime: Option<&PluginRuntime>,
@@ -721,27 +813,64 @@ pub fn preflight_runtime(
         return Ok(());
     };
 
-    if interp.contains('/') || interp.contains('\\') || Path::new(interp).components().count() > 1 {
-        return if is_executable_file(Path::new(interp)) {
-            Ok(())
-        } else {
-            Err((interp.to_string(), 1))
-        };
-    }
+    resolve_interpreter_with_count_impl(interp, path_env, cfg!(windows))
+        .map(|_| ())
+        .map_err(|searched_dirs| (interp.to_string(), searched_dirs))
+}
 
-    let Some(raw_path) = path_env.filter(|p| !p.is_empty()) else {
-        return Err((interp.to_string(), 0));
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let mut searched_dirs = 0usize;
-    for dir in std::env::split_paths(raw_path) {
-        if dir.as_os_str().is_empty() {
-            continue;
-        }
-        searched_dirs += 1;
-        if is_executable_file(&dir.join(interp)) {
-            return Ok(());
+    fn make_fake_exe(path: &Path) {
+        std::fs::write(path, b"#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
     }
-    Err((interp.to_string(), searched_dirs))
+
+    #[test]
+    fn test_resolve_interpreter_windows_exts_python3_fallback_and_explicit_isolation() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin1 = dir.path().join("bin1");
+        let bin2 = dir.path().join("bin2");
+        std::fs::create_dir_all(&bin1).unwrap();
+        std::fs::create_dir_all(&bin2).unwrap();
+
+        let python_exe = bin2.join("python.exe");
+        make_fake_exe(&python_exe);
+        let node_cmd = bin1.join("node.cmd");
+        make_fake_exe(&node_cmd);
+
+        let path_env = std::env::join_paths([&bin1, &bin2]).unwrap();
+
+        // 1. Windows 后缀探测与 python3 -> python.exe 回退
+        assert_eq!(
+            resolve_interpreter_with_count_impl("python3", Some(path_env.as_os_str()), true),
+            Ok(python_exe)
+        );
+        assert_eq!(
+            resolve_interpreter_with_count_impl("node", Some(path_env.as_os_str()), true),
+            Ok(node_cmd)
+        );
+
+        // 2. 不存在时 searched_dirs 精确等于独立目录数 2（不因 python3 回退翻倍）
+        assert_eq!(
+            resolve_interpreter_with_count_impl("missing_interp", Some(path_env.as_os_str()), true),
+            Err(2)
+        );
+
+        // 3. 显式路径即使名称与 PATH 中的相同，绝不越权回退到 PATH
+        let explicit_missing = dir.path().join("nonexistent").join("node");
+        assert_eq!(
+            resolve_interpreter_with_count_impl(
+                explicit_missing.to_str().unwrap(),
+                Some(path_env.as_os_str()),
+                true,
+            ),
+            Err(1)
+        );
+    }
 }

@@ -96,6 +96,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - **`rupost ast` AST 桥（插件生态使能）**：AstDocument JSON v1.0 只读命令（顶层 4 键精确契约，`.http`/`.md` 双路径方法行号）+ 插件环境注入 `RUPOST_BIN`——命令插件复用核心解析器，解析语义零分叉；OpenAPI 导入 / k6 导出移交社区以命令插件承载，样板 `cmd-hello` 与作者指南（双形态矩阵/AST 桥/版本协调）就绪（`feat(parser,cli)` a757fec7、`docs(plugins)` 83736008）。
 - **`rupost plugin validate`**：作者分发前静态体检——复用发现期校验（保留字/超长/可执行缺失/路径囚禁）+ 警告级（命名契约/内置名冲突/空清单）；不执行插件、不触发 TOFU、不写缓存（`feat(plugin)` 6f13d55c）。
 - **复现包完整性摘要**：manifest 新增 `artifact_digests`（report/snapshot 的 sha256+bytes；digest 只防损坏，密钥签名登记不做）（`feat(history)` 280abb5b）。
+- **`--contract-baseline` 契约漂移基线（Phase 2 核心）**：首跑建基线（`{id, assertion, passed}` 确定性字段——id 为 `path#L<行号>` 相对可移植、无响应值），复跑报三态漂移（newly_broken/fixed/new）并更新基线；漂移不改退出码；teardown 排除；断言原文改变视同新增（`feat(report,cli)` e0b29834）。
+- **Web 复现包保留上限**：`.rupost/incidents/` 服务端命名目录（`YYYYMMDDTHHMMSS-8hex`）创建前裁最旧至 32，非命名目录/symlink 不触碰（磁盘 DoS 残余收口）；CLI 显式路径不适用（`refactor(security)` d2565596）。
+- **测试隔离三件套（CI flake 根因修复）**：mock 插件编译产物共享缓存（原 9 个集成测试二进制各自 rustc 现编抢 CPU）、template_test cwd 突变互斥锁+RAII 恢复、插件 IPC 测试超时对负载倍增 5s→30s（`test(isolation)` ed546526）。
+- **脱敏原语归位**：ai/redactor 四个通用原语（mask_urls/redact_assertion_value/truncate_chars/redact_json_value）下沉 `security::redact`，report 层切换直连——消除 report→ai 层级错位（`refactor(security)` d2565596）。
+- **集成冒烟扩展**：verify_features.sh 增 Web 会话隔离+延续步（双 Cookie 划界，A 延续/B 诚实 401）；探针 curl `-m 2` 超时；插件指南补 schema 挂接编辑器示例（C8）；musl CI 首跑确认全绿（D9 闭环）（`test(verify)` e102f69f）。
 - **测试与文档收尾**：exit 2 三来源鉴别表（debug_guide §7.3 + 示例 README）；`--env`→manifest/snapshot 贯通 e2e；directory_structure 补 generator/history/plugin/security/web 五模块条目（`docs` 81fc20e3、`fix(exporter)` c52db271）。
 
 ### Changed

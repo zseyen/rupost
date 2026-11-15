@@ -1,7 +1,7 @@
 # RuPost Phase 0/1 缺口修复 + Phase 2/3 MVP 执行计划（接手文档）
 
 **日期：** 2026-11-13
-**状态：** Completed（批一 + 插件基座 + 批三 A/R6/R5/R9/R4 全过；R7/R8 按 2026-11-14 裁决暂缓）
+**状态：** Completed（批一 + 插件基座 + 批三 A/R6/R5/R9/R4 全过；R7/R8 按 2026-11-14 裁决暂缓）。**勘误 2026-11-15**：①PR #15 正文曾误称 `--contract-baseline` 已落地（实际未实现）——现已在 feature/contract-drift-and-hygiene 线补齐（e0b29834），声称成真；②测试隔离三件套与 R7/redactor 归位同批落地（ed546526/d2565596）。
 **前置基线：** 差异化 Phase 0+1 已交付（提交链：`docs(plans)` → `fix(web)` → `test` → `feat(history)` → `feat(cli)` → `docs`；`@` 工作副本为空，lib 683 测试全绿，7/7 门禁通过）
 **前置文档：** [竞品与差异化开发报告](2026-11-13-competitive-differentiation-report.md)、[差异化路线执行计划](2026-11-13-differentiation-execution-plan.md)
 

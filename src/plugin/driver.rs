@@ -146,6 +146,26 @@ async fn join_with_grace<T>(mut handle: tokio::task::JoinHandle<T>, grace: Durat
     }
 }
 
+/// 应对 Linux 多线程并行 `fork()` 期间继承临时写入句柄引发的短暂 `ETXTBSY (os error 26)`：
+/// 仅在 `ExecutableFileBusy` 时做极短退避重试，其余错误立即透传。
+async fn spawn_with_etxtbsy_retry(
+    cmd: &mut tokio::process::Command,
+) -> std::io::Result<tokio::process::Child> {
+    const MAX_RETRIES: usize = 8;
+    for attempt in 0..=MAX_RETRIES {
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < MAX_RETRIES =>
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
 /// 执行一次插件 Stdio IPC 调用：
 /// `payload` 为内核序列化的输入 JSON 字符串；返回 [`PluginInvocationOutcome`]。
 pub async fn invoke_plugin(
@@ -188,7 +208,7 @@ pub async fn invoke_plugin(
         cmd.env(key, value);
     }
 
-    let mut child = match cmd.spawn() {
+    let mut child = match spawn_with_etxtbsy_retry(&mut cmd).await {
         Ok(child) => child,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let interpreter = infer_missing_interpreter(executable);

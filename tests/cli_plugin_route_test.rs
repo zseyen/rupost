@@ -461,13 +461,11 @@ fn test_missing_env_warning_on_plugin_command_and_suite_startup() {
     let plugin_dir = dir.path().join(".rupost").join("plugins");
     std::fs::create_dir_all(&plugin_dir).unwrap();
 
-    let bin = plugin_dir.join("rupost-plugin-envwarn");
-    std::fs::write(&bin, "#!/bin/sh\necho ok\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let bin = common::mock_plugin::install_mock_executable(
+        &plugin_dir,
+        "rupost-plugin-envwarn",
+        "STDOUT_LINE=ok\n",
+    );
     let real_bin = bin.canonicalize().unwrap_or(bin);
     preseed_tofu(&fake_home, &real_bin);
 

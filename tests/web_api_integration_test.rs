@@ -1121,3 +1121,77 @@ async fn test_web_suite_no_incident_bundle_without_flag_or_on_green() {
     assert!(wrapped["data"]["incident_dir"].is_null(), "全绿不产目录");
     assert!(!tmp_b.path().join(".rupost").exists(), "全绿不得产出目录");
 }
+
+/// WP-R7：保留上限——32 个服务端命名假目录 + 一次真实失败 incident 运行 →
+/// 最旧被裁剪、其余 31 + 新 bundle 存活（合计 32）、非命名目录不触碰。
+#[tokio::test]
+async fn test_web_suite_incident_retention_caps_at_32() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/boom"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&server)
+        .await;
+
+    let tmp = tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("fail.http"),
+        format!(
+            "### boom\nGET {}/boom\n\n# @assert status == 200\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let incident_root = tmp.path().join(".rupost").join("incidents");
+    std::fs::create_dir_all(&incident_root).unwrap();
+    for i in 0..32u32 {
+        let d = incident_root.join(format!("20260101T000000-{i:08x}"));
+        std::fs::create_dir(&d).unwrap();
+        std::fs::write(d.join("sentinel.txt"), "old").unwrap();
+    }
+    let keepme = incident_root.join("keepme");
+    std::fs::create_dir(&keepme).unwrap();
+
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(tmp.path())),
+        working_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let payload = serde_json::json!({ "path": "fail.http", "incident": true });
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let wrapped: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(wrapped["data"]["failed"], 1);
+    assert!(wrapped["data"]["incident_dir"].is_string());
+
+    assert!(
+        !incident_root.join("20260101T000000-00000000").exists(),
+        "最旧假目录被裁剪"
+    );
+    assert!(
+        incident_root
+            .join("20260101T000000-00000001")
+            .join("sentinel.txt")
+            .is_file(),
+        "其余假目录存活"
+    );
+    assert!(incident_root.join("keepme").is_dir(), "非命名目录不被触碰");
+    let named_bundles = std::fs::read_dir(&incident_root)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.len() == 24 && n.as_bytes()[8] == b'T'
+        })
+        .count();
+    assert_eq!(named_bundles, 32, "稳态 = 上限（另含 keepme 非命名条目）");
+}

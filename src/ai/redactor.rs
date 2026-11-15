@@ -1,49 +1,17 @@
+//! `security::redact` 的 AI 表面垫片（WP 审查批四：原语全部下沉 security，
+//! 本文件仅保留路径兼容 re-export——ai 内调用方零改动；report 已切换直连）。
 pub use crate::security::redact::{
     DEFAULT_SNIPPET_MAX_BYTES, assertion_targets_sensitive_key, is_sensitive_key,
-    mask_inline_secrets, mask_pii, order_secret_values, redact_and_truncate_body,
-    redact_explicit_secrets, redact_explicit_secrets_ordered, redact_free_text,
-    redact_header_value, redact_url, truncate_utf8_safe,
+    mask_inline_secrets, mask_pii, mask_urls, order_secret_values, redact_and_truncate_body,
+    redact_assertion_value, redact_explicit_secrets, redact_explicit_secrets_ordered,
+    redact_free_text, redact_header_value, redact_json_value, redact_url, truncate_chars,
+    truncate_utf8_safe,
 };
-use regex::Regex;
-use serde_json::Value;
-use std::sync::OnceLock;
-
-fn url_regex() -> &'static Regex {
-    static URL_RE: OnceLock<Regex> = OnceLock::new();
-    URL_RE.get_or_init(|| Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("valid url regex"))
-}
-
-/// 自由文本脱敏与内联凭据掩码下沉至 `security::redact`（B0 掩码原语统一归位，顶部 re-export）。
-/// 将文本中的 URL 整体替换为 `<url>` 占位符（用于去重签名：同端点不同实例同签名）
-pub fn mask_urls(text: &str) -> String {
-    url_regex().replace_all(text, "<url>").to_string()
-}
-
-/// 断言期望/实际/消息值的脱敏（Gap Review P1-2）：
-/// - raw 命中敏感键 → 值整体 `[REDACTED]`（值可能源自响应体敏感字段，无法从值本身判断敏感性）；
-/// - 否则仅做自由文本 URL 掩码 + 200 字符截断。
-pub fn redact_assertion_value(raw: &str, value: Option<&str>) -> Option<String> {
-    if assertion_targets_sensitive_key(raw) {
-        value.map(|_| "[REDACTED]".to_string())
-    } else {
-        value.map(|s| truncate_utf8_safe(&redact_free_text(s), 200))
-    }
-}
-
-/// 按字符数截断错误消息，防止 AI 后端返回的超长错误体刷屏
-pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
-    crate::utils::text::truncate_chars(msg, max_chars, "...[truncated]")
-}
-
-/// 递归遍历 JSON Value，将命中 `is_sensitive_key` 的对象字段值替换为 `"[REDACTED]"`，
-/// 对 `phone`/`mobile`/`id_card` 数值叶子及普通字符串叶子中的 PII 统一打码 `***`（结构保留）
-pub fn redact_json_value(val: &mut Value) {
-    crate::security::redact::mask_json_pii_value_in_place(val);
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn test_redact_json_body_and_preserve_structure() {

@@ -16,6 +16,46 @@ use axum::http::header::{COOKIE, HeaderMap, HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 
+/// WP-R7：Web 复现包保留上限——创建前裁剪最旧（安全分析残余收口；CLI 通道
+/// 是用户显式路径，不做保留策略）。并发双跑可轻微超上限：无锁容差，
+/// uuid 后缀防命名冲突，超限有界。
+const MAX_INCIDENT_BUNDLES: usize = 32;
+
+/// 服务端命名判别：`YYYYMMDDTHHMMSS-8hex`（len==24）。只删匹配命名的目录，
+/// 绝不触碰用户手工放入 incident_root 的内容；symlink/文件一律跳过。
+fn is_server_named_incident(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() == 24
+        && b[8] == b'T'
+        && b[..8].iter().all(u8::is_ascii_digit)
+        && b[9..15].iter().all(u8::is_ascii_digit)
+        && b[15] == b'-'
+        && b[16..24].iter().all(u8::is_ascii_hexdigit)
+}
+
+/// 匹配目录数 >= max 时按名称升序（即时间序）删除最旧
+fn prune_incident_dirs(root: &std::path::Path, max: usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut named: Vec<std::ffi::OsString> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.metadata().map(|m| m.is_dir()).unwrap_or(false)
+                && is_server_named_incident(&e.file_name().to_string_lossy())
+        })
+        .map(|e| e.file_name())
+        .collect();
+    named.sort();
+    while named.len() >= max {
+        let Some(oldest) = named.first().cloned() else {
+            break;
+        };
+        let _ = std::fs::remove_dir_all(root.join(&oldest));
+        named.remove(0);
+    }
+}
+
 /// 从请求头提取 Cookie 值（无 Cookie / 非法编码一律等价新会话，不泄露原因）
 fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
     headers.get(COOKIE).and_then(|v| v.to_str().ok())
@@ -419,8 +459,11 @@ pub async fn run_suite_handler(
         let batch = vec![(std::path::PathBuf::from(&req.path), results)];
         let resolved_paths = vec![req.path.clone()];
         let env_owned = target_env.map(str::to_string);
+        let incident_root_for_prune = state.incident_root.clone();
 
         let bundle_res = tokio::task::spawn_blocking(move || {
+            // WP-R7：创建前裁剪最旧（32 上限；并发容差见常量注释）
+            prune_incident_dirs(&incident_root_for_prune, MAX_INCIDENT_BUNDLES);
             crate::history::create_incident_bundle(
                 &batch,
                 &resolved_paths,
@@ -469,4 +512,61 @@ pub async fn run_suite_handler(
     };
 
     json_session_response(StatusCode::OK, ApiResponse::ok(response), Some(&handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 命名判别表驱动：长度/字段字符类/分隔符（审查 E2 修正：尾段只认 hex）
+    #[test]
+    fn test_is_server_named_incident_table() {
+        let cases = [
+            ("20260101T000000-00000000", true),
+            ("20260101T000000-0a1b2c3d", true),
+            ("20260101T000000-0000000", false),  // len 23
+            ("20260101t000000-00000000", false), // 小写 t
+            ("20260101T000000-0000000g", false), // g 非 hex
+            ("20260101000000-00000000", false),  // 缺 T
+            ("20260101T0000", false),            // 过短
+        ];
+        for (input, expected) in cases {
+            assert_eq!(is_server_named_incident(input), expected, "{input}");
+        }
+    }
+
+    /// 裁剪：名称升序删最旧至 max-1（新 bundle 落位后稳态 = max）；
+    /// 非命名目录与文件/symlink 不触碰
+    #[test]
+    fn test_prune_incident_dirs_keeps_non_named() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for i in 0..3u32 {
+            let d = dir.path().join(format!("20260101T000000-{i:08x}"));
+            std::fs::create_dir(&d).unwrap();
+            std::fs::write(d.join("s.txt"), "old").unwrap();
+        }
+        let keepme = dir.path().join("keepme");
+        std::fs::create_dir(&keepme).unwrap();
+        let plain_file = dir.path().join("20260101T000000-000000ff");
+        std::fs::write(&plain_file, b"file not dir").unwrap();
+
+        prune_incident_dirs(dir.path(), 2);
+
+        assert!(
+            !dir.path().join("20260101T000000-00000000").exists(),
+            "最旧被删"
+        );
+        assert!(
+            !dir.path().join("20260101T000000-00000001").exists(),
+            "次旧被删"
+        );
+        assert!(
+            dir.path()
+                .join("20260101T000000-00000002")
+                .join("s.txt")
+                .is_file()
+        );
+        assert!(keepme.is_dir(), "非命名目录不触碰");
+        assert!(plain_file.is_file(), "同名文件不触碰");
+    }
 }

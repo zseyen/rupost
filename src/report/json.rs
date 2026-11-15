@@ -5,8 +5,8 @@
 //! 消费方：`ai triage`（反序列化磁盘报告）、`--report json`（stdout/文件）、
 //! HTML 报告离线二次渲染（`ReportContext::from_json_file_reports`）。
 
-use crate::ai::redactor;
 use crate::runner::types::TestResult;
+use crate::security::redact as redactor;
 use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 

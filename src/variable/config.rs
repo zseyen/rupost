@@ -41,7 +41,7 @@ impl ConfigLoader {
             }
         }
 
-        let home = dirs::home_dir()?;
+        let home = crate::platform::home_dir()?;
         let user_path = home.join(".config").join("rupost").join(Self::CONFIG_FILE);
         if user_path.exists() {
             Some(user_path)

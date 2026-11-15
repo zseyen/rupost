@@ -110,7 +110,7 @@ pub fn route(
 }
 
 fn registry_cache_path() -> std::path::PathBuf {
-    dirs::home_dir()
+    rupost::platform::home_dir()
         .map(|h| h.join(".rupost").join("registry.json"))
         .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"))
 }

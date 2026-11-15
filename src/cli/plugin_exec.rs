@@ -213,12 +213,14 @@ pub async fn launch_plugin_command(
         "RUPOST_BIN",
         std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("rupost")),
     );
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = rupost::platform::home_dir() {
         cmd.env("RUPOST_CONFIG_DIR", home.join(".rupost"));
     }
 
     match cmd.status().await {
-        Ok(status) => status.code().unwrap_or_else(|| exit_signal_code(status)),
+        Ok(status) => status
+            .code()
+            .unwrap_or_else(|| rupost::platform::exit_signal_code(status)),
         Err(e) => {
             eprintln!("[!] 插件命令启动失败: {e}");
             1
@@ -226,21 +228,8 @@ pub async fn launch_plugin_command(
     }
 }
 
-fn exit_signal_code(status: std::process::ExitStatus) -> i32 {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        status.signal().map(|s| 128 + s).unwrap_or(1)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = status;
-        1
-    }
-}
-
 fn cache_dir() -> std::path::PathBuf {
-    dirs::home_dir()
+    rupost::platform::home_dir()
         .map(|h| h.join(".rupost"))
         .unwrap_or_else(|| std::path::PathBuf::from(".rupost"))
 }

@@ -73,7 +73,7 @@ fn is_local_base(base_url: &str) -> bool {
 
 /// 用户级配置文件定位：`$HOME/.rupost/ai.toml`（home 缺失 → None）
 fn user_config_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".rupost").join("ai.toml"))
+    crate::platform::home_dir().map(|h| h.join(".rupost").join("ai.toml"))
 }
 
 #[derive(Debug, Default, serde::Deserialize)]

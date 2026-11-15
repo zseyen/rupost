@@ -17,7 +17,7 @@ pub fn discover_plugin_registry(
     discover: &DiscoverOptions,
     authorized_env_keys: &HashSet<String>,
 ) -> Arc<PluginRegistry> {
-    let cache_path = dirs::home_dir()
+    let cache_path = crate::platform::home_dir()
         .map(|h| h.join(".rupost").join("registry.json"))
         .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
     match PluginRegistry::load_or_discover(discover, &cache_path) {

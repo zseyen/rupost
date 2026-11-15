@@ -86,7 +86,7 @@ fn collect_plugin_roots(
             if let Some(path_env) = std::env::var_os("PATH") {
                 roots.extend(std::env::split_paths(&path_env));
             }
-            if let Some(home) = dirs::home_dir() {
+            if let Some(home) = crate::platform::home_dir() {
                 roots.push(home.join(".rupost").join("plugins"));
             }
         }

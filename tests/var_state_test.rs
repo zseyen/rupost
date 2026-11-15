@@ -85,7 +85,7 @@ async fn test_var_state_persists_captured_token_across_runs() {
         state_raw.contains("tok-cross"),
         "捕获的 token 必须进 var-state 文件: {state_raw}"
     );
-    if let Some(mode) = rupost::security::fs::unix_mode(&dir.path().join("state.json")).unwrap() {
+    if let Some(mode) = rupost::platform::unix_mode(&dir.path().join("state.json")).unwrap() {
         assert_eq!(mode, 0o600, "var-state 必须落盘 0600");
     }
 

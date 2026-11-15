@@ -38,11 +38,7 @@ fn preseed_tofu(fake_home: &Path, exe_path: &Path) {
     use sha2::{Digest, Sha256};
     let rupost_dir = fake_home.join(".rupost");
     std::fs::create_dir_all(&rupost_dir).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&rupost_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
+    rupost::platform::set_unix_mode(&rupost_dir, 0o700).unwrap();
     let bytes = std::fs::read(exe_path).unwrap();
     let digest: String = Sha256::digest(&bytes)
         .iter()
@@ -55,11 +51,7 @@ fn preseed_tofu(fake_home: &Path, exe_path: &Path) {
         .open(&tofu_path)
         .unwrap();
     writeln!(file, "{} {}", exe_path.display(), digest).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tofu_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
+    rupost::platform::set_unix_mode(&tofu_path, 0o600).unwrap();
 }
 
 #[test]

@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-15
+
 ### Added
 
 - **TUI/Web 插件与门禁选项面透传（replay-reuse B3/B4，WP-2026-11-14-01）**：`rupost.toml [plugins]` 段（`allow_missing_plugins`/`strict_plugins`/`plugin_timeout_secs`/`plugin_env`/`allow_project_plugins`/`strict_vars`）——TUI/Web 交互入口经 `ConfigLoader::find_and_load_plugin_config`（缺失/损坏决策表）+ `build_interactive_executor_with_options` 消费（映射 + zero-diff 逐字段守护 + env 豁免）；优先级：Web 请求覆盖（`PluginOverrides`）> toml 段 > 默认；strict 门禁——TUI 转发任务降级判失败 / Web run_block 响应与 run_suite 聚合计入失败（与 CLI `--strict-plugins` 一致）。CLI 套件路径不受影响；旧 toml 无段零破坏。

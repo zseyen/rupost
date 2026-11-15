@@ -154,10 +154,29 @@ fn test_template_list_command() {
     assert!(!path.exists());
 }
 
+// 测试隔离件②（审查批二）：cwd 是进程级全局——本二进制 10 个测试并行，
+// cwd 突变与兄弟测试的相对路径解析真竞争，持互斥锁串行
+static CWD_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// cwd RAII 恢复守卫：测试失败路径也保证还原，防污染同二进制后续测试
+struct CwdRestore {
+    old: std::path::PathBuf,
+}
+
+impl Drop for CwdRestore {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.old);
+    }
+}
+
 #[test]
 fn test_default_output_path_resolution() {
+    let _cwd_lock = CWD_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let temp_dir = TempDir::new().unwrap();
     let old_dir = std::env::current_dir().unwrap();
+    let _cwd_restore = CwdRestore {
+        old: old_dir.clone(),
+    };
     std::env::set_current_dir(temp_dir.path()).unwrap();
 
     let res = run_template("config", None, false, false);
@@ -178,8 +197,6 @@ fn test_default_output_path_resolution() {
     let res_spec = run_template("spec", None, false, false);
     assert!(res_spec.is_ok());
     assert!(temp_dir.path().join("spec_template.http").exists());
-
-    std::env::set_current_dir(old_dir).unwrap();
 }
 
 #[test]

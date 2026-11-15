@@ -8,6 +8,7 @@ use rupost::plugin::types::{
     HookCapability, PluginCacheScope, PluginDirective, PluginManifest, PluginStage,
 };
 use rupost::plugin::{PluginPipeline, PluginRegistry};
+use std::time::Duration;
 
 fn install_script_plugin(
     root: &std::path::Path,
@@ -88,7 +89,10 @@ async fn test_pipeline_chains_headers_body_and_variables_across_stages() {
     let outcome = PluginPipeline::execute_for_request(
         &directives,
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "https://api.example.com/v1",
         "POST",
@@ -148,7 +152,10 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
     d2.params.insert("env".to_string(), "prod".to_string());
 
     let cache = SuiteHookCache::new();
-    let opts = PluginRuntimeOptions::default();
+    let opts = PluginRuntimeOptions {
+        plugin_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
     let _ = PluginPipeline::execute_for_request(
         &[d1.clone()],
         &reg,
@@ -238,7 +245,10 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
             PluginStage::Sign,
         )],
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "http://x",
         "GET",
@@ -260,7 +270,10 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
             PluginStage::Sign,
         )],
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "http://x",
         "GET",
@@ -324,7 +337,10 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
             PluginStage::Sign,
         )],
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "http://x",
         "GET",
@@ -377,7 +393,10 @@ async fn test_pipeline_per_request_hooks_run_concurrently_without_global_lock() 
     }
     let reg = std::sync::Arc::new(reg);
     let cache = std::sync::Arc::new(SuiteHookCache::new());
-    let opts = std::sync::Arc::new(PluginRuntimeOptions::default());
+    let opts = std::sync::Arc::new(PluginRuntimeOptions {
+        plugin_timeout: Duration::from_secs(30),
+        ..Default::default()
+    });
 
     let reg1 = reg.clone();
     let cache1 = cache.clone();
@@ -439,7 +458,10 @@ async fn test_pipeline_suite_hook_cold_start_singleflight_dedup() {
 
     let reg = std::sync::Arc::new(reg);
     let cache = std::sync::Arc::new(SuiteHookCache::new());
-    let opts = std::sync::Arc::new(PluginRuntimeOptions::default());
+    let opts = std::sync::Arc::new(PluginRuntimeOptions {
+        plugin_timeout: Duration::from_secs(30),
+        ..Default::default()
+    });
 
     let mut handles = Vec::new();
     for _ in 0..8 {
@@ -551,7 +573,10 @@ async fn test_pipeline_request_scope_reuses_patch_within_request_only() {
 
     let directive = PluginDirective::new("auth", "req-auth", PluginStage::Prepare);
     let cache = SuiteHookCache::new();
-    let opts = PluginRuntimeOptions::default();
+    let opts = PluginRuntimeOptions {
+        plugin_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
 
     // 同一请求内重复声明相同指令 → 仅 1 次子进程（请求内复用）
     let _ = PluginPipeline::execute_for_request(
@@ -621,7 +646,10 @@ async fn test_pipeline_malformed_patch_field_fails_with_invalid_output() {
     let blocked = PluginPipeline::execute_for_request(
         std::slice::from_ref(&directive),
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "http://x",
         "GET",
@@ -705,7 +733,10 @@ async fn test_pipeline_multistage_same_plugin_executes_distinct_stage_hooks() {
         PluginDirective::new("sign", "dual-hook", PluginStage::Sign),
     ];
     let cache = SuiteHookCache::new();
-    let opts = PluginRuntimeOptions::default();
+    let opts = PluginRuntimeOptions {
+        plugin_timeout: Duration::from_secs(30),
+        ..Default::default()
+    };
 
     for _ in 0..2 {
         let out = PluginPipeline::execute_for_request(
@@ -791,7 +822,10 @@ async fn test_pipeline_preflight_runtime_missing_degrades_with_prescription_with
     let blocked = PluginPipeline::execute_for_request(
         std::slice::from_ref(&directive),
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "http://x",
         "GET",
@@ -861,7 +895,10 @@ async fn test_pipeline_dependency_missing_attaches_three_option_prescription() {
     let blocked = PluginPipeline::execute_for_request(
         std::slice::from_ref(&directive),
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &cache,
         "http://x",
         "GET",
@@ -934,7 +971,10 @@ async fn test_pipeline_request_scope_degraded_sentinel_dedupes_retries() {
     let directive = PluginDirective::new("auth", "flaky-auth", PluginStage::Prepare);
     let opts = PluginRuntimeOptions {
         allow_missing_plugins: true,
-        ..PluginRuntimeOptions::default()
+        ..PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        }
     };
     let outcome = PluginPipeline::execute_for_request(
         &[directive.clone(), directive],
@@ -992,7 +1032,10 @@ async fn test_pipeline_blocking_preserves_upstream_patch_warnings() {
             PluginDirective::new("sign", "no-such-blocker", PluginStage::Sign),
         ],
         &reg,
-        &PluginRuntimeOptions::default(),
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
         &SuiteHookCache::new(),
         "http://x",
         "GET",

@@ -172,6 +172,8 @@ replay-reuse 底账 22 项中 20 项完成（B-6◐、E-6 裁决 deferred）、c
   切 `rustls-no-provider` + ring）。
 - **ROI**: ★★★（已投入成本的收尾，必做）
 
+> **✅ 2026-11-15 确认**：PR #15 合并运行（run 43714725889）全部 job 绿——musl Static Build & Size Budget 3m6s success（静态链接断言 + ≤20MB 预算通过），同跑新增 Web Frontend Tests job 亦绿。本项闭环。
+
 ### D10. Windows 平台验证
 
 - **内容**：CI 矩阵已有 windows-latest 编译+测试 job；history 0600 的 Windows 分支是

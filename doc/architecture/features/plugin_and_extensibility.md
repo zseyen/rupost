@@ -66,6 +66,33 @@
 4. **调试**：插件 stderr 在失败时经 16KB 截断入 warnings（终端/报告/快照三处同文）；
 5. **降级约定**：`?optional` 唯一声明语法；兜底鉴权唯一合法机制 = 用户手写静态 Header。
 
+### 3.0 schema 挂接编辑器（C8：让 schema 原料"能用"）
+
+`rupost plugin schema` 导出的 manifest schema 可挂进 VSCode，获得 **manifest 实时校验 + 字段补全**：
+
+`.vscode/settings.json`（仓库级，随仓共享给所有贡献者）：
+
+```json
+{
+  "json.schemas": [
+    {
+      "fileMatch": ["rupost-plugin-*.json"],
+      "url": "./.rupost/rupost-plugin-manifest.schema.json"
+    }
+  ]
+}
+```
+
+生成/更新 schema 文件（建议提交进仓库）：
+
+```bash
+rupost plugin schema --manifest-schema-only > .rupost/rupost-plugin-manifest.schema.json
+# （若无该旗标：从完整输出的 manifestSchema 段提取即可）
+```
+
+效果：编辑 `rupost-plugin-*.json` 时，缺失 `manifest_version`/`name` 等必填字段、
+`stage` 拼写错误（prepare/transform/sign 之外）即时红线提示。
+
 ### 3.1 AST 桥：复用核心解析器（WP-AST，2026-11-13）
 
 命令插件需要理解 `.http/.md` 文档时，**不要自行实现解析**（断言语义/变量约定极易与核心漂移）——经内核注入的 `RUPOST_BIN` 自调只读命令获取稳定 AST：

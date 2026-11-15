@@ -1,3 +1,4 @@
+use crate::platform;
 use crate::variable::resolver::VariableResolver;
 use crate::variable::types::{VariableConfig, VariableContext};
 use std::collections::HashMap;
@@ -41,7 +42,7 @@ impl ConfigLoader {
             }
         }
 
-        let home = crate::platform::home_dir()?;
+        let home = platform::home_dir()?;
         let user_path = home.join(".config").join("rupost").join(Self::CONFIG_FILE);
         if user_path.exists() {
             Some(user_path)

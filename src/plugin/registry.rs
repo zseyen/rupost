@@ -5,6 +5,7 @@ use super::types::{
     PluginHealthStatus, PluginManifest, PluginRuntime, PluginStage, PluginStatusEntry,
 };
 use crate::Result;
+use crate::platform;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -86,8 +87,8 @@ fn collect_plugin_roots(
             if let Some(path_env) = std::env::var_os("PATH") {
                 roots.extend(std::env::split_paths(&path_env));
             }
-            if let Some(home) = crate::platform::home_dir() {
-                roots.push(home.join(".rupost").join("plugins"));
+            if let Some(dir) = platform::rupost_dir() {
+                roots.push(dir.join("plugins"));
             }
         }
     }

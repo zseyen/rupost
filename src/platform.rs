@@ -18,6 +18,16 @@ pub fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
+/// 返回用户级配置根目录（`$HOME/.rupost`）。
+pub fn rupost_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".rupost"))
+}
+
+/// 返回 `$HOME/.rupost/<rel>` 路径。
+pub fn rupost_path(rel: impl AsRef<Path>) -> Option<PathBuf> {
+    rupost_dir().map(|dir| dir.join(rel))
+}
+
 /// 读取路径的 POSIX 权限位（`mode & 0o777`）；非 Unix 平台返回 `Ok(None)`。
 pub fn unix_mode(path: &Path) -> std::io::Result<Option<u32>> {
     let meta = std::fs::metadata(path)?;
@@ -61,6 +71,17 @@ pub fn exit_signal_code(status: ExitStatus) -> i32 {
     }
 }
 
+/// 为 `ExitStatus` 提供链式退出码提取扩展，避免调用方手写信号回退闭包。
+pub trait ExitStatusExt {
+    fn code_or_signal(self) -> i32;
+}
+
+impl ExitStatusExt for ExitStatus {
+    fn code_or_signal(self) -> i32 {
+        self.code().unwrap_or_else(|| exit_signal_code(self))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,7 +108,12 @@ mod tests {
         if let Some(home) = std::env::var_os("HOME")
             && !home.is_empty()
         {
-            assert_eq!(home_dir(), Some(PathBuf::from(home)));
+            let expected = PathBuf::from(&home);
+            assert_eq!(home_dir(), Some(expected.clone()));
+            assert_eq!(
+                rupost_path("ai.toml"),
+                Some(expected.join(".rupost").join("ai.toml"))
+            );
         }
     }
 }

@@ -4,6 +4,7 @@
 //! 插件注册表从未装配——本机已安装的非 optional 插件指令在两入口假性报
 //! "插件未安装"阻断。本工厂把注册表装配收口为表现层"即调即走"的单点。
 
+use crate::platform;
 use crate::plugin::pipeline::PluginRuntimeOptions;
 use crate::plugin::{DiscoverOptions, PluginRegistry};
 use crate::runner::TestExecutor;
@@ -17,8 +18,7 @@ pub fn discover_plugin_registry(
     discover: &DiscoverOptions,
     authorized_env_keys: &HashSet<String>,
 ) -> Arc<PluginRegistry> {
-    let cache_path = crate::platform::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
+    let cache_path = platform::rupost_path("registry.json")
         .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
     match PluginRegistry::load_or_discover(discover, &cache_path) {
         Ok(reg) => {

@@ -1,5 +1,6 @@
 //! CLI 插件命令执行器与 TOFU 可信校验（03 §6.2 交互直通与环境变量隔离）。
 
+use rupost::platform::{self, ExitStatusExt};
 use std::path::Path;
 use std::process::Stdio;
 
@@ -213,14 +214,12 @@ pub async fn launch_plugin_command(
         "RUPOST_BIN",
         std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("rupost")),
     );
-    if let Some(home) = rupost::platform::home_dir() {
-        cmd.env("RUPOST_CONFIG_DIR", home.join(".rupost"));
+    if let Some(dir) = platform::rupost_dir() {
+        cmd.env("RUPOST_CONFIG_DIR", dir);
     }
 
     match cmd.status().await {
-        Ok(status) => status
-            .code()
-            .unwrap_or_else(|| rupost::platform::exit_signal_code(status)),
+        Ok(status) => status.code_or_signal(),
         Err(e) => {
             eprintln!("[!] 插件命令启动失败: {e}");
             1
@@ -229,9 +228,7 @@ pub async fn launch_plugin_command(
 }
 
 fn cache_dir() -> std::path::PathBuf {
-    rupost::platform::home_dir()
-        .map(|h| h.join(".rupost"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".rupost"))
+    platform::rupost_dir().unwrap_or_else(|| std::path::PathBuf::from(".rupost"))
 }
 
 fn sha256_prefix(path: &Path) -> std::io::Result<String> {

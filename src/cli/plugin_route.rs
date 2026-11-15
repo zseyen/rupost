@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 use rupost::Result;
 use rupost::http::Method;
+use rupost::platform;
 use rupost::plugin::types::PluginHealthStatus;
 use rupost::plugin::{DiscoverOptions, PluginRegistry};
 
@@ -110,8 +111,7 @@ pub fn route(
 }
 
 fn registry_cache_path() -> std::path::PathBuf {
-    rupost::platform::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
+    platform::rupost_path("registry.json")
         .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"))
 }
 

@@ -134,6 +134,35 @@ pub async fn present_suite_outcome(
         }
     }
 
+    // WP-P2b：契约漂移基线（只记确定性字段；漂移不改变退出码）
+    if let Some(baseline_path) = &options.contract_baseline {
+        let summary = rupost::report::contract::build_contract_summary(&outcome.batch_results);
+        let baseline =
+            rupost::report::contract::load_baseline(std::path::Path::new(baseline_path))?;
+        match &baseline {
+            Some(base) => {
+                let drift = rupost::report::contract::diff_contracts(base, &summary);
+                if drift.newly_broken > 0 {
+                    eprintln!(
+                        "⚠ 契约漂移: {} 条契约相较基线由通过转为失败",
+                        drift.newly_broken
+                    );
+                }
+                if drift.fixed > 0 {
+                    eprintln!("[i] {} 条契约相较基线修复", drift.fixed);
+                }
+                eprintln!("[i] {} 条新增契约已写入基线", drift.new);
+            }
+            None => {
+                eprintln!(
+                    "[i] 契约基线已创建: {baseline_path}（共 {} 条；下次运行将报告漂移）",
+                    summary.contracts.len()
+                );
+            }
+        }
+        rupost::report::contract::save_baseline(std::path::Path::new(baseline_path), &summary)?;
+    }
+
     // WP-4 故障复现包（在报告与普通快照呈现之后）：仅失败时创建；
     // 强制脱敏、目标必须不存在；成功全绿不写目录只说明。
     // 工件 I/O 失败经专用错误变体 exit 2，不掩盖测试本身的 exit 1 结果。

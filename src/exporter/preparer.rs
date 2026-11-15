@@ -206,7 +206,8 @@ impl RequestPreparer {
         )?;
 
         let name = parsed.name().map(str::to_string);
-        let line_number = parsed.line_number;
+        // WP-A：对齐方法行（与 JSON 报告/契约基线同源）；解析器未回填时回退块首行
+        let line_number = parsed.metadata.source_line.unwrap_or(parsed.line_number);
         let method = parsed.method_or_default().to_uppercase();
         let body = parsed.body;
 
@@ -307,7 +308,7 @@ fn is_valid_json_object_or_array(body: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::variable::capture::VariableCapture;
+    use crate::parser::ParsedVariableCapture;
     use std::time::Duration;
 
     #[test]
@@ -336,6 +337,26 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "Content-Type" && v == "application/json")
         );
+    }
+
+    #[test]
+    fn test_source_location_points_at_method_line() {
+        // WP-A：行号台账——1 ### t（分隔行，不进块内容）/ 2 @assert / 3 GET；
+        // source_location 必须对齐方法行（与 JSON 报告/契约基线同源）
+        let content = "### t\n# @assert status == 200\nGET http://x/api\n";
+        let mut parsed_file = crate::parser::HttpFileParser::parse_content(content).unwrap();
+        let parsed = parsed_file.requests.remove(0);
+        let mut context = VariableContext::new();
+        let ir = RequestPreparer::prepare_one(
+            parsed,
+            &mut context,
+            None,
+            Some("t.http"),
+            false,
+            &HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(ir.source_location.as_deref(), Some("t.http:3"));
     }
 
     #[test]
@@ -411,9 +432,10 @@ mod tests {
         req1.metadata.name = Some("Login".to_string());
         req1.method = Some("POST".to_string());
         req1.url = "https://api.example.com/login".to_string();
-        req1.metadata
-            .captures
-            .push(VariableCapture::from_body("token", "data.token"));
+        req1.metadata.captures.push(ParsedVariableCapture {
+            name: "token".to_string(),
+            source: "body.data.token".to_string(),
+        });
         file.add_request(req1);
 
         // 请求 2: 标记 @skip

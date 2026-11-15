@@ -64,13 +64,26 @@ pub struct TestArgs {
     #[arg(long, value_name = "FILE")]
     pub save_snapshot: Option<String>,
 
+    /// WP-4 故障复现包：仅在运行失败时创建该目录（manifest/report/snapshot 三文件，
+    /// 强制脱敏、绝不覆盖——目录必须不存在；与 --save-snapshot 相互独立）
+    #[arg(long, value_name = "DIR")]
+    pub incident_out: Option<String>,
+
     /// Mask headers/body secrets in the saved snapshot (opt-in; keep off for replay body-diff fidelity)
     #[arg(long)]
     pub mask_secrets: bool,
 
+    /// S-3 按值掩码：快照中精确命中的值替换为 [REDACTED]（可多次；独立于 --mask-secrets 生效）
+    #[arg(long, value_name = "VALUE")]
+    pub mask_secret_value: Vec<String>,
+
     /// 单响应体录入快照的上限字节（默认 262144=256KB；防 OOM，截断部分以 SHA-256 摘要验真）
     #[arg(long, value_name = "BYTES")]
     pub max_snapshot_body_bytes: Option<usize>,
+
+    /// 时序采集模式（02 §2 契约）：仅支持 `off`——关闭时序采集，快照 timing_waterfall=null、timing_source=none
+    #[arg(long, value_name = "MODE")]
+    pub timing: Option<String>,
 
     /// 只运行单个请求：文件内序号 (3) 或 @name (@login)；也可用 path#3 片段语法
     #[arg(long, value_name = "N|@NAME")]
@@ -79,6 +92,19 @@ pub struct TestArgs {
     /// 失败时执行的 shell 命令（每个失败请求一次；env: RUPOST_FAILED_URL/STATUS/TRACE_ID）
     #[arg(long, value_name = "CMD")]
     pub on_failure: Option<String>,
+
+    /// `--only` 时先执行目标文件的 @depends-on 依赖闭包（免重填：上游登录/取号自动先跑）
+    #[arg(long)]
+    pub with_deps: bool,
+
+    /// E-4：未解析 {{var}} 拒绝外发（默认警告 + 字面量发送；CI 可开启硬门禁）。
+    /// 注意：body/URL 中合法的 {{ }} 字面量（webhook 模板等）也会被拦截
+    #[arg(long)]
+    pub strict_vars: bool,
+
+    /// 捕获变量持久化文件（免重填：结束落盘 @capture/插件变量，下次运行回灌补缺；默认 .rupost/vars.json）
+    #[arg(long, value_name = "FILE", num_args = 0..=1, default_missing_value = ".rupost/vars.json")]
+    pub var_state: Option<String>,
 
     /// 插件缺失/失败时降级为警告跳过，请求按 .http 原样外发（03 §2；现场排障）
     #[arg(long)]

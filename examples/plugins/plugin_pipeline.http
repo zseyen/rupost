@@ -1,0 +1,16 @@
+### Echo Sign Pipeline (Prepare -> Sign 不可逆阶段流)
+# 必选插件形态：插件环境损坏（如 python3 缺失 runtime_missing）时本用例必须失败——
+# 防假守护：本用例通过即证明 Python 插件真实拉起、Stdio IPC Patch 真实注入。
+# 即使书写顺序对调，内核亦依据不可逆阶段单向流 (Prepare -> Transform -> Sign) 严格保序。
+POST {{base_url}}/post
+@auth echo-sign key=demo-secret-key
+@sign echo-sign-v2 prefix=V2
+
+Content-Type: application/json
+
+{
+  "order_id": 9527,
+  "action": "create_payment"
+}
+
+# @assert status == 200

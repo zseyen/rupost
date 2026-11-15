@@ -5,6 +5,8 @@ use colored::Colorize;
 /// 终端渲染器：测试结果/摘要/批量汇总的彩色打印（JSON 契约见 `crate::report::json`）
 pub struct TestReporter {
     verbose: bool,
+    debug: bool,
+    debug_on_failure: bool,
     formatter: ResponseFormatter,
 }
 
@@ -18,8 +20,16 @@ impl TestReporter {
 
         Self {
             verbose,
+            debug: false,
+            debug_on_failure: false,
             formatter: ResponseFormatter::new(format),
         }
+    }
+
+    pub fn with_debug(mut self, debug: bool, debug_on_failure: bool) -> Self {
+        self.debug = debug;
+        self.debug_on_failure = debug_on_failure;
+        self
     }
 
     /// 打印单个测试结果
@@ -53,14 +63,21 @@ impl TestReporter {
             String::new()
         };
 
+        // E-5：插件耗时可见性——时延隔离口径（duration 含插件耗时）下，
+        // 单独呈现 plugin_duration 供开发者核对插件冷启动占比
+        let plugin_part = match result.plugin_duration_us {
+            Some(us) if us > 0 => format!(" (plugin +{}ms)", us.div_ceil(1000)),
+            _ => String::new(),
+        };
         println!(
-            " {} [{}]{} {} {} ({}ms)",
+            " {} [{}]{} {} {} ({}ms){}",
             symbol.color(color),
             result.request_number,
             name_part,
             result.method.cyan(),
             result.url,
-            result.duration.as_millis()
+            result.duration.as_millis(),
+            plugin_part
         );
 
         // 如果是 verbose 模式，或者失败了，显示详细信息
@@ -117,10 +134,12 @@ impl TestReporter {
             println!();
         }
 
-        // 显示网络时序与诊断报告
+        // 显示网络时序与诊断报告（M7-A 始终采集 timing 供快照使用，但终端仅在 --debug 或失败时 --debug-on-failure 渲染）
         if let Some(ref report) = result.diagnose_report {
             crate::http::print_diagnose_report(report);
-        } else if let Some(ref timing) = result.timing {
+        } else if (self.debug || (self.debug_on_failure && !result.success))
+            && let Some(ref timing) = result.timing
+        {
             self.print_timing(timing);
         }
     }

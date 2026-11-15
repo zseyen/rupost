@@ -37,6 +37,7 @@ async fn test_snapshot_recording_and_replaying() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"message": "hello world"}"#.to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -46,6 +47,8 @@ async fn test_snapshot_recording_and_replaying() {
         timestamp: chrono::Utc::now(),
         source_file: Some("test_suite".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
 
     // 写入快照
@@ -109,6 +112,7 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: "resp_a".to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -126,6 +130,7 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
             status: 201,
             headers: reqwest::header::HeaderMap::new(),
             body: "resp_b".to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -135,6 +140,8 @@ async fn test_replay_multi_entry_roundtrip_equivalence() {
         timestamp: chrono::Utc::now(),
         source_file: Some("multi_test".to_string()),
         entries: vec![entry_a, entry_b],
+
+        masking: None,
     };
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
@@ -182,6 +189,7 @@ async fn test_replay_honors_recorded_timeout() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: "slow response".to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -191,6 +199,8 @@ async fn test_replay_honors_recorded_timeout() {
         timestamp: chrono::Utc::now(),
         source_file: Some("timeout_test".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
@@ -241,6 +251,8 @@ async fn test_replay_corrupt_snapshot_readable_error() {
         timestamp: chrono::Utc::now(),
         source_file: Some("empty".to_string()),
         entries: vec![],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &path_empty).unwrap();
     let report_empty = replayer.replay_file(&path_empty).await.unwrap();
@@ -281,6 +293,7 @@ async fn test_replay_mixed_results_entries_structured() {
             status,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -294,6 +307,8 @@ async fn test_replay_mixed_results_entries_structured() {
             make_entry("id-2", "bad", 200), // 期望 200 实得 503 → mismatch
             make_entry("id-3", "ok", 200),
         ],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
@@ -352,6 +367,7 @@ async fn test_replay_transport_error_entry_structured() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -360,6 +376,8 @@ async fn test_replay_transport_error_entry_structured() {
         timestamp: chrono::Utc::now(),
         source_file: Some("dead_port_test".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
@@ -422,6 +440,7 @@ async fn test_replay_cli_exit_code_and_failed_entries_stdout() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -431,6 +450,8 @@ async fn test_replay_cli_exit_code_and_failed_entries_stdout() {
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_mixed_test".to_string()),
         entries: vec![make_entry("id-1", "ok"), make_entry("id-2", "bad")],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
@@ -488,6 +509,7 @@ async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -496,6 +518,8 @@ async fn test_replay_cli_all_success_exit_zero_without_failed_block() {
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_ok_test".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
@@ -627,6 +651,7 @@ async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: String::new(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -635,6 +660,8 @@ async fn test_replay_error_entry_duration_reflects_actual_elapsed() {
         timestamp: chrono::Utc::now(),
         source_file: Some("slow_timeout_test".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
@@ -676,6 +703,7 @@ async fn test_smart_diff_jitter_tolerated_and_real_diff_caught() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"quota":100,"timestamp":"2026-01-01T00:00:00Z"}"#.to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -684,6 +712,8 @@ async fn test_smart_diff_jitter_tolerated_and_real_diff_caught() {
         timestamp: chrono::Utc::now(),
         source_file: Some("smart_diff".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
     let replayer = ReplayExecutor::new(Some(mock_server.uri()), false).unwrap();
@@ -756,6 +786,7 @@ async fn test_smart_diff_cli_fourth_form_and_escapes() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"quota":100,"timestamp":"new"}"#.to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -764,6 +795,8 @@ async fn test_smart_diff_cli_fourth_form_and_escapes() {
         timestamp: chrono::Utc::now(),
         source_file: Some("cli_sd".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
     let uri = mock_server.uri();
@@ -861,6 +894,7 @@ async fn test_replay_explain_no_key_degradation() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"ok":true}"#.to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -869,6 +903,8 @@ async fn test_replay_explain_no_key_degradation() {
         timestamp: chrono::Utc::now(),
         source_file: Some("explain".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
@@ -1059,6 +1095,7 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
     };
 
     let fail_result = TestResult {
+        source_line: None,
         request_number: 1,
         name: Some("TimeoutReq".to_string()),
         method: "GET".to_string(),
@@ -1077,6 +1114,9 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
         is_teardown: false,
         degraded: false,
         plugin_duration_us: None,
+        connect_span: None,
+        timing_source: None,
+        timing_attribution: None,
     };
 
     let batch = vec![(PathBuf::from("test.http"), vec![fail_result])];
@@ -1085,6 +1125,7 @@ async fn test_save_batch_snapshot_preserves_error_when_response_is_none() {
         &["test.http".to_string()],
         &snapshot_file,
         true,
+        &[],
         None,
         rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
     )
@@ -1180,6 +1221,8 @@ async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
         timestamp: chrono::Utc::now(),
         source_file: Some("test.http".to_string()),
         entries: vec![error_entry],
+
+        masking: None,
     };
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
@@ -1285,6 +1328,7 @@ async fn test_replay_target_with_path_prefix() {
             status: 200,
             headers: reqwest::header::HeaderMap::new(),
             body: r#"{"status": "ok"}"#.to_string(),
+            body_truncated: None,
         }),
         error: None,
     };
@@ -1294,6 +1338,8 @@ async fn test_replay_target_with_path_prefix() {
         timestamp: chrono::Utc::now(),
         source_file: Some("test_suite_prefix".to_string()),
         entries: vec![entry],
+
+        masking: None,
     };
 
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
@@ -1313,4 +1359,64 @@ async fn test_replay_target_with_path_prefix() {
     assert_eq!(report_trailing.total, 1);
     assert_eq!(report_trailing.passed, 1);
     assert_eq!(report_trailing.failed, 0);
+}
+
+/// R-5（免重填）：replay actual==401 且 expected≠401 → 必须输出"疑似会话过期"
+/// 再获取指引（重放登录/更新 cookie/变量文件），不再是裸 mismatch。
+#[tokio::test]
+async fn test_replay_401_emits_session_expiry_hint() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/guarded"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("expired"))
+        .mount(&mock_server)
+        .await;
+
+    let temp_dir = TempDir::new().unwrap();
+    let snapshot_file = temp_dir.path().join("hint_snapshot.json");
+    let suite = SnapshotSuite {
+        version: 1,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("hint_test".to_string()),
+        entries: vec![SnapshotEntry {
+            id: "id-1".to_string(),
+            request: RequestSnapshot {
+                timeout: None,
+                method: "GET".to_string(),
+                url: "http://original.example.com/guarded".to_string(),
+                headers: reqwest::header::HeaderMap::new(),
+                body: None,
+            },
+            response: Some(ResponseSnapshot {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: String::new(),
+                body_truncated: None,
+            }),
+            error: None,
+        }],
+
+        masking: None,
+    };
+    write_snapshot_suite(&suite, &snapshot_file).unwrap();
+
+    let out = std::process::Command::new(rupost_bin())
+        .args([
+            "replay",
+            snapshot_file.to_str().unwrap(),
+            "--target",
+            mock_server.uri().as_str(),
+        ])
+        .output()
+        .expect("run rupost replay");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("expected 200, got 401"),
+        "mismatch 基线：{stdout}"
+    );
+    assert!(
+        stdout.contains("疑似会话过期"),
+        "401 必须携带会话过期再获取指引: {stdout}"
+    );
 }

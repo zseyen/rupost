@@ -6,7 +6,7 @@
 set -e
 
 # 注册全局清理 Trap，确保脚本因 error 意外退出或被中断时后台 Mock 进程一定能被清理
-trap 'echo -e "\n${YELLOW}[*] 正在释放后台仿真 Mock 服务进程...${NC}"; kill $LLM_MOCK_PID $SSE_MOCK_PID 2>/dev/null || true' EXIT
+trap 'echo -e "\n${YELLOW}[*] 正在释放后台仿真 Mock 服务进程...${NC}"; kill $LLM_MOCK_PID $SSE_MOCK_PID $PLUGIN_MOCK_PID $INCIDENT_MOCK_PID 2>/dev/null || true' EXIT
 
 # 定义终端色彩
 GREEN='\033[0;32m'
@@ -15,6 +15,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # 无颜色
+
+# WP-R5：端口基址可平移（默认 8080——默认值下行为与历史完全一致）；
+# incident 段保留独立旋钮 RUPOST_INCIDENT_MOCK_PORT（先交付兼容，不合并）
+EXAMPLE_PORT_BASE="${RUPOST_EXAMPLE_PORT_BASE:-8080}"
+LLM_PORT=$((EXAMPLE_PORT_BASE))
+PLUGIN_PORT=$((EXAMPLE_PORT_BASE + 10))
 
 echo -e "${BLUE}======================================================================${NC}"
 echo -e "${BLUE}                    RuPost 一键执行全部内置示例                      ${NC}"
@@ -35,6 +41,27 @@ echo -e "${GREEN}[✓] 编译就绪。${NC}"
 PASSED=0
 FAILED=0
 TOTAL=0
+
+# 健康探针（WP-R5，与 tests/verify_features.sh 的 wait_mock_ready 同款）：
+# 有限重试替代固定 sleep；进程启动即退出立刻报错并展示日志
+wait_port_ready() {
+    local port=$1 log=$2 pid=$3 retries=50
+    while [ "$retries" -gt 0 ]; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo -e "${RED}[ERROR] Mock 启动即退出（端口 ${port} 被占用或配置非法），日志：${NC}"
+            cat "$log" 2>/dev/null || true
+            exit 1
+        fi
+        if curl -s -m 2 -o /dev/null "http://127.0.0.1:${port}/"; then
+            return 0
+        fi
+        sleep 0.2
+        retries=$((retries - 1))
+    done
+    echo -e "${RED}[ERROR] Mock 端口 ${port} 未在超时内就绪，日志：${NC}"
+    cat "$log" 2>/dev/null || true
+    exit 1
+}
 
 # 记录执行结果的辅助函数
 run_case() {
@@ -82,31 +109,110 @@ run_case "多叉 DAG 拓扑网 (batch_complex/)" "test examples/batch_complex/ -
 echo -e "\n${BLUE}>>> 第四阶段：运行大模型与 Server-Sent Events (SSE) 闭环联调${NC}"
 
 # (1) 启动大模型仿真 Mock 网关 (llm_demo.md)
-echo -e "${CYAN}[*] 启动大模型仿真 Mock 网关在端口 8080...${NC}"
-$RUPOST_BIN mock examples/llm_and_sse/llm_demo.md --port 8080 > /tmp/llm_mock_run.log 2>&1 &
+echo -e "${CYAN}[*] 启动大模型仿真 Mock 网关在端口 ${LLM_PORT}...${NC}"
+$RUPOST_BIN mock examples/llm_and_sse/llm_demo.md --port "$LLM_PORT" > /tmp/llm_mock_run.log 2>&1 &
 LLM_MOCK_PID=$!
-sleep 2
+wait_port_ready "$LLM_PORT" /tmp/llm_mock_run.log "$LLM_MOCK_PID"
 
 # 运行 LLM 用例
-run_case "大模型流式 SSE 用例 (llm_demo.md)" "test examples/llm_and_sse/llm_demo.md --var base_url=http://127.0.0.1:8080"
-run_case "大模型流式 HTTP 用例 (llm_demo.http)" "test examples/llm_and_sse/llm_demo.http --var base_url=http://127.0.0.1:8080"
+run_case "大模型流式 SSE 用例 (llm_demo.md)" "test examples/llm_and_sse/llm_demo.md --var base_url=http://127.0.0.1:${LLM_PORT}"
+run_case "大模型流式 HTTP 用例 (llm_demo.http)" "test examples/llm_and_sse/llm_demo.http --var base_url=http://127.0.0.1:${LLM_PORT}"
 
 # 关闭 LLM Mock
-kill $LLM_MOCK_PID || true
+kill $LLM_MOCK_PID 2>/dev/null || true
+wait $LLM_MOCK_PID 2>/dev/null || true   # WP-R5 审查修正：等异步终止完成再复用同端口
 LLM_MOCK_PID=""
 
 # (2) 启动通用 SSE Mock 网关 (sse_demo.md)
-echo -e "${CYAN}[*] 启动通用 SSE Mock 网关在端口 8080...${NC}"
-$RUPOST_BIN mock examples/llm_and_sse/sse_demo.md --port 8080 > /tmp/sse_mock_run.log 2>&1 &
+echo -e "${CYAN}[*] 启动通用 SSE Mock 网关在端口 ${LLM_PORT}...${NC}"
+$RUPOST_BIN mock examples/llm_and_sse/sse_demo.md --port "$LLM_PORT" > /tmp/sse_mock_run.log 2>&1 &
 SSE_MOCK_PID=$!
-sleep 2
+wait_port_ready "$LLM_PORT" /tmp/sse_mock_run.log "$SSE_MOCK_PID"
 
 # 运行通用 SSE 用例
-run_case "通用 SSE 接口流用例 (sse_demo.md)" "test examples/llm_and_sse/sse_demo.md --var base_url=http://127.0.0.1:8080"
+run_case "通用 SSE 接口流用例 (sse_demo.md)" "test examples/llm_and_sse/sse_demo.md --var base_url=http://127.0.0.1:${LLM_PORT}"
 
 # 关闭 SSE Mock
 kill $SSE_MOCK_PID || true
 SSE_MOCK_PID=""
+
+# 5.5 插件体系闭环（Stdio IPC 管线 @auth/@sign + 声明式自愈降级；需 python3）
+if command -v python3 &>/dev/null; then
+    PLUGIN_EX_WS=$(mktemp -d /tmp/rupost_plugin_example_XXXXXX)
+    mkdir -p "$PLUGIN_EX_WS/.rupost/plugins"
+    cp examples/plugins/rupost-plugin-echo-sign "$PLUGIN_EX_WS/.rupost/plugins/"
+    cp examples/plugins/rupost-plugin-echo-sign.json "$PLUGIN_EX_WS/.rupost/plugins/"
+    chmod 755 "$PLUGIN_EX_WS/.rupost/plugins/rupost-plugin-echo-sign"
+    echo -e "\n${BLUE}>>> 第五阶段(续)：插件体系闭环联调${NC}"
+    # 插件工作区闸门以 cwd 为根：cd 进临时工作区后相对路径失效，先解析绝对路径
+    RUPOST_BIN="$(cd "$(dirname "$RUPOST_BIN")" && pwd)/$(basename "$RUPOST_BIN")"
+    $RUPOST_BIN mock examples/plugins/mock.json --port "$PLUGIN_PORT" > /tmp/plugin_mock_run.log 2>&1 &
+    PLUGIN_MOCK_PID=$!
+    wait_port_ready "$PLUGIN_PORT" /tmp/plugin_mock_run.log "$PLUGIN_MOCK_PID"
+    EX_PWD=$PWD
+    cd "$PLUGIN_EX_WS"
+    # 防假守护：必选插件形态——插件环境损坏时本用例必须 FAIL
+    run_case "插件 Stdio IPC 管线 @auth/@sign (plugins)" "test $EX_PWD/examples/plugins/plugin_pipeline.http --allow-project-plugins --var base_url=http://127.0.0.1:${PLUGIN_PORT}"
+    run_case "插件缺失自愈降级 (plugins)" "test $EX_PWD/examples/plugins/plugin_degrade.http --allow-project-plugins --allow-missing-plugins --var base_url=http://127.0.0.1:${PLUGIN_PORT}"
+    cd "$EX_PWD"
+    kill $PLUGIN_MOCK_PID || true
+    PLUGIN_MOCK_PID=""
+    rm -rf "$PLUGIN_EX_WS"
+else
+    echo -e "\n${YELLOW}[i] 未检测到 python3，跳过插件示例（安装 python3 后可跑通插件 Stdio IPC 闭环）${NC}"
+fi
+
+# 5.6 故障复现包闭环（WP-4，本地 loopback Mock，零公网零真实凭据）
+echo -e "\n${BLUE}>>> 第五阶段(续)：故障复现包闭环（incident bundle）${NC}"
+INCIDENT_WS=$(mktemp -d /tmp/rupost_incident_example_XXXXXX)
+INCIDENT_PORT="${RUPOST_INCIDENT_MOCK_PORT:-8095}"
+$RUPOST_BIN mock examples/incident_bundle/mock.json --port "$INCIDENT_PORT" > "$INCIDENT_WS/mock.log" 2>&1 &
+INCIDENT_MOCK_PID=$!
+INCIDENT_READY=0
+for _ in $(seq 1 40); do
+    if ! kill -0 "$INCIDENT_MOCK_PID" 2>/dev/null; then
+        echo -e "${RED}[ERROR] 复现包 Mock 启动即退出（端口 ${INCIDENT_PORT} 被占用或配置错误）${NC}"
+        cat "$INCIDENT_WS/mock.log" 2>/dev/null || true
+        exit 1
+    fi
+    if curl -s -o /dev/null "http://127.0.0.1:${INCIDENT_PORT}/ok"; then
+        INCIDENT_READY=1
+        break
+    fi
+    sleep 0.2
+done
+if [ "$INCIDENT_READY" -ne 1 ]; then
+    echo -e "${RED}[ERROR] 复现包 Mock 未在超时内就绪（端口 ${INCIDENT_PORT}）${NC}"
+    cat "$INCIDENT_WS/mock.log" 2>/dev/null || true
+    exit 1
+fi
+# 期望失败用例：exit 1 + 三文件工件 + 强制脱敏（manifest 声明 secrets 且原始凭据零泄漏）
+INCIDENT_OUT="$INCIDENT_WS/payment-failure"
+INCIDENT_EXIT=0
+$RUPOST_BIN t examples/incident_bundle/payments.http --var "base_url=http://127.0.0.1:${INCIDENT_PORT}" --incident-out "$INCIDENT_OUT" --mask-secret-value demo-secret-token-xyz > /dev/null 2>&1 || INCIDENT_EXIT=$?
+if [ "$INCIDENT_EXIT" -eq 1 ] \
+    && [ -f "$INCIDENT_OUT/manifest.json" ] && [ -f "$INCIDENT_OUT/report.json" ] && [ -f "$INCIDENT_OUT/snapshot.json" ] \
+    && ! grep -q "demo-secret-token-xyz" "$INCIDENT_OUT"/manifest.json "$INCIDENT_OUT"/report.json "$INCIDENT_OUT"/snapshot.json \
+    && grep -q '"masking": *"secrets"' "$INCIDENT_OUT"/manifest.json; then
+    echo -e "${GREEN}[✓] 故障复现包闭环验证成功（失败 exit 1 + 三文件 + 强制脱敏）(PASS)${NC}"
+    TOTAL=$((TOTAL + 1)); PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}[✗] 故障复现包闭环验证失败 (FAIL)${NC}"
+    TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+fi
+# 成功对照：全绿运行即使给了 --incident-out 也不创建目录
+GREEN_EXIT=0
+$RUPOST_BIN t examples/incident_bundle/green.http --var "base_url=http://127.0.0.1:${INCIDENT_PORT}" --incident-out "$INCIDENT_WS/should-not-exist" > /dev/null 2>&1 || GREEN_EXIT=$?
+if [ "$GREEN_EXIT" -eq 0 ] && [ ! -e "$INCIDENT_WS/should-not-exist" ]; then
+    echo -e "${GREEN}[✓] 复现包成功对照验证成功（全绿不建目录）(PASS)${NC}"
+    TOTAL=$((TOTAL + 1)); PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}[✗] 复现包成功对照验证失败 (FAIL)${NC}"
+    TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+fi
+kill $INCIDENT_MOCK_PID || true
+INCIDENT_MOCK_PID=""
+rm -rf "$INCIDENT_WS"
 
 # 6. 打印最终执行结果
 echo -e "\n${BLUE}======================================================================${NC}"

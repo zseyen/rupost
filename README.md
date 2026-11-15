@@ -16,13 +16,14 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **变量与环境管理**：灵活的变量替换机制与多环境一键切换。详见 [变量与环境管理指南](file:///doc/guides/variables_and_environments.md)。
 - **批量与并发测试**：支持跨文件有向无环图 (DAG) 拓扑排序依赖执行，支持顺序/并行双模式运行与状态单向克隆。详见 [批量测试指南](file:///doc/guides/batch_testing.md)。
 - **网络诊断分析**：细粒度的网络耗时瀑布图与 X.509 证书到期健康分析。详见 [网络诊断工具指南](file:///doc/guides/network_diagnostics.md)。
-- **全链路调试**：失败自动诊断、`--explain` 就地归因、`ai triage` 批量分诊、`--on-failure` trace 取证钩子、快照重放失败定位到条与历史导出供给链。详见 [调试指南](file:///doc/guides/debug_guide.md)。
+- **全链路调试**：失败自动诊断、`--explain` 就地归因、`ai triage` 批量分诊、`--on-failure` trace 取证钩子、快照重放失败定位到条与历史导出供给链、**故障复现包**（`--incident-out`：失败运行产出脱敏、可重放、可移交的目录工件，仅失败时创建、绝不覆盖）。详见 [调试指南](file:///doc/guides/debug_guide.md)。
 - **本地 Mock 服务**：Trie 树路径匹配、路径参数捕获与多分支条件响应。详见 [本地 Mock 服务器指南](file:///doc/guides/mock_server.md)。
 - **WebSocket 协议调试**：支持 WebSocket 订阅流剧本、操作符软匹配断言与自动重连自愈。详见 [WebSocket 协议调试指南](file:///doc/guides/websocket_testing.md)。
 - **历史与追踪**：自动记录请求历史，支持从历史记录交互式生成测试文件。
 - **极致效率**：支持 curl 与 httpie 风格的命令行输入，并提供极短的别名（`t`, `h`, `g`）以提升操作流转速度。
 - **交互式终端 TUI 模式**：内置基于 Model-View-Update 单向数据流与自适应布局的交互式调试终端。支持文件与请求历史双 Tab 状态解耦切换、基于内存预折行 (Pre-wrapping) 算法的长 Response/WS/SSE 日志高精度垂直滚动、路径显示配置切换、以及历史快照一键 Enter 反向还原代码并重新加载运行。
 - **底层架构**：遵循 Clean Architecture 设计模式，代码结构清晰，易于扩展与维护。
+- **插件生态**：hook（请求管线签名/认证/改写）与 command（CLI 工具扩展）双形态；命令型最小示例与作者指南见 [插件与扩展](file:///doc/architecture/features/plugin_and_extensibility.md)，社区插件索引见 [community-plugins.md](file:///doc/community-plugins.md)。
 
 ---
 

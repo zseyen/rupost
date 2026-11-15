@@ -112,6 +112,10 @@ pub struct SnapshotSuite {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub source_file: Option<String>,
     pub entries: Vec<SnapshotEntry>,
+    /// B-2：来源契约的 masking 标记透传（"secrets" → replay 警告"数据不完整"，
+    /// 02 §4：掩码模式验签/Diff 结论必须降级声明）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub masking: Option<String>,
 }
 
 fn default_snapshot_version() -> u32 {
@@ -127,6 +131,11 @@ pub struct ResponseSnapshot {
     pub headers: reqwest::header::HeaderMap,
 
     pub body: String,
+
+    /// B-2：录制时响应体是否被上限截断（截断条目 replay 跳过 body diff，
+    /// 消灭"截断 JSON 前缀必然比对失败"的系统性假失败）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_truncated: Option<bool>,
 }
 
 impl From<HistoryEntry> for SnapshotEntry {
@@ -141,6 +150,7 @@ impl From<HistoryEntry> for SnapshotEntry {
                     .response
                     .body
                     .unwrap_or_else(|| "Old snapshot: body not recorded".to_string()),
+                body_truncated: None,
             }),
             error: None,
         }
@@ -246,7 +256,7 @@ pub struct ExecutionSnapshotEntry {
     /// 插件耗时由 [`ExecutionSnapshotEntry::plugin_duration_us`] 单列承载。
     /// 采集链路缺失时序时回退为执行墙钟（runner duration）。
     pub duration_us: u64,
-    /// 外部插件管道总耗时（M3 接线；当前恒为 None）
+    /// 外部插件管道总耗时（微秒；由 M3 插件管线采样并隔离记录）
     #[serde(default)]
     pub plugin_duration_us: Option<u64>,
 
@@ -266,6 +276,14 @@ pub struct ExecutionSnapshotEntry {
     /// 微秒级网络时延拆解（连接复用时对应阶段为 None）
     #[serde(default)]
     pub timing_waterfall: Option<TimingWaterfallUs>,
+
+    /// M7-A: 时序采集来源（connector / probe_degraded / none）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_source: Option<crate::http::timing::TimingSource>,
+
+    /// M7-A: 时序归属精度（exact / approximate）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing_attribution: Option<crate::http::timing::TimingAttribution>,
 
     /// 底层物理连接诊断指纹
     #[serde(default)]
@@ -287,9 +305,18 @@ pub struct SnapshotRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+    /// B-6：`@timeout` 往返（毫秒）。缺失 = 旧快照，重放退回 client 默认（serde default 兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
-/// 黑匣子响应镜像（256KB 截断保护 + 截断前完整 Body 的 SHA-256 供离线验真）
+/// 黑匣子响应镜像（256KB 截断保护 + SHA-256 验真摘要）
+///
+/// `body_sha256` 语义随 `masking` 分态（P1-1 review 裁决，02 §2）：
+/// ① 未掩码：截断时对**截断前完整原始 body**，未截断为 None；
+/// ② 掩码模式（masking=secrets）：恒 Some，对**文件内掩码后形态**（离线可验真；
+///    截断+掩码组合时原完整体摘要不可恢复——登记取舍）。
+/// 消费端必须先读顶层 `masking` 再解释本字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotResponse {
     pub status: u16,
@@ -297,7 +324,7 @@ pub struct SnapshotResponse {
     pub body: String,
     /// 超过单响应体上限截断时为 true
     pub body_truncated: bool,
-    /// 截断前完整原始响应体的 SHA-256 校验和（小写 hex）
+    /// 语义随 masking 分态（见 struct doc）；小写 hex
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body_sha256: Option<String>,
 }
@@ -365,6 +392,35 @@ impl TimingWaterfallUs {
             total_us: total,
         }
     }
+
+    /// 从 M7-A `ConnectSpan` + 请求自身 `ttfb`/`transfer` 合成微秒级瀑布。
+    /// 连接复用时 `span` 为 `None`，`dns_lookup_us` 与 `tcp_connect_us` 均保持 `None`（JSON `null`）。
+    pub fn from_connect_span(
+        span: Option<crate::http::timing_connector::ConnectSpan>,
+        ttfb: std::time::Duration,
+        transfer: std::time::Duration,
+        diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
+    ) -> Self {
+        let dns_lookup_us = span.and_then(|s| s.dns_us);
+        let tcp_connect_us = span.and_then(|s| s.tcp_us);
+        let tls_handshake_us =
+            diagnose.and_then(|d| d.tls_handshake_duration.map(|t| t.as_micros() as u64));
+        let ttfb_us = ttfb.as_micros() as u64;
+        let transfer_us = transfer.as_micros() as u64;
+        let total_us = dns_lookup_us.unwrap_or(0)
+            + tcp_connect_us.unwrap_or(0)
+            + tls_handshake_us.unwrap_or(0)
+            + ttfb_us
+            + transfer_us;
+        Self {
+            dns_lookup_us,
+            tcp_connect_us,
+            tls_handshake_us,
+            ttfb_us,
+            transfer_us,
+            total_us,
+        }
+    }
 }
 
 impl SocketDiagnostics {
@@ -404,14 +460,14 @@ fn header_pairs_to_map(pairs: &[(String, String)]) -> reqwest::header::HeaderMap
 }
 
 impl SnapshotRequest {
-    /// 黑匣子请求镜像 → 重放格式的 RequestSnapshot（timeout 不可考，回退 None）
+    /// 黑匣子请求镜像 → 重放格式的 RequestSnapshot（B-6：timeout 往返复现原超时语义）
     pub fn to_history_request(&self) -> RequestSnapshot {
         RequestSnapshot {
             method: self.method.clone(),
             url: self.url.clone(),
             headers: header_pairs_to_map(&self.headers),
             body: self.body.clone(),
-            timeout: None,
+            timeout: self.timeout_ms.map(std::time::Duration::from_millis),
         }
     }
 }
@@ -434,10 +490,15 @@ impl ExecutionSnapshotFile {
                         status: r.status,
                         headers: header_pairs_to_map(&r.headers),
                         body: r.body.clone(),
+                        body_truncated: Some(r.body_truncated),
                     }),
                     error: e.error.clone(),
                 })
                 .collect(),
+            masking: match self.masking {
+                MaskingMode::Secrets => Some("secrets".to_string()),
+                MaskingMode::None => None,
+            },
         }
     }
 }

@@ -1,8 +1,8 @@
 //! 黑匣子契约快照与重放快照脱敏（02 §4 凭据掩码 SSOT）。
 
-use crate::exporter::redact::{
-    is_sensitive_key, mask_body_secrets, mask_inline_secrets, mask_pii, redact_free_text,
-    redact_header_value, redact_url,
+use crate::security::redact::{
+    is_sensitive_key, mask_body_secrets, mask_inline_secrets, mask_pii, order_secret_values,
+    redact_explicit_secrets_ordered, redact_free_text, redact_header_value, redact_url,
 };
 
 /// 自由文本脱敏 SSOT：URL 凭据 -> 内联键值/Bearer/Basic -> PII（邮箱/卡号/手机号）
@@ -98,9 +98,15 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
     // 多值 Header（Set-Cookie 等同名多值）逐值掩码——drain 后 append 重建，
     // 非 UTF-8 值原样保留（掩码通道不损伤结构）
     let mask_headers = |map: &mut reqwest::header::HeaderMap| {
+        let mut last_name: Option<reqwest::header::HeaderName> = None;
         let drained: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)> = map
             .drain()
-            .map(|(name, value)| (name.expect("valid header name"), value))
+            .filter_map(|(name, value)| {
+                if let Some(n) = name {
+                    last_name = Some(n);
+                }
+                last_name.clone().map(|n| (n, value))
+            })
             .collect();
         for (name, value) in drained {
             match value.to_str() {
@@ -131,27 +137,56 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
 /// 黑匣子契约快照 (ExecutionSnapshotEntry) 的 Secrets Masker：
 /// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/exporter/redact.rs`），
 /// 覆盖 URL、Headers、Body、Error、Assertions 与 Warnings 全展示面（02 §2/§4）。
-pub fn mask_execution_snapshot_entry(entry: &mut crate::history::model::ExecutionSnapshotEntry) {
+pub fn mask_execution_snapshot_entry(
+    entry: &mut crate::history::model::ExecutionSnapshotEntry,
+    secret_values: &[String],
+) {
+    // S-3：按值掩码优先（用户显式列出的密钥值 → [REDACTED]），独立于键名启发式（SSOT in security::redact）。
+    let ordered = order_secret_values(secret_values);
+    let redact_values = |text: &str| -> String { redact_explicit_secrets_ordered(text, &ordered) };
     let mask_pairs = |headers: &mut Vec<(String, String)>| {
         for (name, value) in headers.iter_mut() {
-            *value = redact_header_value(name, value);
+            *value = redact_values(&redact_header_value(name, value));
         }
     };
-    entry.request.url = redact_url(&entry.request.url);
+    entry.request.url = redact_values(&redact_url(&entry.request.url));
     mask_pairs(&mut entry.request.headers);
     if let Some(ref mut resp) = entry.response {
         mask_pairs(&mut resp.headers);
-        resp.body = mask_body_secrets(resp.body.as_str());
+        resp.body = redact_values(&mask_body_secrets(resp.body.as_str()));
+        // S-2：掩码后重算 body_sha256——摘要对文件内记录的掩码后形态（离线可验真）；
+        // 对原始字节的验真在掩码模式下不可行（masking=secrets 已声明数据不完整）
+        resp.body_sha256 = Some({
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(resp.body.as_bytes());
+            h.finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        });
     }
-    entry.request.body = entry.request.body.as_ref().map(|b| mask_body_secrets(b));
+    entry.request.body = entry
+        .request
+        .body
+        .as_ref()
+        .map(|b| redact_values(&mask_body_secrets(b)));
     if let Some(ref mut err) = entry.error {
-        err.message = mask_free_text_and_secrets(&err.message);
+        err.message = redact_values(&mask_free_text_and_secrets(&err.message));
     }
     for assertion in &mut entry.assertions {
         mask_snapshot_assertion(assertion);
+        // P1-2（review）：assertion 四字段值掩码——`body.api_key == "secret"` 类
+        // 表达式的 actual/expected 携带密钥值，必须同样经 redact_values
+        assertion.expression = redact_values(&assertion.expression);
+        assertion.actual = assertion.actual.take().map(|v| redact_values(&v));
+        assertion.expected = assertion.expected.take().map(|v| redact_values(&v));
+        if let Some(msg) = assertion.message.take() {
+            assertion.message = Some(redact_values(&msg));
+        }
     }
     for warning in &mut entry.warnings {
-        *warning = mask_free_text_and_secrets(warning);
+        *warning = redact_values(&mask_free_text_and_secrets(warning));
     }
 }
 
@@ -183,6 +218,7 @@ mod tests {
                     ("Content-Type".to_string(), "application/json".to_string()),
                 ],
                 body: Some(r#"{"password": "hunter2", "city": "Shanghai"}"#.to_string()),
+                timeout_ms: None,
             },
             response: None,
             error: Some(ExecutionErrorDetail {
@@ -192,6 +228,8 @@ mod tests {
                 occurred_at: chrono::Utc::now(),
             }),
             timing_waterfall: None,
+            timing_source: None,
+            timing_attribution: None,
             socket_diagnostics: None,
             assertions: vec![SnapshotAssertion {
                 expression: "body.token == \"assert_expr_secret\"".to_string(),
@@ -208,9 +246,59 @@ mod tests {
     }
 
     #[test]
+    fn test_secret_value_masking_hits_all_surfaces() {
+        let mut entry = sample_entry();
+        entry.request.url = "https://vault.example.com/x?ns=super-secret-ns".to_string();
+        entry.request.headers = vec![(
+            "X-Vault-Namespace".to_string(),
+            "super-secret-ns".to_string(),
+        )];
+        entry.request.body = Some("ns=super-secret-ns".to_string());
+        if let Some(resp) = entry.response.as_mut() {
+            resp.body = r#"{"namespace":"super-secret-ns"}"#.to_string();
+        }
+        mask_execution_snapshot_entry(&mut entry, &["super-secret-ns".to_string()]);
+        let combined = format!(
+            "{}{:?}{:?}",
+            entry.request.url, entry.request.headers, entry.request.body
+        );
+        assert!(
+            !combined.contains("super-secret-ns"),
+            "按值掩码必须覆盖 url/headers/body 全表面: {combined}"
+        );
+        assert!(combined.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn test_masked_body_sha256_matches_masked_form() {
+        use sha2::{Digest, Sha256};
+        let mut entry = sample_entry();
+        if let Some(resp) = entry.response.as_mut() {
+            resp.body = r#"{"api_key":"sk-live-plain"}"#.to_string();
+            resp.body_sha256 = Some("deadbeef".to_string());
+        }
+        mask_execution_snapshot_entry(&mut entry, &[]);
+        if let Some(resp) = entry.response.as_ref() {
+            let expected = {
+                let mut h = Sha256::new();
+                h.update(resp.body.as_bytes());
+                h.finalize()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            };
+            assert_eq!(
+                resp.body_sha256.as_deref(),
+                Some(expected.as_str()),
+                "S-2：掩码后 sha 必须对掩码后形态（离线可验真）"
+            );
+        }
+    }
+
+    #[test]
     fn test_mask_execution_snapshot_entry_full_surface() {
         let mut entry = sample_entry();
-        mask_execution_snapshot_entry(&mut entry);
+        mask_execution_snapshot_entry(&mut entry, &[]);
 
         // 1. Headers & Body
         assert_ne!(entry.request.headers[0].1, "Bearer real-token");
@@ -264,5 +352,50 @@ mod tests {
         assert!(!entry.request.url.contains("s3cr3t"));
         assert!(!entry.request.url.contains("query_secret"));
         assert!(entry.request.url.contains("v=1"));
+    }
+    /// P1-1（review）：截断+掩码组合形态——sha 对掩码后截断体（原完整体摘要不可恢复，
+    /// 02 附录裁决登记）；P1-2：assertion actual/expected 携带密钥值必须被值掩码。
+    #[test]
+    fn test_masked_truncated_sha_and_assertion_values() {
+        let mut entry = sample_entry();
+        if let Some(resp) = entry.response.as_mut() {
+            resp.body = r#"{"api_key":"ns-live-777"}"#.to_string();
+            resp.body_truncated = true;
+            resp.body_sha256 = Some("original-full-body-sha".to_string());
+        }
+        entry
+            .assertions
+            .push(crate::history::model::SnapshotAssertion {
+                expression: "body.api_key == \"ns-live-777\"".to_string(),
+                passed: false,
+                actual: Some("ns-live-777".to_string()),
+                expected: Some("ns-live-777".to_string()),
+                message: Some("mismatch at ns-live-777".to_string()),
+            });
+        mask_execution_snapshot_entry(&mut entry, &["ns-live-777".to_string()]);
+
+        if let Some(resp) = entry.response.as_ref() {
+            assert!(resp.body.contains("[REDACTED]"));
+            let expected = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(resp.body.as_bytes());
+                h.finalize()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            };
+            assert_ne!(resp.body_sha256.as_deref(), Some("original-full-body-sha"));
+            assert_eq!(resp.body_sha256.as_deref(), Some(expected.as_str()));
+            let a = &entry.assertions[0];
+            let combined = format!(
+                "{:?}{:?}{:?}{:?}",
+                a.expression, a.actual, a.expected, a.message
+            );
+            assert!(
+                !combined.contains("ns-live-777"),
+                "assertion 四字段必须值掩码（P1-2）: {combined}"
+            );
+        }
     }
 }

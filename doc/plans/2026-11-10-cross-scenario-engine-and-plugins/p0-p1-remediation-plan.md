@@ -1,6 +1,6 @@
 # P0/P1 缺陷解决方案与落地追踪 (Remediation Plan)
 
-- **状态**: Draft (v1.0.0 — 方案已全部裁决并合入 v2.1.0 文档，代码落地待 M1~M5)
+- **状态**: Execution Ready (v1.1.0 — P0/P1 与 M6/M7 已全部落地并经全量门禁验收)
 - **关联**: [review-adversarial.md](./review-adversarial.md)（审查记录）、[README §0 权威矩阵](./README.md)
 - **用途**: 对审查报告 **P0 级发现（多路交叉证实）** 与 **P1 级发现（择要）** 逐项给出解决方案，登记文档落点、代码落点与验收标准，作为 M1~M5 施工期间的**缺陷追踪底账**（每个 P0/P1 必须走到"已落地"才允许回标 Execution Ready）。
 - **状态图例**: 📄 方案已合入 v2.1.0 文档 · 🔧 代码待落地（标注 Milestone） · ✅ 已验收
@@ -137,7 +137,7 @@
 | P1-6 | ✅ 已落地（M3：cache_scope none/request/suite + Hook 缓存复用） | 03 §3.1/§8.3 / 05 D11 | ✅ M3 |
 | P1-7 | ✅ 已落地（M1-M5：04 套件 1/2/3/4/5 全部落地，owner 映射兑现） | 04 全文 | ✅ M1-M5 |
 | P1-8 | ✅ 已落地（masking 感知红线：ai triage-snapshot 读取 masking 标记并输出数据不完整声明） | 02 §2/§4 | ✅ M5 |
-| P1-9 | 📄 已裁决（分层边界由代码结构遵守：`use rupost_ai` 仅存在于 src/ai 与 ai 命令族；CI grep 守护登记待办） | 05 分层裁决 | ✅ M2/M3 |
+| P1-9 | ✅ 已落地（`.github/workflows/ci.yml:40-43` `Guard rupost_ai crate boundary (P1-9/B0)` 守护 `rupost_ai` 仅存在于 `src/ai/`） | 05 分层裁决 | ✅ M2/M3/M6 |
 | P1-10 | ✅ 已落地（M1 冻结清单 interface-freeze-m1.md + exit 127 测试废除改原值穿透 e2e） | 06 M1/M2/M4 | ✅ M1/M4 |
 
 > 汇总裁决：**全部 P0/P1 均已有明确解决方案并合入 v2.1.0 文档层；剩余工作全部是带 Milestone 的代码落地项**。本底账随实施推进更新状态列（🔧 → ✅），M5 结束时必须全表 ✅ 方可回标 Execution Ready。
@@ -146,18 +146,24 @@
 
 | ID | 工作项 | 归属 |
 | :-- | :--- | :--- |
-| M6-1 | `runtime` manifest 声明解析 + readdir 预检 + 插件三态状态机（ready/pending/failed）+ `plugin list` 可视化与处方提示 | M6 |
-| M6-2 | 失败分类学扩展 `runtime_missing`/`dependency_missing`（stderr 表驱动特征，提取缺失模块名入处方） | M6 |
-| M6-3 | `requires_env` 声明未放行启动 WARNING | M6 |
+| M6-1 | ✅ 已落地（`runtime` manifest 解析 + readdir 预检 + 三态状态机 `ready/pending/failed` + `plugin list` 处方；`tests/plugin_registry_test.rs`, `tests/cli_plugin_route_test.rs`） | M6 |
+| M6-2 | ✅ 已落地（`RuntimeMissing`/`DependencyMissing` 失败分类与缺失模块提取处方；`tests/plugin_driver_test.rs`, `tests/plugin_pipeline_test.rs`） | M6 |
+| M6-3 | ✅ 已落地（`requires_env` 未放行启动 WARNING 与 `--plugin-env` 放行；`tests/plugin_registry_test.rs`, `tests/cli_plugin_route_test.rs`） | M6 |
 | M6-4 | ✅ 已落地（2026-11-12：`--max-snapshot-body-bytes` 旗标接线，`save_batch_snapshot` 参数化上限，截断 + SHA-256 验真守护测试 + verify_features 冒烟） | M6 |
 | M6-5 | ✅ 已落地（2026-11-12：main 入口 `RupostError::ParseError` → exit 2 归位，二进制级守护 `tests/ast_exit_code_test.rs` 含 exit 1 防假守护对照） | M6 |
-| M6-6 | DoD 性能验证测试：时延隔离不变量 / suite cache_scope 进程数 ≤2 / fail-fast 组级 kill 传播 / 并发×插件组合 | M6 |
-| M6-7 | 04 套件 3 录制保真半落地 `tests/artifact_mining_test.rs` | M6 |
-| M6-8 | 掩码扩面表驱动单测（X-Sign/query token/Set-Cookie/body PII 全表） | M6 |
-| M6-9 | P1-9 CI grep 守护（`use rupost_ai` 边界） | M6 |
+| M6-6 | ✅ 已落地（时延隔离、suite `cache_scope` 进程数 ≤2、parallel `fail_fast` 组级 kill 传播、并发×多阶段插件；`tests/plugin_dod_test.rs`） | M6 |
+| M6-7 | ✅ 已落地（04 套件 3 录制保真到离线 AI triage 闭环；`tests/artifact_mining_test.rs`） | M6 |
+| M6-8 | ✅ 已落地（掩码扩面表驱动单测：X-Sign/query token/Set-Cookie/body PII/AI 脱敏对齐；`tests/snapshot_contract_test.rs`） | M6 |
+| M6-9 | ✅ 已落地（P1-9/B0 CI grep 守护 `rupost_ai` 边界；`.github/workflows/ci.yml:40-43`） | M6 |
 
 > M6 完成后底账维持全 ✅ + M6 全 ✅，方可维持 Execution Ready。
 
 > 差距收口批注（2026-11-12，plugin-m6 工作区）：代码-设计偏差三项同批落地——①`cache_scope=request` 请求内复用实现（此前枚举无分支退化为 none，`PluginPipeline` 请求局部备忘录 + TDD 防假守护对照 suite 语义）；②registry `register_from_manifest` 保留字阶段（post_response/on_failure/harvest）拒绝注册（interface-freeze-m1 §1 裁决落地，此前静默注册死钩子）；③manifest `ttl` P2 保留值告警 + 按 none 归位（此前 serde 静默忽略与 types.rs 注释裁决不符）。`verify_features.sh` 补插件体系冒烟步骤 15（Stdio IPC 注入防假守护 + 工作区闸门 + 降级 DegradedPass 三态 + 保留字告警 + 新旗标 + exit 2）。
+
+> M7 对账小节（2026-11-12，step5 §3.4 要求的对账项）：**M7-A 核心已落地**——机制按探针实测修订（`tests/m7_reqwest_probe_test.rs`，reqwest 0.13.4）：原蓝本 3 处硬伤（虚构 `.resolver().connector()` API、connector_layer 无法切分 tcp/tls、跨 task 归属）勘误后落地为 `TimingDnsResolver` + `TimingConnectorLayer` 双钩子 + `task_local!` 单连接槽位（替代原 authority 分桶方案，语义等价裁决登记于 m7-timing-connector-design.md M7-A 修订版）。快照 `timing_source`/`timing_attribution`/`timing_waterfall` 已落盘；R1 反转守护、HTTPS (tcp+tls) 合算诚实声明、代理 → approximate 均已兑现。外围收口（plugin-closeout 工作区，同日）：`--timing off` 旗标兑现（02 §2:135 承诺，waterfall=null + source=none + 未知模式 exit 2）；并行池竞争 → approximate 标注（`reconcile_timing_metadata` 后置收敛，决策表锁定 probe/代理/串行对照形态）。**M7 残余**：`SocketDiagnostics.tls_cipher_suite/tls_version` 仍为 best-effort None（冻结清单 #2 诚实声明，reqwest 公开 API 不暴露证书链，登记生态期）。
+
+> Step 1~5 安全/解耦整改闭环记录（2026-11-12 归档）：Step 1 snapshot/ai 红化加固（ea0e3507）→ Step 2 链式 stage 上下文 + requires_env 强制 + 协议/缓存拆分（f1e83695）→ Step 3 TOFU 0600/symlink 硬化 + `--allow-project-plugins` + Method SSOT（38166295）→ Step 4 SuiteHookCache 并发隔离 + parallel/inline 接线 + suite_setup/executor_plugin 提炼（d15a4fb1）→ Step 5A walkthrough-gaps 合流 + 变量装配 DRY 收口（zrwzktlx）；Step 5B 探针结论已回写 M7-A 修订版设计文档并替代原 M7 路线。闭环后 P0/P1 全表 ✅、M6 全表 ✅、M7-A 核心兑现，Execution Ready 维持。
+
+> M6-6 阈值口径裁决（2026-11-12，plugin-closeout 工作区）：时延隔离不变量测试已从审查期放宽口径（sleep 2s / ttfb<200ms / plugin>=1.5s）**对齐回 06 §5 计划字面**（sleep 3s / ttfb<100ms / plugin_duration_us>3s），本地回环 ttfb 实测余量充足；`tests/plugin_dod_test.rs::test_dod_latency_isolation_plugin_duration_vs_ttfb` 为唯一权威守护。
 
 > 全量落地记录（2026-11-11，M2~M5 收官）：M2 registry/缓存硬化（bench registry_cache_read 0.58ms ≤5ms）→ M3 StdioDriver/失败分类学/统一降级/--strict-plugins（6-driver mock 矩阵 + 降级 6 用例 e2e 含正向对照组）→ M4 args[0] 裁决序 + TOFU/环境白名单/信号感知穿透（e2e exit7 原值穿透）→ M5 plugin list/schema + ai triage-snapshot（masking 感知）+ standalone/byte-fidelity 套件。三层门禁：workspace 1029 测试 0 失败 / verify_features.sh PASS / examples run_all 15 套 ALL PASS；clippy -D warnings + fmt 零漂移。release 二进制净增量 vs 审查基线 +141 KiB（预算 ≤500 KiB）。**P0/P1 底账全表 ✅，Execution Ready 回标条件达成。**

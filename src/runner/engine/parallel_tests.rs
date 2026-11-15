@@ -105,3 +105,32 @@ fn test_build_executor_with_cookie_and_plugin_state() {
     assert!(current_state.to_string().contains("session"));
     assert!(current_state.to_string().contains("abcdef"));
 }
+
+#[tokio::test]
+async fn test_parallel_scheduler_deduplicates_duplicate_execution_order_without_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let f1 = dir.path().join("dup.http");
+    std::fs::write(&f1, "### skipped\n# @skip\nGET http://127.0.0.1:1/skip\n").unwrap();
+    let parsed = crate::parser::HttpFileParser::parse_file(&f1).unwrap();
+    let mut files_map = HashMap::new();
+    files_map.insert(f1.clone(), parsed);
+
+    let executor = TestExecutor::new();
+    let mut context = VariableContext::new();
+    let scheduler = ParallelScheduler::new(
+        &executor,
+        vec![f1.clone(), f1.clone()],
+        HashMap::new(),
+        files_map,
+        &mut context,
+        2,
+        false,
+    );
+
+    let output = scheduler
+        .run()
+        .await
+        .expect("duplicate execution_order must not panic");
+    assert_eq!(output.results.len(), 1);
+    assert_eq!(output.results[0].0, f1);
+}

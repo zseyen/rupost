@@ -1,3 +1,4 @@
+pub mod ast_json;
 pub mod http_file;
 pub mod markdown_file;
 pub mod metadata;
@@ -5,12 +6,13 @@ pub mod mock_variant;
 pub mod types;
 
 // Re-export commonly used types
+pub use ast_json::{AST_SCHEMA_VERSION, AstDocument, AstRequest, to_ast_document};
 pub use http_file::HttpFileParser;
 pub use markdown_file::MarkdownFileParser;
 pub use mock_variant::MockVariantParser;
 pub use types::{
-    FileMetadata, ParseError, ParseResult, ParsedFile, ParsedMockVariant, ParsedRequest,
-    RequestMetadata,
+    FileMetadata, ParseError, ParseResult, ParsedFile, ParsedMockVariant, ParsedPluginDirective,
+    ParsedPluginStage, ParsedRequest, ParsedVariableCapture, RequestMetadata,
 };
 
 /// 通用 HTTP Header 行词法解析（`Key: Value` -> `(key, value)`）
@@ -34,12 +36,7 @@ pub fn parse_document_by_path<P: AsRef<std::path::Path>>(
     path: P,
     content: &str,
 ) -> ParseResult<ParsedFile> {
-    let ext = path
-        .as_ref()
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown") {
+    if crate::utils::path_guard::is_markdown_doc(path.as_ref()) {
         MarkdownFileParser::parse_content(content)
     } else {
         HttpFileParser::parse_content(content)
@@ -57,4 +54,4 @@ pub fn parse_content(content: &str) -> ParseResult<ParsedFile> {
 }
 
 pub mod scanner;
-pub use scanner::DirectoryScanner;
+pub use scanner::{DirectoryScanner, is_supported_doc};

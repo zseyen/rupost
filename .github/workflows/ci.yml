@@ -37,6 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Guard rupost_ai crate boundary (P1-9/B0)
+        run: |
+          if grep -rnE '\brupost_ai\b' src/ --exclude-dir=ai; then
+            echo "::error::P1-9/B0 boundary violation: rupost_ai may only be referenced inside src/ai/"
+            exit 1
+          fi
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -81,3 +87,50 @@ jobs:
           path: ${{ matrix.bin_path }}
           retention-days: 7
           if-no-files-found: ignore
+
+  # Job 4: WP-2 可信度——Web 前端无依赖原生单测（本地 make test-web 的 CI 事实化，
+  # 独立 Ubuntu job：node --test 零 npm 依赖，不进三平台 matrix）
+  web-assets:
+    name: Web Frontend Tests (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run web frontend tests
+        run: node --test tests/web/app_test.mjs
+
+  # Job 5: C-1 容器叙事守护——musl 静态链接 + 体积预算断言（scratch/Alpine 可用的工程事实化）
+  musl-static:
+    name: musl Static Build & Size Budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust with musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          key: musl
+      - name: Install musl toolchain (gcc + cmake for aws-lc-rs)
+        run: sudo apt-get update && sudo apt-get install -y musl-tools cmake
+      - name: Build Static Release Binary
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin rupost
+      - name: Verify Static Linking (no dynamic deps)
+        run: |
+          FILE_OUT=$(file target/x86_64-unknown-linux-musl/release/rupost)
+          echo "$FILE_OUT"
+          echo "$FILE_OUT" | grep -qE "statically linked|static-pie linked" || {
+            echo "::error::binary is not statically linked: $FILE_OUT"; exit 1
+          }
+      - name: Size Budget Assertion (≤20MB, 01 §1 DoD)
+        run: |
+          SIZE=$(stat -c%s target/x86_64-unknown-linux-musl/release/rupost)
+          echo "release binary: $SIZE bytes"
+          if [ "$SIZE" -gt 20971520 ]; then
+            echo "::error::size budget exceeded: $SIZE > 20971520 (20MB)"
+            exit 1
+          fi

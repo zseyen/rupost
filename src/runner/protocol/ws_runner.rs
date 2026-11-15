@@ -10,9 +10,8 @@ use tracing::{error, info, warn};
 use crate::assertion::evaluate_assertions;
 use crate::history::model::RequestSnapshot;
 use crate::http::{Request, Response};
-use crate::middleware::Middleware;
+use crate::middleware::MiddlewarePipeline;
 use crate::parser::types::ParsedRequest;
-use crate::runner::executor::ExecutorMiddleware;
 use crate::runner::types::TestResult;
 use crate::runner::utils::file_sync::write_log_with_limit;
 use crate::variable::capture::VariableCapture;
@@ -30,13 +29,15 @@ impl WsRunner {
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
-        middlewares: Vec<ExecutorMiddleware>,
+        middlewares: MiddlewarePipeline,
+        observer: std::sync::Arc<dyn crate::runner::observer::ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
     ) -> TestResult {
         let start_time = Instant::now();
         let name = parsed.name().map(|s| s.to_string());
+        let source_line = parsed.metadata.source_line;
         let initial_url = parsed.url.clone();
 
         let request_snapshot = RequestSnapshot::from_parsed(&parsed);
@@ -45,8 +46,10 @@ impl WsRunner {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let default_log_name = format!("ws_{}_{}.log", timestamp, request_number);
         let log_path_str = parsed.metadata.stream_to.clone().unwrap_or_else(|| {
-            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
-            format!("{}/logs/{}", dir, default_log_name)
+            crate::platform::history_logs_dir()
+                .join(&default_log_name)
+                .to_string_lossy()
+                .into_owned()
         });
         let log_path = std::path::PathBuf::from(&log_path_str);
 
@@ -62,7 +65,12 @@ impl WsRunner {
 
         // 保存断言、捕获列表与超时/Body信息
         let assertions_to_eval = parsed.metadata.assertions.clone();
-        let captures_to_eval = parsed.metadata.captures.clone();
+        let captures_to_eval: Vec<VariableCapture> = parsed
+            .metadata
+            .captures
+            .iter()
+            .map(VariableCapture::from)
+            .collect();
         let decoder_name = parsed.metadata.decoder.clone();
         let handshake_timeout = parsed.metadata.timeout.unwrap_or(Duration::from_secs(5));
         let body_content = parsed.body.clone().unwrap_or_default();
@@ -83,17 +91,15 @@ impl WsRunner {
         };
 
         // 2. 调用所有中间件的 before_request 拦截与追加逻辑
-        for mw in &middlewares {
-            if let Err(e) = mw.before_request(&mut temp_req).await {
-                return TestResult::error(
-                    request_number,
-                    name,
-                    "GET".to_string(),
-                    temp_req.url.to_string(),
-                    format!("Middleware before_request error: {}", e),
-                    start_time.elapsed(),
-                );
-            }
+        if let Err(e) = middlewares.run_before_request(&mut temp_req).await {
+            return TestResult::error(
+                request_number,
+                name,
+                "GET".to_string(),
+                temp_req.url.to_string(),
+                format!("Middleware before_request error: {}", e),
+                start_time.elapsed(),
+            );
         }
 
         // 3. 提取修改后的 URL，自适应协议转写为 ws:// 或 wss://
@@ -345,6 +351,7 @@ impl WsRunner {
             timing: None,
             diagnose_report: None,
             request: Some(request_snapshot.clone()),
+            source_line, // WP-P2a 补全：与 HTTP/SSE 同源
             warnings: {
                 capture_warnings.sort();
                 capture_warnings.dedup();
@@ -353,11 +360,13 @@ impl WsRunner {
             is_teardown: false,
             degraded: false,
             plugin_duration_us: None,
+            connect_span: None,
+            timing_source: None,
+            timing_attribution: None,
         };
 
         // 保存历史记录 (WebSocket 专用)
-        use crate::history::recorder::record_history;
-        record_history(request_snapshot, &summary_response, None);
+        observer.on_record_history(request_snapshot, &summary_response, None);
 
         test_result
     }
@@ -625,7 +634,8 @@ impl WsRunner {
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
-        middlewares: &[ExecutorMiddleware],
+        middlewares: &MiddlewarePipeline,
+        observer: &std::sync::Arc<dyn crate::runner::observer::ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -638,7 +648,8 @@ impl WsRunner {
             parsed,
             request_number,
             context,
-            middlewares.to_vec(),
+            middlewares.clone(),
+            observer.clone(),
             stream_sender,
         )
         .await)

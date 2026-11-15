@@ -2,9 +2,9 @@ use crate::Result;
 use crate::RupostError;
 use crate::history::model::RequestSnapshot;
 use crate::http::Client;
-use crate::middleware::Middleware;
+use crate::middleware::MiddlewarePipeline;
 use crate::parser::types::ParsedRequest;
-use crate::runner::executor::ExecutorMiddleware;
+use crate::runner::observer::ExecutionObserver;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
 use std::time::{Duration, Instant};
@@ -19,7 +19,8 @@ impl HttpRunner {
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
-        middlewares: &[ExecutorMiddleware],
+        middlewares: &MiddlewarePipeline,
+        observer: &std::sync::Arc<dyn ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -34,6 +35,7 @@ impl HttpRunner {
         let name = parsed.name().map(|s| s.to_string());
 
         // 提前保存断言列表和捕获配置（在 parsed 被移动前）
+        let source_line = parsed.metadata.source_line;
         let is_sse_requested = parsed.is_sse_stream();
         let sse_timeout = parsed.metadata.sse_timeout;
         let sse_max_events = parsed.metadata.sse_max_events;
@@ -41,7 +43,12 @@ impl HttpRunner {
         let stream_to_append = parsed.metadata.stream_to_append;
 
         let assertions_to_eval = parsed.metadata.assertions.clone();
-        let captures_to_eval = parsed.metadata.captures.clone();
+        let captures_to_eval: Vec<VariableCapture> = parsed
+            .metadata
+            .captures
+            .iter()
+            .map(VariableCapture::from)
+            .collect();
         let enable_diagnose = parsed.metadata.diagnose;
 
         // [History] 创建请求快照 (在 parsed 被 move 之前)
@@ -65,17 +72,15 @@ impl HttpRunner {
         };
 
         // 遍历调用中间件的 before_request 钩子
-        for mw in middlewares {
-            if let Err(e) = mw.before_request(&mut request).await {
-                return Ok(TestResult::error(
-                    request_number,
-                    name,
-                    method,
-                    url,
-                    format!("Middleware before_request error: {}", e),
-                    start.elapsed(),
-                ));
-            }
+        if let Err(e) = middlewares.run_before_request(&mut request).await {
+            return Ok(TestResult::error(
+                request_number,
+                name,
+                method,
+                url,
+                format!("Middleware before_request error: {}", e),
+                start.elapsed(),
+            ));
         }
 
         // 1. 进行 Pre-flight 探测 (带容错，不干扰主流程)
@@ -87,9 +92,9 @@ impl HttpRunner {
             None
         };
 
-        // 执行请求
-        match client.execute_raw(request).await {
-            Ok((response, ttfb)) => {
+        // 执行请求（M7-A: 始终在 task_local! 作用域内采集单连接 DNS/TCP 时序）
+        match client.execute_raw_with_timing(request).await {
+            Ok((response, ttfb, connect_span)) => {
                 // 判断是否是 SSE 响应
                 let is_sse_by_content_type = response
                     .headers()
@@ -115,6 +120,8 @@ impl HttpRunner {
                         stream_to_append,
                         stream_sender,
                         warnings: build_warnings,
+                        connect_span,
+                        source_line,
                     };
                     return Ok(crate::runner::SseRunner::execute(
                         response,
@@ -125,7 +132,8 @@ impl HttpRunner {
                         source,
                         request_snapshot,
                         probe_result,
-                        middlewares.to_vec(),
+                        middlewares.clone(),
+                        observer.clone(),
                     )
                     .await);
                 }
@@ -166,15 +174,15 @@ impl HttpRunner {
                 }
 
                 // 遍历调用中间件的 after_response 钩子
-                for mw in middlewares {
-                    let _ = mw.after_response(&response_obj).await.map_err(|e| {
+                let _ = middlewares
+                    .run_after_response(&response_obj)
+                    .await
+                    .map_err(|e| {
                         error!("Middleware after_response error: {}", e);
                     });
-                }
 
                 // [History] 异步保存历史记录 (Best Effort)
-                use crate::history::recorder::record_history;
-                record_history(request_snapshot.clone(), &response_obj, source);
+                observer.on_record_history(request_snapshot.clone(), &response_obj, source);
 
                 // 2. 变量捕获（失败项收集为警告，不影响其余捕获）
                 let capture_warnings = VariableCapture::capture_normal(
@@ -201,6 +209,7 @@ impl HttpRunner {
                     response_obj.clone(),
                 );
                 test_result.request = Some(request_snapshot);
+                test_result.source_line = source_line;
                 test_result.assertions = assertion_results;
                 // 构建期警告（畸形 JSON 降级等）在前，捕获警告在后
                 let mut all_warnings = build_warnings;
@@ -224,12 +233,13 @@ impl HttpRunner {
                     }
                 }
 
-                let need_timing = debug || (debug_on_failure && !test_result.success);
-                test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
-                    probe_result,
+                // M7-A: 默认始终记录单连接时序（无需 --debug）；连接复用时 connect_span 为 None
+                //（对应快照 dns_lookup_us/tcp_connect_us = null）。
+                apply_connector_timing(
+                    &mut test_result,
+                    connect_span,
                     response_obj.ttfb,
                     response_obj.transfer,
-                    need_timing,
                 );
 
                 Ok(test_result)
@@ -254,6 +264,7 @@ impl HttpRunner {
                     start.elapsed(),
                 );
                 test_result.request = Some(request_snapshot);
+                test_result.source_line = source_line;
                 let run_diagnose = enable_diagnose || debug || debug_on_failure;
                 // 传输层失败恰是最需要诊断的场景：用宽容版诊断保证 DNS/TCP
                 // 阶段性失败也能产出带 connection_error 分类的部分瀑布（D2 拆分）
@@ -267,9 +278,49 @@ impl HttpRunner {
                     Duration::ZERO,
                     need_timing,
                 );
+                if test_result.timing.is_some() {
+                    test_result.timing_source =
+                        Some(crate::http::timing::TimingSource::ProbeDegraded);
+                    test_result.timing_attribution =
+                        Some(if crate::http::timing_connector::has_proxy_env() {
+                            crate::http::timing::TimingAttribution::Approximate
+                        } else {
+                            crate::http::timing::TimingAttribution::Exact
+                        });
+                }
 
                 Ok(test_result)
             }
         }
     }
+}
+
+/// 将 M7-A 连接器采集的 `ConnectSpan` 与 `ttfb`/`transfer` 写入 `TestResult`（供 HTTP 与 SSE 复用）
+pub(super) fn apply_connector_timing(
+    test_result: &mut TestResult,
+    connect_span: Option<crate::http::timing_connector::ConnectSpan>,
+    ttfb: Duration,
+    transfer: Duration,
+) {
+    let span_dns = connect_span
+        .and_then(|s| s.dns_us)
+        .map(Duration::from_micros)
+        .unwrap_or(Duration::ZERO);
+    let span_tcp = connect_span
+        .and_then(|s| s.tcp_us)
+        .map(Duration::from_micros)
+        .unwrap_or(Duration::ZERO);
+    test_result.timing = Some(crate::http::timing::RequestTiming {
+        dns_lookup: span_dns,
+        tcp_connect: span_tcp,
+        ttfb,
+        transfer,
+    });
+    test_result.connect_span = connect_span;
+    test_result.timing_source = Some(crate::http::timing::TimingSource::Connector);
+    test_result.timing_attribution = Some(if crate::http::timing_connector::has_proxy_env() {
+        crate::http::timing::TimingAttribution::Approximate
+    } else {
+        crate::http::timing::TimingAttribution::Exact
+    });
 }

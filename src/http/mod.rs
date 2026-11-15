@@ -7,6 +7,7 @@ pub mod request_builder;
 pub mod response;
 pub mod stream;
 pub mod timing;
+pub mod timing_connector;
 pub mod types;
 
 // Re-export commonly used types for convenient access
@@ -20,7 +21,10 @@ pub use request::Request;
 pub use request_builder::{to_request, try_from_parsed_with_warnings};
 pub use response::Response;
 pub use stream::{SseEvent, SseParser};
-pub use timing::{DiagnosticsProber, NetworkLatency, RequestTiming};
+pub use timing::{
+    DiagnosticsProber, NetworkLatency, RequestTiming, TimingAttribution, TimingSource,
+};
+pub use timing_connector::{ConnectSpan, TimingConnectorLayer, TimingDnsResolver};
 pub use types::{Method, Status, Url};
 pub mod url;
 pub use url::resolve_final_url;
@@ -29,18 +33,24 @@ use crate::Result;
 
 /// 执行网络诊断命令的机制层函数
 pub async fn run_diagnose(url: &str, report: &str) -> Result<()> {
-    match diagnose_url(url).await {
-        Ok(report_data) => {
-            if report.eq_ignore_ascii_case("json") {
-                println!("{}", serde_json::to_string_pretty(&report_data).unwrap());
-            } else {
-                print_diagnose_report(&report_data);
-            }
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
+    let report_data = diagnose_url(url)
+        .await
+        .map_err(crate::RupostError::NetworkError)?;
+    if report.eq_ignore_ascii_case("json") {
+        println!("{}", serde_json::to_string_pretty(&report_data)?);
+    } else {
+        print_diagnose_report(&report_data);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_run_diagnose_invalid_url_returns_err() {
+        let res = run_diagnose("not a valid url ://", "terminal").await;
+        assert!(res.is_err(), "无效 URL 应返回 Err 而非退出进程");
     }
 }

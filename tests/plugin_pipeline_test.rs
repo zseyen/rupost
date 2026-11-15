@@ -40,6 +40,7 @@ fn install_script_plugin(
             requires_env,
             parameters_schema: serde_json::json!({}),
         }],
+        runtime: None,
     };
     let mpath = root.join(format!("rupost-plugin-{name}.json"));
     std::fs::write(&mpath, serde_json::to_string(&manifest).unwrap()).unwrap();
@@ -197,8 +198,11 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
     let dir = tempfile::tempdir().unwrap();
     unsafe {
         std::env::set_var("RUPOST_TEST_REQ_TOKEN", "from_parent_env");
+        std::env::set_var("CUSTOM_SIGN_SECRET_STEP2", "custom_secret_42");
     }
-    let exe = install_script_plugin(
+
+    // 1. RUPOST_* 变量默认放行
+    let exe_rupost = install_script_plugin(
         dir.path(),
         "env-reader",
         PluginStage::Sign,
@@ -206,27 +210,50 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         vec!["RUPOST_TEST_REQ_TOKEN".to_string()],
         "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Tok\",\"$ENV{RUPOST_TEST_REQ_TOKEN}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
-    // 也测非 RUPOST_ 前缀的普通 env 名（验证 manifest requires_env 本身生效）
-    unsafe {
-        std::env::set_var("CUSTOM_SIGN_SECRET_STEP2", "custom_secret_42");
-    }
+    // 2. 任意 requires_env 变量未经 --plugin-env 显式放行，绝不能静默从宿主机拷贝
     let exe2 = install_script_plugin(
         dir.path(),
         "custom-env",
         PluginStage::Sign,
         PluginCacheScope::None,
         vec!["CUSTOM_SIGN_SECRET_STEP2".to_string()],
-        "READ_STDIN=\nCHECK_ENV_PRESENT=CUSTOM_SIGN_SECRET_STEP2\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Custom\",\"$ENV{CUSTOM_SIGN_SECRET_STEP2}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Custom\",\"$ENV{CUSTOM_SIGN_SECRET_STEP2}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
     );
-    let _ = exe;
+
     let mut reg = PluginRegistry::new();
-    let m2: PluginManifest =
-        serde_json::from_str(&std::fs::read_to_string(exe2.with_extension("json")).unwrap())
-            .unwrap();
-    reg.register_manifest(exe2, m2);
+    for exe in [exe_rupost, exe2] {
+        let m: PluginManifest =
+            serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+                .unwrap();
+        reg.register_manifest(exe, m);
+    }
 
     let cache = SuiteHookCache::new();
-    let out_env = PluginPipeline::execute_for_request(
+
+    // RUPOST_* 前缀自动透传
+    let out_rupost = PluginPipeline::execute_for_request(
+        &[PluginDirective::new(
+            "sign",
+            "env-reader",
+            PluginStage::Sign,
+        )],
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(out_rupost.blocking_error.is_none());
+    assert_eq!(
+        out_rupost.patch.unwrap().extra_headers[0],
+        ("X-Tok".to_string(), "from_parent_env".to_string())
+    );
+
+    // 未传 --plugin-env 时，即使 manifest 声明了 requires_env，宿主机 CUSTOM_SIGN_SECRET_STEP2 也不得泄漏
+    let out_denied = PluginPipeline::execute_for_request(
         &[PluginDirective::new(
             "sign",
             "custom-env",
@@ -234,6 +261,39 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         )],
         &reg,
         &PluginRuntimeOptions::default(),
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(
+        out_denied.blocking_error.is_none(),
+        "{:?}",
+        out_denied.blocking_error
+    );
+    assert_eq!(
+        out_denied.patch.unwrap().extra_headers[0],
+        ("X-Custom".to_string(), String::new()),
+        "未经 --plugin-env 授权时，requires_env 不得静默从宿主机拷贝"
+    );
+
+    // 通过 --plugin-env 显式放行后，子进程才能收到该环境变量
+    let authorized_opts = PluginRuntimeOptions {
+        plugin_env: rupost::plugin::parse_plugin_env_specs(&[
+            "CUSTOM_SIGN_SECRET_STEP2".to_string()
+        ]),
+        ..Default::default()
+    };
+    let out_env = PluginPipeline::execute_for_request(
+        &[PluginDirective::new(
+            "sign",
+            "custom-env",
+            PluginStage::Sign,
+        )],
+        &reg,
+        &authorized_opts,
         &cache,
         "http://x",
         "GET",
@@ -535,5 +595,416 @@ async fn test_pipeline_request_scope_reuses_patch_within_request_only() {
         lines.lines().count(),
         2,
         "request 作用域：请求内去重（1 次）+ 跨请求重调（1 次），实际子进程调用:\n{lines}"
+    );
+}
+
+#[tokio::test]
+async fn test_pipeline_malformed_patch_field_fails_with_invalid_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install_script_plugin(
+        dir.path(),
+        "bad-patch",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":\"not-an-array\"}\n",
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let cache = SuiteHookCache::new();
+    let directive = PluginDirective::new("sign", "bad-patch", PluginStage::Sign);
+
+    let blocked = PluginPipeline::execute_for_request(
+        std::slice::from_ref(&directive),
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(
+        blocked
+            .blocking_error
+            .as_deref()
+            .is_some_and(|e| e.contains("invalid_output")),
+        "畸形 Patch 字段必须触发 invalid_output 阻断: {blocked:?}"
+    );
+
+    let degraded = PluginPipeline::execute_for_request(
+        &[directive],
+        &reg,
+        &PluginRuntimeOptions {
+            allow_missing_plugins: true,
+            ..Default::default()
+        },
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(degraded.blocking_error.is_none());
+    assert!(degraded.degraded);
+    assert!(degraded.patch.is_some());
+}
+
+#[tokio::test]
+async fn test_pipeline_multistage_same_plugin_executes_distinct_stage_hooks() {
+    let dir = tempfile::tempdir().unwrap();
+    let prep_calls = dir.path().join("prep_calls.txt");
+    let sign_calls = dir.path().join("sign_calls.txt");
+    let exe = common::mock_plugin::install_mock_executable(
+        dir.path(),
+        "rupost-plugin-dual-hook",
+        &format!(
+            "READ_STDIN=\nON_STDIN_CONTAINS=\"stage\":\"prepare\"|{}|prep|{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"Authorization\",\"Bearer dual\"]]}}\nON_STDIN_ABSENT=\"stage\":\"prepare\"|{}|sign|{{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Dual-Sig\",\"ok\"]]}}\n",
+            prep_calls.display(),
+            sign_calls.display()
+        ),
+    );
+    let manifest = PluginManifest {
+        manifest_version: "1.0".to_string(),
+        name: "dual-hook".to_string(),
+        version: "0.1.0".to_string(),
+        description: "dual stage".to_string(),
+        commands: vec![],
+        hooks: vec![
+            HookCapability {
+                directive: "auth".to_string(),
+                alias: Some("dual-hook".to_string()),
+                stage: PluginStage::Prepare,
+                cache_scope: PluginCacheScope::Suite,
+                requires_env: vec![],
+                parameters_schema: serde_json::json!({}),
+            },
+            HookCapability {
+                directive: "sign".to_string(),
+                alias: Some("dual-hook".to_string()),
+                stage: PluginStage::Sign,
+                cache_scope: PluginCacheScope::None,
+                requires_env: vec![],
+                parameters_schema: serde_json::json!({}),
+            },
+        ],
+        runtime: None,
+    };
+    let mut reg = PluginRegistry::new();
+    reg.register_manifest(exe, manifest);
+    assert!(reg.warnings.is_empty(), "{:?}", reg.warnings);
+
+    let directives = vec![
+        PluginDirective::new("auth", "dual-hook", PluginStage::Prepare),
+        PluginDirective::new("sign", "dual-hook", PluginStage::Sign),
+    ];
+    let cache = SuiteHookCache::new();
+    let opts = PluginRuntimeOptions::default();
+
+    for _ in 0..2 {
+        let out = PluginPipeline::execute_for_request(
+            &directives,
+            &reg,
+            &opts,
+            &cache,
+            "http://x",
+            "GET",
+            &[],
+            None,
+        )
+        .await;
+        assert!(out.blocking_error.is_none(), "{:?}", out.blocking_error);
+        let headers = out.patch.unwrap().extra_headers;
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer dual")
+        );
+        assert!(headers.iter().any(|(k, v)| k == "X-Dual-Sig" && v == "ok"));
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&prep_calls)
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sign_calls)
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn test_pipeline_preflight_runtime_missing_degrades_with_prescription_without_spawning() {
+    use rupost::plugin::types::PluginRuntime;
+
+    let dir = tempfile::tempdir().unwrap();
+    let sentinel = dir.path().join("should_never_spawn.txt");
+    let exe = dir.path().join("rupost-plugin-py-missing");
+    std::fs::write(
+        &exe,
+        format!("#!/bin/sh\ntouch \"{}\"\nexit 99\n", sentinel.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let manifest = PluginManifest {
+        manifest_version: "1.0".to_string(),
+        name: "py-missing".to_string(),
+        version: "0.1.0".to_string(),
+        description: "needs missing interpreter".to_string(),
+        commands: vec![],
+        hooks: vec![HookCapability {
+            directive: "sign".to_string(),
+            alias: Some("py-missing".to_string()),
+            stage: PluginStage::Sign,
+            cache_scope: PluginCacheScope::None,
+            requires_env: vec![],
+            parameters_schema: serde_json::json!({}),
+        }],
+        runtime: Some(PluginRuntime {
+            interpreter: Some("rupost_missing_python_999".to_string()),
+            min_version: Some("3.10".to_string()),
+            modules: vec!["boto3".to_string()],
+        }),
+    };
+    let mut reg = PluginRegistry::new();
+    reg.register_manifest(exe, manifest);
+
+    let cache = SuiteHookCache::new();
+    let directive = PluginDirective::new("sign", "py-missing", PluginStage::Sign);
+
+    let blocked = PluginPipeline::execute_for_request(
+        std::slice::from_ref(&directive),
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(!sentinel.exists(), "预检失败时绝不能拉起插件子进程");
+    let block_msg = blocked.blocking_error.expect("blocking error expected");
+    assert!(block_msg.contains("runtime_missing"), "{block_msg}");
+    assert!(block_msg.contains("①"), "{block_msg}");
+    assert!(block_msg.contains("②"), "{block_msg}");
+    assert!(block_msg.contains("③"), "{block_msg}");
+    assert!(block_msg.contains("--allow-missing-plugins"), "{block_msg}");
+    assert!(!block_msg.contains("已降级跳过"), "{block_msg}");
+
+    let degraded = PluginPipeline::execute_for_request(
+        &[directive],
+        &reg,
+        &PluginRuntimeOptions {
+            allow_missing_plugins: true,
+            ..Default::default()
+        },
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(!sentinel.exists());
+    assert!(degraded.blocking_error.is_none());
+    assert!(degraded.degraded);
+    assert!(
+        degraded.warnings.iter().any(|w| {
+            w.contains("已降级跳过")
+                && w.contains("rupost_missing_python_999")
+                && w.contains("①")
+                && w.contains("②")
+                && w.contains("③")
+        }),
+        "降级警告必须包含三选一处方: {:?}",
+        degraded.warnings
+    );
+}
+
+#[tokio::test]
+async fn test_pipeline_dependency_missing_attaches_three_option_prescription() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install_script_plugin(
+        dir.path(),
+        "dep-missing",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        "READ_STDIN=\nSTDERR_LINE=ModuleNotFoundError: No module named 'boto3'\nEXIT_CODE=1\n",
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let cache = SuiteHookCache::new();
+    let directive = PluginDirective::new("sign", "dep-missing", PluginStage::Sign);
+
+    let blocked = PluginPipeline::execute_for_request(
+        std::slice::from_ref(&directive),
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    let block_msg = blocked.blocking_error.expect("blocking error");
+    assert!(block_msg.contains("dependency_missing"), "{block_msg}");
+    assert!(block_msg.contains("boto3"), "{block_msg}");
+    assert!(block_msg.contains("①"), "{block_msg}");
+    assert!(block_msg.contains("②"), "{block_msg}");
+    assert!(block_msg.contains("③"), "{block_msg}");
+
+    let degraded = PluginPipeline::execute_for_request(
+        &[directive],
+        &reg,
+        &PluginRuntimeOptions {
+            allow_missing_plugins: true,
+            ..Default::default()
+        },
+        &cache,
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(degraded.blocking_error.is_none());
+    assert!(degraded.degraded);
+    assert!(
+        degraded
+            .warnings
+            .iter()
+            .any(|w| w.contains("boto3") && w.contains("①") && w.contains("②") && w.contains("③")),
+        "依赖缺失降级警告必须包含模块名与三选一处方: {:?}",
+        degraded.warnings
+    );
+}
+
+/// D1/D5 收口（审查发现）：request 作用域下降级后必须写入"降级哨兵"——
+/// 同一请求内重复声明同一失败指令只拉起一次子进程、只产生一条降级告警，
+/// 绝不重复调用与告警轰炸（跨请求仍按各自现场重试，suite 作用域自愈语义不变）。
+#[tokio::test]
+async fn test_pipeline_request_scope_degraded_sentinel_dedupes_retries() {
+    let dir = tempfile::tempdir().unwrap();
+    let counter_file = dir.path().join("sentinel_calls.txt");
+    let exe = install_script_plugin(
+        dir.path(),
+        "flaky-auth",
+        PluginStage::Prepare,
+        PluginCacheScope::Request,
+        vec![],
+        &format!(
+            "READ_STDIN=\nAPPEND_STDIN={}\nEXIT_CODE=3\n",
+            counter_file.display()
+        ),
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let directive = PluginDirective::new("auth", "flaky-auth", PluginStage::Prepare);
+    let opts = PluginRuntimeOptions {
+        allow_missing_plugins: true,
+        ..PluginRuntimeOptions::default()
+    };
+    let outcome = PluginPipeline::execute_for_request(
+        &[directive.clone(), directive],
+        &reg,
+        &opts,
+        &SuiteHookCache::new(),
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+
+    assert!(outcome.degraded, "allow_missing_plugins 下失败必须降级放行");
+    let degraded_warnings = outcome
+        .warnings
+        .iter()
+        .filter(|w| w.contains("flaky-auth"))
+        .count();
+    assert_eq!(
+        degraded_warnings, 1,
+        "同请求重复声明同一失败指令必须只产生一条降级告警: {:?}",
+        outcome.warnings
+    );
+    let lines = std::fs::read_to_string(&counter_file).unwrap();
+    assert_eq!(
+        lines.lines().count(),
+        1,
+        "降级哨兵生效：失败指令同请求内只调用一次子进程"
+    );
+}
+
+/// D4 收口（审查发现）：阻断（blocking_error）时已成功插件产出的 patch.warnings
+/// 必须并入 outcome.warnings——现场信息绝不静默丢弃。
+#[tokio::test]
+async fn test_pipeline_blocking_preserves_upstream_patch_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install_script_plugin(
+        dir.path(),
+        "warn-auth",
+        PluginStage::Prepare,
+        PluginCacheScope::None,
+        vec![],
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[\"PLUGIN_WARN_1\"]}\n",
+    );
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let outcome = PluginPipeline::execute_for_request(
+        &[
+            PluginDirective::new("auth", "warn-auth", PluginStage::Prepare),
+            PluginDirective::new("sign", "no-such-blocker", PluginStage::Sign),
+        ],
+        &reg,
+        &PluginRuntimeOptions::default(),
+        &SuiteHookCache::new(),
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+
+    assert!(outcome.blocking_error.is_some(), "必选插件缺失必须阻断");
+    assert!(
+        outcome.warnings.iter().any(|w| w.contains("PLUGIN_WARN_1")),
+        "阻断时已成功插件的 patch.warnings 必须保留在现场: {:?}",
+        outcome.warnings
     );
 }

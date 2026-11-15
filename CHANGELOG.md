@@ -6,7 +6,34 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-15
+
 ### Added
+
+- **TUI/Web 插件与门禁选项面透传（replay-reuse B3/B4，WP-2026-11-14-01）**：`rupost.toml [plugins]` 段（`allow_missing_plugins`/`strict_plugins`/`plugin_timeout_secs`/`plugin_env`/`allow_project_plugins`/`strict_vars`）——TUI/Web 交互入口经 `ConfigLoader::find_and_load_plugin_config`（缺失/损坏决策表）+ `build_interactive_executor_with_options` 消费（映射 + zero-diff 逐字段守护 + env 豁免）；优先级：Web 请求覆盖（`PluginOverrides`）> toml 段 > 默认；strict 门禁——TUI 转发任务降级判失败 / Web run_block 响应与 run_suite 聚合计入失败（与 CLI `--strict-plugins` 一致）。CLI 套件路径不受影响；旧 toml 无段零破坏。
+
+- **快照 error 语义扩展至断言失败（replay-reuse B-6 解除 deferred，契约评审裁决）**：`ExecutionSnapshotEntry.error` 取值域三形态——网络错（维持既有传输层分类）/ 有响应但断言失败（**kind=AssertionFailed** + 失败断言摘要 `raw (expected X, got Y)`，response 镜像保留）/ 成功（恒 null）；消费端"网络异常"判据是 `response == null`（replay 既有实现）不依赖 error 字段——语义扩展零破坏，"error != null ⇔ 网络异常"旧假设作废（02 附录二为唯一权威口径）；三形态守护测试 `test_error_detail_covers_assertion_failures_three_forms`——504 现场的失败类别/耗时/时间戳可追溯。
+
+- **差异化 Phase 0+1：Web 会话隔离（P0）与故障复现包 MVP（incident bundle）**：①Web Workbench 按浏览器会话隔离执行态——`src/web/session.rs` 新建 `WebSessionStore`（`Cookie: rupost_session=<opaque UUID>` 划界，`Path=/api/v1; HttpOnly; SameSite=Strict; Max-Age=1800`，TTL 30 分钟按 `Instant` 计、上限 128 会话 LRU 淘汰、无 Cookie/非法/过期一律等价新会话），`AppState` 全局 `cookie_bridge`/`run_variables` 合并为按会话存储（修复局域网多客户端共享认证态与捕获变量的 P0 泄漏），run_block/run_suite 四段逐字重复逻辑提炼为三个共享 helper，API body schema 不变（Cookie 为唯一新增 transport 契约）；②`tests/verify_features.sh` 全面可信化——删 `killall rupost`、`mktemp -d` 隔离工作区（仓库根 toml/.env 零触碰、历史收进工作区）、`trap` 幂等清理仅杀本脚本 PID、端口 `RUPOST_TEST_PORT_BASE` 可平移 + 有限重试健康探针、DAG 断言改 mock 变体语义判别 + 严格 exit 0（token 捕获与 .env 优先级任一失守即非零）；CI 增独立 `web-assets` job（`node --test`）；③**故障复现包**——`rupost test --incident-out <DIR>`：仅失败时创建 `manifest.json`（Incident schema 1.0）+ `report.json` + `snapshot.json`（强制 masking=secrets，键名+显式值双重掩码，无关闭开关）三文件工件，`security::fs` 新增"私有 staging 目录 + rename 原子发布"原语（目标必须不存在、拒 symlink、失败无残留、0700/0600），可被既有 `rupost replay`/`ai triage --snapshot` 直接消费；退出码契约扩展：工件创建失败 exit 2（专用 `IncidentBundleError`），不掩盖测试失败的 exit 1；守护测试 `tests/incident_bundle_test.rs` 四用例（主契约/绿跑对照/已存在目录保护/symlink 保护）+ Web 双会话隔离守护（均经反假守护变红验证）；新增 `examples/incident_bundle/` 本地 loopback 闭环示例并接入 `examples/run_all.sh`。
+
+
+- **免重填收尾（replay-reuse R-4 + review P2 项）**：①Web 轨道会话延续（R-4 落地）——`AppState` 增 `cookie_bridge`/`run_variables` 内存会话资产，run_block/run_suite 双 handler 回灌（只补缺、extra_variables 恒优先）+ cookie 导入导出 + 捕获增量合并（跳过 `__` 保留前缀）；三用例 e2e（跨块复用 / 无会话诚实失败 / 显式覆盖防假守护）；②`--strict-vars` 错误形态一致性——base_url/baseUrl 特判交由 BaseUrlNotConfigured 专用处方；错误消息注明合法 `{{ }}` 字面量拦截语义；③终端插件耗时 `div_ceil` 渲染（<1ms 显示 +1ms）；④manifest description ≤80 注册校验落地（与 plugin schema manifestSchema / 03 §6.4 对齐）+ 拒绝测试；⑤`test_json_timing_subkeys_and_skipped_form_key_parity`（timing 子键锁定 + skipped 形态键集一致）；⑥S-3 e2e masking 断言收紧为精确解析断言。
+
+- **免重填主线批 7（replay-reuse E-1/E-2，生态文档）**：①插件权威档案 `plugin_and_extensibility.md` 全面重写——废弃 Wasm/plugin.toml 旧设计（此前宣称"核心尚未接入运行时"与现实断裂），对齐 Stdio IPC 现架构 + 作者五步指南；②`plugin schema` 升级为四段统一 schema（pluginDirectives 参数+阶段序、directiveSyntax 枚举、builtinMacros 内置宏表、manifestSchema manifest 校验）——场景 A"键入 @ 弹出候选与参数模板"的 IDE 原料齐备。
+
+- **TLS 后端统一切换 rustls（replay-reuse C-1，容器叙事工程事实化；P1-7/P1-8 review 修正声明与边界）**：reqwest `default-tls`(openssl-sys)→`rustls` feature——**后端为 aws-lc-rs（C/汇编实现，musl 构建需 cmake）**，消除 openssl-sys 依赖；tokio-tungstenite `rustls-tls-native-roots`→`rustls-tls-webpki-roots`——WSS 在无 `/etc/ssl/certs` 环境可用；CI `musl-static` job 安装 `musl-tools + cmake`（静态链接断言 + ≤20MB 体积预算 DoD）。**边界登记（P1-8）**：reqwest HTTPS 走 `rustls-platform-verifier`（系统证书 store）——scratch 镜像内 HTTPS 需自带 CA bundle 或 `SSL_CERT_FILE`；Alpine（有 ca-certificates 包）不受影响。rustls 后端下全量 70 套件 + examples/run_all.sh 外网用例全绿验证。
+
+- **免重填主线批 5（replay-reuse E-3/E-4/E-5，开发者体验）**：①`--keep-credentials`（generate/ai bootstrap）——T2 链式溯源不命中时保留字面凭据，免"翻 history 抄 token 填 .env"；②`--strict-vars`——未解析 `{{var}}` 拒绝外发（可读错误指名变量），默认语义（警告+字面量发送）不回退防假守护对照；③JSON 报告 `timing` 分段（恒序列化键集稳定）+ 终端 `plugin +Xms` 渲染——插件冷启动占比可见、离线 HTML 复渲染不退化。
+
+- **免重填主线批 4（replay-reuse S-1/S-2/S-3，安全对齐）**：①history.jsonl 权限对齐快照防线（首建 0600 + 宽松旧文件 append 前收紧）——共享账号堡垒机的最大凭据明文外带面收窄；②掩码后重算 `body_sha256`（摘要对掩码后记录形态，掩码快照离线可验真）；③`--mask-secret-value <VAL>` 按值掩码（可多次、独立于 `--mask-secrets` 生效、全表面替换 [REDACTED]、masking 标记联动）——词表外自定义 header 密钥不再明文落盘。
+
+- **免重填主线批 3（replay-reuse B-2/B-3/B-4/B-5/B-6◐，replay 消费契约收口）**：①`SnapshotSuite.masking`/`ResponseSnapshot.body_truncated`/`SnapshotRequest.timeout_ms` 三字段透传（追加式演进）；②replay 两级消费收口——masked 快照警告"数据不完整"（02 §4 裁决，验签/Diff 结论降级）、`body_truncated` 条目跳过 body diff（消灭截断 JSON 前缀的系统性假失败，注明原因）；③输入防线——64MB 体积上限（与 triage 对齐）+ schema 主版本门（2.0+ 显式拒绝，"1.x 均可消费"的另一半）+ legacy version≤2 门；④JUnit 报告 degraded→`<skipped>`（断言通过非 failure）+ JSON 报告 `degraded` 字段——CI 看板与 `--strict-plugins` 红 job 不再互相矛盾；⑤未安装插件阻断文案补三选一处方；⑥`@timeout` 快照往返（重放复现原超时语义）。B-6 error-Detail 部分 deferred（契约语义裁决，见底账）。
+
+- **免重填主线批 2（replay-reuse R-2/R-3/R-5，变量持久化 + 会话过期引导）**：①`--var-state [FILE]`（默认 `.rupost/vars.json`）——捕获变量（@capture/插件 set_variables）跨运行持久化：结束 0600 原子落盘、启动回灌**最低优先级层**（只补缺，显式 `--var`/.env/toml 恒优先；缺失静默、损坏指名告警）；e2e 锁定"删登录文件后凭回灌免重填成功"与优先级防假守护；②TUI 捕获合并移出 Ok 分支——断言红/失败不影响变量承接（登录 200 但断言写错时 token 仍可复用）；③会话过期引导两级提示——replay 401 mismatch 与套件汇总（401 失败集中）均输出"疑似会话过期——重放登录/更新 cookie/变量文件"。
+
+- **免重填主线批 1（replay-reuse R-1/B-1，`--with-deps` 依赖闭包 + 交互执行器工厂）**：①`--only --with-deps` 按拓扑序先执行目标文件的 `@depends-on` 依赖闭包（`WorkflowGraph::closure_execution_order` 祖先闭包 + 子图边过滤，传递依赖跨两级；opt-in 保护既有 `--only` 仅目标文件契约，防假守护对照锁定 401 语义）——调试下游接口不再手动先跑登录文件、手工搬运 token；②`src/runner/executor_factory.rs` 交互执行器共享工厂：注册表发现拆层 `discover_plugin_registry`（与套件路径 DRY 单点）+ `build_interactive_executor[_with]`，TUI/Web 三构建点收口——消灭"本机已装插件在 TUI/Web 假性未安装阻断"（`tests/interactive_executor_test.rs` 防假守护：mock 依赖插件注入 header）。
+
+- **插件体系审查收口：M7 契约诚实性 + 管线健壮性 + 示例覆盖（plugin-closeout 工作区，P1~P4 全项）**：①`--timing off` 旗标兑现（02 §2:135 契约承诺）——快照 `timing_waterfall=null`、`timing_source=none`（显式记录"未采集"），未知模式按语法错误 exit 2；②并行池竞争时序归属诚实化——`reconcile_timing_metadata` 后置收敛（决策表锁定五形态：off×3 / 并行 connector→approximate / 串行 exact 不回退 / probe 独立连接 exact / 代理 approximate 保持），`ttfb`/`transfer` 永远精确语义不变；③插件管线健壮性三收口（审查 D1/D4/D5）——request 作用域降级哨兵（同请求内失败指令不重试、不重复告警）、阻断时已成功插件的 `patch.warnings` 并入现场（绝不静默丢弃）、suite 作用域跨请求自愈重试语义裁决注释；④`cache_scope` 适用边界裁决文档化——缓存键不含请求态维度，body 敏感签名类插件应声明 `none`（types.rs 注释 + 03 §8.3 裁决行）；⑤M6-6 时延不变量对齐 06 §5 计划字面（sleep 3s / ttfb<100ms / plugin>3s，替换审查期放宽口径）；⑥`examples/run_all.sh` 补插件一键场景（echo-sign Python 插件 Stdio IPC 管线必选形态防假守护 + 缺失自愈降级，python3 缺席自动跳过）+ 新示例 `examples/plugins/{mock.json,plugin_pipeline.http,plugin_degrade.http}`；⑦verify_features.sh 步骤 c 注释与命令对齐；⑧文档完成态对账——interface-freeze-m1.md 七处缺口标记修订（#4/#6/#7/#8/#10/#10.5/#11）、06 §4.5 M6 行 ✅ 与 M7 段落地记录、p0-p1 追加 M7 对账小节 + Step 1~5 闭环记录 + M6-6 阈值裁决。
 
 - **插件体系差距收口（plugin-m6 工作区，M6-4/M6-5 + 代码-设计偏差三项）**：①`--max-snapshot-body-bytes <BYTES>` 旗标接线（冻结清单缺口 #4，M6-4）——单响应体录入上限参数化（缺省 256KB 不变），截断 + 截断前完整 Body 的 SHA-256 验真守护测试；②AST 语法错误退出码归位 exit 2（M6-5，P1-5 残尾）——main 入口对 `ParseError` 统一归位（01 §2.1 三值契约：2 = 参数/语法错误），其余执行错误维持 exit 1，二进制级守护含防假守护对照；③`cache_scope=request` 请求内复用实现——此前枚举有定义无分支、实际退化为 none，现 `PluginPipeline` 请求局部备忘录同指令去重（跨请求绝不复用，与 suite 语义对照锁定）；④registry 保留字阶段拒绝注册——`post_response`/`on_failure`/`harvest`（interface-freeze-m1 §1 P2 保留字）此前被静默注册为永不调用的死钩子，现 manifest 声明即跳过 + 含"保留字"可见告警；⑤manifest `ttl` P2 保留值告警归位——此前 serde 静默忽略与 `HookCapability` 注释裁决（"解析到即按 none + 告警"）不符，现顶层 `ttl` 键与 `cache_scope` 内嵌对象两种形态均告警 + 按 none 处理且不解析失败；⑥`verify_features.sh` 补插件体系冒烟步骤 15（真实 sh 子进程 Stdio IPC 注入防假守护 + 工作区闸门 + 缺失阻断/`?optional` 降级 DegradedPass 三态 + 保留字告警 + 新旗标 + exit 2）。
 
@@ -64,6 +91,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - `rupost ai triage <report.json> [--json|--format]` 与 `rupost test --triage`：CI 失败**根因聚类分诊**（E5）——确定性签名分桶（数字/UUID 折叠 `:id`，上限 20 桶）→ AI 语义归并 → **分桶 ID 守恒回填**（计数 100% 守恒、零幻觉 ID）；无 Key 时降级确定性分组并输出黄色警告，exit 0。
 - `rupost test --report-file <FILE>`：JSON 报告落盘（不干扰终端输出）；报告升级为强类型 `JsonFileReport` 契约，失败项附带脱敏（复用 exporter 脱敏器 + JSON 敏感键掩码 + 512B UTF-8 安全截断）的响应体片段与断言 expected/actual。
 - `rupost ai assert "<自然语言>"`：AI 创作辅助命令，将自然语言期望翻译为标准 `@assert` 断言行（支持任意 OpenAI 兼容后端与本地 Ollama；密钥仅从 `RUPOST_AI_API_KEY`/`OPENAI_API_KEY` 环境变量读取，不落盘不入日志）。`--raw` 输出纯断言行供脚本追加。休眠的 `rupost-ai` crate 正式接线激活；通过 `rupost mock` 充当 OpenAI 兼容后端实现零 Key 离线 dogfooding 闭环（`tests/ai_assert_test.rs` + `tests/verify_features.sh` 步骤 7）。
+
+- **差异化主线批一：Web 工作台故障复现包**——套件运行请求带 `incident: true` 且失败时，在服务端管辖目录（`<工作区>/.rupost/incidents/<时间戳>-<uuid8>/`）产出三文件工件（manifest/report/snapshot，强制 masking=secrets、客户端零路径输入、目标必须不存在、fail-closed exit 2 镜像）；后端契约就绪、前端开关留用户自定义（`feat(web)` 1147b159）。
+- **`rupost ast` AST 桥（插件生态使能）**：AstDocument JSON v1.0 只读命令（顶层 4 键精确契约，`.http`/`.md` 双路径方法行号）+ 插件环境注入 `RUPOST_BIN`——命令插件复用核心解析器，解析语义零分叉；OpenAPI 导入 / k6 导出移交社区以命令插件承载，样板 `cmd-hello` 与作者指南（双形态矩阵/AST 桥/版本协调）就绪（`feat(parser,cli)` a757fec7、`docs(plugins)` 83736008）。
+- **`rupost plugin validate`**：作者分发前静态体检——复用发现期校验（保留字/超长/可执行缺失/路径囚禁）+ 警告级（命名契约/内置名冲突/空清单）；不执行插件、不触发 TOFU、不写缓存（`feat(plugin)` 6f13d55c）。
+- **复现包完整性摘要**：manifest 新增 `artifact_digests`（report/snapshot 的 sha256+bytes；digest 只防损坏，密钥签名登记不做）（`feat(history)` 280abb5b）。
+- **测试与文档收尾**：exit 2 三来源鉴别表（debug_guide §7.3 + 示例 README）；`--env`→manifest/snapshot 贯通 e2e；directory_structure 补 generator/history/plugin/security/web 五模块条目（`docs` 81fc20e3、`fix(exporter)` c52db271）。
 
 ### Changed
 
@@ -140,6 +173,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - Markdown code fences with info strings like ```` ```http title="demo" ```` are recognized (language matched by first token).
 - The JSON report (`--report json`) now includes the per-request `warnings` field — CI consumers previously lost all capture/unresolved-variable warnings.
 - The `BaseUrlNotConfigured` suggestion now points to `--var` instead of the non-existent `-v` variable flag.
+
+- **Web 会话 Cookie 滑动续期**：活跃会话随每次执行响应重发 `Set-Cookie`（同 ID、`Max-Age` 重新起算），不再因固定倒计时 30 分钟硬过期；执行前失败（只读/解析错误）仍不触碰 Cookie（`fix(web)` 2c7f05e9）。
+- **请求来源行号稳定定位**：`.http`（### 分隔行不进块内容，追加首行记账）与 `.md`（pulldown-cmark 原生 offsets 换算围栏行）双路径回填方法行 1-based 行号——终端失败输出 `path:line`、JSON 报告 `source_line` 字段、SSE/WS 路径同源贯通、导出注释 `source_location` 对齐方法行（`feat(parser,report)` d75dd6a1、`fix(runner)` ec830932、`fix(exporter)` c52db271）。
+- **示例与验证脚本可信度**：`examples/run_all.sh` 端口 `RUPOST_EXAMPLE_PORT_BASE` 可平移（LLM/SSE=+0、plugin=+10）+ 健康探针替代固定 sleep；`sse_demo.md` 测试块模板化 `{{base_url}}`（原硬编码 8080 使偏移端口必败）（`test(examples)` d4e826ce）。
+
+### Docs
+
+- **插件生态文档**：权威档案补命令插件节（双形态矩阵/五步指南/AST 桥/版本协调）、03/06 设计文档 `RUPOST_ENV` 未实现声明勘误、`export --list` 措辞澄清为内置 targets、`doc/community-plugins.md` 社区插件索引上线（`docs(plugins)` 83736008、b98940e3）。
+- **范围裁决归档**：Phase 3（OpenAPI 导入 / k6 导出）移交社区——核心不实施，插件承载基座（AST 桥 + 样板 + validate）就绪；设计骨架与现场核验保留于执行计划暂缓节（`docs(plans)` 39b6f245）。
 
 ### Removed
 

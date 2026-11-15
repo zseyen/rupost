@@ -228,6 +228,32 @@ graph TD
 
 ---
 
+*   #### [src/generator/](file:///Users/zsyzzx/project/rust/rupost/src/generator)（代码生成层：历史/快照 → 可执行用例）
+    *   [http.rs](file:///Users/zsyzzx/project/rust/rupost/src/generator/http.rs)：`HttpGenerator`——把历史条目/快照反向生成为 `.http` 用例；`--keep-credentials` 保留字面凭据（链式溯源不命中时），默认模板化为 `{{var}}`。
+
+*   #### [src/history/](file:///Users/zsyzzx/project/rust/rupost/src/history)（历史与工件层）
+    *   [recorder.rs](file:///Users/zsyzzx/project/rust/rupost/src/history/recorder.rs)：请求历史异步落盘（`history.jsonl`，0600 防线）。
+    *   [snapshot_io.rs](file:///Users/zsyzzx/project/rust/rupost/src/history/snapshot_io.rs)：快照读写 SSOT（`save_batch_snapshot`/`read_execution_snapshot`，Schema v1.0 契约）。
+    *   [snapshot_mask.rs](file:///Users/zsyzzx/project/rust/rupost/src/history/snapshot_mask.rs)：快照掩码（键名 + 按值，掩码后重算 body_sha256）。
+    *   [incident.rs](file:///Users/zsyzzx/project/rust/rupost/src/history/incident.rs)：故障复现包三文件工件（`create_incident_bundle`，强制 masking=secrets + artifact_digests 完整性摘要）。
+    *   **依赖红线：零 `cli`/`web`/`tui` 依赖**——CLI/Web 只做解析与呈现，工件创建在领域层。
+
+*   #### [src/plugin/](file:///Users/zsyzzx/project/rust/rupost/src/plugin)（插件体系运行时）
+    *   [registry.rs](file:///Users/zsyzzx/project/rust/rupost/src/plugin/registry.rs)：静态 manifest 零子进程发现、TOFU/缓存指纹/工作区闸门、`validate_manifest_file`（作者离线校验）。
+    *   [pipeline.rs](file:///Users/zsyzzx/project/rust/rupost/src/plugin/pipeline.rs)：阶段管线（prepare/transform/sign 不可逆升序）与 suite/request 缓存仲裁。
+    *   [driver.rs](file:///Users/zsyzzx/project/rust/rupost/src/plugin/driver.rs)：Stdio IPC 驱动（10MB 载荷上限、5s 进程组熔断、stderr 环形截断净化）。
+    *   协议与作者指南：`doc/plans/2026-11-10-cross-scenario-engine-and-plugins/03-plugin-spi-and-degradation.md` 与 `doc/architecture/features/plugin_and_extensibility.md`。
+
+*   #### [src/security/](file:///Users/zsyzzx/project/rust/rupost/src/security)（安全原语 SSOT）
+    *   [redact.rs](file:///Users/zsyzzx/project/rust/rupost/src/security/redact.rs)：脱敏策略唯一权威（`RedactionPolicy`、键名/按值掩码、URL/自由文本净化）。
+    *   [fs.rs](file:///Users/zsyzzx/project/rust/rupost/src/security/fs.rs)：文件系统原语（属主校验、私有目录、原子写入、整目录 staging+rename 发布）。
+
+*   #### [src/web/](file:///Users/zsyzzx/project/rust/rupost/src/web)（活文档工作台，薄表现层）
+    *   [server.rs](file:///Users/zsyzzx/project/rust/rupost/src/web/server.rs)：axum 路由装配、Host 守卫、`AppState`（会话隔离 + incident_root）。
+    *   [session.rs](file:///Users/zsyzzx/project/rust/rupost/src/web/session.rs)：按浏览器会话隔离的执行态存储（`Cookie: rupost_session` 划界、TTL/LRU、非法等价新会话）。
+    *   [handlers/run.rs](file:///Users/zsyzzx/project/rust/rupost/src/web/handlers/run.rs)：单块/套件执行 handler（复用核心执行器；失败可产出 incident 复现包）。
+    *   定位：辅助执行 + 辅助创建的薄表现层——复杂业务一律下沉领域层；扩展缝见 `plugin_and_extensibility.md` §6（四条）。
+
 ## 4. 智能体二次开发与文件指引索引 (Developer Navigation Index)
 
 当需要新增功能或进行代码修改时，可通过下表快速定位需要工作的源文件：

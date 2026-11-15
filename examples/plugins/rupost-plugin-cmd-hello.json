@@ -1,0 +1,14 @@
+{
+  "manifest_version": "1.0",
+  "name": "cmd-hello",
+  "version": "0.1.0",
+  "description": "minimal command-plugin example (argv & kernel context demo)",
+  "commands": [
+    {
+      "name": "cmd-hello",
+      "usage": "rupost cmd-hello [args...]",
+      "description": "argv passthrough & kernel context demo",
+      "requires_env": []
+    }
+  ]
+}

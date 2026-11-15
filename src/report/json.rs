@@ -5,6 +5,7 @@
 //! 消费方：`ai triage`（反序列化磁盘报告）、`--report json`（stdout/文件）、
 //! HTML 报告离线二次渲染（`ReportContext::from_json_file_reports`）。
 
+use crate::ai::redactor;
 use crate::runner::types::TestResult;
 use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,15 @@ use serde::{Deserialize, Serialize};
 pub struct JsonFileReport {
     pub file_path: String,
     pub results: Vec<JsonTestReport>,
+}
+
+/// E-5：网络时序分段（毫秒粒度，供离线 HTML 复渲染瀑布）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonTiming {
+    pub dns_ms: u64,
+    pub tcp_ms: u64,
+    pub ttfb_ms: u64,
+    pub transfer_ms: u64,
 }
 
 /// 单个请求的 JSON 测试报告
@@ -28,6 +38,14 @@ pub struct JsonTestReport {
     pub success: bool,
     pub error: Option<String>,
     pub skipped: bool,
+    /// B-3：插件降级形态的成功（DegradedPass）——CI 看板可见性对齐 --strict-plugins
+    #[serde(default)]
+    pub degraded: bool,
+    /// E-5：网络时序分段（毫秒；DNS/TCP/TTFB/Transfer）——JSON 报告离线渲染不退化。
+    /// 恒序列化（None→null）保持键集合稳定（与 diagnose_report 同形态；失败条目
+    /// 无时序数据时为 null，键集合不随形态漂移）
+    #[serde(default)]
+    pub timing: Option<JsonTiming>,
     pub assertions: Vec<JsonAssertionReport>,
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -36,6 +54,9 @@ pub struct JsonTestReport {
     /// 仅在失败请求 (!success) 且存在响应体时记录脱敏 + 512B 截断后的响应片段
     #[serde(default)]
     pub response_body_snippet: Option<String>,
+    /// WP-P2a：请求方法行的 1-based 行号（稳定定位 `<path>#L<行号>`；缺席为 null）
+    #[serde(default)]
+    pub source_line: Option<usize>,
 }
 
 /// 单条断言的 JSON 报告（保留 expected/actual/stream_event_index 供 E2/E5 分诊）
@@ -56,6 +77,18 @@ pub struct JsonAssertionReport {
 pub fn build_json_reports(
     results: &[(std::path::PathBuf, Vec<TestResult>)],
 ) -> Vec<JsonFileReport> {
+    build_json_reports_with_secrets(results, &[])
+}
+
+/// 将内存测试结果转换为强类型报告，并在全部展示字段上应用显式密钥值清单（`--mask-secret-value`）。
+pub fn build_json_reports_with_secrets(
+    results: &[(std::path::PathBuf, Vec<TestResult>)],
+    secret_values: &[String],
+) -> Vec<JsonFileReport> {
+    let ordered = redactor::order_secret_values(secret_values);
+    let mask_explicit =
+        |s: String| -> String { redactor::redact_explicit_secrets_ordered(&s, &ordered) };
+
     results
         .iter()
         .map(|(path, file_results)| JsonFileReport {
@@ -70,20 +103,23 @@ pub fn build_json_reports(
                             // Gap Review P1-2：expected/actual/message 可能携带响应体敏感值
                             // （如 body.access_token 的实际取值），与 snippet 同级脱敏
                             JsonAssertionReport {
-                                raw: a.raw.clone(),
+                                raw: mask_explicit(a.raw.clone()),
                                 passed: a.passed,
-                                message: crate::ai::redactor::redact_assertion_value(
+                                message: redactor::redact_assertion_value(
                                     &a.raw,
                                     a.message.as_deref(),
-                                ),
-                                expected: crate::ai::redactor::redact_assertion_value(
+                                )
+                                .map(mask_explicit),
+                                expected: redactor::redact_assertion_value(
                                     &a.raw,
                                     (!a.expected.is_empty()).then_some(a.expected.as_str()),
-                                ),
-                                actual: crate::ai::redactor::redact_assertion_value(
+                                )
+                                .map(mask_explicit),
+                                actual: redactor::redact_assertion_value(
                                     &a.raw,
                                     a.actual.as_deref(),
-                                ),
+                                )
+                                .map(mask_explicit),
                                 stream_event_index: a.stream_event_index,
                             }
                         })
@@ -93,9 +129,11 @@ pub fn build_json_reports(
                         r.response
                             .as_ref()
                             .map(|resp| {
-                                crate::ai::redactor::redact_and_truncate_body(
-                                    &resp.body,
-                                    crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                                // 先按显式值脱敏再做结构化键名脱敏与 512B 截断，避免截断边界露出半截密钥
+                                let pre_masked = mask_explicit(resp.body.clone());
+                                redactor::redact_and_truncate_body(
+                                    &pre_masked,
+                                    redactor::DEFAULT_SNIPPET_MAX_BYTES,
                                 )
                             })
                             .filter(|s| !s.is_empty())
@@ -107,26 +145,36 @@ pub fn build_json_reports(
                         request_number: r.request_number,
                         name: r.name.clone(),
                         method: r.method.clone(),
-                        url: crate::ai::redactor::redact_url(&r.url),
+                        url: mask_explicit(redactor::redact_url(&r.url)),
+                        // WP-P2a：稳定定位行号（构造器缺省 None 的字段显式透传）
+                        source_line: r.source_line,
                         status: r.status,
                         duration_ms: r.duration.as_millis() as u64,
                         success: r.success,
+                        degraded: r.degraded,
+                        timing: r.timing.as_ref().map(|t| JsonTiming {
+                            dns_ms: t.dns_lookup.as_millis() as u64,
+                            tcp_ms: t.tcp_connect.as_millis() as u64,
+                            ttfb_ms: t.ttfb.as_millis() as u64,
+                            transfer_ms: t.transfer.as_millis() as u64,
+                        }),
                         // Gap Review P1-1：reqwest 错误文本自带完整原始 URL，必须掩码
                         error: r
                             .error
                             .as_deref()
-                            .map(crate::ai::redactor::redact_free_text),
+                            .map(redactor::redact_free_text)
+                            .map(mask_explicit),
                         skipped: r.skipped,
                         assertions,
                         // 报告级红线：warnings 值源（未定义变量名/位置错误上下文）统一脱敏
                         warnings: r
                             .warnings
                             .iter()
-                            .map(|w| crate::ai::redactor::redact_free_text(w))
+                            .map(|w| mask_explicit(redactor::redact_free_text(w)))
                             .collect(),
                         // diagnose 的 URL 来自 --debug 实测原始地址，出站前与顶层 url 同口径脱敏
                         diagnose_report: r.diagnose_report.clone().map(|mut diag| {
-                            diag.url = crate::ai::redactor::redact_url(&diag.url);
+                            diag.url = mask_explicit(redactor::redact_url(&diag.url));
                             diag
                         }),
                         response_body_snippet,
@@ -142,7 +190,16 @@ pub fn report_json(
     results: &[(std::path::PathBuf, Vec<TestResult>)],
     writer: &mut impl std::io::Write,
 ) -> crate::Result<()> {
-    let json_list = build_json_reports(results);
+    report_json_with_secrets(results, &[], writer)
+}
+
+/// 导出为 JSON 报告（同时应用显式 `--mask-secret-value` 脱敏清单）
+pub fn report_json_with_secrets(
+    results: &[(std::path::PathBuf, Vec<TestResult>)],
+    secret_values: &[String],
+    writer: &mut impl std::io::Write,
+) -> crate::Result<()> {
+    let json_list = build_json_reports_with_secrets(results, secret_values);
     let json_str = serde_json::to_string_pretty(&json_list)?;
     writer.write_all(json_str.as_bytes())?;
     Ok(())

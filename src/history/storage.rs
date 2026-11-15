@@ -2,14 +2,14 @@
 use crate::Result;
 use crate::error::RupostError;
 use crate::history::model::HistoryEntry;
+use crate::platform;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
-const HISTORY_DIR: &str = ".rupost";
 const HISTORY_FILE: &str = "history.jsonl";
 // 20 MB soft limit for compaction
 const COMPACTION_THRESHOLD_BYTES: u64 = 20 * 1024 * 1024;
@@ -29,8 +29,7 @@ impl HistoryStorage {
 
 impl Default for HistoryStorage {
     fn default() -> Self {
-        let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| HISTORY_DIR.to_string());
-        let path = Path::new(&dir).join(HISTORY_FILE);
+        let path = platform::history_dir().join(HISTORY_FILE);
         Self { file_path: path }
     }
 }
@@ -41,7 +40,38 @@ impl HistoryStorage {
         Self { file_path: path }
     }
 
-    /// Ensure directory exists
+    /// S-1（安全对齐，P0-1 review 修复）：history.jsonl 含完整请求/响应明文，权限
+    /// 必须与快照防线对齐——首建走 `create_new + mode(0o600)`（mode 创建时原子生效，
+    /// 无截断竞态、无 0644 窗口）；并发首建时败方走 AlreadyExists 分支收紧既有文件。
+    fn ensure_private_file(&self) -> Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&self.file_path)
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(RupostError::IoError(e)),
+            }
+            // 既有文件：收紧宽松权限（幂等；chmod 跟随 symlink 的 TOCTOU 由
+            // append 前置的 regular-file 语义缓解——history 路径不经用户可控 symlink）
+            let meta = std::fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
+            if meta.is_file() && meta.permissions().mode() & 0o777 & 0o077 != 0 {
+                std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(0o600))?;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows 权限模型不同（ACL），维持现状；CHANGELOG 已登记平台边界
+        }
+        Ok(())
+    }
+
+    /// 确保父目录存在。
     fn ensure_dir(&self) -> Result<()> {
         if let Some(parent) = self.file_path.parent()
             && !parent.exists()
@@ -61,6 +91,7 @@ impl HistoryStorage {
     /// The lock is held only for the duration of the write (microseconds).
     pub fn append(&self, entry: &HistoryEntry) -> Result<()> {
         self.ensure_dir()?;
+        self.ensure_private_file()?;
         let json = serde_json::to_string(entry)?;
 
         let mut retries = 0;
@@ -236,6 +267,54 @@ pub use super::snapshot_legacy::{
     export_history_snapshot, read_snapshot_suite, read_snapshot_suite_compat, write_snapshot_suite,
 };
 pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entry};
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+
+    /// S-1：history.jsonl 权限必须与快照防线对齐——新建即 0600，宽松旧文件收紧。
+    #[cfg(unix)]
+    #[test]
+    fn test_history_file_permissions_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.jsonl");
+        // 1) 预置 0644 旧文件 → append 后必须收紧
+        std::fs::write(&path, "{}\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let store = HistoryStorage::new_with_path(path.clone());
+        store.append(&sample_entry()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "宽松权限必须被收紧");
+        // 2) 新建路径 → append 创建即 0600
+        let path2 = dir.path().join("history2.jsonl");
+        let store2 = HistoryStorage::new_with_path(path2.clone());
+        store2.append(&sample_entry()).unwrap();
+        let mode2 = std::fs::metadata(&path2).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode2, 0o600, "新建文件必须 0600");
+    }
+
+    fn sample_entry() -> HistoryEntry {
+        HistoryEntry {
+            id: "s1".to_string(),
+            timestamp: chrono::Utc::now(),
+            duration_ms: 1,
+            request: crate::history::model::RequestSnapshot {
+                method: "GET".to_string(),
+                url: "http://x".to_string(),
+                headers: Default::default(),
+                body: None,
+                timeout: None,
+            },
+            source: Some("test".to_string()),
+            response: crate::history::model::ResponseMeta {
+                status: 200,
+                headers: Default::default(),
+                body: Some("{}".to_string()),
+            },
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

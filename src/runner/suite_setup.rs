@@ -4,9 +4,24 @@ use crate::plugin::pipeline::PluginRuntimeOptions;
 use crate::plugin::{DiscoverOptions, PluginRegistry, parse_plugin_env_specs};
 use crate::runner::{TestExecutor, TestSuiteOptions};
 use crate::variable::{ConfigLoader, VariableContext};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// 从原始 `--plugin-env` 参数列表提取已放行的环境变量名集合（保留未在宿主机设值的裸 `KEY`）。
+pub(crate) fn extract_authorized_env_keys(specs: &[String]) -> HashSet<String> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let key = match spec.split_once('=') {
+                Some((k, _)) => k.trim(),
+                None => spec.trim(),
+            };
+            (!key.is_empty()).then(|| key.to_string())
+        })
+        .collect()
+}
 
 /// 加载工作区配置、环境变量文件与 `--var` 覆盖，构造套件变量上下文。
 pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext {
@@ -19,6 +34,23 @@ pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext 
         eprintln!("[!] {warning}");
     }
     var_context.insert("__default_scheme", &options.default_scheme);
+    // R-2 免重填：--var-state 回灌为最低优先级层（只补缺；缺失静默、损坏指名告警）
+    if let Some(state_path) = &options.var_state {
+        match crate::variable::var_state::load_var_state(Path::new(state_path)) {
+            None => {}
+            Some(Ok(vars)) => {
+                let filled = crate::variable::var_state::backfill_missing(&mut var_context, &vars);
+                if filled > 0 {
+                    eprintln!(
+                        "[i] 已从 {state_path} 回灌 {filled} 个捕获变量（仅补缺，显式值优先）"
+                    );
+                }
+            }
+            Some(Err(e)) => {
+                eprintln!("[!] --var-state 文件损坏，已忽略回灌: {state_path} ({e})");
+            }
+        }
+    }
     var_context
 }
 
@@ -34,26 +66,15 @@ pub(crate) fn assemble_plugin_runtime(
         plugin_env: parse_plugin_env_specs(&options.plugin_env),
     };
     let discover_options = DiscoverOptions {
-        allow_project_plugins: options.allow_project_plugins,
+        allow_project_plugins: options.allow_project_plugins
+            || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
-    let cache_path = dirs::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
-        .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
-
-    let registry = match PluginRegistry::load_or_discover(&discover_options, &cache_path) {
-        Ok(reg) => {
-            for warning in &reg.warnings {
-                eprintln!("[!] {warning}");
-            }
-            Arc::new(reg)
-        }
-        Err(e) => {
-            // 反静默：发现失败必须可见；回退空注册表确保插件管线与严格门禁不旁路
-            eprintln!("[!] 插件注册表发现失败（插件注解将按缺失门禁/降级处理）: {e}");
-            Arc::new(PluginRegistry::new())
-        }
-    };
+    let authorized_env_keys = extract_authorized_env_keys(&options.plugin_env);
+    let registry = crate::runner::executor_factory::discover_plugin_registry(
+        &discover_options,
+        &authorized_env_keys,
+    );
     (registry, plugin_runtime)
 }
 
@@ -78,5 +99,59 @@ pub(crate) fn build_suite_executor(options: &TestSuiteOptions) -> Result<TestExe
     Ok(executor
         .with_debug(options.debug)
         .with_debug_on_failure(options.debug_on_failure)
+        .with_strict_vars(options.strict_vars)
         .with_plugins(registry, plugin_runtime))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::types::{HookCapability, PluginManifest, PluginStage};
+
+    #[test]
+    fn test_extract_authorized_env_keys_preserves_bare_and_kv_specs() {
+        let specs = vec![
+            "UNSET_BARE_KEY".to_string(),
+            "  TRIMMED_KEY = value=with=eq ".to_string(),
+            "   ".to_string(),
+            "=empty_key".to_string(),
+        ];
+        let keys = extract_authorized_env_keys(&specs);
+        assert!(keys.contains("UNSET_BARE_KEY"));
+        assert!(keys.contains("TRIMMED_KEY"));
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn test_registry_missing_env_warnings_respects_bare_plugin_env_key() {
+        let mut reg = PluginRegistry::new();
+        reg.register_manifest(
+            PathBuf::from("/tmp/vault/rupost-plugin-vault"),
+            PluginManifest {
+                manifest_version: "1.0".to_string(),
+                name: "vault-plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: "vault".to_string(),
+                runtime: None,
+                hooks: vec![HookCapability {
+                    directive: "vault".to_string(),
+                    alias: None,
+                    stage: PluginStage::Prepare,
+                    cache_scope: Default::default(),
+                    requires_env: vec!["VAULT_TOKEN".to_string()],
+                    parameters_schema: serde_json::json!({}),
+                }],
+                commands: vec![],
+            },
+        );
+
+        let directives = vec!["vault".to_string()];
+        let warnings_missing = reg.collect_missing_env_warnings(&directives, &HashSet::new());
+        assert_eq!(warnings_missing.len(), 1);
+        assert!(warnings_missing[0].contains("VAULT_TOKEN"));
+
+        let authorized = extract_authorized_env_keys(&["VAULT_TOKEN".to_string()]);
+        let warnings_allowed = reg.collect_missing_env_warnings(&directives, &authorized);
+        assert!(warnings_allowed.is_empty());
+    }
 }

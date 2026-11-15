@@ -296,3 +296,35 @@ async fn test_unresolved_placeholder_header_skips_request() {
     );
     let _ = out;
 }
+
+/// B-4（免重填审查）：必选插件缺失的阻断文案必须含三选一处方
+/// （与 runtime_missing 分支一致——首跑失败即给出下一步动作）。
+#[tokio::test]
+async fn test_missing_plugin_blocking_message_includes_prescription() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_home = dir.path().join("home");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    let case = dir.path().join("missing.http");
+    std::fs::write(
+        &case,
+        "### a\n@auth no-such-plugin-b4\nGET http://127.0.0.1:1/x\n",
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(dir.path())
+        .env("HOME", &fake_home)
+        .args(["t", case.to_str().unwrap(), "--allow-project-plugins"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "必选插件缺失必须 exit 1");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("no-such-plugin-b4")
+            && combined.contains("三选一")
+            && combined.contains("--allow-missing-plugins"),
+        "阻断文案必须含三选一处方: stdout={stdout} stderr={stderr}"
+    );
+}

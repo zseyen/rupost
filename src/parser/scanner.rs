@@ -1,6 +1,10 @@
 use crate::Result;
-use crate::runner::path::is_supported_file;
 use std::path::{Path, PathBuf};
+
+/// 判断路径是否为受支持的活文档（`.http` / `.md` 等），SSOT 委托给 `path_guard::is_live_doc`。
+pub fn is_supported_doc(path: &Path) -> bool {
+    crate::utils::path_guard::is_live_doc(path)
+}
 
 pub struct DirectoryScanner;
 
@@ -17,7 +21,7 @@ impl DirectoryScanner {
             }
             let canonical = path.canonicalize()?;
             if canonical.is_file() {
-                if is_supported_file(&canonical) {
+                if is_supported_doc(&canonical) {
                     files.push(canonical);
                 }
             } else if canonical.is_dir() {
@@ -47,7 +51,7 @@ impl DirectoryScanner {
             }
 
             if path.is_file() {
-                if is_supported_file(&path) {
+                if is_supported_doc(&path) {
                     let canonical = path.canonicalize()?;
                     files.push(canonical);
                 }

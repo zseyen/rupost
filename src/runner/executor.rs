@@ -1,37 +1,16 @@
 #![allow(clippy::collapsible_if)]
+use crate::http::Client;
 use crate::http::url::resolve_final_url;
-use crate::http::{Client, Request, Response};
-use crate::middleware::{CookieMiddleware, Middleware};
+use crate::middleware::{CookieMiddleware, MiddlewarePipeline};
 use crate::parser::{ParsedFile, ParsedRequest};
 use crate::runner::WsRunner;
+use crate::runner::observer::ExecutionObserver;
 use crate::runner::types::TestResult;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-
-#[derive(Clone)]
-pub enum ExecutorMiddleware {
-    Cookie(Arc<CookieMiddleware>),
-    Routing(Arc<crate::middleware::routing::RoutingMiddleware>),
-}
-
-impl Middleware for ExecutorMiddleware {
-    async fn before_request(&self, req: &mut Request) -> Result<()> {
-        match self {
-            Self::Cookie(mw) => mw.before_request(req).await,
-            Self::Routing(mw) => mw.before_request(req).await,
-        }
-    }
-
-    async fn after_response(&self, resp: &Response) -> Result<()> {
-        match self {
-            Self::Cookie(mw) => mw.after_response(resp).await,
-            Self::Routing(mw) => mw.after_response(resp).await,
-        }
-    }
-}
 
 pub enum Runner {
     Http(crate::runner::HttpRunner),
@@ -45,7 +24,8 @@ impl Runner {
         parsed: ParsedRequest,
         request_number: usize,
         context: &mut VariableContext,
-        middlewares: &[ExecutorMiddleware],
+        middlewares: &MiddlewarePipeline,
+        observer: &Arc<dyn ExecutionObserver>,
         stream_sender: Option<
             tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>,
         >,
@@ -61,6 +41,7 @@ impl Runner {
                     request_number,
                     context,
                     middlewares,
+                    observer,
                     stream_sender,
                     debug,
                     debug_on_failure,
@@ -75,6 +56,7 @@ impl Runner {
                     request_number,
                     context,
                     middlewares,
+                    observer,
                     stream_sender,
                     debug,
                     debug_on_failure,
@@ -91,9 +73,13 @@ pub struct TestExecutor {
     client: Client,
     cookie_middleware: Option<Arc<CookieMiddleware>>,
     routing_middleware: Option<Arc<crate::middleware::routing::RoutingMiddleware>>,
-    middlewares: Vec<ExecutorMiddleware>,
+    middlewares: MiddlewarePipeline,
+    observer: Arc<dyn ExecutionObserver>,
     pub debug: bool,
     pub debug_on_failure: bool,
+    /// E-4（免重填）：`--strict-vars`——未解析 `{{var}}` 拒绝外发（默认 false 维持
+    /// 字面量发送 + 事后警告的既有语义），防漏配变量打注定失败的请求
+    pub strict_vars: bool,
     pub stream_sender: Option<tokio::sync::mpsc::UnboundedSender<super::types::StreamEvent>>,
     /// 插件注册表（M3：`--save-snapshot`/插件注解存在时由 app 层装配；None 时由
     /// `executor_plugin` 回退空注册表进入管线，防止绕过严格门禁）。
@@ -143,9 +129,11 @@ impl TestExecutor {
             client: Client::new(None),
             cookie_middleware: None,
             routing_middleware: None,
-            middlewares: Vec::new(),
+            middlewares: MiddlewarePipeline::new(),
+            observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
+            strict_vars: false,
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
@@ -177,13 +165,18 @@ impl TestExecutor {
         self
     }
 
+    /// Inject a custom [`ExecutionObserver`] (e.g., `NoopExecutionObserver` in tests).
+    pub fn with_observer(mut self, observer: Arc<dyn ExecutionObserver>) -> Self {
+        self.observer = observer;
+        self
+    }
+
     pub fn with_middleware(
         mut self,
         middleware: Arc<crate::middleware::routing::RoutingMiddleware>,
     ) -> Self {
         self.routing_middleware = Some(middleware.clone());
-        self.middlewares
-            .push(ExecutorMiddleware::Routing(middleware));
+        self.middlewares.push_arc(middleware);
         self
     }
 
@@ -196,6 +189,12 @@ impl TestExecutor {
     /// Set debug-on-failure mode
     pub fn with_debug_on_failure(mut self, debug_on_failure: bool) -> Self {
         self.debug_on_failure = debug_on_failure;
+        self
+    }
+
+    /// E-4：`--strict-vars`——未解析 `{{var}}` 拒绝外发
+    pub fn with_strict_vars(mut self, strict_vars: bool) -> Self {
+        self.strict_vars = strict_vars;
         self
     }
 
@@ -220,9 +219,15 @@ impl TestExecutor {
             client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(cookie_middleware.clone()),
             routing_middleware: None,
-            middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
+            middlewares: {
+                let mut pipeline = MiddlewarePipeline::new();
+                pipeline.push_arc(cookie_middleware);
+                pipeline
+            },
+            observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
+            strict_vars: false,
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
@@ -239,9 +244,15 @@ impl TestExecutor {
             client: Client::with_cookie_store(cookie_store, None),
             cookie_middleware: Some(cookie_middleware.clone()),
             routing_middleware: None,
-            middlewares: vec![ExecutorMiddleware::Cookie(cookie_middleware)],
+            middlewares: {
+                let mut pipeline = MiddlewarePipeline::new();
+                pipeline.push_arc(cookie_middleware);
+                pipeline
+            },
+            observer: Arc::new(crate::history::recorder::HistoryObserver),
             debug: false,
             debug_on_failure: false,
+            strict_vars: false,
             stream_sender: None,
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
@@ -336,6 +347,30 @@ impl TestExecutor {
 
         // 检测渲染后仍残留的占位符（未定义变量），收集为可见警告避免静默假通过
         let unresolved = VariableResolver::unresolved_placeholders(&parsed);
+        // E-4：--strict-vars 下未解析变量 → 拒绝外发（可读错误指名变量）。
+        // P2-5（review）：base_url/baseUrl 除外——交由下方 BaseUrlNotConfigured
+        // 专用分支（错误形态/处方一致：--env/--var base_url）
+        let strict_unresolved: Vec<&String> = unresolved
+            .iter()
+            .filter(|v| v.as_str() != "base_url" && v.as_str() != "baseUrl")
+            .collect();
+        if self.strict_vars && !strict_unresolved.is_empty() {
+            return TestResult::error(
+                request_number,
+                parsed.name().map(|s| s.to_string()),
+                parsed.method_or_default().to_string(),
+                parsed.url.clone(),
+                format!(
+                    "变量未解析（--strict-vars 拒绝外发；合法 {{{{}}}} 字面量亦会被拦截，请酌情关闭）: {}——请补齐 --var/.env/rupost.toml 或 --var-state",
+                    strict_unresolved
+                        .iter()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                start.elapsed(),
+            );
+        }
 
         // 检查未配置的 base_url/baseUrl 占位符
         if parsed.url.contains("{{base_url}}") || parsed.url.contains("{{baseUrl}}") {
@@ -423,6 +458,7 @@ impl TestExecutor {
                 request_number,
                 context,
                 &self.middlewares,
+                &self.observer,
                 self.stream_sender.clone(),
                 self.debug,
                 self.debug_on_failure,

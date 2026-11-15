@@ -341,8 +341,8 @@ pub struct PluginPatch {
 * **环境变量白名单（v2.1.0 裁决）**：子进程默认仅继承 `PATH/HOME/LANG/TERM/TMPDIR + RUPOST_*`；manifest `requires_env` 声明额外需要的变量，运行时可用 `--plugin-env <VAR>` 显式放行。**全量环境继承废除**（防止堡垒机上的 AWS 凭据/API Key 经第三方插件外泄）；
 * **注入的上下文环境变量**：
   * `RUPOST_WORKSPACE`：当前工作区绝对路径；
-  * `RUPOST_ENV`：当前激活的环境标签（如 `--env staging`）；
   * `RUPOST_CONFIG_DIR`：配置与插件注册表目录路径；
+  * `RUPOST_BIN`：内核自身绝对路径（2026-11-13 WP-AST 新增——插件经 `$RUPOST_BIN ast <file>` 消费核心解析 AST）；
 * **退出码穿透（信号感知）**：`Some(code)` → 原值穿透（不受 01 §2.1 三值契约约束，该契约仅约束内置命令）；`None`（信号终止）→ `128 + signal`（Unix 惯例），废除 `status.code().unwrap_or(1)` 折叠。
 
 ### 6.3 双模路由流程
@@ -441,6 +441,7 @@ manifest 的 `name/description/usage` 与插件 `warnings` 渲染进终端前必
 * **超时可配置**：默认 5s 硬熔断，可用 `--plugin-timeout <sec>` 覆盖（SigV4 STS 冷启动等慢插件场景）；
 * **时延隔离**：插件子进程耗时独立统计为 `plugin_duration_us`，落盘于快照 `ExecutionSnapshotEntry.plugin_duration_us`（02 §2），**绝不混入**物理网络的 `duration_us` 和 `ttfb`；
 * **Hook 结果缓存**：按 manifest `cache_scope` 复用 Patch（suite 级缓存使 OAuth2 类插件全套件仅 1~2 次子进程，量化验收见 06 §5）。
+* **cache_scope 适用边界裁决（2026-11-12 审查收口）**：缓存键 = 插件名 + 阶段 + 排序参数，**不含请求态维度（headers/body/变量）**——同请求内前置插件改写 body 后再次声明同一 hook，命中的是旧请求态算出的 Patch。对 body 敏感的签名类插件（依赖完整报文计算签名）应声明 `none`；`request`/`suite` 仅适用于请求态无关的取证类插件（OAuth2 取 Token、STS 凭据等）。失败降级不写缓存槽（request 作用域同请求内以降级哨兵去重，suite 作用域跨请求按各自现场自愈重试）。
 
 ---
 
@@ -509,3 +510,9 @@ DeepSeek Harness (`dsh`) 是由 DeepSeek 官方构建的智能体运行时框架
 
 ### 10.6 快照防 OOM 截断限额 (Snapshot Lightweight Limit)
 * 默认单响应体录入上限设为 `256KB`（可通过 `--max-snapshot-body-bytes` 调整）。超限响应体执行截断，并标记 `body_truncated: true`，同时记录完整报文的 `body_sha256` 校验和，确保快照文件轻盈（控制在 5MB 以内）。
+
+---
+
+## 勘误（2026-11-13，WP-PL3）
+
+* §6.2 原声明的注入变量 `RUPOST_ENV`（"当前激活的环境标签"）**从未实现，登记不做**——实际注入为 `RUPOST_WORKSPACE` / `RUPOST_CONFIG_DIR` / `RUPOST_BIN`（以 `src/cli/plugin_exec.rs` 为准）。

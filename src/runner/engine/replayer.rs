@@ -122,6 +122,13 @@ impl ReplayExecutor {
             "[*]".bold().blue(),
             suite.entries.len()
         );
+        // B-2（02 §4）：masked 快照消费前必须声明"数据不完整"——验签/Diff 结论降级
+        if suite.masking.as_deref() == Some("secrets") {
+            println!(
+                "{} 该快照为脱敏形态（masking=secrets）：敏感值已替换为 [REDACTED]，body 比对与验签类结论按数据不完整降级",
+                "[!]".bold().yellow()
+            );
+        }
         if let Some(target) = &self.target_url {
             println!(
                 "{} Overriding target URL base to: {}",
@@ -316,8 +323,11 @@ impl ReplayExecutor {
         let status_matched = expected_status == actual_status;
 
         // 5. T4 Smart Diff：body 深比较（默认排除列表 + 用户 --ignore-fields 合并）；
-        // 仅状态码相等且未启用 --status-only 时参与
-        let (body_matched, body_diff) = if status_matched && !self.status_only {
+        // 仅状态码相等且未启用 --status-only 时参与。
+        // B-2：录制时被截断的响应体（body_truncated）不参与 diff——截断 JSON 前缀
+        // 必然解析失败，参与比对只会产生系统性假 "body changed"
+        let truncated = recorded_resp.body_truncated == Some(true);
+        let (body_matched, body_diff) = if status_matched && !self.status_only && !truncated {
             let mut keys: Vec<String> = DEFAULT_IGNORE_FIELDS
                 .iter()
                 .map(|s| s.to_string())
@@ -327,6 +337,12 @@ impl ReplayExecutor {
         } else {
             (None, None)
         };
+        if truncated && status_matched {
+            println!(
+                "  {} Body 因录制时截断（body_truncated）不参与比对，仅锁定 status/headers",
+                "[i]".yellow()
+            );
+        }
         let matched = status_matched && body_matched.unwrap_or(true);
 
         if status_matched {
@@ -343,6 +359,13 @@ impl ReplayExecutor {
                 expected_status.to_string().green(),
                 actual_status.to_string().red()
             );
+            // R-5（免重填）：actual==401 且 expected≠401 → 疑似会话过期，给出再获取指引
+            if actual_status == 401 {
+                println!(
+                    "  {} 疑似会话过期：录制的登录态/token 已失效——可先重放登录条目，或更新 cookie 文件（--cookie-file）/捕获变量（--var-state）后重录",
+                    "[i]".yellow()
+                );
+            }
         }
         // T4 第四形态内联呈现：状态匹配但 body 失败（差异摘要已脱敏）
         if let Some(diff) = &body_diff {
@@ -359,9 +382,9 @@ impl ReplayExecutor {
         let response_body_snippet = if matched {
             None
         } else {
-            Some(crate::ai::redactor::redact_and_truncate_body(
+            Some(crate::security::redact::redact_and_truncate_body(
                 &res.body,
-                crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
             ))
         };
 
@@ -415,9 +438,9 @@ impl ReplayExecutor {
                     } else {
                         diffs.join("; ")
                     };
-                    let summary = crate::ai::redactor::redact_free_text(&summary);
-                    let summary = crate::exporter::redact::mask_pii(&summary);
-                    let summary = crate::ai::redactor::truncate_utf8_safe(&summary, 512);
+                    let summary = crate::security::redact::redact_free_text(&summary);
+                    let summary = crate::security::redact::mask_pii(&summary);
+                    let summary = crate::security::redact::truncate_utf8_safe(&summary, 512);
                     (Some(false), Some(summary))
                 }
             }
@@ -599,7 +622,7 @@ fn diff_values(
 /// 按叶子键名掩码差异值：路径命中敏感键（token/authorization 等）→ 值整体 `[REDACTED]`。
 /// 复用 `assertion_targets_sensitive_key`（分词匹配，`orders[0].access_token` 命中）。
 fn mask_by_key(path: &str, value: &str) -> String {
-    if crate::ai::redactor::assertion_targets_sensitive_key(path) {
+    if crate::security::redact::assertion_targets_sensitive_key(path) {
         "[REDACTED]".to_string()
     } else {
         value.to_string()

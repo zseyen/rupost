@@ -49,8 +49,11 @@ GET http://example.com/api/test
         debug_on_failure: false,
         default_scheme: "http".to_string(),
         save_snapshot: None,
+        incident_out: None,
         mask_snapshot: false,
+        mask_secret_values: Vec::new(),
         max_snapshot_body_bytes: None,
+        timing_off: false,
         only: None,
         on_failure: None,
         allow_missing_plugins: false,
@@ -58,6 +61,9 @@ GET http://example.com/api/test
         plugin_timeout_secs: 5,
         plugin_env: vec![],
         allow_project_plugins: false,
+        with_deps: false,
+        var_state: None,
+        strict_vars: false,
     };
 
     // 执行套件并显式写出报告（报告落盘已上移至表现层门面）
@@ -167,8 +173,11 @@ Accept: text/event-stream
         debug_on_failure: false,
         default_scheme: "http".to_string(),
         save_snapshot: None,
+        incident_out: None,
         mask_snapshot: false,
+        mask_secret_values: Vec::new(),
         max_snapshot_body_bytes: None,
+        timing_off: false,
         only: None,
         on_failure: None,
         allow_missing_plugins: false,
@@ -176,6 +185,9 @@ Accept: text/event-stream
         plugin_timeout_secs: 5,
         plugin_env: vec![],
         allow_project_plugins: false,
+        with_deps: false,
+        var_state: None,
+        strict_vars: false,
     };
 
     let outcome = run_test_suite(options).await.unwrap();
@@ -216,6 +228,7 @@ fn test_offline_json_report_to_html_generation() {
 
     let test_item = JsonTestReport {
         request_number: 1,
+        source_line: None,
         name: Some("query_user".to_string()),
         method: "GET".to_string(),
         url: "https://api.example.com/users/42".to_string(),
@@ -224,6 +237,8 @@ fn test_offline_json_report_to_html_generation() {
         success: true,
         error: None,
         skipped: false,
+        degraded: false,
+        timing: None,
         assertions: vec![assert_item],
         warnings: vec![],
         diagnose_report: None,

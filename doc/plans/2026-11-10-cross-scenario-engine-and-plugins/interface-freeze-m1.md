@@ -46,15 +46,15 @@
 1. `timing_waterfall.tls_handshake_us` 仅在 diagnose 报告可得时填充（reqwest 公开 API 不暴露握手时序）；
 2. `SocketDiagnostics.tls_cipher_suite/tls_version` 恒为 None（CertInfo 未采集，best-effort）；
 3. ~~`plugin_duration_us` 恒为 None~~ ✅ M3 已接线（`TestResult.plugin_duration_us` → 快照字段）；`DegradedPass` ✅ M3 已接线（`TestResult.degraded` 驱动）；
-4. `--max-snapshot-body-bytes` CLI 旗标 M3 接线（当前常量默认值）；
+4. ~~`--max-snapshot-body-bytes` CLI 旗标 M3 接线~~ ✅ M6-4 已接线（`save_batch_snapshot` 参数化上限，缺省 256KB 不变；截断 + 截断前完整 Body SHA-256 验真）；
 5. 套件级 source 字段不在契约中（来源逐条目落在 `entry.file_path`）；
-6. **函数宏参数不含 `)}}` 序列**（正则非贪婪截断，`{{$sha256("a)}}b")}}` 会求错值）——宏文档与 `plugin schema` 导出须明示，M3 评估改用状态机解析；
-7. **HeaderMap 采集链的多值/顺序限制**（预先存在，非 M1 引入）：`RequestSnapshot::from_parsed` 用 `insert` 语义，同名多值 Header（Set-Cookie×N）仅存最后一个；HeaderMap 迭代序 ≠ 原始线上顺序。02 的"完整响应头/保序"承诺的上限受此约束，M5 前需在采集层改 append + 保序结构；
-8. ~~02 §3.3 消费侧 64MB 体积上限~~ ✅ M5 已在 `ai triage-snapshot` 消费者内置；`read_execution_snapshot` 通用入口的内置校验仍待 M6 补齐；
+6. ~~**函数宏参数不含 `)}}` 序列**~~ ✅ 已修（`resolve_fn_macros` 状态机扫描器：引号感知 + 括号深度 + 转义处理；守护测试 `test_fn_macro_scanner_closing_braces_newlines_and_parens`）；
+7. ~~**HeaderMap 采集链的多值/顺序限制**~~ ✅ 已修（`from_parsed` 改 `append` + 快照侧 `Vec<(String,String)>` 有序对；Set-Cookie×N 保留与掩码守护测试在 `snapshot_contract_test.rs`）；
+8. ~~02 §3.3 消费侧 64MB 体积上限~~ ✅ M5 已在 `ai triage-snapshot` 消费者内置；`read_execution_snapshot` 通用入口内置校验 ✅ M6 已补齐；
 9. **参数转义语义已统一**（M1 评审修复）：`\"` → `"`，反斜杠不进参数值；`$random_int` 无参历史形态继续可用（向后兼容，文档只承诺参数化形态）；
-10. **插件运行时声明契约（v2.1.1 新增，03 §3.1）**：manifest `runtime: {interpreter, min_version?, modules?}`——`interpreter` 存在性 = readdir 级 PATH 预检（**不 spawn 版本 probe**）；预检未过 → 插件 `pending` 状态（03 §3.1.1 三态机），与"缺失"共享降级开关；失败分类学新增 `runtime_missing` / `dependency_missing`（stderr 表驱动特征，03 §8.3）。**[待建 M6]**；
-10.5 **时序采集契约（v2.1.2 新增，M7 设计蓝本 m7-timing-connector-design.md）**：`TimingConnector`（自建 TCP connect，非 HttpConnector 包装）+ `TimingResolver`（GaiResolver 包装）双包装点；快照 `timing_source`（connector/probe_degraded/none）与 `timing_attribution`（exact/approximate）字段；`tls_handshake_us` 默认 None（TLS 在 reqwest 内部层，@diagnose 重档补）；代理场景 warnings 注明；**[待建 M7]**；
-11. **HeaderMap 采集链多值/顺序限制**（同 #7 根因）与 **M6 剩余缺口收尾**（exit 2 AST 归位、DoD 性能验证测试、并发×插件组合、fail-fast 传播测试）统一归属 M6（06 §4.5 缺口收尾清单）。
+10. **插件运行时声明契约（v2.1.1 新增，03 §3.1）**：manifest `runtime: {interpreter, min_version?, modules?}`——`interpreter` 存在性 = readdir 级 PATH 预检（**不 spawn 版本 probe**）；预检未过 → 插件 `pending` 状态（03 §3.1.1 三态机），与"缺失"共享降级开关；失败分类学新增 `runtime_missing` / `dependency_missing`（stderr 表驱动特征，03 §8.3）。✅ M6-1/M6-2 已落地（`preflight_runtime` 零子进程预检 + `PluginHealthStatus` 三态响应式重算 + `plugin list` 三态与三选一处方）；
+10.5 **时序采集契约（v2.1.2，M7-A 已落地）**：机制已按探针实测修订为 `TimingDnsResolver`（`reqwest::dns::Resolve`）+ `TimingConnectorLayer`（tower Layer）双钩子 + `task_local!` 单连接槽位（替代原"自建 TCP connect"措辞，详见 m7-timing-connector-design.md M7-A 修订版）；快照 `timing_source`（connector/probe_degraded/none）与 `timing_attribution`（exact/approximate）字段已落盘；HTTPS 无 `--debug` 时 `tcp_connect_us` 为 (tcp+tls) 合算、`tls_handshake_us` 为 None（诚实声明）；代理 → approximate；并行池竞争 → approximate（`reconcile_timing_metadata` 后置收敛）；`--timing off` → waterfall=null + source=none（02 §2:135 已兑现）；`tls_handshake_us` 默认 None（@diagnose 重档补）；
+11. ~~**M6 剩余缺口收尾**~~ ✅ M6 全项落地：exit 2 AST 归位（`tests/ast_exit_code_test.rs`）、DoD 性能验证四测试（`tests/plugin_dod_test.rs`：sleep 3s 时延隔离 / 100 请求 ≤2 子进程 / fail-fast 组级 kill / 并发×插件）、HeaderMap 保序（见 #7）；#11 保留项仅剩 `SocketDiagnostics.tls_cipher_suite/tls_version`（见 #2，best-effort 诚实缺口）。
 
 ## 5. 二进制体积基线（06 M1 出口条件）
 

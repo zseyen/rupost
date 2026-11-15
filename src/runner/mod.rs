@@ -1,17 +1,20 @@
 pub mod app;
 pub mod executor;
 mod executor_plugin;
+pub mod observer;
 pub mod on_failure;
 pub mod selector;
 mod suite_setup;
 pub mod types;
 
 pub mod engine;
+pub mod executor_factory;
 pub mod protocol;
 pub mod utils;
 
-pub use app::{TestSuiteOptions, TestSuiteOutcome, run_test_suite};
+pub use app::{TestSuiteOptions, TestSuiteOutcome, execute_test_suite, run_test_suite};
 pub use executor::TestExecutor;
+pub use observer::{ExecutionObserver, NoopExecutionObserver};
 pub use types::{TestResult, TestSummary};
 
 pub use engine::batch::{BatchExecutor, BatchMode, BatchRunRequest};

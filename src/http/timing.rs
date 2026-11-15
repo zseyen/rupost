@@ -5,6 +5,30 @@ use tokio::net::{TcpStream, lookup_host};
 use tokio::time::timeout;
 use url::Url;
 
+/// 时序采集来源（02 §2 黑匣子契约字段）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimingSource {
+    /// 单连接真实测量（TimingDnsResolver + TimingConnectorLayer）
+    Connector,
+    /// 探测连接降级形态（DiagnosticsProber 独立探测）
+    ProbeDegraded,
+    /// 未采集
+    #[default]
+    None,
+}
+
+/// 时序归属精度（02 §2 黑匣子契约字段）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimingAttribution {
+    /// 精确归属（直连单请求 task_local! 隔离）
+    #[default]
+    Exact,
+    /// 近似归属（如经过代理隧道或并发池竞争）
+    Approximate,
+}
+
 /// 细粒度网络时序诊断结构体
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct RequestTiming {
@@ -231,6 +255,30 @@ mod tests {
         assert!(
             err.starts_with("TCP connection failed"),
             "错误分类文案不得漂移: {err}"
+        );
+    }
+
+    #[test]
+    fn test_timing_source_and_attribution_serde_contract() {
+        assert_eq!(
+            serde_json::to_string(&TimingSource::Connector).unwrap(),
+            "\"connector\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TimingSource::ProbeDegraded).unwrap(),
+            "\"probe_degraded\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TimingSource::None).unwrap(),
+            "\"none\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TimingAttribution::Exact).unwrap(),
+            "\"exact\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TimingAttribution::Approximate).unwrap(),
+            "\"approximate\""
         );
     }
 }

@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 
 use rupost::Result;
 use rupost::http::Method;
+use rupost::platform;
+use rupost::plugin::types::PluginHealthStatus;
 use rupost::plugin::{DiscoverOptions, PluginRegistry};
 
 /// 解析后的动态 CLI 路由参数（剥离 rupost 自有插件旗标，保留纯净业务参数传给插件）
@@ -17,9 +19,11 @@ pub struct ParsedRouteArgs {
 }
 
 /// 从 `cli.args` 任意位置提取 `--allow-project-plugins` 与 `--plugin-env[=...]`
-pub fn parse_routing_args(args: &[String]) -> ParsedRouteArgs {
+pub fn parse_routing_args(args: &[String]) -> Result<ParsedRouteArgs> {
     let mut parsed = ParsedRouteArgs {
-        allow_project_plugins: std::env::var("RUPOST_ALLOW_PROJECT_PLUGINS").is_ok(),
+        allow_project_plugins: rupost::security::fs::env_flag_enabled(
+            "RUPOST_ALLOW_PROJECT_PLUGINS",
+        ),
         ..Default::default()
     };
     let mut iter = args.iter();
@@ -27,16 +31,30 @@ pub fn parse_routing_args(args: &[String]) -> ParsedRouteArgs {
         if arg == "--allow-project-plugins" {
             parsed.allow_project_plugins = true;
         } else if let Some(spec) = arg.strip_prefix("--plugin-env=") {
+            if spec.is_empty() {
+                return Err(rupost::RupostError::Other(
+                    "--plugin-env= 缺少环境变量名".to_string(),
+                ));
+            }
             parsed.allow_env.push(spec.to_string());
         } else if arg == "--plugin-env" {
-            if let Some(spec) = iter.next() {
-                parsed.allow_env.push(spec.clone());
+            let Some(spec) = iter.next() else {
+                return Err(rupost::RupostError::Other(
+                    "--plugin-env 缺少环境变量名参数（用法：--plugin-env KEY 或 --plugin-env KEY=VALUE）"
+                        .to_string(),
+                ));
+            };
+            if spec.is_empty() {
+                return Err(rupost::RupostError::Other(
+                    "--plugin-env 环境变量名不能为空".to_string(),
+                ));
             }
+            parsed.allow_env.push(spec.clone());
         } else {
             parsed.passthrough.push(arg.clone());
         }
     }
-    parsed
+    Ok(parsed)
 }
 
 /// `args[0]` 是否为标准 HTTP 方法（复用 `rupost::http::Method` SSOT）
@@ -92,13 +110,19 @@ pub fn route(
     RoutingDecision::Unknown(first.clone())
 }
 
-/// 发现插件注册表（路由兜底用）。发现失败/冲突告警可见输出，不静默吞掉。
+fn registry_cache_path() -> std::path::PathBuf {
+    platform::rupost_path("registry.json")
+        .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"))
+}
+
+/// 发现插件注册表（路由兜底用）。优先命中磁盘缓存（<5ms），发现失败/冲突告警可见输出。
 pub fn discover_for_routing(allow_project_plugins: bool) -> PluginRegistry {
     let options = DiscoverOptions {
         allow_project_plugins,
         project_root: None,
     };
-    match PluginRegistry::discover(&options) {
+    let cache_path = registry_cache_path();
+    match PluginRegistry::load_or_discover(&options, &cache_path) {
         Ok(reg) => {
             for warning in &reg.warnings {
                 eprintln!("[!] {warning}");
@@ -112,6 +136,16 @@ pub fn discover_for_routing(allow_project_plugins: bool) -> PluginRegistry {
     }
 }
 
+/// 静默发现插件注册表（`--help` Extensions 区块用，命中缓存且绝不向 stderr 输出告警）。
+pub fn discover_for_help_silent(allow_project_plugins: bool) -> PluginRegistry {
+    let options = DiscoverOptions {
+        allow_project_plugins,
+        project_root: None,
+    };
+    let cache_path = registry_cache_path();
+    PluginRegistry::load_or_discover(&options, &cache_path).unwrap_or_default()
+}
+
 /// 处理 `rupost plugin list|schema` 子命令
 pub fn handle_plugin_command(
     command: crate::cli::PluginCommands,
@@ -119,18 +153,15 @@ pub fn handle_plugin_command(
 ) -> Result<()> {
     let options = DiscoverOptions {
         allow_project_plugins: allow_project_plugins
-            || std::env::var("RUPOST_ALLOW_PROJECT_PLUGINS").is_ok(),
+            || rupost::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
-    let cache_path = dirs::home_dir()
-        .map(|h| h.join(".rupost").join("registry.json"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".rupost-registry.json"));
-    let registry = PluginRegistry::load_or_discover(&options, &cache_path)?;
-    for warning in &registry.warnings {
-        eprintln!("[!] {warning}");
-    }
     match command {
         crate::cli::PluginCommands::List => {
+            let registry = PluginRegistry::discover_with_diagnostics(&options)?;
+            for warning in &registry.warnings {
+                eprintln!("[!] {}", sanitize_manifest_text(warning, 200));
+            }
             println!("Installed plugin commands:");
             if registry.commands.is_empty() {
                 println!(
@@ -148,10 +179,115 @@ pub fn handle_plugin_command(
             }
             for name in hook_names {
                 let (path, hook) = &registry.hooks[name];
-                println!("  {:<14} stage={:?} @ {}", name, hook.stage, path.display());
+                let safe_name = sanitize_manifest_text(name, 64);
+                let safe_path = sanitize_manifest_text(&path.display().to_string(), 256);
+                println!("  {:<14} stage={:?} @ {}", safe_name, hook.stage, safe_path);
+            }
+            println!("Plugin status:");
+            let statuses = registry.evaluate_statuses(std::env::var_os("PATH").as_deref());
+            if statuses.is_empty() {
+                println!("  (none)");
+            } else {
+                for entry in statuses {
+                    let safe_name = sanitize_manifest_text(&entry.name, 64);
+                    match &entry.status {
+                        PluginHealthStatus::Ready => {
+                            let safe_ver = sanitize_manifest_text(&entry.version, 32);
+                            let safe_desc = sanitize_manifest_text(&entry.description, 80);
+                            if safe_ver.is_empty() {
+                                println!("  {:<14} ✓ ready {}", safe_name, safe_desc);
+                            } else {
+                                println!(
+                                    "  {:<14} ✓ ready (v{}) {}",
+                                    safe_name, safe_ver, safe_desc
+                                );
+                            }
+                        }
+                        PluginHealthStatus::Pending {
+                            interpreter,
+                            min_version,
+                            modules,
+                            searched_dirs,
+                        } => {
+                            let safe_interp = sanitize_manifest_text(interpreter, 64);
+                            let ver_hint = min_version
+                                .as_deref()
+                                .map(|v| format!(" >= {}", sanitize_manifest_text(v, 32)))
+                                .unwrap_or_default();
+                            println!(
+                                "  {:<14} ⚠ pending (解释器 {safe_interp}{ver_hint} 未找到，已搜索 {searched_dirs} 个 PATH 目录)",
+                                safe_name
+                            );
+                            if !modules.is_empty() {
+                                let safe_mods: Vec<String> = modules
+                                    .iter()
+                                    .map(|m| sanitize_manifest_text(m, 64))
+                                    .collect();
+                                println!("    声明依赖模块: {}", safe_mods.join(", "));
+                            }
+                            let mod_hint = if modules.is_empty() {
+                                ""
+                            } else {
+                                " 及所需模块"
+                            };
+                            println!(
+                                "    处方: ① 安装 {safe_interp}{ver_hint}{mod_hint}  ② 或改用内置宏（如 {{{{$hmac_sha256}}}}）  ③ 或传入 --allow-missing-plugins 显式降级"
+                            );
+                        }
+                        PluginHealthStatus::Failed { reason } => {
+                            let safe_reason = sanitize_manifest_text(reason, 200);
+                            let safe_path = sanitize_manifest_text(
+                                &entry.manifest_path.display().to_string(),
+                                256,
+                            );
+                            println!("  {:<14} ✗ failed ({safe_reason}) [{safe_path}]", safe_name);
+                        }
+                    }
+                }
+            }
+        }
+        crate::cli::PluginCommands::Validate { path } => {
+            // WP-PL2：作者分发前静态体检——复用发现期校验 + 三个作者工具级警告
+            match rupost::plugin::registry::validate_manifest_file(std::path::Path::new(&path)) {
+                Ok((vm, mut warnings)) => {
+                    let builtin = builtin_subcommand_names();
+                    for cmd in &vm.manifest.commands {
+                        if builtin.contains(cmd.name.as_str()) {
+                            warnings.push(format!(
+                                "命令 '{}' 与内置子命令同名——路由内置优先，该插件命令永不可达",
+                                sanitize_manifest_text(&cmd.name, 80)
+                            ));
+                        }
+                    }
+                    println!(
+                        "✓ ready: {} v{}（commands: {}, hooks: {}）",
+                        sanitize_manifest_text(&vm.manifest.name, 80),
+                        sanitize_manifest_text(&vm.manifest.version, 40),
+                        vm.manifest.commands.len(),
+                        vm.manifest.hooks.len()
+                    );
+                    for w in &warnings {
+                        println!("  ⚠ {}", sanitize_manifest_text(w, 200));
+                    }
+                }
+                Err((name, reason)) => {
+                    let label = name
+                        .map(|n| format!("{}: ", sanitize_manifest_text(&n, 80)))
+                        .unwrap_or_default();
+                    return Err(rupost::RupostError::Other(format!(
+                        "✗ failed: {}{}",
+                        label,
+                        sanitize_manifest_text(&reason, 300)
+                    )));
+                }
             }
         }
         crate::cli::PluginCommands::Schema => {
+            let cache_path = registry_cache_path();
+            let registry = PluginRegistry::load_or_discover(&options, &cache_path)?;
+            for warning in &registry.warnings {
+                eprintln!("[!] {}", sanitize_manifest_text(warning, 200));
+            }
             let mut defs = serde_json::Map::new();
             let mut aliases: Vec<_> = registry.hooks.keys().collect();
             aliases.sort();
@@ -162,11 +298,109 @@ pub fn handle_plugin_command(
                     hook.parameters_schema.clone(),
                 );
             }
+            // E-2：面向 IDE 补全的完整 schema——指令枚举、内置宏、manifest schema
+            // 与插件参数四段齐备（场景 A 兑现：键入 "@" 即可弹出候选与参数模板）
+            let directive_enum: Vec<&str> = ["auth", "transform", "sign", "plugin"].to_vec();
+            // P1-9（review）：宏表与 resolver SSOT 对齐——删 $timestamp_s（不存在），
+            // 补 $uuid/$timestamp/$timestamp_iso
+            let builtin_macros = serde_json::json!({
+                "$hmac_sha256": {
+                    "signature": "$hmac_sha256(key, msg)",
+                    "description": "HMAC-SHA256 hex 摘要（RFC 4231 向量守护）"
+                },
+                "$sha256": {
+                    "signature": "$sha256(msg)",
+                    "description": "SHA-256 hex 摘要"
+                },
+                "$random_int": {
+                    "signature": "$random_int(min, max)",
+                    "description": "闭区间随机整数（含边界）"
+                },
+                "$uuid": {
+                    "signature": "$uuid",
+                    "description": "随机 UUID v4"
+                },
+                "$timestamp": {
+                    "signature": "$timestamp",
+                    "description": "当前 Unix 秒时间戳"
+                },
+                "$timestamp_iso": {
+                    "signature": "$timestamp_iso",
+                    "description": "当前 UTC ISO-8601 时间戳"
+                },
+                "$timestamp_ms": {
+                    "signature": "$timestamp_ms",
+                    "description": "当前 Unix 毫秒时间戳"
+                }
+            });
+            let manifest_schema = serde_json::json!({
+                "type": "object",
+                "required": ["manifest_version", "name", "version", "description"],
+                "properties": {
+                    "manifest_version": {"const": "1.0"},
+                    "name": {"type": "string"},
+                    "version": {"type": "string"},
+                    "description": {"type": "string", "maxLength": 80},
+                    "runtime": {
+                        "type": "object",
+                        "properties": {
+                            "interpreter": {"type": "string"},
+                            "min_version": {"type": "string"},
+                            "modules": {"type": "array", "items": {"type": "string"}}
+                        }
+                    },
+                    "commands": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "usage", "description"],
+                            "properties": {
+                                "name": {"type": "string"},
+                                "usage": {"type": "string"},
+                                "description": {"type": "string"},
+                                "requires_tty": {"type": "boolean"},
+                                "requires_env": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "显式放行给子进程的环境变量（默认白名单外全部裁剪）"
+                                }
+                            }
+                        }
+                    },
+                    "hooks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["directive", "stage"],
+                            "properties": {
+                                "directive": {"type": "string"},
+                                "alias": {"type": "string"},
+                                "stage": {"enum": ["prepare", "transform", "sign"]},
+                                "cache_scope": {"enum": ["none", "request", "suite"]},
+                                "requires_env": {"type": "array", "items": {"type": "string"}},
+                                "parameters_schema": {"type": "object"}
+                            }
+                        }
+                    }
+                }
+            });
             let schema = serde_json::json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "title": "rupost plugin directive parameters",
-                "type": "object",
-                "properties": defs,
+                "title": "rupost .http language & plugin schema",
+                "pluginDirectives": {
+                    "type": "object",
+                    "properties": defs,
+                    "stageOrder": ["prepare", "transform", "sign"],
+                    "optionalSuffix": "?optional"
+                },
+                "directiveSyntax": {
+                    "type": "string",
+                    "pattern": "^@(auth|transform|sign|plugin) <plugin-alias> [params...] [?optional]$",
+                    "enum": directive_enum,
+                    "description": "阶段不可逆：auth(prepare) -> transform -> sign；同阶段按书写行序 FIFO"
+                },
+                "builtinMacros": builtin_macros,
+                "manifestSchema": manifest_schema
             });
             println!("{}", serde_json::to_string_pretty(&schema)?);
         }
@@ -178,7 +412,7 @@ pub fn handle_plugin_command(
 pub fn builtin_subcommand_names() -> BTreeSet<String> {
     [
         "test", "history", "generate", "diagnose", "mock", "init", "replay", "export", "web", "ai",
-        "import", "plugin", "tui",
+        "import", "plugin", "tui", "ast",
     ]
     .into_iter()
     .map(String::from)
@@ -192,12 +426,12 @@ pub fn render_extensions(registry: &PluginRegistry) -> Vec<String> {
     names.sort();
     for name in names {
         let (path, capability) = &registry.commands[name];
+        let safe_name = sanitize_manifest_text(name, 64);
         let description = sanitize_manifest_text(&capability.description, 80);
+        let safe_path = sanitize_manifest_text(&path.display().to_string(), 256);
         lines.push(format!(
             "  {:<14} {} ({})",
-            name,
-            description,
-            path.display()
+            safe_name, description, safe_path
         ));
     }
     lines
@@ -267,8 +501,10 @@ mod tests {
                     usage: format!("rupost {name}"),
                     description: "demo".to_string(),
                     requires_tty: false,
+                    requires_env: vec![],
                 }],
                 hooks: vec![],
+                runtime: None,
             },
         );
         registry
@@ -342,5 +578,57 @@ mod tests {
         let out = sanitize_manifest_text(&"x".repeat(100), 80);
         assert_eq!(out.chars().count(), 81);
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn test_parse_routing_args_dangling_plugin_env_errors_and_strips_flags() {
+        let err = parse_routing_args(&["GET".into(), "http://x".into(), "--plugin-env".into()])
+            .expect_err("缺少值的 --plugin-env 必须返回错误");
+        assert!(err.to_string().contains("--plugin-env"));
+
+        let parsed = parse_routing_args(&[
+            "POST".into(),
+            "http://x".into(),
+            "--allow-project-plugins".into(),
+            "--plugin-env=FOO=1".into(),
+            "a=b".into(),
+        ])
+        .unwrap();
+        assert!(parsed.allow_project_plugins);
+        assert_eq!(parsed.allow_env, vec!["FOO=1".to_string()]);
+        assert_eq!(
+            parsed.passthrough,
+            vec![
+                "POST".to_string(),
+                "http://x".to_string(),
+                "a=b".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_render_extensions_sanitizes_name_description_and_path() {
+        let mut reg = PluginRegistry::new();
+        reg.commands.insert(
+            "\u{1b}[2Jevil-cmd\u{1b}]8;;http://bad\u{7}".into(),
+            (
+                std::path::PathBuf::from("/tmp/\u{1b}[2Jpwn/rupost-plugin-evil"),
+                CommandCapability {
+                    name: "evil-cmd".into(),
+                    usage: "rupost evil-cmd".into(),
+                    description: "\u{1b}[31mcmd-desc\u{1b}[0m".into(),
+                    requires_tty: false,
+                    requires_env: vec![],
+                },
+            ),
+        );
+        let rendered = render_extensions(&reg).join("\n");
+        assert!(
+            !rendered.contains('\u{1b}'),
+            "Extensions 渲染必须清洗 name/description/path 中的 ANSI ESC: {rendered}"
+        );
+        assert!(rendered.contains("evil-cmd"));
+        assert!(rendered.contains("cmd-desc"));
+        assert!(rendered.contains("/tmp/pwn/rupost-plugin-evil"));
     }
 }

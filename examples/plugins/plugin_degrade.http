@@ -1,0 +1,8 @@
+### Declarative Self-Healing Degrade (Fallback Gracefully)
+# 生产调试机无 Python 插件时，?optional 自动跳过外部插件调用并记录黄色警告；
+# 兜底鉴权唯一合法机制 = 用户手写静态 Header（引擎绝不注入魔法值）。
+GET {{base_url}}/get
+@auth not-installed-plugin key=production-secret ?optional
+Authorization: Bearer static-fallback-token
+
+# @assert status == 200

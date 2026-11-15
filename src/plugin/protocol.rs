@@ -16,6 +16,13 @@ pub enum PluginFailureKind {
     Crashed(String),
     /// exit ≠ 0 且无合法输出
     ExitNonZero(i32, String),
+    /// 运行时解释器缺失（预检未过 / spawn ENOENT / env 127）
+    RuntimeMissing { interpreter: String, detail: String },
+    /// 解释器依赖模块缺失（stderr 表驱动命中）
+    DependencyMissing {
+        module: Option<String>,
+        detail: String,
+    },
 }
 
 impl PluginFailureKind {
@@ -25,6 +32,8 @@ impl PluginFailureKind {
             Self::InvalidOutput(_) => "invalid_output",
             Self::Crashed(_) => "crashed",
             Self::ExitNonZero(_, _) => "exit_non_zero",
+            Self::RuntimeMissing { .. } => "runtime_missing",
+            Self::DependencyMissing { .. } => "dependency_missing",
         }
     }
 
@@ -38,6 +47,14 @@ impl PluginFailureKind {
                 let brief: String = stderr.chars().take(200).collect();
                 format!("插件退出码 {code}：{brief}")
             }
+            Self::RuntimeMissing {
+                interpreter,
+                detail,
+            } => format!("插件运行时解释器 '{interpreter}' 缺失（{detail}）"),
+            Self::DependencyMissing { module, detail } => match module {
+                Some(m) => format!("插件依赖模块 '{m}' 缺失（{detail}）"),
+                None => format!("插件依赖模块缺失（{detail}）"),
+            },
         }
     }
 }
@@ -91,33 +108,17 @@ pub fn parse_plugin_output(
     Ok(value)
 }
 
-/// 从已校验的插件输出对象提取强类型 `PluginPatch`
-pub fn parse_patch_from_output(output: &serde_json::Value) -> PluginPatch {
-    PluginPatch {
-        extra_headers: output
-            .get("extra_headers")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
-        remove_headers: output
-            .get("remove_headers")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
-        mutated_body: output.get("mutated_body").and_then(|v| {
-            if v.is_null() {
-                None
-            } else {
-                v.as_str().map(|s| s.to_string())
-            }
-        }),
-        set_variables: output
-            .get("set_variables")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
-        warnings: output
-            .get("warnings")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default(),
+/// 从已校验的插件输出对象提取强类型 `PluginPatch`（字段类型非法时显式返回 `InvalidOutput`，绝不静默丢弃）
+pub fn parse_patch_from_output(
+    output: &serde_json::Value,
+) -> std::result::Result<PluginPatch, PluginFailureKind> {
+    if !output.is_object() {
+        return Err(PluginFailureKind::InvalidOutput(
+            "插件输出顶层必须是 JSON 对象".to_string(),
+        ));
     }
+    serde_json::from_value::<PluginPatch>(output.clone())
+        .map_err(|e| PluginFailureKind::InvalidOutput(format!("插件输出 Patch 字段类型非法: {e}")))
 }
 
 #[cfg(test)]
@@ -154,11 +155,56 @@ mod tests {
             "set_variables": {"K": "V"},
             "warnings": ["w1"]
         });
-        let patch = parse_patch_from_output(&val);
+        let patch = parse_patch_from_output(&val).expect("valid patch");
         assert_eq!(patch.extra_headers, vec![("X-A".into(), "1".into())]);
         assert_eq!(patch.remove_headers, vec!["X-Old"]);
         assert_eq!(patch.mutated_body.as_deref(), Some("new-body"));
         assert_eq!(patch.set_variables.get("K").unwrap(), "V");
         assert_eq!(patch.warnings, vec!["w1"]);
+    }
+
+    #[test]
+    fn test_parse_patch_from_output_rejects_malformed_field_types() {
+        let cases = [
+            serde_json::json!(["not-an-object"]),
+            serde_json::json!({"protocol_version": "1.0", "extra_headers": "bad"}),
+            serde_json::json!({"protocol_version": "1.0", "remove_headers": 42}),
+            serde_json::json!({"protocol_version": "1.0", "mutated_body": 123}),
+            serde_json::json!({"protocol_version": "1.0", "set_variables": ["K"]}),
+            serde_json::json!({"protocol_version": "1.0", "warnings": {"a": 1}}),
+        ];
+        for case in cases {
+            assert!(
+                matches!(
+                    parse_patch_from_output(&case),
+                    Err(PluginFailureKind::InvalidOutput(_))
+                ),
+                "malformed patch payload must yield InvalidOutput: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_runtime_and_dependency_missing_labels_and_descriptions() {
+        let rt = PluginFailureKind::RuntimeMissing {
+            interpreter: "python3".to_string(),
+            detail: "not found".to_string(),
+        };
+        assert_eq!(rt.kind_label(), "runtime_missing");
+        assert!(rt.describe().contains("python3"));
+
+        let dep = PluginFailureKind::DependencyMissing {
+            module: Some("boto3".to_string()),
+            detail: "ModuleNotFoundError".to_string(),
+        };
+        assert_eq!(dep.kind_label(), "dependency_missing");
+        assert!(dep.describe().contains("boto3"));
+
+        let dep_unknown = PluginFailureKind::DependencyMissing {
+            module: None,
+            detail: "ERR_MODULE_NOT_FOUND".to_string(),
+        };
+        assert_eq!(dep_unknown.kind_label(), "dependency_missing");
+        assert!(dep_unknown.describe().contains("ERR_MODULE_NOT_FOUND"));
     }
 }

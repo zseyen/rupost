@@ -1,7 +1,6 @@
 #![allow(clippy::collapsible_if)]
 use crate::history::model::RequestSnapshot;
 use crate::http::{Response, SseEvent, SseParser};
-use crate::middleware::Middleware;
 use crate::runner::types::TestResult;
 use crate::runner::utils::file_sync::write_log_with_limit;
 use crate::variable::{VariableContext, VariableResolver, capture::VariableCapture};
@@ -27,6 +26,10 @@ pub struct SseRunnerOptions {
         Option<tokio::sync::mpsc::UnboundedSender<crate::runner::types::StreamEvent>>,
     /// 请求构建期的非致命警告（如畸形 JSON 降级发送），随流结果一起呈现
     pub warnings: Vec<String>,
+    /// M7-A 连接器采集的单连接时序（连接复用时为 None）
+    pub connect_span: Option<crate::http::timing_connector::ConnectSpan>,
+    /// WP-P2a 补全：请求方法行的 1-based 行号（http_runner 从 parsed 预提取捎带）
+    pub source_line: Option<usize>,
 }
 
 /// 单个 SSE 事件的处理上下文。
@@ -170,13 +173,16 @@ impl SseRunner {
         source: Option<String>,
         request_snapshot: RequestSnapshot,
         probe_result: Option<(Duration, Duration)>,
-        middlewares: Vec<crate::runner::executor::ExecutorMiddleware>,
+        middlewares: crate::middleware::MiddlewarePipeline,
+        observer: std::sync::Arc<dyn crate::runner::observer::ExecutionObserver>,
     ) -> TestResult {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
         let default_log_name = format!("sse_{}.log", timestamp);
         let final_stream_to = options.stream_to.clone().unwrap_or_else(|| {
-            let dir = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
-            format!("{}/logs/{}", dir, default_log_name)
+            crate::platform::history_logs_dir()
+                .join(&default_log_name)
+                .to_string_lossy()
+                .into_owned()
         });
         let log_path = std::path::PathBuf::from(&final_stream_to);
 
@@ -206,14 +212,12 @@ impl SseRunner {
             Duration::from_millis(0),
         )
         .unwrap();
-        for mw in &middlewares {
-            let _ = mw
-                .after_response(&handshake_response_tmp)
-                .await
-                .map_err(|e| {
-                    error!("Middleware error: {}", e);
-                });
-        }
+        let _ = middlewares
+            .run_after_response(&handshake_response_tmp)
+            .await
+            .map_err(|e| {
+                error!("Middleware error: {}", e);
+            });
 
         let mut assertion_results = Vec::new();
         // 逐事件捕获的失败信息；同一 capture 在每个事件上重复失败时去重后再呈现
@@ -368,8 +372,7 @@ impl SseRunner {
         ));
 
         // [History] 保存历史记录 (Best Effort)
-        use crate::history::recorder::record_history;
-        record_history(request_snapshot, &final_response, source);
+        observer.on_record_history(request_snapshot, &final_response, source);
 
         // 构造最终测试结果
         let mut test_result = TestResult::success(
@@ -379,6 +382,7 @@ impl SseRunner {
             options.url,
             final_response.clone(),
         );
+        test_result.source_line = options.source_line;
         test_result.assertions = assertion_results;
         // 构建期警告（请求级）在前，逐事件捕获警告在后；排序去重避免同一
         // capture 在每个事件上重复刷屏
@@ -392,14 +396,96 @@ impl SseRunner {
             test_result.success = test_result.assertions.iter().all(|a| a.passed);
         }
 
-        let need_timing = options.debug || (options.debug_on_failure && !test_result.success);
-        test_result.timing = crate::http::timing::DiagnosticsProber::resolve_timing(
-            probe_result,
+        // M7-A: 默认始终记录单连接时序（无需 --debug）；probe_result 保留供扩展诊断
+        let _ = probe_result;
+        super::http_runner::apply_connector_timing(
+            &mut test_result,
+            options.connect_span,
             final_response.ttfb,
             final_response.transfer,
-            need_timing,
         );
 
         test_result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::http::Client;
+    use crate::http::timing::TimingSource;
+    use crate::middleware::MiddlewarePipeline;
+    use crate::parser::HttpFileParser;
+    use crate::runner::observer::{ExecutionObserver, NoopExecutionObserver};
+    use crate::runner::protocol::http_runner::HttpRunner;
+    use crate::variable::VariableContext;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_sse_records_connector_timing_without_debug() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = socket.read(&mut buf).await;
+                let body = "data: {\"ok\":true}\n\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let log_file = dir.path().join("sse_timing.log");
+        let doc = format!(
+            "### sse-timing\n# @stream\n# @sse-max-events 1\n# @stream-to {}\nGET http://{addr}/events\n",
+            log_file.display()
+        );
+        let parsed = HttpFileParser::parse_content(&doc)
+            .unwrap()
+            .requests
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let client = Client::new(None);
+        let mut ctx = VariableContext::new();
+        let observer: Arc<dyn ExecutionObserver> = Arc::new(NoopExecutionObserver);
+        let res = HttpRunner
+            .run(
+                parsed,
+                1,
+                &mut ctx,
+                &MiddlewarePipeline::new(),
+                &observer,
+                None,
+                false,
+                false,
+                &client,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(res.success, "SSE request should succeed: {:?}", res.error);
+        assert!(
+            res.timing.is_some(),
+            "SSE timing must be populated without --debug"
+        );
+        assert!(
+            res.connect_span.is_some(),
+            "cold SSE connect_span must be recorded without --debug"
+        );
+        assert!(
+            res.connect_span.unwrap().tcp_us.is_some(),
+            "cold SSE tcp_us must be recorded"
+        );
+        assert_eq!(res.timing_source, Some(TimingSource::Connector));
+        assert!(res.timing_attribution.is_some());
     }
 }

@@ -417,6 +417,7 @@ mod tests {
     fn make_fail(num: usize, url: &str) -> JsonTestReport {
         JsonTestReport {
             request_number: num,
+            source_line: None,
             name: None,
             method: "GET".to_string(),
             url: url.to_string(),
@@ -425,6 +426,8 @@ mod tests {
             success: false,
             error: None,
             skipped: false,
+            degraded: false,
+            timing: None,
             assertions: vec![JsonAssertionReport {
                 raw: "status == 200".to_string(),
                 passed: false,

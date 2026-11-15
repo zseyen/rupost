@@ -146,3 +146,263 @@ async fn test_invoke_env_allowlist() {
     }
     assert!(outcome.failure.is_none(), "父级凭据不得进入插件环境");
 }
+
+#[cfg(unix)]
+fn sh_plugin(dir: &tempfile::TempDir, name: &str, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.path().join(name);
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_invoke_stdout_over_10mb_returns_invalid_output_not_sigpipe() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = sh_plugin(
+        &dir,
+        "flood_stdout.sh",
+        "#!/bin/sh\ncat > /dev/null\nhead -c 11534336 /dev/zero | tr '\\0' 'a'\n",
+    );
+    let outcome = invoke_plugin(&plugin, payload().as_str(), Duration::from_secs(5), &[])
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            outcome.failure,
+            Some(PluginFailureKind::InvalidOutput(ref msg)) if msg.contains("10MB")
+        ),
+        "stdout 超 10MB 必须返回 InvalidOutput 而非 Crashed(SIG13): {:?}",
+        outcome.failure
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_invoke_stderr_keeps_tail_64kb_and_strips_ansi_controls() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = sh_plugin(
+        &dir,
+        "stderr_tail.sh",
+        "#!/bin/sh\ncat > /dev/null\nprintf 'HEAD_MARKER' >&2\nhead -c 131072 /dev/zero | tr '\\0' 'x' >&2\nprintf '\\033[31mRED_TAIL\\033[0m\\tTAB\\n\\033]8;;http://evil\\007OSC_TAIL\\000CTRL\\n' >&2\necho '{\"protocol_version\":\"1.0\"}'\n",
+    );
+    let outcome = invoke_plugin(&plugin, payload().as_str(), Duration::from_secs(5), &[])
+        .await
+        .unwrap();
+    assert!(outcome.failure.is_none(), "{:?}", outcome.failure);
+    assert!(
+        !outcome.stderr_tail.contains("HEAD_MARKER"),
+        "stderr 超过 64KB 时必须丢弃头部并保留尾部"
+    );
+    assert!(
+        outcome.stderr_tail.contains("RED_TAIL\tTAB\nOSC_TAILCTRL"),
+        "必须保留尾部文本及 \\n/\\t 并剥离 ANSI CSI/OSC 与 NUL: {:?}",
+        &outcome.stderr_tail[outcome.stderr_tail.len().saturating_sub(128)..]
+    );
+    assert!(!outcome.stderr_tail.contains('\u{1b}'));
+    assert!(!outcome.stderr_tail.contains('\0'));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_invoke_drop_guard_kills_process_group_on_early_cancel() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("grandchild.pid");
+    let plugin = sh_plugin(
+        &dir,
+        "cancel_group.sh",
+        &format!(
+            "#!/bin/sh\ncat > /dev/null\nsleep 30 &\necho $! > \"{}\"\nwait\n",
+            pid_file.display()
+        ),
+    );
+
+    let p_str = payload();
+    let handle = tokio::spawn(async move {
+        let _ = invoke_plugin(&plugin, &p_str, Duration::from_secs(10), &[]).await;
+    });
+
+    // 等待孙进程 PID 落盘后主动取消外层 Future
+    let mut grandchild_pid: Option<i32> = None;
+    for _ in 0..100 {
+        if let Ok(content) = std::fs::read_to_string(&pid_file)
+            && let Ok(pid) = content.trim().parse::<i32>()
+        {
+            grandchild_pid = Some(pid);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let pid = grandchild_pid.expect("grandchild pid should be recorded");
+    handle.abort();
+    let _ = handle.await;
+
+    let mut exited = false;
+    for _ in 0..50 {
+        let rc = unsafe { libc::kill(pid, 0) };
+        if rc != 0 {
+            exited = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    if !exited {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+    assert!(
+        exited,
+        "取消 invoke_plugin Future 后 Drop 守卫必须终结整个进程组（含孙进程 {pid}）"
+    );
+}
+
+#[tokio::test]
+async fn test_invoke_enoent_and_127_map_to_runtime_missing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // 1. 可执行文件不存在 -> Ok(RuntimeMissing)
+    let missing_bin = dir.path().join("no-such-plugin-bin");
+    let out1 = invoke_plugin(
+        &missing_bin,
+        payload().as_str(),
+        Duration::from_secs(5),
+        &[],
+    )
+    .await
+    .expect("ENOENT 应映射为 Ok(Outcome) 而非 Err");
+    assert_eq!(
+        out1.failure.as_ref().unwrap().kind_label(),
+        "runtime_missing"
+    );
+    assert!(matches!(
+        out1.failure,
+        Some(PluginFailureKind::RuntimeMissing { .. })
+    ));
+
+    // 2. shebang 指向不存在解释器 -> Ok(RuntimeMissing) 并在可能时提取解释器名
+    let bad_shebang = dir.path().join("bad_shebang.py");
+    std::fs::write(
+        &bad_shebang,
+        "#!/nonexistent/bin/fake_python_xyz\nprint('{}')\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bad_shebang, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let out2 = invoke_plugin(
+        &bad_shebang,
+        payload().as_str(),
+        Duration::from_secs(5),
+        &[],
+    )
+    .await
+    .expect("bad shebang ENOENT 应映射为 Ok(Outcome)");
+    assert!(matches!(
+        out2.failure,
+        Some(PluginFailureKind::RuntimeMissing { ref interpreter, .. })
+            if interpreter.contains("fake_python_xyz")
+    ));
+
+    // 3. exit 127 + `env: <interp>: No such file` / `not found` -> RuntimeMissing
+    let env_127 = mock_plugin(
+        &dir,
+        "env_127.sh",
+        "READ_STDIN=\nSTDERR_LINE=env: python3_missing: No such file or directory\nEXIT_CODE=127\n",
+    );
+    let out3 = invoke_plugin(&env_127, payload().as_str(), Duration::from_secs(5), &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        out3.failure,
+        Some(PluginFailureKind::RuntimeMissing {
+            interpreter: "python3_missing".to_string(),
+            detail: "env: python3_missing: No such file or directory".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_invoke_dependency_missing_table_and_local_path_exclusions() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "py_mod_not_found.sh",
+            "ModuleNotFoundError: No module named 'boto3'",
+            Some("boto3"),
+        ),
+        (
+            "py_import_err.sh",
+            "ImportError: No module named yaml",
+            Some("yaml"),
+        ),
+        (
+            "node_cannot_find.sh",
+            "Error: Cannot find module 'axios'",
+            Some("axios"),
+        ),
+        (
+            "node_esm.sh",
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'chalk' imported from /app/index.mjs",
+            Some("chalk"),
+        ),
+    ];
+
+    for (name, stderr_line, expected_mod) in cases {
+        let plugin = mock_plugin(
+            &dir,
+            name,
+            &format!("READ_STDIN=\nSTDERR_LINE={stderr_line}\nEXIT_CODE=1\n"),
+        );
+        let outcome = invoke_plugin(&plugin, payload().as_str(), Duration::from_secs(5), &[])
+            .await
+            .unwrap();
+        match outcome.failure {
+            Some(PluginFailureKind::DependencyMissing { module, .. }) => {
+                assert_eq!(module.as_deref(), expected_mod, "case={name}");
+            }
+            other => panic!("case={name} expected DependencyMissing, got {other:?}"),
+        }
+    }
+
+    // 排除 ./ 与 ../ 本地路径（插件自身文件缺失应保持 ExitNonZero，不误判为第三方依赖缺失）
+    for (name, stderr_line) in [
+        ("local_dot.sh", "Error: Cannot find module './helper.js'"),
+        ("local_dotdot.sh", "Error: Cannot find module '../lib/x.js'"),
+        (
+            "local_esm.sh",
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find module './local.mjs' imported from /app/index.mjs",
+        ),
+    ] {
+        let plugin = mock_plugin(
+            &dir,
+            name,
+            &format!("READ_STDIN=\nSTDERR_LINE={stderr_line}\nEXIT_CODE=1\n"),
+        );
+        let outcome = invoke_plugin(&plugin, payload().as_str(), Duration::from_secs(5), &[])
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome.failure, Some(PluginFailureKind::ExitNonZero(1, _))),
+            "本地相对路径 {stderr_line} 不得误判为 DependencyMissing: {:?}",
+            outcome.failure
+        );
+    }
+
+    // 未知非零退出码保持 ExitNonZero
+    let generic = mock_plugin(
+        &dir,
+        "generic_3.sh",
+        "READ_STDIN=\nSTDERR_LINE=unexpected error\nEXIT_CODE=3\n",
+    );
+    let outcome = invoke_plugin(&generic, payload().as_str(), Duration::from_secs(5), &[])
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome.failure,
+        Some(PluginFailureKind::ExitNonZero(3, _))
+    ));
+}

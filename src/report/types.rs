@@ -1,3 +1,4 @@
+use crate::ai::redactor;
 use crate::report::json::JsonFileReport;
 use crate::runner::types::TestResult;
 use crate::utils::path_guard::normalize_posix_path;
@@ -229,18 +230,12 @@ impl ReportContext {
                     .map(|a| ReportAssertionItem {
                         raw: a.raw.clone(),
                         passed: a.passed,
-                        message: crate::ai::redactor::redact_assertion_value(
-                            &a.raw,
-                            a.message.as_deref(),
-                        ),
-                        expected: crate::ai::redactor::redact_assertion_value(
+                        message: redactor::redact_assertion_value(&a.raw, a.message.as_deref()),
+                        expected: redactor::redact_assertion_value(
                             &a.raw,
                             (!a.expected.is_empty()).then_some(a.expected.as_str()),
                         ),
-                        actual: crate::ai::redactor::redact_assertion_value(
-                            &a.raw,
-                            a.actual.as_deref(),
-                        ),
+                        actual: redactor::redact_assertion_value(&a.raw, a.actual.as_deref()),
                     })
                     .collect();
 
@@ -252,9 +247,9 @@ impl ReportContext {
                         .as_ref()
                         .and_then(|resp| resp.text().ok())
                         .map(|text| {
-                            crate::ai::redactor::redact_and_truncate_body(
+                            redactor::redact_and_truncate_body(
                                 text,
-                                crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                                redactor::DEFAULT_SNIPPET_MAX_BYTES,
                             )
                         })
                         .filter(|s| !s.is_empty())
@@ -270,20 +265,17 @@ impl ReportContext {
                     method: res.method.clone(),
                     // 以下四字段与 build_json_reports 同一脱敏原语（审查发现：在线
                     // 直渲路径曾弱于 JSON 出口——url query 凭据/错误文本 URL/断言值）
-                    url: crate::ai::redactor::redact_url(&res.url),
+                    url: redactor::redact_url(&res.url),
                     status: res.status,
                     duration_ms,
                     success: res.success,
                     skipped: res.skipped,
-                    error: res
-                        .error
-                        .as_deref()
-                        .map(crate::ai::redactor::redact_free_text),
+                    error: res.error.as_deref().map(redactor::redact_free_text),
                     assertions,
                     warnings: res
                         .warnings
                         .iter()
-                        .map(|w| crate::ai::redactor::redact_free_text(w))
+                        .map(|w| redactor::redact_free_text(w))
                         .collect(),
                     timing_waterfall,
                     body_snippet,
@@ -366,10 +358,22 @@ impl ReportContext {
                     })
                     .collect();
 
+                // P1-5（review）：优先 diagnose（TLS/证书）→ 次选 JSON timing 分段
+                // （M7 瀑布）→ 回退总时长——离线复渲染不再退化为单段
                 let timing_waterfall = res
                     .diagnose_report
                     .as_ref()
                     .map(TimingWaterfall::from_diagnostics)
+                    .or_else(|| {
+                        res.timing.as_ref().map(|t| TimingWaterfall {
+                            dns_ms: t.dns_ms as f64,
+                            tcp_ms: t.tcp_ms as f64,
+                            tls_ms: None,
+                            ttfb_ms: Some(t.ttfb_ms as f64),
+                            transfer_ms: t.transfer_ms as f64,
+                            total_ms: (t.dns_ms + t.tcp_ms + t.ttfb_ms + t.transfer_ms) as f64,
+                        })
+                    })
                     .or_else(|| {
                         // 普通请求 fallback：对齐在线模式，提供基于 duration_ms 的简单瀑布
                         TimingWaterfall::from_total_ms(res.duration_ms as f64)

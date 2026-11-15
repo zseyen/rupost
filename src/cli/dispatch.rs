@@ -35,8 +35,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 no_cookies,
                 cookie_file,
                 save_snapshot,
+                incident_out,
                 mask_secrets,
+                mask_secret_value,
                 max_snapshot_body_bytes,
+                timing,
+                with_deps,
+                var_state,
+                strict_vars,
                 only,
                 on_failure,
                 allow_missing_plugins,
@@ -47,17 +53,24 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             } = args;
 
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
-            let explain_enabled = explain
-                || std::env::var("RUPOST_AI_EXPLAIN").is_ok_and(|v| {
-                    matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
-                });
-            let env_label = env.clone();
+            let explain_enabled =
+                explain || rupost::security::fs::env_flag_enabled("RUPOST_AI_EXPLAIN");
+            // --timing 仅支持 off（02 §2:135 契约：none = 未采集）；未知模式按语法错误 exit 2
+            let timing_off = match timing.as_deref() {
+                None => false,
+                Some("off") => true,
+                Some(other) => {
+                    return Err(rupost::RupostError::ParseError(format!(
+                        "无效的 --timing 模式 '{other}'（当前仅支持: off）"
+                    )));
+                }
+            };
             let options = rupost::runner::TestSuiteOptions {
                 paths,
                 mode,
                 concurrency,
-                report: report.clone(),
-                report_file: report_file.clone(),
+                report,
+                report_file,
                 explain: explain_enabled,
                 triage,
                 fail_fast,
@@ -71,8 +84,14 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 debug_on_failure: cli.debug_on_failure,
                 default_scheme: cli.default_scheme,
                 save_snapshot,
+                incident_out,
                 mask_snapshot: mask_secrets,
+                mask_secret_values: mask_secret_value,
                 max_snapshot_body_bytes,
+                timing_off,
+                with_deps,
+                var_state,
+                strict_vars,
                 only,
                 on_failure,
                 allow_missing_plugins,
@@ -81,34 +100,8 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 plugin_env,
                 allow_project_plugins,
             };
-            let outcome = rupost::runner::run_test_suite(options).await?;
-
-            // 报告文件输出（表现层职责，UseCase 不再隐式落盘）：
-            // 覆盖提示走 stderr；"已生成"提示仅在 HTML 格式或 verbose 时走 stdout。
-            // 空扫描（无 .http/.md）恢复旧语义：不产生报告文件（审查 P1）
-            if !outcome.batch_results.is_empty()
-                && let Some(written) = rupost::report::write_report_files(
-                    &outcome.batch_results,
-                    &report,
-                    report_file.as_deref(),
-                    env_label.as_deref(),
-                )?
-            {
-                if written.overwritten {
-                    eprintln!("[!] 报告文件已存在，将覆盖: {}", written.path.display());
-                }
-                let is_html = matches!(written.format, rupost::report::ReportFileFormat::Html);
-                let is_junit = matches!(written.format, rupost::report::ReportFileFormat::Junit);
-                // M1（评审 P1-4）：junit 落盘纳入"已生成"提示（此前静默写文件）
-                if (is_html && (verbose || report.eq_ignore_ascii_case("html")))
-                    || (is_junit
-                        && (verbose
-                            || report.eq_ignore_ascii_case("junit")
-                            || report.eq_ignore_ascii_case("xml")))
-                {
-                    println!("  报告已生成至: {}", written.path.display());
-                }
-            }
+            let outcome = rupost::runner::execute_test_suite(&options).await?;
+            super::suite_presenter::present_suite_outcome(&options, &outcome).await?;
 
             if outcome.has_failure {
                 std::process::exit(1);
@@ -144,6 +137,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 last: args.last,
                 interactive: args.interactive,
                 templatize_host: args.templatize_host,
+                keep_credentials: args.keep_credentials,
             };
             rupost::generator::run_generate(opts)?;
         }
@@ -218,13 +212,23 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             }
             AiCommands::Triage {
                 report_file,
+                snapshot,
                 json,
                 format,
             } => {
-                rupost::ai::triage::run_ai_triage_from_file(&report_file, json, &format).await?;
+                if let Some(snapshot_path) = snapshot {
+                    rupost::ai::triage::run_snapshot_triage(&snapshot_path, json, &format).await?;
+                } else if let Some(report_path) = report_file {
+                    rupost::ai::triage::run_ai_triage_from_file(&report_path, json, &format)
+                        .await?;
+                }
             }
-            AiCommands::TriageSnapshot { snapshot, json } => {
-                rupost::ai::triage::run_snapshot_triage(&snapshot, json).await?;
+            AiCommands::TriageSnapshot {
+                snapshot,
+                json,
+                format,
+            } => {
+                rupost::ai::triage::run_snapshot_triage(&snapshot, json, &format).await?;
             }
             AiCommands::Resolve { file, dry_run } => {
                 rupost::ai::resolve::run_resolve(&file, dry_run).await?;
@@ -236,6 +240,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 output,
                 no_ai,
                 templatize_host,
+                keep_credentials,
             } => {
                 let params = rupost::ai::bootstrap::BootstrapParams {
                     from,
@@ -244,6 +249,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                     output,
                     no_ai,
                     templatize_host,
+                    keep_credentials,
                 };
                 rupost::ai::bootstrap::run_bootstrap(&params).await?;
             }
@@ -268,6 +274,17 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 },
             )
             .await?;
+        }
+        Some(Commands::Ast(args)) => {
+            // WP-AST：AstDocument v1.0 只读导出——stdout 仅 JSON（日志走 stderr），
+            // 缺失文件/解析错误走既有错误链（非零退出）
+            let content = std::fs::read_to_string(&args.file)?;
+            let parsed = rupost::parser::parse_document_by_path(&args.file, &content)?;
+            let doc = rupost::parser::to_ast_document(&parsed, &args.file);
+            let json = serde_json::to_vec_pretty(&doc)?;
+            use std::io::Write as _;
+            std::io::stdout().write_all(&json)?;
+            println!();
         }
         Some(Commands::Web(args)) => {
             let store: std::sync::Arc<dyn rupost::web::DocumentStore> =
@@ -297,13 +314,15 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             } else {
                 // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
                 // 先从 cli.args 剥离 rupost 路由旗标再查表，确保前置/后置均可达插件命令。
-                let parsed = super::plugin_route::parse_routing_args(&cli.args);
+                let parsed = super::plugin_route::parse_routing_args(&cli.args)?;
                 let builtins = super::plugin_route::builtin_subcommand_names();
                 let registry =
                     super::plugin_route::discover_for_routing(parsed.allow_project_plugins);
                 match super::plugin_route::route(&parsed.passthrough, &builtins, &registry) {
-                    super::plugin_route::RoutingDecision::PluginCommand(exe_path, _name, rest) => {
+                    super::plugin_route::RoutingDecision::PluginCommand(exe_path, name, rest) => {
                         let code = super::plugin_exec::launch_plugin_command(
+                            &registry,
+                            &name,
                             &exe_path,
                             &rest,
                             &parsed.allow_env,
@@ -324,7 +343,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                         std::process::exit(2);
                     }
                     super::plugin_route::RoutingDecision::Inline => {
-                        runner::run(RunParams::from_cli(&cli)).await?;
+                        let mut params = RunParams::from_cli(&cli);
+                        params.args = parsed.passthrough;
+                        runner::run(params).await?;
                     }
                 }
             }

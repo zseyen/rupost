@@ -48,6 +48,11 @@ pub enum RupostError {
     #[error("插件错误: {0}")]
     PluginError(String),
 
+    /// 故障复现包工件创建失败（WP-4 退出码契约：exit 2——工件 I/O 故障不得
+    /// 掩盖测试执行结果，也区别于测试失败本身的 exit 1）
+    #[error("故障复现包创建失败: {0}")]
+    IncidentBundleError(String),
+
     #[error("{0}")]
     Other(String),
 }

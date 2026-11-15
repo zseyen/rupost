@@ -107,6 +107,16 @@ Accept: text/event-stream
         res.error
     );
 
+    // WP-P2a 补全（SSE 路径）：source_line = 方法行（GET）的 1-based 行号。
+    // 行号台账（parse_file 对内容 trim，前导空行不计）：1 ###（分隔行，不进块内容）
+    //           2 @sse / 3 @sse_max_events / 4-6 @assert ×3 / 7 @capture / 8 GET
+    assert_eq!(
+        res.source_line,
+        Some(8),
+        "SSE 请求的方法行必须携带稳定定位行号: {:?}",
+        res.source_line
+    );
+
     // 验证握手断言
     assert!(
         res.assertions

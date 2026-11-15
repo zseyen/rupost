@@ -1,3 +1,4 @@
+use crate::platform;
 use crate::variable::resolver::VariableResolver;
 use crate::variable::types::{VariableConfig, VariableContext};
 use std::collections::HashMap;
@@ -41,7 +42,7 @@ impl ConfigLoader {
             }
         }
 
-        let home = dirs::home_dir()?;
+        let home = platform::home_dir()?;
         let user_path = home.join(".config").join("rupost").join(Self::CONFIG_FILE);
         if user_path.exists() {
             Some(user_path)
@@ -50,16 +51,47 @@ impl ConfigLoader {
         }
     }
 
-    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
-    pub fn find_and_load_redaction_policy() -> crate::exporter::redact::RedactionPolicy {
-        if let Some(path) = Self::find_config_path()
-            && let Ok(content) = fs::read_to_string(path)
-            && let Ok(policy) = crate::exporter::redact::RedactionPolicy::from_toml_str(&content)
-        {
-            policy
-        } else {
-            crate::exporter::redact::RedactionPolicy::builtin()
+    /// 从指定路径加载脱敏策略，区分“文件不存在”（静默回退）与“读取/解析失败”（返回告警并回退内置默认策略）。
+    fn load_redaction_policy_from_path(
+        path: &Path,
+    ) -> (crate::security::redact::RedactionPolicy, Option<String>) {
+        if !path.exists() {
+            return (crate::security::redact::RedactionPolicy::builtin(), None);
         }
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    crate::security::redact::RedactionPolicy::builtin(),
+                    Some(format!(
+                        "[!] 读取 {} 失败: {e}，已回退到内置默认脱敏策略",
+                        path.display()
+                    )),
+                );
+            }
+        };
+        match crate::security::redact::RedactionPolicy::from_toml_str(&content) {
+            Ok(policy) => (policy, None),
+            Err(e) => (
+                crate::security::redact::RedactionPolicy::builtin(),
+                Some(format!(
+                    "[!] 解析 {} 脱敏策略失败: {e}，已回退到内置默认脱敏策略",
+                    path.display()
+                )),
+            ),
+        }
+    }
+
+    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
+    pub fn find_and_load_redaction_policy() -> crate::security::redact::RedactionPolicy {
+        let Some(path) = Self::find_config_path() else {
+            return crate::security::redact::RedactionPolicy::builtin();
+        };
+        let (policy, warning) = Self::load_redaction_policy_from_path(&path);
+        if let Some(w) = warning {
+            eprintln!("{w}");
+        }
+        policy
     }
 
     /// 单个 toml 路径的分类加载（走查缺口 #6c：存在但损坏必须区分于不存在——
@@ -86,6 +118,34 @@ impl ConfigLoader {
     /// 返回 `(配置, 告警)`：配置损坏时 `config` 为 None 且 `告警` 携带根因
     /// （坏文件优先于静默回退——首个存在的配置损坏即停止，不再搜索其他位置）。
     /// 渲染决策留给调用方（CLI stderr / Web tracing / TUI 状态栏各不相同）。
+    /// B3（免重填主线）：读取 `rupost.toml [plugins]` 段——TUI/Web 交互入口专用单点。
+    /// 缺失/无段 → 默认；解析失败 → 默认 + 指名告警（与 find_and_load 告警策略一致）。
+    /// TUI/Web 均经此单点，禁止各自解析 toml。
+    pub fn find_and_load_plugin_config() -> (crate::variable::PluginTomlConfig, Vec<String>) {
+        let Some(path) = Self::find_config_path() else {
+            return (crate::variable::PluginTomlConfig::default(), Vec::new());
+        };
+        Self::load_plugin_config_from_path(&path)
+    }
+
+    /// 可注入路径变体（测试用，避免 set_current_dir 全局状态污染）
+    pub fn load_plugin_config_from_path<P: AsRef<Path>>(
+        path: P,
+    ) -> (crate::variable::PluginTomlConfig, Vec<String>) {
+        let mut warnings = Vec::new();
+        let path = path.as_ref();
+        match Self::load_from_path(path) {
+            Ok(config) => match config.plugins {
+                Some(cfg) => (cfg, warnings),
+                None => (crate::variable::PluginTomlConfig::default(), warnings),
+            },
+            Err(e) => {
+                warnings.push(format!("rupost.toml [plugins] 段解析失败，已回退默认: {e}"));
+                (crate::variable::PluginTomlConfig::default(), warnings)
+            }
+        }
+    }
+
     pub fn find_and_load() -> (Option<VariableConfig>, Vec<String>) {
         let mut warnings = Vec::new();
         let config =
@@ -271,6 +331,89 @@ fn apply_env_file(
 
 #[cfg(test)]
 mod tests {
+
+    /// T1（WP-2026-11-14-01）：[plugins] 段 serde round-trip——全字段/缺段/未知字段容忍。
+    #[test]
+    fn test_plugin_toml_config_roundtrip_and_missing_section() {
+        // 全字段
+        let full = r#"
+[environments.dev]
+base_url = "http://x"
+
+[plugins]
+allow_missing_plugins = true
+strict_plugins = false
+plugin_timeout_secs = 15
+plugin_env = ["AWS_ACCESS_KEY_ID", "VAULT_TOKEN=abc"]
+allow_project_plugins = true
+strict_vars = true
+"#;
+        let config: crate::variable::VariableConfig = toml::from_str(full).unwrap();
+        let plugins = config.plugins.expect("[plugins] 段必须被解析");
+        assert!(plugins.allow_missing_plugins);
+        assert!(!plugins.strict_plugins);
+        assert_eq!(plugins.plugin_timeout_secs, Some(15));
+        assert_eq!(
+            plugins.plugin_env,
+            vec![
+                "AWS_ACCESS_KEY_ID".to_string(),
+                "VAULT_TOKEN=abc".to_string()
+            ]
+        );
+        assert!(plugins.allow_project_plugins);
+        assert!(plugins.strict_vars);
+
+        // 缺段 → None（零破坏：旧 toml 兼容）
+        let legacy: crate::variable::VariableConfig = toml::from_str(
+            "[environments.dev]
+base_url = \"http://x\"",
+        )
+        .unwrap();
+        assert!(
+            legacy.plugins.is_none(),
+            "旧 toml 缺 [plugins] 段必须为 None"
+        );
+
+        // 未知字段容忍
+        let future: crate::variable::VariableConfig =
+            toml::from_str("[plugins]\nallow_missing_plugins = true\nfuture_field = \"whatever\"")
+                .unwrap();
+        assert!(future.plugins.unwrap().allow_missing_plugins);
+    }
+
+    /// T2（WP-2026-11-14-01）：find_and_load_plugin_config 决策表——
+    /// 合法段/缺段/无文件/损坏文件四形态（损坏 → 默认 + 指名告警）。
+    #[test]
+    fn test_find_and_load_plugin_config_decision_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("rupost.toml");
+
+        // 形态 1：合法段
+        std::fs::write(
+            &toml_path,
+            "[plugins]\nplugin_timeout_secs = 12\nallow_missing_plugins = true\n",
+        )
+        .unwrap();
+        let (cfg, warnings) = ConfigLoader::load_plugin_config_from_path(&toml_path);
+        assert_eq!(cfg.plugin_timeout_secs, Some(12));
+        assert!(cfg.allow_missing_plugins);
+        assert!(warnings.is_empty());
+
+        // 形态 2：无 [plugins] 段 → 默认
+        std::fs::write(&toml_path, "[environments.dev]\nbase_url = \"http://x\"").unwrap();
+        let (cfg2, _) = ConfigLoader::load_plugin_config_from_path(&toml_path);
+        assert_eq!(cfg2, crate::variable::PluginTomlConfig::default());
+
+        // 形态 3：损坏 toml → 默认 + 指名告警（不 panic）
+        std::fs::write(&toml_path, "[plugins\nbroken").unwrap();
+        let (cfg3, warnings3) = ConfigLoader::load_plugin_config_from_path(&toml_path);
+        assert_eq!(cfg3, crate::variable::PluginTomlConfig::default());
+        assert!(
+            warnings3.iter().any(|w| w.contains("[plugins]")),
+            "解析失败必须指名 [plugins] 段: {:?}",
+            warnings3
+        );
+    }
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -661,5 +804,46 @@ plain = "no-ref"
         let policy = ConfigLoader::find_and_load_redaction_policy();
         assert!(policy.is_sensitive("Authorization"));
         assert!(!policy.is_sensitive("next_token"));
+    }
+
+    #[test]
+    fn test_load_redaction_policy_from_path_distinguishes_missing_and_malformed() {
+        // 1. 文件不存在 -> 静默回退内置默认策略（无 warning）
+        let missing = std::path::PathBuf::from("/tmp/rupost-nonexistent-redaction-policy.toml");
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(&missing);
+        assert!(warning.is_none(), "缺失文件不应产生告警: {warning:?}");
+        assert!(policy.is_sensitive("Authorization"));
+
+        // 2. 损坏的 TOML -> 产生可见 [!] 告警并安全回退内置默认策略
+        let mut malformed = NamedTempFile::new().unwrap();
+        malformed
+            .write_all(b"[export.redaction\nbroken = [")
+            .unwrap();
+        malformed.flush().unwrap();
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(malformed.path());
+        let w = warning.expect("损坏配置必须产生可见告警");
+        assert!(w.contains("[!]"), "{w}");
+        assert!(policy.is_sensitive("Authorization"));
+
+        // 3. 读取失败（传入目录路径） -> 产生可见 [!] 告警并安全回退内置默认策略
+        let dir = tempfile::tempdir().unwrap();
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(dir.path());
+        let w = warning.expect("读取失败必须产生可见告警");
+        assert!(w.contains("[!]"), "{w}");
+        assert!(policy.is_sensitive("Authorization"));
+
+        // 4. 合法配置 -> 正常加载自定义策略且无告警
+        let mut valid = NamedTempFile::new().unwrap();
+        valid
+            .write_all(
+                br#"[export.redaction]
+sensitive_keys = ["x_custom_secret"]
+"#,
+            )
+            .unwrap();
+        valid.flush().unwrap();
+        let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(valid.path());
+        assert!(warning.is_none(), "合法配置不应产生告警: {warning:?}");
+        assert!(policy.is_sensitive("x_custom_secret"));
     }
 }

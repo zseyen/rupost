@@ -54,6 +54,26 @@ pub struct RunBlockRequest {
     pub env: Option<String>,
     #[serde(default)]
     pub extra_variables: Option<HashMap<String, String>>,
+    /// B3（免重填主线）：请求级插件/门禁覆盖（> toml [plugins] > 默认）
+    #[serde(default)]
+    pub plugin_overrides: Option<PluginOverrides>,
+}
+
+/// B3：请求级插件/门禁覆盖（部分字段可选，None 字段沿用 toml/默认）
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct PluginOverrides {
+    #[serde(default)]
+    pub allow_missing_plugins: Option<bool>,
+    #[serde(default)]
+    pub plugin_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub plugin_env: Vec<String>,
+    #[serde(default)]
+    pub strict_vars: Option<bool>,
+    #[serde(default)]
+    pub strict_plugins: Option<bool>,
+    #[serde(default)]
+    pub allow_project_plugins: Option<bool>,
 }
 
 /// 单块原位调试执行响应
@@ -100,6 +120,13 @@ pub struct RunSuiteRequest {
     pub path: String,
     #[serde(default)]
     pub env: Option<String>,
+    /// WP-R2：失败时产出故障复现包（布尔开关；输出位置由服务端决定，
+    /// **绝不接受客户端路径**——浏览器可控的文件系统路径是注入/滥用面）
+    #[serde(default)]
+    pub incident: Option<bool>,
+    /// B3：请求级插件/门禁覆盖（> toml [plugins] > 默认）
+    #[serde(default)]
+    pub plugin_overrides: Option<PluginOverrides>,
 }
 
 /// 套件单条请求执行摘要
@@ -125,6 +152,9 @@ pub struct RunSuiteResponse {
     pub skipped: usize,
     pub duration_ms: u64,
     pub items: Vec<SuiteItemResult>,
+    /// WP-R2：故障复现包目录（仅失败 + incident 开关时为 Some；路径由服务端管辖）
+    #[serde(default)]
+    pub incident_dir: Option<String>,
 }
 
 /// 单条规则匹配诊断

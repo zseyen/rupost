@@ -8,6 +8,9 @@ use crate::history::model::{
     SnapshotResponse,
 };
 use crate::history::snapshot_mask::mask_execution_snapshot_entry;
+use crate::security::fs::write_private_file_atomic;
+use crate::utils::path_guard::normalize_posix_path;
+use crate::utils::text::truncate_utf8_prefix;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +41,8 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
     source_paths: &[String],
     snapshot_path: P,
     mask_secrets: bool,
+    // S-3：按值掩码清单（--mask-secret-value；独立于键名掩码开关生效）
+    secret_values: &[String],
     environment: Option<&str>,
     max_body_bytes: usize,
 ) -> Result<()> {
@@ -54,17 +59,20 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                     url: req.url.clone(),
                     headers: header_map_to_pairs(&req.headers),
                     body: req.body.clone(),
+                    // B-6：@timeout 往返（重放复现原超时语义，不再退回 30s 默认）
+                    timeout_ms: req
+                        .timeout
+                        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
                 },
                 None => SnapshotRequest {
                     method: r.method.clone(),
                     url: r.url.clone(),
                     headers: Vec::new(),
                     body: None,
+                    timeout_ms: None,
                 },
             };
-            let file_path_str = crate::utils::path_guard::normalize_posix_path(
-                file_path.to_string_lossy().as_ref(),
-            );
+            let file_path_str = normalize_posix_path(file_path.to_string_lossy().as_ref());
 
             // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03 §10.6）
             let response = r.response.as_ref().map(|resp| {
@@ -88,6 +96,12 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 }
             });
 
+            // A1（裁决 2026-11-14）：error 语义扩展——三形态全覆盖：
+            // ① 网络错（无响应）→ 既有 classify_error_kind 分类；
+            // ② 有响应但断言失败 → kind=AssertionFailed + 失败断言摘要
+            //   （error != null ⇔ 网络异常 的旧假设作废；消费端判据 = response 缺失，
+            //    replay/transport_error_entry 已按 response.is_none() 判定，不受影响）；
+            // ③ 成功 → None。
             let error = if r.response.is_none() {
                 r.error.as_ref().map(|err_msg| ExecutionErrorDetail {
                     kind: classify_error_kind(err_msg),
@@ -95,13 +109,46 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                     duration_ms: r.duration.as_millis() as u64,
                     occurred_at: chrono::Utc::now(),
                 })
+            } else if !r.success {
+                let failed: Vec<String> = r
+                    .assertions
+                    .iter()
+                    .filter(|a| !a.passed)
+                    .map(|a| match &a.actual {
+                        Some(act) => format!("{} (expected {}, got {})", a.raw, a.expected, act),
+                        None => a.raw.clone(),
+                    })
+                    .collect();
+                let message = if failed.is_empty() {
+                    "assertions failed".to_string()
+                } else {
+                    failed.join("; ")
+                };
+                Some(ExecutionErrorDetail {
+                    kind: "AssertionFailed".to_string(),
+                    message,
+                    duration_ms: r.duration.as_millis() as u64,
+                    occurred_at: chrono::Utc::now(),
+                })
             } else {
                 None
             };
 
-            // 时序瀑布 + Socket 指纹：diagnose 报告优先（含 TLS/证书），退回 RequestTiming
+            // 时序瀑布 + Socket 指纹：M7-A Connector 优先（区分复用 None 与 Some(0)），退回 Prober
             let timing_waterfall = r.timing.as_ref().map(|t| {
-                crate::history::model::TimingWaterfallUs::from_probes(t, r.diagnose_report.as_ref())
+                if r.timing_source == Some(crate::http::timing::TimingSource::Connector) {
+                    crate::history::model::TimingWaterfallUs::from_connect_span(
+                        r.connect_span,
+                        t.ttfb,
+                        t.transfer,
+                        r.diagnose_report.as_ref(),
+                    )
+                } else {
+                    crate::history::model::TimingWaterfallUs::from_probes(
+                        t,
+                        r.diagnose_report.as_ref(),
+                    )
+                }
             });
             let socket_diagnostics = r
                 .diagnose_report
@@ -149,12 +196,14 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 response,
                 error,
                 timing_waterfall,
+                timing_source: r.timing_source,
+                timing_attribution: r.timing_attribution,
                 socket_diagnostics,
                 assertions,
                 warnings: r.warnings.clone(),
             };
-            if mask_secrets {
-                mask_execution_snapshot_entry(&mut entry);
+            if mask_secrets || !secret_values.is_empty() {
+                mask_execution_snapshot_entry(&mut entry, secret_values);
             }
             entries.push(entry);
         }
@@ -170,7 +219,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             arch: std::env::consts::ARCH.to_string(),
             rupost_version: env!("CARGO_PKG_VERSION").to_string(),
         },
-        masking: if mask_secrets {
+        masking: if mask_secrets || !secret_values.is_empty() {
             MaskingMode::Secrets
         } else {
             MaskingMode::None
@@ -192,51 +241,19 @@ pub(crate) fn header_map_to_pairs(map: &reqwest::header::HeaderMap) -> Vec<(Stri
         .collect()
 }
 
-/// 响应体截断（UTF-8 边界安全）：多字节字符中点绝不 panic。
+/// 响应体截断（UTF-8 边界安全）：多字节字符中点绝不 panic（SSOT 委托给 `utils::text::truncate_utf8_prefix`）。
 pub(crate) fn truncate_response_body(body: &str, max_bytes: usize) -> (String, bool) {
-    if body.len() <= max_bytes {
-        return (body.to_string(), false);
-    }
-    let mut end = max_bytes;
-    while !body.is_char_boundary(end) {
-        end -= 1;
-    }
-    (body[..end].to_string(), true)
+    let (prefix, truncated) = truncate_utf8_prefix(body, max_bytes);
+    (prefix.to_string(), truncated)
 }
 
-/// 将黑匣子契约快照写入指定文件（Unix 下权限强制 0600）。
+/// 将黑匣子契约快照写入指定文件（Unix 下权限强制 0600，原子写入且不跟随符号链接）。
 pub fn write_execution_snapshot<P: AsRef<Path>>(
     snapshot: &ExecutionSnapshotFile,
     path: P,
 ) -> Result<()> {
-    if let Some(parent) = path.as_ref().parent()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(RupostError::IoError)?;
-    }
     let json = serde_json::to_string_pretty(snapshot)?;
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(RupostError::IoError)?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(RupostError::IoError)?;
-        file.write_all(json.as_bytes())
-            .map_err(RupostError::IoError)?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, json).map_err(RupostError::IoError)?;
-        Ok(())
-    }
+    write_private_file_atomic(path.as_ref(), json.as_bytes())
 }
 
 /// 读取黑匣子契约快照
@@ -308,6 +325,7 @@ mod tests {
             &[],
             &snap_path,
             false,
+            &[],
             None,
             DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
         )
@@ -322,6 +340,110 @@ mod tests {
         // 100 + 200 + 5000 + 700 + 30000 = 36000
         assert_eq!(snap.entries[1].duration_us, 36_000);
         assert_eq!(snap.entries[1].plugin_duration_us, Some(30_000));
+    }
+
+    /// A1（裁决 2026-11-14）：error 语义扩展——有响应但断言失败的条目也填
+    /// error（kind=AssertionFailed + 失败断言摘要）；三形态守护：
+    /// ① 504+断言失败 → error=Some(AssertionFailed)、response 保留；
+    /// ② 网络错（无响应）→ 维持既有分类；
+    /// ③ 成功 → error 恒 None。
+    #[test]
+    fn test_error_detail_covers_assertion_failures_three_forms() {
+        let dir = TempDir::new().unwrap();
+        let snap_path = dir.path().join("snap.json");
+
+        // ① 有响应 + 断言失败（504 实得，期望 200）
+        let mut failed_504 = TestResult::success(
+            1,
+            Some("slow-upstream".into()),
+            "GET".into(),
+            "https://api.example.com/slow".into(),
+            Response::new(
+                504,
+                HeaderMap::new(),
+                "{\"error\":\"gateway timeout\"}".into(),
+                Duration::from_millis(5100),
+                Duration::from_millis(5000),
+                Duration::from_millis(100),
+            )
+            .unwrap(),
+        );
+        failed_504.success = false;
+        failed_504
+            .assertions
+            .push(crate::assertion::AssertionResult {
+                raw: "status == 200".to_string(),
+                passed: false,
+                actual: Some("504".to_string()),
+                expected: "200".to_string(),
+                message: Some("expected 200, got 504".to_string()),
+                stream_event_index: None,
+            });
+
+        // ② 网络错（无响应）
+        let net_err = TestResult::error(
+            2,
+            Some("net-fail".into()),
+            "GET".into(),
+            "https://api.example.com/net".into(),
+            "Connection refused".into(),
+            Duration::from_millis(3),
+        );
+
+        // ③ 成功
+        let ok = TestResult::success(
+            3,
+            Some("ok".into()),
+            "GET".into(),
+            "https://api.example.com/ok".into(),
+            Response::new(
+                200,
+                HeaderMap::new(),
+                "{}".into(),
+                Duration::from_millis(5),
+                Duration::from_millis(5),
+                Duration::ZERO,
+            )
+            .unwrap(),
+        );
+
+        let batch = vec![(PathBuf::from("case.http"), vec![failed_504, net_err, ok])];
+        save_batch_snapshot(
+            &batch,
+            &[],
+            &snap_path,
+            false,
+            &[],
+            None,
+            DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+        )
+        .unwrap();
+
+        let snap = read_execution_snapshot(&snap_path).unwrap();
+        assert_eq!(snap.entries.len(), 3);
+
+        // 形态 ①：断言失败 → error=Some(AssertionFailed) + 失败摘要 + response 保留
+        let e1 = &snap.entries[0];
+        assert_eq!(e1.outcome, ExecutionOutcome::Fail);
+        let err1 = e1
+            .error
+            .as_ref()
+            .expect("断言失败必须填充 error（A1 裁决）");
+        assert_eq!(err1.kind, "AssertionFailed");
+        assert!(
+            err1.message.contains("status == 200") && err1.message.contains("504"),
+            "error.message 必须携带失败断言摘要: {}",
+            err1.message
+        );
+        assert!(e1.response.is_some(), "有响应条目 response 镜像保留");
+
+        // 形态 ②：网络错维持既有分类
+        let e2 = &snap.entries[1];
+        let err2 = e2.error.as_ref().expect("网络错必须有 error");
+        assert_eq!(err2.kind, "ConnectionRefused");
+
+        // 形态 ③：成功 → error 恒 None
+        assert!(snap.entries[2].error.is_none(), "成功条目 error 恒 None");
     }
 
     #[test]

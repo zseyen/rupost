@@ -92,6 +92,7 @@ impl BatchExecutor {
         }
 
         let mut parallel_cookie_state: Option<serde_json::Value> = None;
+        let mut parallel_started_files: Option<Vec<PathBuf>> = None;
 
         match request.mode {
             BatchMode::Parallel => {
@@ -106,6 +107,7 @@ impl BatchExecutor {
                 );
                 let out = scheduler.run().await?;
                 results = out.results;
+                parallel_started_files = Some(out.started_files);
                 parallel_cookie_state = out.final_cookie_state;
             }
             BatchMode::Serial => {
@@ -141,9 +143,11 @@ impl BatchExecutor {
         }
 
         // ───── M3 Finally：@teardown 确定性清理 ─────
-        // 已实际执行（或已启动）的文件，按执行序的**逆序**执行其 teardown；
+        // 已实际执行（或已启动，包括 parallel+fail_fast 被取消的在途文件）的文件，
+        // 按执行序的**逆序**执行其 teardown；
         // serial 的 fail_fast break 已由 'outer 标签记录中断点。
-        let started: Vec<PathBuf> = results.iter().map(|(p, _)| p.clone()).collect();
+        let started: Vec<PathBuf> = parallel_started_files
+            .unwrap_or_else(|| results.iter().map(|(p, _)| p.clone()).collect());
         let mut teardown_failure = false;
         // 并行分支若带有捕获的会话 Cookie，只装配临时 teardown 执行器消费，
         // 避免污染主执行器的持久化仓库（守护 cookie_persistence_test 契约 2a/2b）。
@@ -204,14 +208,20 @@ impl BatchExecutor {
                     };
                     result.is_teardown = true;
 
-                    // 替换常规阶段占位结果（保持原序号定位）
+                    // 替换常规阶段占位结果（保持原序号定位；若被 fail_fast 中断未产出常规结果，仍登记 teardown 结果）
                     if let Some((_, file_results)) =
                         results.iter_mut().find(|(p, _)| p == file_path)
-                        && let Some(slot) = file_results
+                    {
+                        if let Some(slot) = file_results
                             .iter_mut()
                             .find(|r| r.request_number == orig_number)
-                    {
-                        *slot = result;
+                        {
+                            *slot = result;
+                        } else {
+                            file_results.push(result);
+                        }
+                    } else {
+                        results.push((file_path.clone(), vec![result]));
                     }
                 }
             }

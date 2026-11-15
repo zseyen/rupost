@@ -218,6 +218,7 @@ async fn test_web_readonly_mode_blocks_request_execution() {
         raw_block: "GET http://127.0.0.1:59999/internal-probe\n".to_string(),
         env: None,
         extra_variables: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/block")
@@ -245,6 +246,7 @@ async fn test_web_run_block_native_http_file_parse() {
         raw_block: "# @name health-check\nGET http://127.0.0.1:59999/health\n".to_string(),
         env: None,
         extra_variables: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/block")
@@ -276,6 +278,7 @@ async fn test_web_run_block_and_mock_simulate() {
         raw_block: "GET http://127.0.0.1:59999/test-health\n\n?? status == 200".to_string(),
         env: None,
         extra_variables: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .header("host", "127.0.0.1")
@@ -748,6 +751,8 @@ GET {base}/never
     let payload = RunSuiteRequest {
         path: "suite.http".to_string(),
         env: None,
+        incident: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -781,6 +786,8 @@ async fn test_web_run_suite_error_shapes() {
     let payload = RunSuiteRequest {
         path: "whatever.http".to_string(),
         env: None,
+        incident: None,
+        plugin_overrides: None,
     };
 
     // 1. 只读模式 -> 403（SSRF 防线与 run/block 一致）
@@ -822,6 +829,8 @@ async fn test_web_run_suite_error_shapes() {
     let no_req_payload = RunSuiteRequest {
         path: "empty.http".to_string(),
         env: None,
+        incident: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -842,6 +851,8 @@ async fn test_web_run_suite_error_shapes() {
     let empty_md_payload = RunSuiteRequest {
         path: "empty.md".to_string(),
         env: None,
+        incident: None,
+        plugin_overrides: None,
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -952,4 +963,161 @@ async fn test_dev_mode_rejects_non_loopback_host() {
         err.to_string().contains("回环") || err.to_string().contains("127.0.0.1"),
         "error must explain loopback-only posture: {err}"
     );
+}
+
+// ===== WP-R2：Web 工作台故障复现包 =====
+
+/// WP-R2（缺口 2）：Web 套件失败 + incident 开关 → 服务端管辖目录产出三文件
+/// 复现包；客户端无法指定路径（路径注入免疫）；masking 恒为 secrets。
+/// 反假守护：把 handler 中 `req.incident == Some(true)` 临时改为 `false`，
+/// 本测试必须稳定变红。
+#[tokio::test]
+async fn test_web_suite_incident_bundle_emitted_on_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/boom"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&server)
+        .await;
+
+    let tmp = tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("fail.http"),
+        format!(
+            "### boom\nGET {}/boom\n\n# @assert status == 200\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(tmp.path())),
+        working_dir: tmp.path().to_path_buf(),
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = serde_json::json!({
+        "path": "fail.http",
+        "env": "staging",
+        "incident": true
+    });
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let wrapped: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = &wrapped["data"];
+    assert_eq!(data["failed"], 1);
+
+    let incident_dir = data["incident_dir"]
+        .as_str()
+        .expect("失败 + incident 开关必须返回 incident_dir");
+    // 路径最小暴露：返回相对于工作目录的 POSIX 路径，不暴露服务端绝对路径
+    assert!(
+        incident_dir.starts_with(".rupost/incidents/"),
+        "incident_dir 必须返回相对工作目录的 POSIX 路径: {incident_dir}"
+    );
+    let dir = tmp.path().join(incident_dir);
+    for f in ["manifest.json", "report.json", "snapshot.json"] {
+        assert!(dir.join(f).is_file(), "missing artifact: {f}");
+    }
+    // 强制脱敏声明 + req.env 贯通到 manifest 与 snapshot
+    let manifest_bytes = std::fs::read(dir.join("manifest.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    assert_eq!(manifest["masking"], "secrets");
+    assert_eq!(manifest["environment"], "staging");
+
+    let snap_bytes = std::fs::read(dir.join("snapshot.json")).unwrap();
+    let snap: serde_json::Value = serde_json::from_slice(&snap_bytes).unwrap();
+    assert_eq!(snap["environment"], "staging");
+}
+
+/// WP-R2 成功对照：无开关（失败）或全绿（有开关）都不得产出目录。
+#[tokio::test]
+async fn test_web_suite_no_incident_bundle_without_flag_or_on_green() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/boom"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("fine"))
+        .mount(&server)
+        .await;
+
+    // 场景 A：失败但无开关 → 无目录
+    let tmp_a = tempdir().unwrap();
+    std::fs::write(
+        tmp_a.path().join("fail.http"),
+        format!(
+            "### boom\nGET {}/boom\n\n# @assert status == 200\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(tmp_a.path())),
+        working_dir: tmp_a.path().to_path_buf(),
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let payload = serde_json::json!({ "path": "fail.http" });
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let wrapped: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(wrapped["data"]["failed"], 1);
+    assert!(
+        wrapped["data"]["incident_dir"].is_null(),
+        "无开关不得返回 incident_dir"
+    );
+    assert!(!tmp_a.path().join(".rupost").exists(), "无开关不得产出目录");
+
+    // 场景 B：开关打开但全绿 → 无目录
+    let tmp_b = tempdir().unwrap();
+    std::fs::write(
+        tmp_b.path().join("ok.http"),
+        format!(
+            "### ok\nGET {}/ok\n\n# @assert status == 200\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(tmp_b.path())),
+        working_dir: tmp_b.path().to_path_buf(),
+        ..Default::default()
+    };
+    let app = create_web_router(config);
+    let payload = serde_json::json!({ "path": "ok.http", "incident": true });
+    let req = Request::builder()
+        .uri("/api/v1/run/suite")
+        .method("POST")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let wrapped: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(wrapped["data"]["failed"], 0);
+    assert!(wrapped["data"]["incident_dir"].is_null(), "全绿不产目录");
+    assert!(!tmp_b.path().join(".rupost").exists(), "全绿不得产出目录");
 }

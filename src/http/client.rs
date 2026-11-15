@@ -4,6 +4,9 @@ use std::time::Duration;
 use crate::Result;
 use crate::http::request::Request;
 use crate::http::response::Response;
+use crate::http::timing_connector::{
+    ACTIVE_TIMING_SLOT, ConnectSpan, RequestTimingSlot, TimingConnectorLayer, TimingDnsResolver,
+};
 use crate::http::types::Method;
 use reqwest_cookie_store::CookieStoreMutex;
 
@@ -19,13 +22,19 @@ impl Default for Client {
 }
 
 impl Client {
+    fn base_builder(ua: &str) -> reqwest::ClientBuilder {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent(ua)
+            .dns_resolver(Arc::new(TimingDnsResolver))
+            .connector_layer(TimingConnectorLayer)
+    }
+
     /// Create a new client without cookie support.
     pub fn new(user_agent: Option<&str>) -> Self {
         let ua = user_agent.unwrap_or("rupost/1.0.0");
         Self {
-            inner: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .user_agent(ua)
+            inner: Self::base_builder(ua)
                 .build()
                 .expect("Failed to build HTTP client"),
         }
@@ -41,17 +50,15 @@ impl Client {
     ) -> Self {
         let ua = user_agent.unwrap_or("rupost/1.0.0");
         Self {
-            inner: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
+            inner: Self::base_builder(ua)
                 .cookie_store(true)
                 .cookie_provider(cookie_store)
-                .user_agent(ua)
                 .build()
                 .expect("Failed to build HTTP client with cookie store"),
         }
     }
 
-    pub async fn execute_raw(&self, request: Request) -> Result<(reqwest::Response, Duration)> {
+    fn build_reqwest(&self, request: Request) -> Result<reqwest::RequestBuilder> {
         let url = if request.query_params.is_empty() {
             reqwest::Url::parse(&request.url.to_string())?
         } else {
@@ -76,9 +83,28 @@ impl Client {
             req = req.body(body);
         }
 
+        Ok(req)
+    }
+
+    /// 执行请求并捕获单连接时序观测区间（`ConnectSpan`）。
+    /// 连接池复用时 `ConnectSpan` 为 `None`。
+    pub async fn execute_raw_with_timing(
+        &self,
+        request: Request,
+    ) -> Result<(reqwest::Response, Duration, Option<ConnectSpan>)> {
+        let req = self.build_reqwest(request)?;
+        let slot = Arc::new(RequestTimingSlot::default());
         let start = std::time::Instant::now();
-        let response = req.send().await?;
+        let response = ACTIVE_TIMING_SLOT
+            .scope(slot.clone(), async { req.send().await })
+            .await?;
         let ttfb = start.elapsed();
+        let span = slot.take_span();
+        Ok((response, ttfb, span))
+    }
+
+    pub async fn execute_raw(&self, request: Request) -> Result<(reqwest::Response, Duration)> {
+        let (response, ttfb, _) = self.execute_raw_with_timing(request).await?;
         Ok((response, ttfb))
     }
 

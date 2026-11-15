@@ -1,5 +1,8 @@
+use super::gc;
 use super::storage::get_storage;
 use crate::Result;
+use crate::platform;
+use crate::utils::text::truncate_chars;
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, Table};
 
@@ -23,7 +26,7 @@ pub fn list_history(limit: usize, reverse: bool) -> Result<()> {
             Color::Red
         };
 
-        let short_id = crate::utils::text::truncate_chars(&entry.id, 8, "");
+        let short_id = truncate_chars(&entry.id, 8, "");
         table.add_row(vec![
             Cell::new(&short_id), // Short ID (边界安全截断)
             Cell::new(entry.timestamp.format("%H:%M:%S")),
@@ -121,14 +124,13 @@ pub fn show_history(target: &str) -> Result<()> {
 
 pub fn prune_history(days: u64, max_size: usize) -> Result<()> {
     use colored::Colorize;
-    let dir_str = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
-    let log_dir = std::path::PathBuf::from(dir_str).join("logs");
+    let log_dir = platform::history_logs_dir();
 
     println!(
         "Scanning log directory: {}",
         log_dir.display().to_string().cyan()
     );
-    match crate::history::gc::perform_prune(&log_dir, days, max_size) {
+    match gc::perform_prune(&log_dir, days, max_size) {
         Ok((count, bytes)) => {
             let mb = bytes as f64 / 1024.0 / 1024.0;
             println!(
@@ -168,11 +170,10 @@ pub fn clear_history(yes: bool, all: bool) -> Result<()> {
         }
     }
 
-    let dir_str = std::env::var("RUPOST_HISTORY_DIR").unwrap_or_else(|_| ".rupost".to_string());
-    let log_dir = std::path::PathBuf::from(&dir_str).join("logs");
+    let log_dir = platform::history_logs_dir();
 
     // 1. 清空 logs/ 文件夹
-    match crate::history::gc::perform_clear(&log_dir) {
+    match gc::perform_clear(&log_dir) {
         Ok((count, bytes)) => {
             let mb = bytes as f64 / 1024.0 / 1024.0;
             println!(
@@ -193,7 +194,7 @@ pub fn clear_history(yes: bool, all: bool) -> Result<()> {
 
     // 2. 如果携带了 --all，清空 history.jsonl
     if all {
-        let history_db = std::path::PathBuf::from(&dir_str).join("history.jsonl");
+        let history_db = platform::history_dir().join("history.jsonl");
         if history_db.exists() {
             if std::fs::remove_file(&history_db).is_ok() {
                 println!("{} Cleared history.jsonl database.", "[✓]".green().bold());
@@ -211,14 +212,16 @@ pub fn clear_history(yes: bool, all: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_print_history_short_id_safety() {
         let short_id = "123";
-        let formatted = crate::utils::text::truncate_chars(short_id, 8, "");
+        let formatted = truncate_chars(short_id, 8, "");
         assert_eq!(formatted, "123");
 
         let long_id = "1234567890abcdef";
-        let formatted_long = crate::utils::text::truncate_chars(long_id, 8, "");
+        let formatted_long = truncate_chars(long_id, 8, "");
         assert_eq!(formatted_long, "12345678");
     }
 }

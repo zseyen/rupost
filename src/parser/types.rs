@@ -115,7 +115,33 @@ impl ParsedRequest {
     }
 }
 
-use crate::variable::capture::VariableCapture;
+/// 纯语法层插件生命周期阶段（不依赖 plugin 模块）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum ParsedPluginStage {
+    Prepare = 10,
+    #[default]
+    Transform = 20,
+    Sign = 30,
+    PostResponse = 40,
+    OnFailure = 50,
+}
+
+/// 纯语法层插件指令（`@auth`, `@transform`, `@sign`, `@plugin`）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedPluginDirective {
+    pub directive: String,
+    pub name: String,
+    pub stage: ParsedPluginStage,
+    pub optional: bool,
+    pub params: std::collections::HashMap<String, String>,
+}
+
+/// 纯语法层变量捕获声明（`@capture <name> from <source>`）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParsedVariableCapture {
+    pub name: String,
+    pub source: String,
+}
 
 /// 请求元数据
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -133,7 +159,7 @@ pub struct RequestMetadata {
     pub assertions: Vec<String>,
 
     /// 变量捕获列表（@capture）
-    pub captures: Vec<VariableCapture>,
+    pub captures: Vec<ParsedVariableCapture>,
 
     /// 是否为 SSE 请求（@sse）
     pub sse: bool,
@@ -156,7 +182,7 @@ pub struct RequestMetadata {
     pub stream_to_append: bool,
 
     /// 插件生命周期指令列表（@auth, @transform, @sign, @plugin）
-    pub plugins: Vec<crate::plugin::PluginDirective>,
+    pub plugins: Vec<ParsedPluginDirective>,
 
     /// 请求重定向转发 URL（@forward_to，可选）
     pub forward_to: Option<String>,
@@ -166,6 +192,10 @@ pub struct RequestMetadata {
 
     /// WebSocket 二进制帧解码器（@decoder，可选）
     pub decoder: Option<String>,
+
+    /// WP-P2a：请求方法行的 1-based 行号（稳定定位 `<path>#L<行号>`；
+    /// .http 与 .md 双解析路径均回填；缺席为 None）
+    pub source_line: Option<usize>,
 
     /// 是否开启网络诊断（@diagnose）
     pub diagnose: bool,
@@ -211,7 +241,7 @@ pub enum Metadata {
     /// 显式声明的豁免键列表（@no-redact）
     NoRedact(Vec<String>),
     /// 插件生命周期指令（@auth, @transform, @sign, @plugin）
-    Plugin(crate::plugin::PluginDirective),
+    Plugin(ParsedPluginDirective),
 }
 
 /// 整个文件的解析结果
@@ -302,6 +332,40 @@ pub type ParseResult<T> = Result<T, ParseError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WP-P2a：source_line 契约——方法行的 1-based 行号，.md 与 .http 双路径锁定
+    #[test]
+    fn test_source_line_contract_md_and_http() {
+        // .md 围栏：行4 与行10 的 GET
+        let md = "前言\n\n```http\nGET http://x/ok\n\n# @assert status == 200\n```\n\n```http\nGET http://x/boom\n\n# @assert status == 200\n```\n";
+        let parsed = crate::parser::parse_document_by_path("doc.md", md).unwrap();
+        assert_eq!(parsed.requests.len(), 2);
+        assert_eq!(parsed.requests[0].metadata.source_line, Some(4));
+        assert_eq!(parsed.requests[1].metadata.source_line, Some(10));
+
+        // .http ### 分隔：### 在行1/5（不进块内容），方法行 3 与 6
+        let http =
+            "### first\n# @assert status == 200\nGET http://x/a\n\n### second\nGET http://x/b\n";
+        let parsed = crate::parser::parse_document_by_path("a.http", http).unwrap();
+        assert_eq!(parsed.requests.len(), 2);
+        assert_eq!(parsed.requests[0].metadata.source_line, Some(3));
+        assert_eq!(parsed.requests[1].metadata.source_line, Some(6));
+
+        // 无分隔符直起：方法行在行1
+        let bare = "GET http://x/c\n";
+        let parsed = crate::parser::parse_document_by_path("b.http", bare).unwrap();
+        assert_eq!(parsed.requests[0].metadata.source_line, Some(1));
+
+        // 审查修正 B1 回归：混合语言文档——python 围栏在前，http 围栏行号不受错位
+        let mixed = "前言\n\n```python\nprint(1)\n```\n\n```http\nGET http://x/a\n```\n";
+        let parsed = crate::parser::parse_document_by_path("m.md", mixed).unwrap();
+        assert_eq!(parsed.requests.len(), 1);
+        assert_eq!(
+            parsed.requests[0].metadata.source_line,
+            Some(8),
+            "python 围栏在前时 http 方法行仍在行 8"
+        );
+    }
 
     #[test]
     fn test_parsed_request_new() {

@@ -17,7 +17,12 @@ Content-Type: application/json
     let parsed = HttpFileParser::parse_content(http_content).expect("Failed to parse http file");
     assert_eq!(parsed.requests.len(), 1);
 
-    let mut req_plugins = parsed.requests[0].metadata.plugins.clone();
+    let mut req_plugins: Vec<rupost::plugin::PluginDirective> = parsed.requests[0]
+        .metadata
+        .plugins
+        .iter()
+        .map(Into::into)
+        .collect();
     assert_eq!(req_plugins.len(), 2);
 
     // 1. 验证解析属性
@@ -82,6 +87,7 @@ fn test_plugin_registry_discovery_and_command_mapping() {
             usage: "rupost echo-sign --test".to_string(),
             description: "Self test".to_string(),
             requires_tty: false,
+            requires_env: vec![],
         }],
         hooks: vec![rupost::plugin::HookCapability {
             directive: "auth".to_string(),
@@ -91,6 +97,7 @@ fn test_plugin_registry_discovery_and_command_mapping() {
             requires_env: vec![],
             parameters_schema: serde_json::json!({}),
         }],
+        runtime: None,
     };
 
     let fake_path = PathBuf::from("/usr/local/bin/rupost-plugin-echo-sign");

@@ -44,8 +44,9 @@ impl MarkdownFileParser {
             let split_result = Self::split_mock_variants(&block.content);
 
             if let Some((request_part, variants_part)) = split_result {
+                // WP-P2a：block.line_number 是围栏开行，块内容首行 = 围栏 + 1
                 let parsed_opt =
-                    HttpFileParser::parse_request_block(&request_part, block.line_number)?;
+                    HttpFileParser::parse_request_block(&request_part, block.line_number + 1)?;
                 if let Some(mut req) = parsed_opt {
                     if req.metadata.name.is_none() {
                         req.metadata.name = block.preceding_header.clone();
@@ -75,6 +76,10 @@ impl MarkdownFileParser {
                     if req.base_path.is_none() {
                         req.base_path = base_path.clone();
                     }
+                    // WP-P2a：parse_content 内部从 1 计数，换算回文档行号
+                    // （内容首行 = 围栏 + 1 = line_number + 1，relative 1 对应 +1）
+                    req.metadata.source_line =
+                        req.metadata.source_line.map(|n| n + block.line_number);
                 }
 
                 parsed_file.requests.extend(block_parsed.requests);
@@ -201,10 +206,11 @@ impl MarkdownFileParser {
         let mut current_header: Option<String> = None;
         let mut in_code_block = false;
         let mut current_code = String::new();
+        let mut current_line = 1usize;
         let mut is_capturing_header = false;
         let mut header_text = String::new();
 
-        for event in parser {
+        for (event, range) in parser.into_offset_iter() {
             match event {
                 // 标题开始
                 Event::Start(Tag::Heading { .. }) => {
@@ -232,12 +238,17 @@ impl MarkdownFileParser {
                 }
 
                 // 代码块开始：info string 只取首个 token 作为语言标签，
-                // ```http title="demo" 这类带属性的围栏此前因整串比较被忽略
+                // ```http title="demo" 这类带属性的围栏此前因整串比较被忽略；
+                // 使用 pulldown-cmark 原生 byte offset 精确换算围栏开行 1-based 行号。
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
                     let lang_token = lang.split_whitespace().next().unwrap_or("").to_lowercase();
                     if lang_token == "http" || lang_token == "rest" {
                         in_code_block = true;
                         current_code.clear();
+                        current_line = 1 + content[..range.start]
+                            .bytes()
+                            .filter(|&b| b == b'\n')
+                            .count();
                     }
                 }
 
@@ -246,7 +257,7 @@ impl MarkdownFileParser {
                     blocks.push(ExtractedCodeBlock {
                         content: current_code.clone(),
                         preceding_header: current_header.clone(),
-                        line_number: 1, // 缺省从 1 开始
+                        line_number: current_line,
                     });
 
                     in_code_block = false;

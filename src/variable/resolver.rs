@@ -15,23 +15,10 @@ impl VariableResolver {
     ///
     /// 求值失败的函数宏保留字面量，交由 `unresolved_placeholders` 显式告警（反静默）。
     pub fn substitute(text: &str, context: &VariableContext) -> String {
-        static FN_MACRO_REGEX: OnceLock<Regex> = OnceLock::new();
         static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
-        let fn_re =
-            FN_MACRO_REGEX.get_or_init(|| Regex::new(r"\{\{\$([a-z_0-9]+)\((.*?)\)\}\}").unwrap());
 
-        // 通道 1：函数宏（带参数）
-        let with_fns = fn_re.replace_all(text, |caps: &Captures| {
-            let name: &str = &caps[1];
-            let raw_args = caps[2].to_string();
-            let evaluated = match name {
-                "hmac_sha256" => Self::eval_hmac_sha256(&raw_args, context),
-                "sha256" => Self::eval_sha256(&raw_args, context),
-                "random_int" => Self::eval_random_int(&raw_args, context),
-                _ => None, // 未知函数宏：保持字面量，残留检查显式告警
-            };
-            evaluated.unwrap_or_else(|| caps[0].to_string())
-        });
+        // 通道 1：函数宏（带参数，引号感知 + 括号平衡扫描）
+        let with_fns = Self::substitute_fn_macros(text, context);
 
         // 通道 2：简单变量
         let re =
@@ -58,6 +45,92 @@ impl VariableResolver {
             }
         })
         .to_string()
+    }
+
+    /// 引号感知、括号平衡的 `{{$name(args)}}` 函数宏扫描替换器：
+    /// 避免正则 `(.*?)` 在参数含 `)}}`（如 `{{$sha256("a)}}b")}}`）或换行符时提前截断。
+    fn substitute_fn_macros(text: &str, context: &VariableContext) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut cursor = 0;
+
+        while let Some(rel_start) = text[cursor..].find("{{$") {
+            let macro_start = cursor + rel_start;
+            out.push_str(&text[cursor..macro_start]);
+
+            let after_prefix = macro_start + 3; // "{{$".len()
+            let rest = &text[after_prefix..];
+
+            let name_len = rest
+                .bytes()
+                .take_while(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+                .count();
+            if name_len == 0 || !rest[name_len..].starts_with('(') {
+                out.push_str("{{$");
+                cursor = after_prefix;
+                continue;
+            }
+
+            let name = &rest[..name_len];
+            let args_start = after_prefix + name_len + 1;
+
+            let mut depth = 1usize;
+            let mut in_quote: Option<char> = None;
+            let mut escaped = false;
+            let mut close_paren_abs = None;
+
+            for (idx, ch) in text[args_start..].char_indices() {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match ch {
+                    '\\' if in_quote.is_some() => {
+                        escaped = true;
+                    }
+                    q @ ('\'' | '"') if in_quote == Some(q) => {
+                        in_quote = None;
+                    }
+                    q @ ('\'' | '"') if in_quote.is_none() => {
+                        in_quote = Some(q);
+                    }
+                    '(' if in_quote.is_none() => {
+                        depth += 1;
+                    }
+                    ')' if in_quote.is_none() => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close_paren_abs = Some(args_start + idx);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(close_idx) = close_paren_abs
+                && text[close_idx + 1..].starts_with("}}")
+            {
+                let macro_end = close_idx + 3;
+                let raw_args = &text[args_start..close_idx];
+                let evaluated = match name {
+                    "hmac_sha256" => Self::eval_hmac_sha256(raw_args, context),
+                    "sha256" => Self::eval_sha256(raw_args, context),
+                    "random_int" => Self::eval_random_int(raw_args, context),
+                    _ => None, // 未知函数宏：保持字面量，残留检查显式告警
+                };
+                match evaluated {
+                    Some(val) => out.push_str(&val),
+                    None => out.push_str(&text[macro_start..macro_end]),
+                }
+                cursor = macro_end;
+            } else {
+                out.push_str("{{$");
+                cursor = after_prefix;
+            }
+        }
+
+        out.push_str(&text[cursor..]);
+        out
     }
 
     /// `$hmac_sha256(key, msg)` → 小写十六进制 HMAC-SHA256 摘要
@@ -579,5 +652,54 @@ mod tests {
 
         // 验证 Body 渲染
         assert_eq!(parsed.body.unwrap(), "hello 456");
+    }
+
+    /// 引号感知 + 括号平衡扫描器契约：
+    /// 1. 参数含 `)}}`（如 `{{$sha256("a)}}b")}}`）不被提前截断；
+    /// 2. 参数含换行符（如 `{{$sha256("line1\nline2")}}`）不被正则 `.` 阻断；
+    /// 3. 参数含嵌套平衡括号与转义引号（如 `{{$sha256("a(\"b\")")}}`）正确求值；
+    /// 4. 未闭合括号后的有效宏仍能继续被扫描替换。
+    #[test]
+    fn test_fn_macro_scanner_closing_braces_newlines_and_parens() {
+        use sha2::{Digest, Sha256};
+        let sha256_hex = |s: &str| -> String {
+            let mut h = Sha256::new();
+            h.update(s.as_bytes());
+            h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+        };
+
+        let ctx = VariableContext::new();
+
+        // 1. 引号内含 `)}}`
+        let out = VariableResolver::resolve(r#"{{$sha256("a)}}b")}}"#, &ctx);
+        assert_eq!(out, sha256_hex("a)}}b"));
+
+        // 单引号内含 `)}}`
+        let out_sq = VariableResolver::resolve(r#"{{$sha256('a)}}b')}}"#, &ctx);
+        assert_eq!(out_sq, sha256_hex("a)}}b"));
+
+        // 2. 多行参数
+        let out_nl = VariableResolver::resolve("{{$sha256(\"line1\nline2\")}}", &ctx);
+        assert_eq!(out_nl, sha256_hex("line1\nline2"));
+
+        // 3. 转义引号与未加引号的嵌套平衡括号
+        let out_esc = VariableResolver::resolve(r#"{{$sha256("a(\"b\")")}}"#, &ctx);
+        assert_eq!(out_esc, sha256_hex("a(\"b\")"));
+
+        let out_paren = VariableResolver::resolve(r#"{{$sha256(foo(bar))}}"#, &ctx);
+        assert_eq!(out_paren, sha256_hex("foo(bar)"));
+
+        // 4. 混合：未闭合宏后面紧跟有效宏
+        let out_mixed = VariableResolver::resolve(
+            r#"prefix {{$sha256("unclosed) and {{$sha256("ok")}} suffix"#,
+            &ctx,
+        );
+        assert_eq!(
+            out_mixed,
+            format!(
+                r#"prefix {{{{$sha256("unclosed) and {} suffix"#,
+                sha256_hex("ok")
+            )
+        );
     }
 }

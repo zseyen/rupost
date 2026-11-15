@@ -5,6 +5,9 @@ use crate::runner::path::{display_path, resolve_dep_path};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
+/// 依赖闭包执行计划：拓扑执行序 + 节点到其直接依赖的映射（R-1）
+pub type ClosureExecutionPlan = (Vec<PathBuf>, HashMap<PathBuf, Vec<PathBuf>>);
+
 #[derive(Debug, Clone)]
 pub struct WorkflowNode {
     pub file_path: PathBuf,
@@ -34,6 +37,51 @@ impl WorkflowGraph {
             );
         }
         Self { nodes }
+    }
+
+    /// R-1（免重填主线）：计算 roots 的祖先依赖闭包并返回拓扑执行序与依赖映射。
+    /// 闭包 = roots 自身 + 沿 `depends_on` 边可达的全部祖先（传递闭包）；
+    /// 子图仅保留两端均在闭包内的边。用于 `--only --with-deps`：
+    /// 调试单个下游请求前自动先执行其上游（登录/取号），免去手工重跑与 token 搬运。
+    pub fn closure_execution_order(&self, roots: &[PathBuf]) -> Result<ClosureExecutionPlan> {
+        let mut queue: VecDeque<PathBuf> = VecDeque::new();
+        for root in roots {
+            let canon = root.canonicalize().unwrap_or_else(|_| root.clone());
+            if self.nodes.contains_key(&canon) {
+                queue.push_back(canon);
+            } else {
+                return Err(RupostError::Other(format!(
+                    "依赖闭包根不在已解析文件集内: {}",
+                    display_path(root)
+                )));
+            }
+        }
+        let mut closure: HashMap<PathBuf, WorkflowNode> = HashMap::new();
+        while let Some(cur) = queue.pop_front() {
+            if closure.contains_key(&cur) {
+                continue;
+            }
+            if let Some(node) = self.nodes.get(&cur) {
+                closure.insert(cur.clone(), node.clone());
+                for dep in &node.depends_on {
+                    if !closure.contains_key(dep) {
+                        queue.push_back(dep.clone());
+                    }
+                }
+            }
+        }
+        let closure_keys: std::collections::HashSet<PathBuf> = closure.keys().cloned().collect();
+        let mut sub = WorkflowGraph { nodes: closure };
+        for node in sub.nodes.values_mut() {
+            node.depends_on.retain(|d| closure_keys.contains(d));
+        }
+        let order = sub.resolve_execution_order()?;
+        let dependencies = sub
+            .nodes
+            .iter()
+            .map(|(k, v)| (k.clone(), v.depends_on.clone()))
+            .collect();
+        Ok((order, dependencies))
     }
 
     pub fn resolve_execution_order(&self) -> Result<Vec<PathBuf>> {

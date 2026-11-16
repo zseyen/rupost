@@ -11,6 +11,7 @@ let currentFilePath = null;
 let allFiles = [];
 let activeInspectorTab = 'overview';
 let lastDebugData = null;
+let lastExecutedUrl = '';
 let isReadonly = false;
 let currentResponseBodyText = '';
 
@@ -40,6 +41,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   initTheme();
 
   document.addEventListener('DOMContentLoaded', () => {
+    initCustomSelects();
     loadFiles();
     loadEnvs();
     applyReadonlyState();
@@ -139,6 +141,7 @@ async function loadEnvs() {
       if (def && envs.includes(def)) {
         selectEl.value = def;
       }
+      syncCustomSelect(selectEl);
     }
   } catch (e) {
     console.error('Failed to load environments:', e);
@@ -430,6 +433,7 @@ async function runCurrentBlock() {
 }
 
 async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
+  lastExecutedUrl = RupostCards.parseHttpBlock(rawBlock).url || '';
   const debugEl = document.getElementById('debug-output');
   debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EXECUTING]</div><div class="empty-text">Dispatching request to runtime engine...</div></div>';
 
@@ -640,7 +644,27 @@ function renderInspectorTab(tab) {
 }
 
 function renderOverviewTab(d, container) {
+  const diagBtn =
+    !isReadonly && lastExecutedUrl
+      ? `<button type="button" class="btn btn-secondary btn-sm" onclick="runDiagnoseForUrl('${escapeHtml(lastExecutedUrl)}')">[Diagnose]</button>`
+      : '';
+  const errorHtml = d.error
+    ? `<div class="error-banner">
+         <div class="error-banner-head">
+           <span>[EXECUTION ERROR]</span>
+           ${diagBtn}
+         </div>
+         <div>${escapeHtml(d.error)}</div>
+       </div>`
+    : '';
+  const warnHtml =
+    Array.isArray(d.warnings) && d.warnings.length > 0
+      ? `<div class="warn-banner"><strong>[WARNINGS]</strong> ${d.warnings.map(escapeHtml).join('<br/>')}</div>`
+      : '';
+
   let html = `
+    ${errorHtml}
+    ${warnHtml}
     <div class="timing-panel">
       <div class="timing-header">
         <span>[EXECUTION SUMMARY]</span>
@@ -915,10 +939,11 @@ function initKeyboardShortcuts() {
       openImportModal();
       return;
     }
-    // Escape -> Close modal
+    // Escape -> Close modal & custom selects
     if (e.key === 'Escape') {
       closeImportModal();
       closeExportModal();
+      closeAllCustomSelects();
     }
   });
 }
@@ -1494,6 +1519,7 @@ function renderMockTab(container) {
     </div>
     <div id="mock-sim-result">${resultHtml}</div>
   `;
+  enhanceSelect(document.getElementById('mock-method'));
 }
 
 async function runMockSimulate() {
@@ -1750,6 +1776,103 @@ function sendWsBridgeFrame() {
   }
 }
 
+// 12. Custom Positioned Select Dropdowns (Fixes native <select> OS popup offset)
+function initCustomSelects() {
+  ['env-select', 'import-format-select', 'export-format-select'].forEach((id) => {
+    enhanceSelect(document.getElementById(id));
+  });
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest || !e.target.closest('.ui-select')) {
+        closeAllCustomSelects();
+      }
+    });
+  }
+}
+
+function closeAllCustomSelects(exceptEl = null) {
+  if (!document.querySelectorAll) return;
+  document.querySelectorAll('.ui-select.open').forEach((wrap) => {
+    if (wrap !== exceptEl) wrap.classList.remove('open');
+  });
+}
+
+function enhanceSelect(selectEl) {
+  if (!selectEl || !selectEl.parentNode || selectEl.dataset.enhanced === '1') return;
+  selectEl.dataset.enhanced = '1';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'ui-select' + (selectEl.classList && selectEl.classList.contains('form-select') ? ' ui-select-full' : '');
+  if (selectEl.style && selectEl.style.width) {
+    wrapper.style.width = selectEl.style.width;
+  }
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'ui-select-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'ui-select-label';
+  const caretSpan = document.createElement('span');
+  caretSpan.className = 'ui-select-caret';
+  caretSpan.textContent = 'v';
+  trigger.appendChild(labelSpan);
+  trigger.appendChild(caretSpan);
+
+  const menu = document.createElement('ul');
+  menu.className = 'ui-select-menu';
+  menu.setAttribute('role', 'listbox');
+
+  trigger.onclick = (e) => {
+    e.stopPropagation();
+    const isOpen = wrapper.classList.contains('open');
+    closeAllCustomSelects(wrapper);
+    wrapper.classList.toggle('open', !isOpen);
+  };
+
+  wrapper.appendChild(trigger);
+  wrapper.appendChild(menu);
+
+  selectEl.parentNode.insertBefore(wrapper, selectEl.nextSibling);
+  selectEl.style.display = 'none';
+  selectEl._customWrapper = wrapper;
+
+  syncCustomSelect(selectEl);
+}
+
+function syncCustomSelect(selectEl) {
+  if (!selectEl || !selectEl._customWrapper) return;
+  const wrapper = selectEl._customWrapper;
+  const labelSpan = wrapper.querySelector('.ui-select-label');
+  const menu = wrapper.querySelector('.ui-select-menu');
+  if (!menu || !labelSpan) return;
+
+  menu.innerHTML = '';
+  const options = Array.from(selectEl.options || []);
+  const selectedOpt = options.find((o) => o.value === selectEl.value) || options[0];
+  labelSpan.textContent = selectedOpt ? selectedOpt.textContent : '';
+
+  options.forEach((opt) => {
+    const li = document.createElement('li');
+    li.className = 'ui-select-option' + (opt.value === selectEl.value ? ' selected' : '');
+    li.setAttribute('role', 'option');
+    li.textContent = opt.textContent;
+    li.onclick = (e) => {
+      e.stopPropagation();
+      selectEl.value = opt.value;
+      wrapper.classList.remove('open');
+      syncCustomSelect(selectEl);
+      if (typeof selectEl.onchange === 'function') {
+        selectEl.onchange();
+      } else if (typeof Event !== 'undefined' && selectEl.dispatchEvent) {
+        selectEl.dispatchEvent(new Event('change'));
+      }
+    };
+    menu.appendChild(li);
+  });
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     applyReadonlyState,
@@ -1776,6 +1899,7 @@ if (typeof module !== 'undefined' && module.exports) {
     renderSessionTab,
     renderHistoryTab,
     runDiagnoseForUrl,
+    renderOverviewTab,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },

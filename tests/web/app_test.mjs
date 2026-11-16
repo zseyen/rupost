@@ -647,3 +647,27 @@ test('runDiagnoseForUrl formats Duration {secs, nanos} and shows 403 SSRF hint',
   await app.runDiagnoseForUrl('http://127.0.0.1:8080');
   assert.match(debugEl.innerHTML, /--allowed-hosts/);
 });
+
+test('renderOverviewTab displays error and warning banners when request fails', () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  const debugEl = getOrCreateElement('debug-output');
+
+  app.renderOverviewTab(
+    {
+      success: false,
+      status: null,
+      duration_ms: 0,
+      assertions: [],
+      error: 'relative URL without a base: "/orders"',
+      warnings: ['base_url is not defined'],
+    },
+    debugEl
+  );
+
+  assert.match(debugEl.innerHTML, /\[EXECUTION ERROR\]/);
+  assert.match(debugEl.innerHTML, /relative URL without a base/);
+  assert.match(debugEl.innerHTML, /\[WARNINGS\]/);
+  assert.match(debugEl.innerHTML, /base_url is not defined/);
+});

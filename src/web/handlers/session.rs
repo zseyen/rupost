@@ -47,6 +47,7 @@ pub async fn get_session_handler(State(state): State<AppState>, headers: HeaderM
 mod tests {
     use super::*;
     use crate::web::assets::EmbeddedAssetProvider;
+    use crate::web::mock_manager::WebMockManager;
     use crate::web::session::WebSessionStore;
     use crate::web::store::LocalFsDocumentStore;
     use axum::body::to_bytes;
@@ -66,6 +67,7 @@ mod tests {
             allowed_hosts: Vec::new(),
             sessions: Arc::new(WebSessionStore::default()),
             incident_root: PathBuf::from(".rupost/incidents"),
+            mock_manager: Arc::new(WebMockManager::default()),
         };
 
         let handle = state.sessions.load_or_create(None);

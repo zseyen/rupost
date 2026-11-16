@@ -224,6 +224,45 @@ pub struct ParseHttpResponse {
     pub cards: Vec<HttpCardDto>,
 }
 
+/// 工作区发现的 Mock 路由条目
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockRouteItemDto {
+    pub file_path: String,
+    pub title: String,
+    pub method: String,
+    pub path: String,
+    pub raw_block: String,
+}
+
+/// 运行中的 Web 托管 Mock 实例信息
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockServerInfo {
+    pub id: String,
+    pub file_path: String,
+    pub port: u16,
+    pub url: String,
+    pub route_count: usize,
+}
+
+/// 启动托管 Mock 服务请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartMockRequest {
+    pub file_path: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub enable_cors: Option<bool>,
+}
+
+/// 停止托管 Mock 服务请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StopMockRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
 /// 新建活文档请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateFileRequest {

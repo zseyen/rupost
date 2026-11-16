@@ -2,9 +2,11 @@ use crate::mock::compiler::MockCompiler;
 use crate::mock::variant::{CompareOp, ConditionSource};
 use crate::parser::MarkdownFileParser;
 use crate::utils::jsonpath::JsonPathResolver;
+use crate::web::mock_manager::discover_workspace_mock_routes;
 use crate::web::server::AppState;
 use crate::web::types::{
-    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse,
+    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse, StartMockRequest,
+    StopMockRequest,
 };
 use axum::Json;
 use axum::extract::State;
@@ -137,4 +139,68 @@ pub async fn simulate_mock_handler(
     };
 
     (StatusCode::OK, Json(ApiResponse::ok(response)))
+}
+
+/// 列出工作区内所有包含 Mock 变体的文档路由（只读模式可用）
+pub async fn list_mock_routes_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let routes = discover_workspace_mock_routes(&state.working_dir);
+    (StatusCode::OK, Json(ApiResponse::ok(routes)))
+}
+
+/// 列出当前通过 Web 托管运行中的 Mock 服务实例
+pub async fn list_mock_servers_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let servers = state.mock_manager.list_servers();
+    (StatusCode::OK, Json(ApiResponse::ok(servers)))
+}
+
+/// 启动托管 Mock HTTP 服务（只读模式禁止，仅绑定 127.0.0.1，经 PathSandbox 校验）
+pub async fn start_mock_server_handler(
+    State(state): State<AppState>,
+    Json(req): Json<StartMockRequest>,
+) -> impl IntoResponse {
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "Starting mock servers is disabled in read-only mode",
+            )),
+        );
+    }
+
+    match state
+        .mock_manager
+        .start_server(
+            &state.working_dir,
+            &req.file_path,
+            req.port,
+            req.enable_cors.unwrap_or(true),
+        )
+        .await
+    {
+        Ok(info) => (StatusCode::CREATED, Json(ApiResponse::ok(info))),
+        Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
+}
+
+/// 停止托管 Mock HTTP 服务（只读模式禁止）
+pub async fn stop_mock_server_handler(
+    State(state): State<AppState>,
+    Json(req): Json<StopMockRequest>,
+) -> impl IntoResponse {
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "Stopping mock servers is disabled in read-only mode",
+            )),
+        );
+    }
+
+    match state
+        .mock_manager
+        .stop_server(req.id.as_deref(), req.port)
+    {
+        Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
+        Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
 }

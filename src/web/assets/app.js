@@ -35,8 +35,12 @@ let mockDraft = {
   query: '',
   body: '',
   raw_block: '',
+  file_path: '',
   lastResult: null,
 };
+let mockWorkspaceRoutes = [];
+let mockRunningServers = [];
+let mockServerError = '';
 
 // Initialize theme immediately to prevent FOUC
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
@@ -606,6 +610,7 @@ function switchGlobalPage(page) {
 
   switch (activeGlobalPage) {
     case 'mock':
+      refreshMockWorkspaceData();
       renderMockTab(pageView);
       break;
     case 'session':
@@ -1575,14 +1580,157 @@ function openMockSimulatorForBlock(rawBlock) {
   mockDraft.path = extractPathFromUrl(parsed.url);
   mockDraft.body = parsed.body || '';
   mockDraft.raw_block = rawBlock;
+  mockDraft.file_path = currentFilePath || mockDraft.file_path;
   mockDraft.lastResult = null;
   switchGlobalPage('mock');
 }
 
+async function refreshMockWorkspaceData() {
+  try {
+    const [routesRes, serversRes] = await Promise.all([
+      fetch('/api/v1/mock/routes'),
+      fetch('/api/v1/mock/servers'),
+    ]);
+    const routesJson = await safeReadJson(routesRes);
+    const serversJson = await safeReadJson(serversRes);
+    if (routesJson && routesJson.success && Array.isArray(routesJson.data)) {
+      mockWorkspaceRoutes = routesJson.data;
+      if (!mockDraft.raw_block && mockWorkspaceRoutes.length > 0) {
+        selectMockRouteByIndex(0, false);
+      }
+    }
+    if (serversJson && serversJson.success && Array.isArray(serversJson.data)) {
+      mockRunningServers = serversJson.data;
+    }
+  } catch (e) {
+    console.error('Failed to load mock workspace data:', e);
+  }
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+function selectMockRouteByIndex(idx, rerender = true) {
+  const route = mockWorkspaceRoutes[idx];
+  if (!route) return;
+  mockDraft.method = route.method || 'GET';
+  mockDraft.path = extractPathFromUrl(route.path);
+  mockDraft.raw_block = route.raw_block;
+  mockDraft.file_path = route.file_path;
+  const parsed = RupostCards.parseHttpBlock(route.raw_block);
+  mockDraft.body = parsed.body || '';
+  mockDraft.lastResult = null;
+  if (rerender && activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+async function startManagedMockServer() {
+  if (isReadonly) return;
+  const fileEl = document.getElementById('mock-server-file');
+  const portEl = document.getElementById('mock-server-port');
+  const filePath = fileEl ? fileEl.value : mockDraft.file_path;
+  const rawPort = portEl ? portEl.value.trim() : '';
+  const portVal = rawPort === '' ? 0 : Number(rawPort);
+
+  mockServerError = '';
+  if (!filePath) {
+    mockServerError = 'Please select a Mock document first.';
+    if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/v1/mock/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_path: filePath, port: Number.isNaN(portVal) ? 0 : portVal }),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
+      mockRunningServers = [...mockRunningServers.filter((s) => s.id !== json.data.id), json.data];
+    } else {
+      mockServerError = (json && json.error) || `HTTP ${res.status}: Failed to start mock server`;
+    }
+  } catch (e) {
+    mockServerError = e.message;
+  }
+
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+async function stopManagedMockServer(id) {
+  if (isReadonly) return;
+  mockServerError = '';
+  try {
+    const res = await fetch('/api/v1/mock/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success) {
+      mockRunningServers = mockRunningServers.filter((s) => s.id !== id);
+    } else {
+      mockServerError = (json && json.error) || `HTTP ${res.status}: Failed to stop mock server`;
+    }
+  } catch (e) {
+    mockServerError = e.message;
+  }
+
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
 function renderMockTab(container) {
   if (!container) return;
+  const uniqueFiles = Array.from(new Set(mockWorkspaceRoutes.map((r) => r.file_path)));
+  if (mockDraft.file_path && !uniqueFiles.includes(mockDraft.file_path)) {
+    uniqueFiles.unshift(mockDraft.file_path);
+  }
+  const selectedFile = mockDraft.file_path || uniqueFiles[0] || '';
+
+  const fileOptsHtml = uniqueFiles.length
+    ? uniqueFiles
+        .map((f) => `<option value="${escapeHtml(f)}" ${f === selectedFile ? 'selected' : ''}>${escapeHtml(f)}</option>`)
+        .join('')
+    : '<option value="">(No mock files found)</option>';
+
+  const serversHtml = mockRunningServers.length
+    ? mockRunningServers
+        .map(
+          (s) => `
+          <div class="mock-server-pill">
+            <span class="mock-live-tag">[LIVE :${s.port}]</span>
+            <span>${escapeHtml(s.file_path)} (${s.route_count} routes)</span>
+            <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer" style="color: var(--accent-primary);">${escapeHtml(s.url)}</a>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="stopManagedMockServer('${escapeHtml(s.id)}')" ${isReadonly ? 'disabled' : ''}>Stop</button>
+          </div>`
+        )
+        .join('')
+    : '<span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">No managed mock server running. Pick a file and click [Start Mock Server].</span>';
+
+  const routesHtml = mockWorkspaceRoutes.length
+    ? mockWorkspaceRoutes
+        .map((r, idx) => {
+          const isActive = mockDraft.raw_block && mockDraft.raw_block === r.raw_block;
+          return `
+            <li class="mock-route-item ${isActive ? 'active' : ''}" onclick="selectMockRouteByIndex(${idx})">
+              <div class="mock-route-top">
+                <span class="method-badge ${r.method === 'POST' ? 'method-post' : 'method-get'}">${escapeHtml(r.method)}</span>
+                <span>${escapeHtml(r.path)}</span>
+              </div>
+              <div class="mock-route-file">${escapeHtml(r.file_path)}</div>
+            </li>`;
+        })
+        .join('')
+    : '<div class="empty-hint"><div class="empty-text">No @mock routes discovered in workspace.</div></div>';
+
   const simResult = mockDraft.lastResult;
-  let resultHtml = '<div class="empty-hint"><div class="empty-text">Configure the incoming probe request on the left and click [Simulate Mock Match].</div></div>';
+  let resultHtml = '<div class="empty-hint"><div class="empty-text">Configure the incoming probe request and click [Simulate Mock Match].</div></div>';
   if (simResult) {
     if (simResult.error) {
       resultHtml = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(simResult.error)}</span></div>`;
@@ -1610,9 +1758,24 @@ function renderMockTab(container) {
   }
 
   container.innerHTML = `
-    ${buildGlobalPageHeader('[MOCK SIMULATOR]', 'Mock Rule Probe & Variant Matcher')}
+    ${buildGlobalPageHeader('[MOCK STUDIO]', 'Mock Server Manager & Rule Probe', 'refreshMockWorkspaceData()')}
     <div class="global-page-body">
-      <div class="global-page-grid">
+      <section class="mock-server-bar">
+        <div class="mock-server-controls">
+          <span class="pane-tag">[HOSTED MOCK]</span>
+          <select id="mock-server-file" class="env-select" style="min-width: 260px;">${fileOptsHtml}</select>
+          <input id="mock-server-port" class="mock-port-input" type="number" min="0" max="65535" placeholder="Port (0=auto)" value="9000" />
+          <button type="button" id="btn-start-mock-server" class="btn btn-success" onclick="startManagedMockServer()" ${isReadonly ? 'disabled' : ''}>&gt; Start Mock Server</button>
+        </div>
+        ${mockServerError ? `<div class="error-banner" style="margin-bottom:0;">${escapeHtml(mockServerError)}</div>` : ''}
+        <div id="mock-running-servers" class="mock-servers-list">${serversHtml}</div>
+      </section>
+
+      <div class="mock-page-3col">
+        <section class="global-panel-card">
+          <div class="global-panel-title">Workspace Mock Routes (${mockWorkspaceRoutes.length})</div>
+          <ul class="mock-routes-list">${routesHtml}</ul>
+        </section>
         <section class="global-panel-card">
           <div class="global-panel-title">1. Incoming Probe Request</div>
           <div class="mock-probe-form">
@@ -1635,6 +1798,7 @@ function renderMockTab(container) {
       </div>
     </div>
   `;
+  enhanceSelect(document.getElementById('mock-server-file'));
   enhanceSelect(document.getElementById('mock-method'));
 }
 
@@ -2023,6 +2187,8 @@ if (typeof module !== 'undefined' && module.exports) {
     renderOverviewTab,
     switchGlobalPage,
     getActiveGlobalPage: () => activeGlobalPage,
+    startManagedMockServer,
+    stopManagedMockServer,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },

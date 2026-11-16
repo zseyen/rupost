@@ -1557,3 +1557,75 @@ async fn test_web_http_parse_endpoint_handles_comments_and_trailing_assert() {
             .any(|d| d == "@assert status == 200")
     );
 }
+
+#[tokio::test]
+async fn test_web_mock_routes_and_server_lifecycle_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("v1.md"),
+        "```http\nGET /api/ping\n\n@mock-default\n200\n{\"pong\":true}\n```\n",
+    )
+    .unwrap();
+
+    let ro_config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let ro_app = create_web_router(ro_config.clone());
+
+    // 1. 只读模式可查询 routes，但禁止 start/stop
+    let routes_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/mock/routes")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let routes_res = ro_app.clone().oneshot(routes_req).await.unwrap();
+    assert_eq!(routes_res.status(), StatusCode::OK);
+
+    let ro_start_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mock/start")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"file_path":"v1.md","port":0}"#))
+        .unwrap();
+    assert_eq!(
+        ro_app.oneshot(ro_start_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // 2. 非只读模式完整生命周期：start -> list -> stop
+    let rw_app = create_web_router(WebServerConfig {
+        readonly: false,
+        ..ro_config
+    });
+    let start_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mock/start")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"file_path":"v1.md","port":0}"#))
+        .unwrap();
+    let start_res = rw_app.clone().oneshot(start_req).await.unwrap();
+    assert_eq!(start_res.status(), StatusCode::CREATED);
+    let body = to_bytes(start_res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::MockServerInfo> =
+        serde_json::from_slice(&body).unwrap();
+    let server_info = api_res.data.unwrap();
+    assert_eq!(server_info.file_path, "v1.md");
+
+    let stop_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mock/stop")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "id": server_info.id }).to_string(),
+        ))
+        .unwrap();
+    let stop_res = rw_app.oneshot(stop_req).await.unwrap();
+    assert_eq!(stop_res.status(), StatusCode::OK);
+}

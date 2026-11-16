@@ -728,6 +728,9 @@ test('switchGlobalPage toggles #workspace-body and #global-page-view cleanly', a
   const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
   global.document = mockDocument;
   global.window = mockWindow;
+  global.fetch = async () => ({
+    text: async () => JSON.stringify({ success: true, data: [] }),
+  });
 
   const wsBody = getOrCreateElement('workspace-body');
   const pageView = getOrCreateElement('global-page-view');
@@ -736,11 +739,58 @@ test('switchGlobalPage toggles #workspace-body and #global-page-view cleanly', a
   assert.equal(app.getActiveGlobalPage(), 'mock');
   assert.equal(wsBody.style.display, 'none');
   assert.equal(pageView.style.display, 'flex');
-  assert.match(pageView.innerHTML, /\[MOCK SIMULATOR\]/);
+  assert.match(pageView.innerHTML, /\[MOCK STUDIO\]/);
   assert.match(pageView.innerHTML, /Back to Workbench/);
 
   app.switchGlobalPage('workbench');
   assert.equal(app.getActiveGlobalPage(), 'workbench');
   assert.equal(wsBody.style.display, 'grid');
   assert.equal(pageView.style.display, 'none');
+});
+
+test('startManagedMockServer & stopManagedMockServer manage live mock instances', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const fileEl = getOrCreateElement('mock-server-file');
+  fileEl.value = 'examples/v1_api.md';
+  const portEl = getOrCreateElement('mock-server-port');
+  portEl.value = '9001';
+  const pageView = getOrCreateElement('global-page-view');
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/mock/start') {
+      return {
+        text: async () =>
+          JSON.stringify({
+            success: true,
+            data: {
+              id: 'm1',
+              file_path: 'examples/v1_api.md',
+              port: 9001,
+              url: 'http://127.0.0.1:9001',
+              route_count: 1,
+            },
+          }),
+      };
+    }
+    if (url === '/api/v1/mock/stop') {
+      return {
+        text: async () =>
+          JSON.stringify({
+            success: true,
+            data: { id: 'm1', port: 9001 },
+          }),
+      };
+    }
+    return { text: async () => JSON.stringify({ success: true, data: [] }) };
+  };
+
+  app.switchGlobalPage('mock');
+  await app.startManagedMockServer();
+  assert.match(pageView.innerHTML, /\[LIVE :9001\]/);
+
+  await app.stopManagedMockServer('m1');
+  assert.doesNotMatch(pageView.innerHTML, /\[LIVE :9001\]/);
 });

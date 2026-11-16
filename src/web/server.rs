@@ -3,6 +3,7 @@ use crate::RupostError;
 use crate::http::url::is_loopback_host;
 use crate::web::assets::{AssetProvider, EmbeddedAssetProvider};
 use crate::web::handlers;
+use crate::web::mock_manager::WebMockManager;
 use crate::web::session::WebSessionStore;
 use crate::web::store::{DocumentStore, LocalFsDocumentStore};
 use axum::Router;
@@ -60,6 +61,8 @@ pub struct AppState {
     pub sessions: Arc<WebSessionStore>,
     /// WP-R2：Web 复现包输出根（服务端管辖路径，客户端零路径输入）
     pub incident_root: PathBuf,
+    /// Web 托管 Mock 服务生命周期管理器
+    pub mock_manager: Arc<WebMockManager>,
 }
 
 /// 检查 Host 标头是否属于安全白名单（本地基础名单 + 用户自定义名单，防御 DNS Rebinding）
@@ -122,6 +125,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         allowed_hosts: config.allowed_hosts,
         sessions: Arc::new(WebSessionStore::default()),
         incident_root,
+        mock_manager: Arc::new(WebMockManager::default()),
     };
 
     let api_router = Router::new()
@@ -139,6 +143,13 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
             "/mock/simulate",
             post(handlers::mock::simulate_mock_handler),
         )
+        .route("/mock/routes", get(handlers::mock::list_mock_routes_handler))
+        .route(
+            "/mock/servers",
+            get(handlers::mock::list_mock_servers_handler),
+        )
+        .route("/mock/start", post(handlers::mock::start_mock_server_handler))
+        .route("/mock/stop", post(handlers::mock::stop_mock_server_handler))
         .route("/import", post(handlers::import::import_handler))
         .route("/import/curl", post(handlers::import::import_curl_handler))
         .route(

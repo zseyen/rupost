@@ -989,7 +989,7 @@ async function submitImport() {
       closeImportModal();
       document.getElementById('import-textarea').value = '';
     } else {
-      alert('Import failed: ' + (json.error || 'Invalid format'));
+      alert('Import failed: ' + ((json && json.error) || `HTTP ${res.status}: Invalid format`));
     }
   } catch (e) {
     alert('Request exception: ' + e.message);
@@ -1471,7 +1471,7 @@ async function refreshExportCommand() {
         warnEl.textContent = json.data.warnings.join(' | ');
       }
     } else {
-      preEl.textContent = `[ERR] ${json.error || 'Export failed'}`;
+      preEl.textContent = `[ERR] ${(json && json.error) || `HTTP ${res.status}: Export failed`}`;
     }
   } catch (e) {
     preEl.textContent = `[NETWORK ERR] ${e.message}`;
@@ -1626,7 +1626,7 @@ async function runMockSimulate() {
     if (json && json.success && json.data) {
       mockDraft.lastResult = json.data;
     } else {
-      mockDraft.lastResult = { error: json.error || 'Simulation failed' };
+      mockDraft.lastResult = { error: (json && json.error) || `HTTP ${res.status}: Simulation failed` };
     }
   } catch (e) {
     mockDraft.lastResult = { error: e.message };

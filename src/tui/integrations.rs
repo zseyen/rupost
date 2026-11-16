@@ -6,17 +6,18 @@ use crate::ai::AssertionTranslator;
 use crate::ai::config::resolve as resolve_ai_config;
 use crate::diagnostics::BufferedWarningSink;
 use crate::middleware::ERR_COOKIE_PERSIST;
-use crate::mock::server::axum_adapter::serve_matcher;
+use crate::mock::server::axum_adapter::{MockTrafficEvent, serve_matcher_with_events};
 use crate::mock::server::build_mock_matcher;
 use crate::runner::ReplayExecutor;
 use crate::tui::event::TuiEvent;
 use crate::variable::WorkspaceConfig;
 use std::fmt;
 use std::fs;
+use std::future::pending;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, unbounded_channel};
 use tokio::task::AbortHandle;
 
 struct AbortOnDrop(AbortHandle);
@@ -114,8 +115,8 @@ fn latest_snapshot_path(state: &AppState) -> Option<PathBuf> {
     files.pop()
 }
 
-/// R11：mock 服务开关（`M` 键）。无路由/未保存文件浮出可读错误。
-pub async fn toggle_mock_server(state: &mut AppState) {
+/// R11：mock 服务开关（`M` 键）。无路由/未保存文件浮出可读错误；入站流量经 `event_tx` 回流到界面。
+pub async fn toggle_mock_server(state: &mut AppState, event_tx: &Sender<TuiEvent>) {
     if state.mock_session.take().is_some() {
         state.last_error = None;
         return;
@@ -141,7 +142,7 @@ pub async fn toggle_mock_server(state: &mut AppState) {
         return;
     }
 
-    // 直接绑定空闲端口并将同一个 TcpListener 交给 serve_matcher，消除二次绑定竞态
+    // 直接绑定空闲端口并将同一个 TcpListener 交给 serve_matcher_with_events，消除二次绑定竞态
     let listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(l) => l,
         Err(e) => {
@@ -151,9 +152,20 @@ pub async fn toggle_mock_server(state: &mut AppState) {
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
 
+    state.mock_traffic.clear();
+    let (mock_tx, mut mock_rx) = unbounded_channel::<MockTrafficEvent>();
+    let tui_tx = event_tx.clone();
+    tokio::spawn(async move {
+        while let Some(ev) = mock_rx.recv().await {
+            if tui_tx.send(TuiEvent::MockTraffic(ev)).await.is_err() {
+                break;
+            }
+        }
+    });
+
     let matcher = Arc::new(matcher);
     let handle = tokio::spawn(async move {
-        let _ = serve_matcher(listener, matcher, true).await;
+        let _ = serve_matcher_with_events(listener, matcher, true, pending(), Some(mock_tx)).await;
     });
 
     state.mock_session = Some(MockSessionState::new(handle.abort_handle(), port, path));
@@ -235,10 +247,11 @@ mod tests {
         )
         .unwrap();
 
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let mut state = AppState::new();
         state.editor_file_path = Some(doc_path.to_string_lossy().into_owned());
 
-        toggle_mock_server(&mut state).await;
+        toggle_mock_server(&mut state, &tx).await;
         assert!(state.last_error.is_none(), "unexpected error: {:?}", state.last_error);
         let port = state.mock_session.as_ref().expect("mock session should start").port;
         assert!(port > 0);
@@ -251,8 +264,18 @@ mod tests {
         assert_eq!(resp.status().as_u16(), 200);
         assert_eq!(resp.text().await.unwrap(), "pong");
 
+        let ev = rx.recv().await.expect("should emit MockTraffic event");
+        match ev {
+            TuiEvent::MockTraffic(traffic) => {
+                assert_eq!(traffic.method, "GET");
+                assert_eq!(traffic.path, "/api/ping");
+                assert_eq!(traffic.status, 200);
+            }
+            other => panic!("unexpected event: {:?}", std::mem::discriminant(&other)),
+        }
+
         // 再次 toggle 停止
-        toggle_mock_server(&mut state).await;
+        toggle_mock_server(&mut state, &tx).await;
         assert!(state.mock_session.is_none());
     }
 
@@ -266,9 +289,10 @@ mod tests {
         )
         .unwrap();
 
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
         let mut state = AppState::new();
         state.editor_file_path = Some(doc_path.to_string_lossy().into_owned());
-        toggle_mock_server(&mut state).await;
+        toggle_mock_server(&mut state, &tx).await;
         let port = state.mock_session.as_ref().unwrap().port;
 
         // 克隆后再释放克隆体不应终止服务；仅当最后一个持有者 drop 时才终止

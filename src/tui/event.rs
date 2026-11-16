@@ -1,3 +1,4 @@
+use crate::mock::server::axum_adapter::MockTrafficEvent;
 use crate::parser::ParsedRequest;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -32,6 +33,7 @@ pub enum TuiEvent {
         id: Uuid,
         path: String,
     },
+    MockTraffic(MockTrafficEvent),
 }
 
 #[derive(Debug, Clone, PartialEq)]

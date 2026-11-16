@@ -212,6 +212,9 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                     state.total_log_lines = 0;
                     state.viewport_cache.clear();
                 }
+                TuiEvent::MockTraffic(ev) => {
+                    state.push_mock_traffic(ev);
+                }
                 TuiEvent::Tick => {
                     state.check_and_reload_editor_file();
                     if state.is_loading {

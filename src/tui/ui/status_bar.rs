@@ -33,8 +33,13 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &AppState) {
         spans.push(Span::raw("│ "));
     }
     if let Some(sess) = &state.mock_session {
+        let badge = if let Some(last) = state.mock_traffic.back() {
+            format!(" MOCK :{} ({} {}) ", sess.port, last.status, last.path)
+        } else {
+            format!(" MOCK :{} ", sess.port)
+        };
         spans.push(Span::styled(
-            format!(" MOCK :{} ", sess.port),
+            badge,
             Style::default().fg(t.ok).add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw("│ "));

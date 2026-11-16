@@ -54,7 +54,7 @@ pub(super) async fn handle_editor_key(
             }
             // R11：`M` 开关当前文件 mock 服务器
             KeyCode::Char('M') => {
-                crate::tui::integrations::toggle_mock_server(state).await;
+                crate::tui::integrations::toggle_mock_server(state, event_tx).await;
             }
             // R12：`I` AI 断言翻译模态
             KeyCode::Char('I') => {

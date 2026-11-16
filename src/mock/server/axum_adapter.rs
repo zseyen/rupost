@@ -10,6 +10,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::mpsc::UnboundedSender;
 
 use colored::Colorize;
 
@@ -27,14 +29,33 @@ impl MockServer for AxumMockServer {
             .await
             .map_err(RupostError::IoError)?;
 
-        serve_matcher_inner(listener, matcher, enable_cors, true, std::future::pending()).await
+        serve_matcher_inner(
+            listener,
+            matcher,
+            enable_cors,
+            true,
+            None,
+            std::future::pending(),
+        )
+        .await
     }
+}
+
+/// Mock 流量观测事件：供 CLI / TUI / Web 三端统一消费
+#[derive(Debug, Clone)]
+pub struct MockTrafficEvent {
+    pub method: String,
+    pub path: String,
+    pub status: u16,
+    pub matched_pattern: Option<String>,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Clone)]
 struct MockServerState {
     matcher: Arc<dyn MockMatcher>,
     log_to_stdout: bool,
+    event_tx: Option<UnboundedSender<MockTrafficEvent>>,
 }
 
 /// M3：智能 CORS 中间件——预检 OPTIONS 秒回 204；动态回显 Origin；
@@ -105,14 +126,28 @@ pub async fn serve_matcher(
 /// 以已绑定的 listener 服务 mock 路由，支持优雅关闭信号（Web 工作台托管用）
 pub async fn serve_matcher_with_shutdown<F>(
     listener: tokio::net::TcpListener,
-    matcher: std::sync::Arc<dyn MockMatcher>,
+    matcher: Arc<dyn MockMatcher>,
     enable_cors: bool,
     shutdown: F,
 ) -> Result<()>
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    serve_matcher_inner(listener, matcher, enable_cors, false, shutdown).await
+    serve_matcher_inner(listener, matcher, enable_cors, false, None, shutdown).await
+}
+
+/// 以已绑定的 listener 服务 mock 路由，支持优雅关闭与流量观测事件流
+pub async fn serve_matcher_with_events<F>(
+    listener: tokio::net::TcpListener,
+    matcher: Arc<dyn MockMatcher>,
+    enable_cors: bool,
+    shutdown: F,
+    event_tx: Option<UnboundedSender<MockTrafficEvent>>,
+) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    serve_matcher_inner(listener, matcher, enable_cors, false, event_tx, shutdown).await
 }
 
 async fn serve_matcher_inner<F>(
@@ -120,6 +155,7 @@ async fn serve_matcher_inner<F>(
     matcher: Arc<dyn MockMatcher>,
     enable_cors: bool,
     log_to_stdout: bool,
+    event_tx: Option<UnboundedSender<MockTrafficEvent>>,
     shutdown: F,
 ) -> Result<()>
 where
@@ -128,6 +164,7 @@ where
     let state = MockServerState {
         matcher,
         log_to_stdout,
+        event_tx,
     };
     let app = Router::new()
         .fallback(any(handle_mock_request))
@@ -145,10 +182,64 @@ where
     Ok(())
 }
 
+fn emit_traffic_event(
+    state: &MockServerState,
+    method: &str,
+    path: &str,
+    status: u16,
+    matched_pattern: Option<String>,
+    started: Instant,
+) {
+    if state.log_to_stdout {
+        if let Some(ref pattern) = matched_pattern {
+            println!(
+                "  {} {} | {} {} | {}",
+                "Status:".bold().white(),
+                format!("{status}").bold().green(),
+                "Matched Route:".bold().white(),
+                pattern.cyan(),
+                "Success".bold().green()
+            );
+        } else if status == 404 {
+            println!(
+                "  {} {} | {}",
+                "Status:".bold().white(),
+                "404 Not Found".bold().red(),
+                "No Matching Mock Route Found".bold().red()
+            );
+        } else {
+            println!(
+                "  {} {}",
+                "Status:".bold().white(),
+                format!("{status} Bad Request").bold().red()
+            );
+        }
+    } else {
+        tracing::debug!(
+            method = %method,
+            path = %path,
+            status = status,
+            matched_pattern = ?matched_pattern,
+            "mock request handled"
+        );
+    }
+
+    if let Some(ref tx) = state.event_tx {
+        let _ = tx.send(MockTrafficEvent {
+            method: method.to_string(),
+            path: path.to_string(),
+            status,
+            matched_pattern,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+}
+
 async fn handle_mock_request(
     State(state): State<MockServerState>,
     req: Request,
 ) -> Response {
+    let started = Instant::now();
     let matcher = &state.matcher;
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
@@ -160,8 +251,6 @@ async fn handle_mock_request(
             method.bold().green(),
             path.cyan()
         );
-    } else {
-        tracing::debug!(method = %method, path = %path, "mock incoming request");
     }
 
     let query_str = req.uri().query().unwrap_or("");
@@ -179,15 +268,7 @@ async fn handle_mock_request(
     let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
-            if state.log_to_stdout {
-                println!(
-                    "  {} {}",
-                    "Status:".bold().white(),
-                    "400 Bad Request".bold().red()
-                );
-            } else {
-                tracing::debug!("mock request 400 Bad Request");
-            }
+            emit_traffic_event(&state, &method, &path, 400, None, started);
             return (StatusCode::BAD_REQUEST, "Failed to read request body").into_response();
         }
     };
@@ -207,22 +288,14 @@ async fn handle_mock_request(
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
-        let matched_pattern = mock_resp
-            .matched_pattern
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
-        if state.log_to_stdout {
-            println!(
-                "  {} {} | {} {} | {}",
-                "Status:".bold().white(),
-                format!("{}", status.as_u16()).bold().green(),
-                "Matched Route:".bold().white(),
-                matched_pattern.cyan(),
-                "Success".bold().green()
-            );
-        } else {
-            tracing::debug!(status = status.as_u16(), matched_pattern = %matched_pattern, "mock matched");
-        }
+        emit_traffic_event(
+            &state,
+            &mock_req.method,
+            &mock_req.path,
+            status.as_u16(),
+            mock_resp.matched_pattern.clone(),
+            started,
+        );
 
         let is_sse = mock_resp.headers.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("content-type") && v.contains("text/event-stream")
@@ -269,17 +342,7 @@ async fn handle_mock_request(
 
         response
     } else {
-        if state.log_to_stdout {
-            println!(
-                "  {} {} | {}",
-                "Status:".bold().white(),
-                "404 Not Found".bold().red(),
-                "No Matching Mock Route Found".bold().red()
-            );
-        } else {
-            tracing::debug!(method = %mock_req.method, path = %mock_req.path, "mock 404 not found");
-        }
-
+        emit_traffic_event(&state, &mock_req.method, &mock_req.path, 404, None, started);
         not_found_response(&mock_req.method, &mock_req.path)
     }
 }
@@ -327,5 +390,66 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed["request"]["path"], "/bad\"path\\test");
+    }
+
+    #[tokio::test]
+    async fn test_serve_matcher_with_events_emits_traffic_events() {
+        use crate::mock::matcher::TrieRouteMatcher;
+        use crate::mock::variant::MockVariant;
+
+        let mut matcher = TrieRouteMatcher::new();
+        matcher.add_route(
+            "GET",
+            "/api/hello",
+            vec![MockVariant {
+                condition: None,
+                status: 200,
+                headers: HashMap::new(),
+                response_body: "hi".to_string(),
+            }],
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        let handle = tokio::spawn(async move {
+            let _ = serve_matcher_with_events(
+                listener,
+                Arc::new(matcher),
+                false,
+                async move {
+                    let _ = shutdown_rx.await;
+                },
+                Some(tx),
+            )
+            .await;
+        });
+
+        let client = reqwest::Client::new();
+        let _ = client
+            .get(format!("http://127.0.0.1:{port}/api/hello"))
+            .send()
+            .await
+            .unwrap();
+        let _ = client
+            .get(format!("http://127.0.0.1:{port}/api/missing"))
+            .send()
+            .await
+            .unwrap();
+
+        let ev1 = rx.recv().await.expect("first event");
+        assert_eq!(ev1.method, "GET");
+        assert_eq!(ev1.path, "/api/hello");
+        assert_eq!(ev1.status, 200);
+        assert_eq!(ev1.matched_pattern.as_deref(), Some("/api/hello"));
+
+        let ev2 = rx.recv().await.expect("second event");
+        assert_eq!(ev2.status, 404);
+        assert!(ev2.matched_pattern.is_none());
+
+        let _ = shutdown_tx.send(());
+        let _ = handle.await;
     }
 }

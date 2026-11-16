@@ -193,11 +193,11 @@ mod tests {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
-        state.mock_session = Some(crate::tui::integrations::MockSessionState {
-            file: "test.http".to_string(),
-            port: 8080,
-            abort: tokio::spawn(async {}).abort_handle(),
-        });
+        state.mock_session = Some(crate::tui::integrations::MockSessionState::new(
+            tokio::spawn(async {}).abort_handle(),
+            8080,
+            "test.http".to_string(),
+        ));
 
         terminal
             .draw(|f| {

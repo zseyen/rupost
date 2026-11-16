@@ -5,19 +5,28 @@ use super::state::AppState;
 use crate::tui::event::TuiEvent;
 use std::sync::Arc;
 
-/// 活跃 mock 会话（`M` 键开关）；abort 即停止服务
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// 活跃 mock 会话（`M` 键开关）；最后一份引用销毁时自动停止服务
+#[derive(Clone)]
 pub struct MockSessionState {
-    pub abort: tokio::task::AbortHandle,
+    _abort: Arc<AbortOnDrop>,
     pub port: u16,
     pub file: String,
 }
 
-impl Clone for MockSessionState {
-    fn clone(&self) -> Self {
+impl MockSessionState {
+    pub fn new(abort: tokio::task::AbortHandle, port: u16, file: String) -> Self {
         Self {
-            abort: self.abort.clone(),
-            port: self.port,
-            file: self.file.clone(),
+            _abort: Arc::new(AbortOnDrop(abort)),
+            port,
+            file,
         }
     }
 }
@@ -99,8 +108,7 @@ fn latest_snapshot_path(state: &AppState) -> Option<std::path::PathBuf> {
 
 /// R11：mock 服务开关（`M` 键）。无路由/未保存文件浮出可读错误。
 pub async fn toggle_mock_server(state: &mut AppState) {
-    if let Some(sess) = state.mock_session.take() {
-        sess.abort.abort();
+    if state.mock_session.take().is_some() {
         state.last_error = None;
         return;
     }
@@ -140,11 +148,7 @@ pub async fn toggle_mock_server(state: &mut AppState) {
         let _ = crate::mock::server::axum_adapter::serve_matcher(listener, matcher, true).await;
     });
 
-    state.mock_session = Some(MockSessionState {
-        abort: handle.abort_handle(),
-        port,
-        file: path,
-    });
+    state.mock_session = Some(MockSessionState::new(handle.abort_handle(), port, path));
     state.last_error = None;
 }
 
@@ -237,5 +241,40 @@ mod tests {
         // 再次 toggle 停止
         toggle_mock_server(&mut state).await;
         assert!(state.mock_session.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mock_session_drop_aborts_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc_path = dir.path().join("drop_mock.http");
+        std::fs::write(
+            &doc_path,
+            "GET /api/ping\n\n@mock-default\nHTTP/1.1 200 OK\n\npong\n",
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        state.editor_file_path = Some(doc_path.to_string_lossy().into_owned());
+        toggle_mock_server(&mut state).await;
+        let port = state.mock_session.as_ref().unwrap().port;
+
+        // 克隆后再释放克隆体不应终止服务；仅当最后一个持有者 drop 时才终止
+        let cloned = state.mock_session.clone();
+        drop(cloned);
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/ping"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+
+        drop(state);
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let err = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/ping"))
+            .send()
+            .await;
+        assert!(err.is_err(), "server should stop after last AppState drop");
     }
 }

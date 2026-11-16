@@ -69,6 +69,13 @@ impl AssetProvider for EmbeddedAssetProvider {
                     "application/javascript; charset=utf-8",
                 ))
             }
+            "http_cards.js" => {
+                let js = include_str!("assets/http_cards.js");
+                Some((
+                    Cow::Borrowed(js.as_bytes()),
+                    "application/javascript; charset=utf-8",
+                ))
+            }
             "style.css" => {
                 let css = include_str!("assets/style.css");
                 Some((Cow::Borrowed(css.as_bytes()), "text/css; charset=utf-8"))

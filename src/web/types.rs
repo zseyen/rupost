@@ -1,6 +1,6 @@
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// 通用 API 包装结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,4 +173,165 @@ pub struct MockSimulateResponse {
     pub matched_variant_name: String,
     pub expected_status: u16,
     pub evaluations: Vec<ConditionEvaluation>,
+}
+
+/// Markdown 渲染请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderMarkdownRequest {
+    pub content: String,
+}
+
+/// Markdown 渲染响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderMarkdownResponse {
+    pub html: String,
+    pub executable_blocks: Vec<String>,
+    #[serde(default)]
+    pub executable_cards: Vec<HttpCardDto>,
+}
+
+/// `.http` 文档结构化解析请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseHttpRequest {
+    pub content: String,
+}
+
+/// 标准化请求头 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HttpHeaderDto {
+    pub key: String,
+    pub value: String,
+}
+
+/// 统一 HTTP 请求卡片 DTO（`.http` 与 `.md` 活文档共用，SSOT）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HttpCardDto {
+    pub title: String,
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<HttpHeaderDto>,
+    pub body: Option<String>,
+    pub directives: Vec<String>,
+    pub has_mock: bool,
+    pub is_websocket: bool,
+    pub raw_block: String,
+}
+
+/// `.http` 文档结构化解析响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseHttpResponse {
+    pub variables: BTreeMap<String, String>,
+    pub cards: Vec<HttpCardDto>,
+}
+
+/// 工作区发现的 Mock 路由条目
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockRouteItemDto {
+    pub file_path: String,
+    pub title: String,
+    pub method: String,
+    pub path: String,
+    pub raw_block: String,
+}
+
+/// 运行中的 Web 托管 Mock 实例信息
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockServerInfo {
+    pub id: String,
+    pub file_path: String,
+    pub port: u16,
+    pub url: String,
+    pub route_count: usize,
+}
+
+/// 启动托管 Mock 服务请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartMockRequest {
+    pub file_path: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub enable_cors: Option<bool>,
+}
+
+/// 停止托管 Mock 服务请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StopMockRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
+/// 新建活文档请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFileRequest {
+    pub path: String,
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
+/// 新建活文档响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFileResponse {
+    pub path: String,
+    pub bytes_written: usize,
+}
+
+/// 工作区可用环境列表响应（仅返回环境名，不暴露变量值）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvsResponse {
+    pub environments: Vec<String>,
+    pub default_env: Option<String>,
+}
+
+/// 单块导出请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportBlockRequest {
+    pub raw_block: String,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub env: Option<String>,
+    #[serde(default)]
+    pub compact: Option<bool>,
+    #[serde(default)]
+    pub redact_secrets: Option<bool>,
+    #[serde(default)]
+    pub extra_variables: Option<HashMap<String, String>>,
+}
+
+/// 单块导出响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportBlockResponse {
+    pub format: String,
+    pub command: String,
+    pub warnings: Vec<String>,
+}
+
+/// 当前浏览器会话状态摘要（仅限当前 rupost_session）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStateResponse {
+    pub captured_variables: BTreeMap<String, String>,
+    pub has_cookie_state: bool,
+}
+
+/// 工作区隔离后的历史记录摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryItemSummary {
+    pub id: String,
+    pub timestamp: String,
+    pub method: String,
+    pub url: String,
+    pub status: u16,
+    pub duration_ms: u64,
+    pub source: Option<String>,
+}
+
+/// 链路诊断请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnoseRequest {
+    pub url: String,
 }

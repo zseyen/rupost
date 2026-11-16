@@ -1,5 +1,11 @@
+pub mod diagnose;
+pub mod export;
 pub mod files;
+pub mod history;
 pub mod import;
+pub mod markdown;
 pub mod mock;
 pub mod run;
 pub mod save;
+pub mod session;
+pub mod ws;

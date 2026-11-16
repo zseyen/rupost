@@ -1195,3 +1195,451 @@ async fn test_web_suite_incident_retention_caps_at_32() {
         .count();
     assert_eq!(named_bundles, 32, "稳态 = 上限（另含 keepme 非命名条目）");
 }
+
+#[tokio::test]
+async fn test_web_markdown_render_endpoint_and_readonly_support() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = serde_json::json!({
+        "content": "# Title\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```http\nGET https://example.com\n```\n\n<script>alert(1)</script>"
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/markdown/render")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::RenderMarkdownResponse> =
+        serde_json::from_slice(&body).unwrap();
+    assert!(api_res.success);
+    let data = api_res.data.unwrap();
+    assert!(data.html.contains("<h1>Title</h1>"));
+    assert!(data.html.contains("<table>"));
+    assert!(data.html.contains("md-run-btn"));
+    assert!(!data.html.contains("<script>"));
+    assert_eq!(data.executable_blocks.len(), 1);
+    assert!(data.executable_blocks[0].contains("GET https://example.com"));
+}
+
+#[tokio::test]
+async fn test_web_create_file_api_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config.clone());
+
+    // 1. 正常创建嵌套 .http 文件 -> 201
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "path": "api/users.http",
+                "content": "GET https://httpbin.org/get\n"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert!(dir.path().join("api/users.http").is_file());
+
+    // 2. 重复创建同一文件 -> 409 Conflict（绝不静默覆盖）
+    let dup_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "path": "api/users.http" }).to_string(),
+        ))
+        .unwrap();
+    let dup_res = app.clone().oneshot(dup_req).await.unwrap();
+    assert_eq!(dup_res.status(), StatusCode::CONFLICT);
+
+    // 3. 非法扩展名 / 目录穿越 -> 403 Forbidden
+    let bad_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "path": "evil.sh" }).to_string(),
+        ))
+        .unwrap();
+    let bad_res = app.oneshot(bad_req).await.unwrap();
+    assert_eq!(bad_res.status(), StatusCode::FORBIDDEN);
+
+    // 4. 只读模式拦截 -> 403 Forbidden
+    let ro_app = create_web_router(WebServerConfig {
+        readonly: true,
+        ..config
+    });
+    let ro_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "path": "new.md" }).to_string(),
+        ))
+        .unwrap();
+    let ro_res = ro_app.oneshot(ro_req).await.unwrap();
+    assert_eq!(ro_res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_web_list_envs_api() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("rupost.toml"),
+        "[environments.dev]\napi_key = \"super-secret-dev-key\"\n\n[environments.prod]\napi_key = \"super-secret-prod-key\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".env.staging"), "TOKEN=secret-staging\n").unwrap();
+    std::fs::write(dir.path().join(".env.example"), "TOKEN=placeholder\n").unwrap();
+
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        default_env: Some("dev".to_string()),
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/envs")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8_lossy(&body);
+    assert!(!body_str.contains("super-secret-dev-key"), "不得泄露密钥值");
+    assert!(!body_str.contains("secret-staging"), "不得泄露 .env 密钥值");
+
+    let api_res: ApiResponse<rupost::web::types::EnvsResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert_eq!(data.default_env.as_deref(), Some("dev"));
+    assert_eq!(data.environments, vec!["dev", "prod", "staging"]);
+}
+
+#[tokio::test]
+async fn test_web_export_block_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    // 1. 导出 cURL（只读模式同样可用）
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/export")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "raw_block": "POST https://api.example.com/items\nContent-Type: application/json\n\n{\"id\":1}",
+                "format": "curl",
+                "compact": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::ExportBlockResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert_eq!(data.format, "curl");
+    assert!(data.command.contains("curl"));
+    assert!(data.command.contains("https://api.example.com/items"));
+
+    // 2. 不支持的导出格式 -> 400
+    let bad_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/export")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "raw_block": "GET https://api.example.com",
+                "format": "unknown_fmt"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let bad_res = app.oneshot(bad_req).await.unwrap();
+    assert_eq!(bad_res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_web_session_inspect_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    // 无 Cookie 请求 /api/v1/session 会下发新会话 Set-Cookie 并返回空摘要
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/session")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let set_cookie = res
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(set_cookie.contains("rupost_session="));
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::SessionStateResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert!(data.captured_variables.is_empty());
+    assert!(!data.has_cookie_state);
+}
+
+#[tokio::test]
+async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let ro_config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let ro_app = create_web_router(ro_config.clone());
+
+    // 1. 只读模式禁用 /history 与 /diagnose 与 /ws/bridge
+    let h_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/history")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        ro_app.clone().oneshot(h_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let d_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/diagnose")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"url":"https://example.com"}"#))
+        .unwrap();
+    assert_eq!(
+        ro_app.clone().oneshot(d_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // 2. 非只读模式下 SSRF 护栏拦截内网/元数据/非法协议
+    let rw_app = create_web_router(WebServerConfig {
+        readonly: false,
+        ..ro_config
+    });
+    let ssrf_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/diagnose")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"url":"http://169.254.169.254/latest/meta-data/"}"#,
+        ))
+        .unwrap();
+    assert_eq!(
+        rw_app.clone().oneshot(ssrf_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // 3. /history 在非只读下正常返回 200 数组
+    let h_ok = Request::builder()
+        .method("GET")
+        .uri("/api/v1/history?limit=5")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        rw_app.clone().oneshot(h_ok).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    // 4. /ws/bridge 在只读模式与 SSRF 地址下均返回 403 Forbidden（需带 WebSocket 升级头）
+    let ws_ro_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/ws/bridge?url=wss%3A%2F%2Fecho.websocket.events")
+        .header("host", "127.0.0.1")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        ro_app.oneshot(ws_ro_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let ws_ssrf_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/ws/bridge?url=ws%3A%2F%2F127.0.0.1%3A9999%2Fws")
+        .header("host", "127.0.0.1")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        rw_app.oneshot(ws_ssrf_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn test_web_http_parse_endpoint_handles_comments_and_trailing_assert() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = serde_json::json!({
+        "content": "# 获取用户资料\n### get-profile\n# @name get-profile\nGET {{base_url}}/v1/users/1\nAccept: application/json\n\n# @assert status == 200\n"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/http/parse")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::ParseHttpResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert_eq!(data.cards.len(), 1);
+    assert_eq!(data.cards[0].title, "get-profile");
+    assert!(data.cards[0].body.is_none());
+    assert!(
+        data.cards[0]
+            .directives
+            .iter()
+            .any(|d| d == "@assert status == 200")
+    );
+}
+
+#[tokio::test]
+async fn test_web_mock_routes_and_server_lifecycle_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("v1.md"),
+        "```http\nGET /api/ping\n\n@mock-default\n200\n{\"pong\":true}\n```\n",
+    )
+    .unwrap();
+
+    let ro_config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let ro_app = create_web_router(ro_config.clone());
+
+    // 1. 只读模式可查询 routes，但禁止 start/stop
+    let routes_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/mock/routes")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let routes_res = ro_app.clone().oneshot(routes_req).await.unwrap();
+    assert_eq!(routes_res.status(), StatusCode::OK);
+
+    let ro_start_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mock/start")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"file_path":"v1.md","port":0}"#))
+        .unwrap();
+    assert_eq!(
+        ro_app.oneshot(ro_start_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // 2. 非只读模式完整生命周期：start -> list -> stop
+    let rw_app = create_web_router(WebServerConfig {
+        readonly: false,
+        ..ro_config
+    });
+    let start_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mock/start")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"file_path":"v1.md","port":0}"#))
+        .unwrap();
+    let start_res = rw_app.clone().oneshot(start_req).await.unwrap();
+    assert_eq!(start_res.status(), StatusCode::CREATED);
+    let body = to_bytes(start_res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::MockServerInfo> =
+        serde_json::from_slice(&body).unwrap();
+    let server_info = api_res.data.unwrap();
+    assert_eq!(server_info.file_path, "v1.md");
+
+    let stop_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mock/stop")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "id": server_info.id }).to_string(),
+        ))
+        .unwrap();
+    let stop_res = rw_app.oneshot(stop_req).await.unwrap();
+    assert_eq!(stop_res.status(), StatusCode::OK);
+}

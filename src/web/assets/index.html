@@ -29,9 +29,19 @@
         <span class="logo">rupost</span>
         <span class="sub">workbench</span>
         <span id="readonly-badge" class="readonly-badge" style="display: none;">[LOCKED: READ-ONLY]</span>
+        <nav id="global-nav" class="global-nav" aria-label="Primary Views">
+          <button type="button" class="global-nav-btn active" data-page="workbench" onclick="switchGlobalPage('workbench')">[Workbench]</button>
+          <button type="button" class="global-nav-btn" data-page="mock" onclick="switchGlobalPage('mock')">[Mock]</button>
+          <button type="button" class="global-nav-btn" data-page="session" onclick="switchGlobalPage('session')">[Session]</button>
+          <button type="button" class="global-nav-btn" data-page="history" onclick="switchGlobalPage('history')">[History]</button>
+          <button type="button" class="global-nav-btn" data-page="ws" onclick="switchGlobalPage('ws')">[WS]</button>
+        </nav>
       </div>
       <div class="nav-controls">
         <span id="active-file-label" class="file-label">[NO FILE SELECTED]</span>
+        <select id="env-select" class="env-select" title="Active Environment">
+          <option value="">[ENV: default]</option>
+        </select>
         <button id="btn-theme-toggle" class="btn btn-secondary" onclick="toggleTheme()" title="Toggle Theme (Dark / Light)">
           [THEME: DARK]
         </button>
@@ -51,7 +61,7 @@
     </header>
 
     <!-- Workspace Main Body -->
-    <div class="workspace-body">
+    <div id="workspace-body" class="workspace-body">
       <!-- 1. Left Sidebar: Workspace Files -->
       <aside class="sidebar" id="sidebar-pane">
         <div class="sidebar-header">
@@ -64,7 +74,7 @@
         <ul id="file-list" class="file-tree"></ul>
       </aside>
 
-      <!-- 2. Center: Document Editor -->
+      <!-- 2. Center: Document Editor & Markdown Preview -->
       <main class="editor-pane">
         <div class="editor-toolbar">
           <div class="toolbar-left">
@@ -72,13 +82,21 @@
             <span id="editor-file-title" class="pane-title">Untitled</span>
           </div>
           <div class="editor-actions">
+            <div id="editor-mode-switch" class="mode-switch" role="group" aria-label="Document view mode" style="display: none;">
+              <button type="button" class="mode-btn active" data-mode="preview" onclick="setEditorMode('preview')">Preview</button>
+              <button type="button" class="mode-btn" data-mode="split" onclick="setEditorMode('split')">Split</button>
+              <button type="button" class="mode-btn" data-mode="source" onclick="setEditorMode('source')">Source</button>
+            </div>
             <span id="editor-meta" class="editor-meta">0 lines | UTF-8</span>
             <span id="save-status" class="save-status"></span>
           </div>
         </div>
-        <div class="editor-wrapper">
-          <div id="editor-gutter" class="editor-gutter"></div>
-          <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="Select a document on the left or type Markdown / HTTP DSL here..."></textarea>
+        <div id="editor-wrapper" class="editor-wrapper">
+          <div id="editor-source-pane" class="editor-source-pane">
+            <div id="editor-gutter" class="editor-gutter"></div>
+            <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="Select a document on the left or type Markdown / HTTP DSL here..."></textarea>
+          </div>
+          <div id="markdown-preview" class="markdown-preview" style="display: none;"></div>
         </div>
       </main>
 
@@ -95,7 +113,7 @@
           </div>
         </div>
 
-        <!-- Inspector Tabs -->
+        <!-- Inspector Tabs (Per-Request Runtime Only) -->
         <nav class="inspector-tabs">
           <button class="tab-btn active" data-tab="overview" onclick="switchInspectorTab('overview')">[Overview]</button>
           <button class="tab-btn" data-tab="body" onclick="switchInspectorTab('body')">[Body]</button>
@@ -113,6 +131,9 @@
         </div>
       </aside>
     </div>
+
+    <!-- Global Dedicated Page View (Mock / Session / History / WS) -->
+    <main id="global-page-view" class="global-page-view" style="display: none;"></main>
 
     <!-- Bottom Status Bar -->
     <footer class="statusbar">
@@ -173,6 +194,39 @@
     </div>
   </div>
 
+  <!-- Export Command Modal -->
+  <div id="export-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-badge">[EXPORT]</span>
+          <span class="modal-title">Export Request Command</span>
+        </div>
+        <button class="close-btn" onclick="closeExportModal()" title="Close (Esc)">[X]</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label class="form-label">Target Format:</label>
+          <select id="export-format-select" class="form-select" onchange="refreshExportCommand()">
+            <option value="curl" selected>cURL (curl)</option>
+            <option value="httpie">HTTPie (http)</option>
+            <option value="wget">Wget (wget)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Generated Command:</label>
+          <pre id="export-command-pre" class="export-command-pre">Loading...</pre>
+        </div>
+        <div id="export-warnings" class="import-hint"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeExportModal()">Close (Esc)</button>
+        <button id="btn-copy-export" class="btn btn-primary" onclick="copyExportCommand()">[Copy Command]</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/http_cards.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

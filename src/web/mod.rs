@@ -1,6 +1,9 @@
 pub mod assets;
 pub mod handlers;
+pub mod http_parse;
 pub mod importer;
+pub mod markdown;
+pub mod mock_manager;
 pub mod server;
 pub mod session;
 pub mod store;

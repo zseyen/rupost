@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const app = require('../../src/web/assets/app.js');
+const cards = require('../../src/web/assets/http_cards.js');
 
 // 极简 Micro-DOM 打桩器
 function createMockDom() {
@@ -34,13 +35,29 @@ function createMockDom() {
 
   const mockDocument = {
     getElementById: (id) => getOrCreateElement(id),
-    createElement: (tag) => ({
-      tagName: tag.toUpperCase(),
-      style: {},
-      dataset: {},
-      classList: { add: () => {}, remove: () => {} },
-      appendChild: () => {},
-    }),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: (tag) => {
+      const el = {
+        tagName: tag.toUpperCase(),
+        style: {},
+        dataset: {},
+        children: [],
+        textContent: '',
+        className: '',
+        classList: {
+          add: (c) => {
+            el.className = `${el.className} ${c}`.trim();
+          },
+          remove: () => {},
+          toggle: () => {},
+        },
+        appendChild: (child) => {
+          el.children.push(child);
+        },
+      };
+      return el;
+    },
     documentElement: {
       getAttribute: () => 'dark',
       setAttribute: () => {},
@@ -207,4 +224,573 @@ test('escapeHtml sanitizes dangerous HTML characters', () => {
   );
   assert.equal(app.escapeHtml(null), '');
   assert.equal(app.escapeHtml(undefined), '');
+});
+
+test('toggleDir lazy-loads subdirectory, caches it, and renders nested items with indentation', async () => {
+  app.clearTreeState();
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const fileListEl = getOrCreateElement('file-list');
+  fileListEl.children = [];
+  Object.defineProperty(fileListEl, 'innerHTML', {
+    get: () => '',
+    set: (val) => {
+      if (val === '') fileListEl.children = [];
+    },
+  });
+  fileListEl.appendChild = (child) => { fileListEl.children.push(child); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setAllFiles([
+    { path: 'doc', name: 'doc', is_dir: true },
+    { path: 'empty_dir', name: 'empty_dir', is_dir: true },
+    { path: 'README.md', name: 'README.md', is_dir: false },
+  ]);
+
+  let fetchCount = 0;
+  global.fetch = async (url) => {
+    fetchCount += 1;
+    if (url === '/api/v1/files?path=doc') {
+      return {
+        json: async () => ({
+          success: true,
+          data: [{ path: 'doc/quickstart.md', name: 'quickstart.md', is_dir: false }],
+        }),
+      };
+    }
+    if (url === '/api/v1/files?path=empty_dir') {
+      return {
+        json: async () => ({ success: true, data: [] }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.toggleDir('doc');
+  assert.deepEqual(app.getExpandedDirs(), ['doc']);
+  assert.equal(fetchCount, 1);
+  // Expect: doc, doc/quickstart.md, empty_dir, README.md
+  assert.equal(fileListEl.children.length, 4);
+  assert.equal(fileListEl.children[0].children[0].textContent, '[-]');
+  assert.equal(fileListEl.children[1].dataset.path, 'doc/quickstart.md');
+  assert.equal(fileListEl.children[1].style.paddingLeft, '28px');
+
+  // Collapse then re-expand should hit cache (no extra fetch)
+  await app.toggleDir('doc');
+  assert.deepEqual(app.getExpandedDirs(), []);
+  assert.equal(fileListEl.children.length, 3);
+
+  await app.toggleDir('doc');
+  assert.deepEqual(app.getExpandedDirs(), ['doc']);
+  assert.equal(fetchCount, 1);
+
+  // Expanding empty dir renders (empty) placeholder
+  await app.toggleDir('empty_dir');
+  assert.equal(fileListEl.children.some((c) => c.textContent === '(empty)'), true);
+});
+
+test('filterFiles searches across cached subdirectories', async () => {
+  app.clearTreeState();
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const fileListEl = getOrCreateElement('file-list');
+  fileListEl.children = [];
+  Object.defineProperty(fileListEl, 'innerHTML', {
+    get: () => '',
+    set: (val) => {
+      if (val === '') fileListEl.children = [];
+    },
+  });
+  fileListEl.appendChild = (child) => { fileListEl.children.push(child); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setAllFiles([
+    { path: 'doc', name: 'doc', is_dir: true },
+    { path: 'README.md', name: 'README.md', is_dir: false },
+  ]);
+  global.fetch = async () => ({
+    json: async () => ({
+      success: true,
+      data: [{ path: 'doc/quickstart.md', name: 'quickstart.md', is_dir: false }],
+    }),
+  });
+  await app.toggleDir('doc');
+
+  const filterInput = getOrCreateElement('file-filter-input');
+  filterInput.value = 'quickstart';
+  app.filterFiles();
+
+  assert.equal(fileListEl.children.length, 1);
+  assert.equal(fileListEl.children[0].dataset.path, 'doc/quickstart.md');
+});
+
+test('syncEditorModeForFile defaults .md to preview and .http to source', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const editorEl = getOrCreateElement('code-editor');
+  editorEl.value = '# Hello Rupost';
+  const modeSwitch = getOrCreateElement('editor-mode-switch');
+  const sourcePane = getOrCreateElement('editor-source-pane');
+  const previewPane = getOrCreateElement('markdown-preview');
+  const wrapper = getOrCreateElement('editor-wrapper');
+  wrapper.classList = { toggle: () => {} };
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/markdown/render') {
+      return {
+        json: async () => ({
+          success: true,
+          data: { html: '<h1>Hello Rupost</h1>', executable_blocks: [], executable_cards: [] },
+        }),
+      };
+    }
+    if (url === '/api/v1/http/parse') {
+      return {
+        json: async () => ({
+          success: true,
+          data: {
+            variables: {},
+            cards: [
+              {
+                title: 'Demo',
+                method: 'GET',
+                url: 'https://example.com',
+                headers: [],
+                body: null,
+                directives: [],
+                has_mock: false,
+                is_websocket: false,
+                raw_block: '### Demo\nGET https://example.com',
+              },
+            ],
+          },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  app.setCurrentFilePath('README.md');
+  app.syncEditorModeForFile('README.md');
+  assert.equal(modeSwitch.style.display, 'inline-flex');
+  assert.equal(sourcePane.style.display, 'none');
+  assert.equal(previewPane.style.display, 'block');
+
+  // Wait for async renderMarkdownPreview
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(previewPane.innerHTML, /<h1>Hello Rupost<\/h1>/);
+
+  app.setCurrentFilePath('test.http');
+  editorEl.value = '### Demo\nGET https://example.com\n';
+  app.syncEditorModeForFile('test.http');
+  assert.equal(modeSwitch.style.display, 'inline-flex');
+  assert.equal(sourcePane.style.display, 'none');
+  assert.equal(previewPane.style.display, 'block');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(previewPane.innerHTML, /http-cards-stack/);
+
+  app.syncEditorModeForFile('notes.txt');
+  assert.equal(modeSwitch.style.display, 'none');
+  assert.equal(sourcePane.style.display, 'flex');
+  assert.equal(previewPane.style.display, 'none');
+});
+
+test('resolveRelativeDocPath resolves internal .md/.http links and ignores external/anchor links', () => {
+  assert.equal(
+    app.resolveRelativeDocPath('README.md', 'doc/guides/quickstart.md'),
+    'doc/guides/quickstart.md'
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('doc/guides/a.md', '../b.http#step1'),
+    'doc/b.http'
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('doc/a.md', '../../outside.md'),
+    null
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('README.md', 'https://example.com/docs.md'),
+    null
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('README.md', '#section-1'),
+    null
+  );
+});
+
+test('toggleDir preserves active file filter view', async () => {
+  app.clearTreeState();
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const fileListEl = getOrCreateElement('file-list');
+  fileListEl.children = [];
+  Object.defineProperty(fileListEl, 'innerHTML', {
+    get: () => '',
+    set: (val) => { if (val === '') fileListEl.children = []; },
+  });
+  fileListEl.appendChild = (child) => { fileListEl.children.push(child); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setAllFiles([
+    { path: 'doc', name: 'doc', is_dir: true },
+    { path: 'README.md', name: 'README.md', is_dir: false },
+  ]);
+  const filterInput = getOrCreateElement('file-filter-input');
+  filterInput.value = 'quickstart';
+
+  global.fetch = async () => ({
+    json: async () => ({
+      success: true,
+      data: [{ path: 'doc/quickstart.md', name: 'quickstart.md', is_dir: false }],
+    }),
+  });
+
+  await app.toggleDir('doc');
+  assert.equal(fileListEl.children.length, 1);
+  assert.equal(fileListEl.children[0].dataset.path, 'doc/quickstart.md');
+});
+
+test('insertIntoEditor refreshes markdown preview when not in source mode', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const editorEl = getOrCreateElement('code-editor');
+  editorEl.value = '# Doc';
+  editorEl.selectionStart = 5;
+  editorEl.selectionEnd = 5;
+  const previewPane = getOrCreateElement('markdown-preview');
+  const wrapper = getOrCreateElement('editor-wrapper');
+  wrapper.classList = { toggle: () => {} };
+
+  let renderCalled = 0;
+  global.fetch = async (url) => {
+    if (url === '/api/v1/markdown/render') {
+      renderCalled += 1;
+      return {
+        json: async () => ({
+          success: true,
+          data: { html: '<h1>Doc</h1><p>imported</p>', executable_blocks: [] },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  app.setCurrentFilePath('README.md');
+  app.setEditorMode('preview');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(renderCalled, 1);
+
+  app.insertIntoEditor('```http\nGET https://example.com\n```');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(renderCalled, 2);
+  assert.match(previewPane.innerHTML, /imported/);
+});
+
+test('highlightJson highlights tokens, escapes XSS, and falls back for >100KB', () => {
+  const html = cards.highlightJson('{"ok": true, "n": 42, "xss": "<script>"}');
+  assert.match(html, /class="tok-json-key"/);
+  assert.match(html, /class="tok-json-bool">true/);
+  assert.match(html, /class="tok-json-num">42/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+
+  const big = JSON.stringify({ data: 'a'.repeat(110 * 1024) });
+  const bigHtml = cards.highlightJson(big);
+  assert.doesNotMatch(bigHtml, /tok-json-key/);
+});
+
+test('extractHttpFileBlocks extracts top-level @vars and splits ### blocks', () => {
+  const src = `@tenant = east_01\n@base_url = https://httpbingo.org\n\n### One\nGET {{base_url}}/get?t={{tenant}}\n\n### Two\nPOST {{base_url}}/post\n\n{"a":1}\n`;
+  const { fileVariables, blocks } = cards.extractHttpFileBlocks(src);
+  assert.deepEqual(fileVariables, { tenant: 'east_01', base_url: 'https://httpbingo.org' });
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /### One/);
+  assert.match(blocks[1], /POST/);
+});
+
+test('parseHttpBlock & rebuildBlockWithBody preserve @mock-when variants and handle empty body', () => {
+  const blockWithMock = `### Login\nPOST https://api.example.com/login\nContent-Type: application/json\n\n{"user":"alice"}\n\n# @mock-when body.$.user == "alice"\n200\n{"ok":true}`;
+  const parsed = cards.parseHttpBlock(blockWithMock);
+  assert.equal(parsed.method, 'POST');
+  assert.equal(parsed.hasMock, true);
+  assert.equal(parsed.body, '{"user":"alice"}');
+
+  const rebuilt = cards.rebuildBlockWithBody(blockWithMock, '{"user":"bob"}');
+  assert.match(rebuilt, /\{"user":"bob"\}/);
+  assert.match(rebuilt, /\n\n# @mock-when body\.\$\.user == "alice"/);
+
+  const getBlock = 'GET https://example.com/ping\nAccept: application/json';
+  const rebuiltGet = cards.rebuildBlockWithBody(getBlock, '{"ping":1}');
+  assert.equal(rebuiltGet, 'GET https://example.com/ping\nAccept: application/json\n\n{"ping":1}');
+});
+
+test('formatDurationObj converts Rust Duration {secs, nanos} to ms', () => {
+  assert.equal(cards.formatDurationObj({ secs: 1, nanos: 250000000 }), '1250.0 ms');
+  assert.equal(cards.formatDurationObj(null), '-');
+});
+
+test('loadEnvs populates #env-select and selects default_env', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const envSelect = getOrCreateElement('env-select');
+  envSelect.children = [];
+  Object.defineProperty(envSelect, 'innerHTML', {
+    get: () => '',
+    set: (v) => { if (v === '') envSelect.children = []; },
+  });
+  envSelect.appendChild = (c) => { envSelect.children.push(c); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+  global.fetch = async (url) => {
+    if (url === '/api/v1/envs') {
+      return {
+        json: async () => ({
+          success: true,
+          data: { environments: ['dev', 'prod'], default_env: 'prod' },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.loadEnvs();
+  assert.equal(envSelect.children.length, 3);
+  assert.equal(envSelect.value, 'prod');
+  assert.equal(app.getSelectedEnv(), 'prod');
+});
+
+test('openExportModal strips markdown fences and sends selected env', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const envSelect = getOrCreateElement('env-select');
+  envSelect.value = 'staging';
+  const fmtSelect = getOrCreateElement('export-format-select');
+  fmtSelect.value = 'curl';
+  const preEl = getOrCreateElement('export-command-pre');
+
+  let capturedBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/api/v1/export') {
+      capturedBody = JSON.parse(opts.body);
+      return {
+        json: async () => ({
+          success: true,
+          data: { format: 'curl', command: 'curl https://example.com', warnings: [] },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.openExportModal('```http\nGET https://example.com\n```');
+  assert.equal(capturedBody.raw_block, 'GET https://example.com');
+  assert.equal(capturedBody.env, 'staging');
+  assert.equal(preEl.textContent, 'curl https://example.com');
+});
+
+test('parseKvInput parses JSON and line-based key:value / key=value', () => {
+  assert.deepEqual(app.parseKvInput('{"a": 1, "b": "x"}'), { a: '1', b: 'x' });
+  assert.deepEqual(app.parseKvInput('Authorization: Bearer tok\nX-Id: 42'), {
+    Authorization: 'Bearer tok',
+    'X-Id': '42',
+  });
+  assert.deepEqual(app.parseKvInput('role=admin\npage=2'), { role: 'admin', page: '2' });
+});
+
+test('renderSessionTab renders masked session variables', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  const container = getOrCreateElement('debug-output');
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/session') {
+      return {
+        json: async () => ({
+          success: true,
+          data: {
+            has_cookie_state: true,
+            captured_variables: { user_id: '42', token: '***' },
+          },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.renderSessionTab(container);
+  assert.match(container.innerHTML, /\[SESSION STATE\]/);
+  assert.match(container.innerHTML, /user_id/);
+  assert.match(container.innerHTML, /\*\*\*/);
+});
+
+test('runDiagnoseForUrl formats Duration {secs, nanos} and shows 403 SSRF hint', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  const debugEl = getOrCreateElement('debug-output');
+
+  global.fetch = async () => ({
+    status: 200,
+    json: async () => ({
+      success: true,
+      data: {
+        url: 'https://example.com',
+        dns_lookup_duration: { secs: 0, nanos: 12000000 },
+        tcp_connect_duration: { secs: 0, nanos: 24000000 },
+        tls_handshake_duration: null,
+        ttfb: { secs: 0, nanos: 50000000 },
+        total_duration: { secs: 0, nanos: 90000000 },
+        http_status: 200,
+        http_version: 'HTTP/1.1',
+        resolved_ips: ['93.184.216.34'],
+      },
+    }),
+  });
+
+  await app.runDiagnoseForUrl('https://example.com');
+  assert.match(debugEl.innerHTML, /12\.0 ms/);
+  assert.match(debugEl.innerHTML, /93\.184\.216\.34/);
+
+  global.fetch = async () => ({
+    status: 403,
+    json: async () => ({
+      success: false,
+      error: 'Blocked by SSRF guard',
+    }),
+  });
+  await app.runDiagnoseForUrl('http://127.0.0.1:8080');
+  assert.match(debugEl.innerHTML, /--allowed-hosts/);
+});
+
+test('renderOverviewTab displays error and warning banners when request fails', () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  const debugEl = getOrCreateElement('debug-output');
+
+  app.renderOverviewTab(
+    {
+      success: false,
+      status: null,
+      duration_ms: 0,
+      assertions: [],
+      error: 'relative URL without a base: "/orders"',
+      warnings: ['base_url is not defined'],
+    },
+    debugEl
+  );
+
+  assert.match(debugEl.innerHTML, /\[EXECUTION ERROR\]/);
+  assert.match(debugEl.innerHTML, /relative URL without a base/);
+  assert.match(debugEl.innerHTML, /\[WARNINGS\]/);
+  assert.match(debugEl.innerHTML, /base_url is not defined/);
+});
+
+test('renderMarkdownPreview falls back gracefully when /api/v1/http/parse returns 405 empty body', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const editorEl = getOrCreateElement('code-editor');
+  editorEl.value = '### Fallback\nGET https://example.com\n';
+  const previewPane = getOrCreateElement('markdown-preview');
+  const wrapper = getOrCreateElement('editor-wrapper');
+  wrapper.classList = { toggle: () => {} };
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/http/parse') {
+      return {
+        status: 405,
+        ok: false,
+        text: async () => '',
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  app.setCurrentFilePath('test.http');
+  await app.renderMarkdownPreview();
+  assert.match(previewPane.innerHTML, /http-cards-stack/);
+  assert.match(previewPane.innerHTML, /https:\/\/example\.com/);
+});
+
+test('switchGlobalPage toggles #workspace-body and #global-page-view cleanly', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  global.fetch = async () => ({
+    text: async () => JSON.stringify({ success: true, data: [] }),
+  });
+
+  const wsBody = getOrCreateElement('workspace-body');
+  const pageView = getOrCreateElement('global-page-view');
+
+  app.switchGlobalPage('mock');
+  assert.equal(app.getActiveGlobalPage(), 'mock');
+  assert.equal(wsBody.style.display, 'none');
+  assert.equal(pageView.style.display, 'flex');
+  assert.match(pageView.innerHTML, /\[MOCK STUDIO\]/);
+  assert.match(pageView.innerHTML, /Back to Workbench/);
+
+  app.switchGlobalPage('workbench');
+  assert.equal(app.getActiveGlobalPage(), 'workbench');
+  assert.equal(wsBody.style.display, 'grid');
+  assert.equal(pageView.style.display, 'none');
+});
+
+test('startManagedMockServer & stopManagedMockServer manage live mock instances', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const fileEl = getOrCreateElement('mock-server-file');
+  fileEl.value = 'examples/v1_api.md';
+  const portEl = getOrCreateElement('mock-server-port');
+  portEl.value = '9001';
+  const pageView = getOrCreateElement('global-page-view');
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/mock/start') {
+      return {
+        text: async () =>
+          JSON.stringify({
+            success: true,
+            data: {
+              id: 'm1',
+              file_path: 'examples/v1_api.md',
+              port: 9001,
+              url: 'http://127.0.0.1:9001',
+              route_count: 1,
+            },
+          }),
+      };
+    }
+    if (url === '/api/v1/mock/stop') {
+      return {
+        text: async () =>
+          JSON.stringify({
+            success: true,
+            data: { id: 'm1', port: 9001 },
+          }),
+      };
+    }
+    return { text: async () => JSON.stringify({ success: true, data: [] }) };
+  };
+
+  app.switchGlobalPage('mock');
+  await app.startManagedMockServer();
+  assert.match(pageView.innerHTML, /\[LIVE :9001\]/);
+
+  await app.stopManagedMockServer('m1');
+  assert.doesNotMatch(pageView.innerHTML, /\[LIVE :9001\]/);
 });

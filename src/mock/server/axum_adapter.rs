@@ -93,6 +93,19 @@ pub async fn serve_matcher(
     matcher: std::sync::Arc<dyn MockMatcher>,
     enable_cors: bool,
 ) -> Result<()> {
+    serve_matcher_with_shutdown(listener, matcher, enable_cors, std::future::pending()).await
+}
+
+/// 以已绑定的 listener 服务 mock 路由，支持优雅关闭信号（Web 工作台托管用）
+pub async fn serve_matcher_with_shutdown<F>(
+    listener: tokio::net::TcpListener,
+    matcher: std::sync::Arc<dyn MockMatcher>,
+    enable_cors: bool,
+    shutdown: F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     let app = Router::new()
         .fallback(any(handle_mock_request))
         .with_state(matcher)
@@ -102,6 +115,7 @@ pub async fn serve_matcher(
         ));
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
         .await
         .map_err(|e| RupostError::RequestExecutionFailed(e.to_string()))?;
 

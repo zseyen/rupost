@@ -1,6 +1,6 @@
 use crate::RupostError;
 use crate::ws::client::{WsClient, WsClientConfig};
-use crate::ws::frame::WsFrame;
+use crate::ws::frame::{FrameDirection, WsFrame, WsFrameType};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -208,7 +208,7 @@ impl SessionManager {
                                         // 记录到历史缓冲区中 (Inbound)
                                         self.history_buffer.lock().unwrap_or_else(|e| e.into_inner()).push(frame.clone());
 
-                                        let is_close = matches!(frame.frame_type, crate::ws::WsFrameType::Close);
+                                        let is_close = matches!(frame.frame_type, WsFrameType::Close);
                                         let _ = self.broadcast_tx.send(frame);
                                         if is_close {
                                             *self.state.lock().unwrap_or_else(|e| e.into_inner()) = SessionState::Disconnected;
@@ -237,8 +237,8 @@ impl SessionManager {
                         *self.state.lock().unwrap_or_else(|e| e.into_inner()) =
                             SessionState::Disconnected;
                         let _ = self.broadcast_tx.send(WsFrame::new(
-                            crate::ws::frame::FrameDirection::Inbound,
-                            crate::ws::WsFrameType::Close,
+                            FrameDirection::Inbound,
+                            WsFrameType::Close,
                             Vec::new(),
                             0,
                         ));

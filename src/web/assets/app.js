@@ -1,18 +1,58 @@
 // Rupost Living Workbench - Client Controller (Vanilla ESM, No Emoji)
 
+const RupostCards =
+  typeof window !== 'undefined' && window.RupostCards
+    ? window.RupostCards
+    : typeof require === 'function'
+      ? require('./http_cards.js')
+      : null;
+
 let currentFilePath = null;
 let allFiles = [];
+let activeGlobalPage = 'workbench';
 let activeInspectorTab = 'overview';
 let lastDebugData = null;
+let lastExecutedUrl = '';
+let isReadonly = false;
+let currentResponseBodyText = '';
+
+const expandedDirs = new Set();
+const dirCache = new Map();
+const loadingDirs = new Set();
+
+let editorMode = 'source';
+let lastRenderedExecBlocks = [];
+let lastRenderedCards = [];
+let cardEditedBodies = new Map();
+let currentHttpFileVars = {};
+let markdownRenderTimer = null;
+let renderSeq = 0;
+let exportTargetBlock = '';
+let mockDraft = {
+  method: 'GET',
+  path: '/',
+  headers: '',
+  query: '',
+  body: '',
+  raw_block: '',
+  file_path: '',
+  lastResult: null,
+};
+let mockWorkspaceRoutes = [];
+let mockRunningServers = [];
+let mockServerError = '';
 
 // Initialize theme immediately to prevent FOUC
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   initTheme();
 
   document.addEventListener('DOMContentLoaded', () => {
+    initCustomSelects();
     loadFiles();
+    loadEnvs();
     applyReadonlyState();
     initEditorEvents();
+    initMarkdownPreviewEvents();
     initKeyboardShortcuts();
     updateGutter();
     updateEditorMeta();
@@ -59,8 +99,9 @@ function toggleTheme() {
 async function applyReadonlyState() {
   try {
     const res = await fetch('/api/v1/meta');
-    const json = await res.json();
-    if (json.success && json.data && json.data.readonly) {
+    const json = await safeReadJson(res);
+    isReadonly = Boolean(json && json.success && json.data && json.data.readonly);
+    if (isReadonly) {
       const badge = document.getElementById('readonly-badge');
       if (badge) badge.style.display = 'inline-block';
 
@@ -73,6 +114,7 @@ async function applyReadonlyState() {
           btn.title = '只读模式下不可用';
         }
       });
+      syncMarkdownRunButtonsReadonly();
       const statusInd = document.getElementById('status-indicator');
       if (statusInd) statusInd.textContent = '[STATUS] Locked (Read-Only)';
     }
@@ -81,15 +123,72 @@ async function applyReadonlyState() {
   }
 }
 
+// 0.1 Environment Selector
+async function loadEnvs() {
+  const selectEl = document.getElementById('env-select');
+  if (!selectEl) return;
+  try {
+    const res = await fetch('/api/v1/envs');
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
+      const envs = Array.isArray(json.data.environments) ? json.data.environments : [];
+      const def = json.data.default_env || '';
+      selectEl.innerHTML = '';
+      const defOpt = document.createElement('option');
+      defOpt.value = '';
+      defOpt.textContent = '[ENV: default]';
+      selectEl.appendChild(defOpt);
+      envs.forEach((name) => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = `[ENV: ${name}]`;
+        selectEl.appendChild(opt);
+      });
+      if (def && envs.includes(def)) {
+        selectEl.value = def;
+      }
+      syncCustomSelect(selectEl);
+    }
+  } catch (e) {
+    console.error('Failed to load environments:', e);
+  }
+}
+
+function getSelectedEnv() {
+  const selectEl = document.getElementById('env-select');
+  if (!selectEl || !selectEl.value) return null;
+  return selectEl.value;
+}
+
 // 1. Load files from workspace
 async function loadFiles() {
-  const listEl = document.getElementById('file-list');
   try {
+    dirCache.clear();
     const res = await fetch('/api/v1/files');
-    const json = await res.json();
-    if (json.success && Array.isArray(json.data)) {
+    const json = await safeReadJson(res);
+    if (json && json.success && Array.isArray(json.data)) {
       allFiles = json.data;
-      renderFileList(allFiles);
+
+      // 保留已展开目录的状态并刷新其子内容
+      if (expandedDirs.size > 0) {
+        await Promise.all(
+          Array.from(expandedDirs).map(async (dirPath) => {
+            try {
+              const subRes = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
+              const subJson = await safeReadJson(subRes);
+              if (subJson && subJson.success && Array.isArray(subJson.data)) {
+                dirCache.set(dirPath, subJson.data);
+              } else {
+                expandedDirs.delete(dirPath);
+              }
+            } catch (err) {
+              expandedDirs.delete(dirPath);
+            }
+          })
+        );
+      }
+
+      refreshFileTreeView();
 
       // Auto-open first document if not selected
       const firstDoc = allFiles.find(f => !f.is_dir);
@@ -102,58 +201,175 @@ async function loadFiles() {
   }
 }
 
-// Render file list with pure text tags (no emojis)
-function renderFileList(files) {
-  const listEl = document.getElementById('file-list');
-  listEl.innerHTML = '';
-
-  files.forEach(file => {
-    const li = document.createElement('li');
-    li.dataset.path = file.path;
-
-    const tag = document.createElement('span');
-    tag.className = 'item-tag';
-    if (file.is_dir) {
-      tag.textContent = '[DIR]';
-    } else if (file.name.endsWith('.http')) {
-      tag.textContent = '[HTTP]';
-    } else {
-      tag.textContent = '[DOC]';
-    }
-
-    const name = document.createElement('span');
-    name.textContent = file.name;
-
-    li.appendChild(tag);
-    li.appendChild(name);
-
-    if (!file.is_dir) {
-      li.onclick = () => openFile(file.path);
-    }
-    if (file.path === currentFilePath) {
-      li.classList.add('active');
-    }
-    listEl.appendChild(li);
-  });
+function refreshFileTreeView() {
+  const queryEl = document.getElementById('file-filter-input');
+  if (queryEl && queryEl.value && queryEl.value.trim()) {
+    filterFiles();
+  } else {
+    renderFileList(allFiles);
+  }
 }
 
-// Filter file tree by query text
+// Toggle directory expand/collapse with lazy loading & concurrency guard
+async function toggleDir(dirPath) {
+  if (expandedDirs.has(dirPath)) {
+    expandedDirs.delete(dirPath);
+    refreshFileTreeView();
+    return;
+  }
+
+  if (dirCache.has(dirPath)) {
+    expandedDirs.add(dirPath);
+    refreshFileTreeView();
+    return;
+  }
+
+  if (loadingDirs.has(dirPath)) {
+    return;
+  }
+
+  loadingDirs.add(dirPath);
+  refreshFileTreeView();
+
+  try {
+    const res = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
+    const json = await safeReadJson(res);
+    if (json && json.success && Array.isArray(json.data)) {
+      dirCache.set(dirPath, json.data);
+      expandedDirs.add(dirPath);
+    }
+  } catch (e) {
+    console.error(`Failed to load directory ${dirPath}:`, e);
+  } finally {
+    loadingDirs.delete(dirPath);
+    refreshFileTreeView();
+  }
+}
+
+// Render file tree recursively (or flat list when filtering)
+function renderFileList(files, options = {}) {
+  const listEl = document.getElementById('file-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  const { flatSearch = false } = options;
+
+  const appendItems = (entries, depth) => {
+    entries.forEach(file => {
+      const li = document.createElement('li');
+      li.dataset.path = file.path;
+      li.tabIndex = 0;
+      if (depth > 0) {
+        li.style.paddingLeft = `${14 + depth * 14}px`;
+      }
+
+      if (file.is_dir) {
+        li.classList.add('is-dir');
+        const toggle = document.createElement('span');
+        toggle.className = 'dir-toggle';
+        if (loadingDirs.has(file.path)) {
+          toggle.textContent = '[..]';
+        } else if (expandedDirs.has(file.path)) {
+          toggle.textContent = '[-]';
+        } else {
+          toggle.textContent = '[+]';
+        }
+        li.appendChild(toggle);
+      }
+
+      const tag = document.createElement('span');
+      tag.className = 'item-tag';
+      if (file.is_dir) {
+        tag.textContent = '[DIR]';
+      } else if (file.name.endsWith('.http')) {
+        tag.textContent = '[HTTP]';
+      } else {
+        tag.textContent = '[DOC]';
+      }
+
+      const name = document.createElement('span');
+      name.className = 'item-name';
+      name.textContent = flatSearch ? file.path : file.name;
+      name.title = file.path;
+
+      li.appendChild(tag);
+      li.appendChild(name);
+
+      const activate = () => {
+        if (file.is_dir) {
+          toggleDir(file.path);
+        } else {
+          openFile(file.path);
+        }
+      };
+
+      li.onclick = activate;
+      li.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activate();
+        }
+      };
+
+      if (file.path === currentFilePath) {
+        li.classList.add('active');
+      }
+      listEl.appendChild(li);
+
+      if (!flatSearch && file.is_dir && expandedDirs.has(file.path)) {
+        const children = dirCache.get(file.path) || [];
+        if (children.length === 0) {
+          const emptyLi = document.createElement('li');
+          emptyLi.className = 'tree-empty';
+          emptyLi.style.paddingLeft = `${14 + (depth + 1) * 14}px`;
+          emptyLi.textContent = '(empty)';
+          listEl.appendChild(emptyLi);
+        } else {
+          appendItems(children, depth + 1);
+        }
+      }
+    });
+  };
+
+  appendItems(files, 0);
+}
+
+// Filter file tree across root and all cached subdirectories
 function filterFiles() {
-  const query = document.getElementById('file-filter-input').value.trim().toLowerCase();
+  const inputEl = document.getElementById('file-filter-input');
+  const query = inputEl ? inputEl.value.trim().toLowerCase() : '';
   if (!query) {
     renderFileList(allFiles);
     return;
   }
-  const filtered = allFiles.filter(f => f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query));
-  renderFileList(filtered);
+
+  const seen = new Set();
+  const pool = [];
+  const collect = (entries) => {
+    entries.forEach(entry => {
+      if (!seen.has(entry.path)) {
+        seen.add(entry.path);
+        pool.push(entry);
+      }
+      if (entry.is_dir && dirCache.has(entry.path)) {
+        collect(dirCache.get(entry.path));
+      }
+    });
+  };
+  collect(allFiles);
+
+  const filtered = pool.filter(
+    f => f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query)
+  );
+  renderFileList(filtered, { flatSearch: true });
 }
 
 // 2. Open active document
 async function openFile(path) {
   try {
     const res = await fetch(`/api/v1/file?path=${encodeURIComponent(path)}`);
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       currentFilePath = path;
 
       const fileLabel = document.getElementById('active-file-label');
@@ -165,9 +381,11 @@ async function openFile(path) {
       const fileContent = typeof json.data === 'string' ? json.data : (json.data && json.data.content ? json.data.content : '');
       const editor = document.getElementById('code-editor');
       editor.value = fileContent;
+      cardEditedBodies.clear();
 
       updateGutter();
       updateEditorMeta();
+      syncEditorModeForFile(path);
 
       document.querySelectorAll('#file-list li').forEach(li => {
         li.classList.toggle('active', li.dataset.path === path);
@@ -195,15 +413,16 @@ async function saveActiveFile() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: currentFilePath, content })
     });
-    const json = await res.json();
-    if (res.ok && json.success) {
+    const json = await safeReadJson(res);
+    if (res.ok && json && json.success) {
       statusEl.textContent = '[OK] Saved & Verified';
       statusEl.style.color = 'var(--accent-pass)';
       setTimeout(() => { statusEl.textContent = ''; }, 3000);
     } else {
-      statusEl.textContent = '[ERR] ' + (json.error || 'Syntax Guard Error');
+      const errMsg = (json && json.error) || `HTTP ${res.status}: Syntax Guard Error`;
+      statusEl.textContent = '[ERR] ' + errMsg;
       statusEl.style.color = 'var(--accent-fail)';
-      alert(`Save Rejected (Syntax Guard):\n${json.error}`);
+      alert(`Save Rejected (Syntax Guard):\n${errMsg}`);
     }
   } catch (e) {
     statusEl.textContent = '[ERR] Network Error';
@@ -211,35 +430,67 @@ async function saveActiveFile() {
   }
 }
 
-// 4. In-situ single block debug execution
+// 4. In-situ single block debug execution (shared by editor & Markdown Run buttons)
 async function runCurrentBlock() {
   const editor = document.getElementById('code-editor');
   const fullText = editor.value;
   const cursorPos = editor.selectionStart;
-
   const rawBlock = extractTargetBlock(fullText, cursorPos);
+  await executeRawBlock(rawBlock);
+}
+
+async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
+  lastExecutedUrl = RupostCards.parseHttpBlock(rawBlock).url || '';
   const debugEl = document.getElementById('debug-output');
   debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EXECUTING]</div><div class="empty-text">Dispatching request to runtime engine...</div></div>';
 
+  const origLabel = triggerBtn ? triggerBtn.textContent : '';
+  if (triggerBtn) {
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = '[RUNNING...]';
+  }
+
   try {
+    const payload = {
+      file_path: currentFilePath || 'inline.http',
+      raw_block: rawBlock,
+    };
+    const envName = getSelectedEnv();
+    if (envName) payload.env = envName;
+    if (extraVars && Object.keys(extraVars).length > 0) {
+      payload.extra_variables = extraVars;
+    }
+
     const res = await fetch('/api/v1/run/block', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_path: currentFilePath || 'inline.http',
-        raw_block: rawBlock
-      })
+      body: JSON.stringify(payload),
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       lastDebugData = json.data;
       updateSummaryPill(json.data);
       renderInspectorTab(activeInspectorTab);
     } else {
-      debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[EXEC ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Execution failed')}</span></div>`;
+      const parsed = RupostCards.parseHttpBlock(rawBlock);
+      const diagBtn =
+        !isReadonly && parsed.url
+          ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-left:auto;" onclick="runDiagnoseForUrl('${escapeHtml(parsed.url)}')">[Diagnose]</button>`
+          : '';
+      debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[EXEC ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Execution failed`)}</span>${diagBtn}</div>`;
     }
   } catch (e) {
-    debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+    const parsed = RupostCards.parseHttpBlock(rawBlock);
+    const diagBtn =
+      !isReadonly && parsed.url
+        ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-left:auto;" onclick="runDiagnoseForUrl('${escapeHtml(parsed.url)}')">[Diagnose]</button>`
+        : '';
+    debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span>${diagBtn}</div>`;
+  } finally {
+    if (triggerBtn) {
+      triggerBtn.disabled = isReadonly;
+      triggerBtn.textContent = origLabel;
+    }
   }
 }
 
@@ -253,15 +504,17 @@ async function runSuite() {
   debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[RUNNING SUITE]</div><div class="empty-text">Executing all requests in active document...</div></div>';
 
   try {
+    const suitePayload = { path: currentFilePath };
+    const envName = getSelectedEnv();
+    if (envName) suitePayload.env = envName;
+
     const res = await fetch('/api/v1/run/suite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path: currentFilePath
-      })
+      body: JSON.stringify(suitePayload)
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       const suite = json.data;
       let html = `
         <div class="timing-panel">
@@ -336,7 +589,60 @@ function updateSummaryPill(data) {
   durEl.textContent = `${data.duration_ms} ms`;
 }
 
-// 5. Inspector Tabs Switcher & Renderer
+// 5. Global Page Switcher & Per-Request Inspector Tabs
+function switchGlobalPage(page) {
+  activeGlobalPage = page || 'workbench';
+  const wsBody = document.getElementById('workspace-body');
+  const pageView = document.getElementById('global-page-view');
+
+  document.querySelectorAll('.global-nav-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.page === activeGlobalPage);
+  });
+
+  if (activeGlobalPage === 'workbench') {
+    if (wsBody) wsBody.style.display = 'grid';
+    if (pageView) pageView.style.display = 'none';
+    return;
+  }
+
+  if (wsBody) wsBody.style.display = 'none';
+  if (pageView) pageView.style.display = 'flex';
+
+  switch (activeGlobalPage) {
+    case 'mock':
+      refreshMockWorkspaceData();
+      renderMockTab(pageView);
+      break;
+    case 'session':
+      renderSessionTab(pageView);
+      break;
+    case 'history':
+      renderHistoryTab(pageView);
+      break;
+    case 'ws':
+      renderWsTab(pageView);
+      break;
+  }
+}
+
+function buildGlobalPageHeader(badge, title, refreshFnName = null) {
+  const refreshBtn = refreshFnName
+    ? `<button type="button" class="btn btn-secondary btn-sm" onclick="${refreshFnName}">[Refresh]</button>`
+    : '';
+  return `
+    <div class="global-page-header">
+      <div class="global-page-title-wrap">
+        <span class="pane-tag">${escapeHtml(badge)}</span>
+        <span class="pane-title">${escapeHtml(title)}</span>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        ${refreshBtn}
+        <button type="button" class="btn btn-secondary btn-sm" onclick="switchGlobalPage('workbench')">&lt;- Back to Workbench</button>
+      </div>
+    </div>
+  `;
+}
+
 function switchInspectorTab(tab) {
   activeInspectorTab = tab;
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -382,7 +688,27 @@ function renderInspectorTab(tab) {
 }
 
 function renderOverviewTab(d, container) {
+  const diagBtn =
+    !isReadonly && lastExecutedUrl
+      ? `<button type="button" class="btn btn-secondary btn-sm" onclick="runDiagnoseForUrl('${escapeHtml(lastExecutedUrl)}')">[Diagnose]</button>`
+      : '';
+  const errorHtml = d.error
+    ? `<div class="error-banner">
+         <div class="error-banner-head">
+           <span>[EXECUTION ERROR]</span>
+           ${diagBtn}
+         </div>
+         <div>${escapeHtml(d.error)}</div>
+       </div>`
+    : '';
+  const warnHtml =
+    Array.isArray(d.warnings) && d.warnings.length > 0
+      ? `<div class="warn-banner"><strong>[WARNINGS]</strong> ${d.warnings.map(escapeHtml).join('<br/>')}</div>`
+      : '';
+
   let html = `
+    ${errorHtml}
+    ${warnHtml}
     <div class="timing-panel">
       <div class="timing-header">
         <span>[EXECUTION SUMMARY]</span>
@@ -439,17 +765,20 @@ function renderOverviewTab(d, container) {
 }
 
 function renderBodyTab(d, container) {
-  const bodyText = d.response_body || '[EMPTY BODY]';
+  currentResponseBodyText = d.response_body || '';
+  const displayHtml = currentResponseBodyText
+    ? RupostCards.highlightJson(currentResponseBodyText)
+    : '<span class="tok-null">[EMPTY BODY]</span>';
   container.innerHTML = `
     <div class="code-container">
       <div class="code-toolbar">
         <span class="code-title">Response Body</span>
         <div style="display: flex; gap: 6px;">
-          <button class="btn btn-secondary" onclick="formatBodyJson()" style="padding: 2px 8px; font-size: 11px;">[Format JSON]</button>
-          <button id="btn-copy-body" class="btn btn-secondary" onclick="copyResponseBody()" style="padding: 2px 8px; font-size: 11px;">[Copy Body]</button>
+          <button class="btn btn-secondary btn-sm" onclick="formatBodyJson()">[Format JSON]</button>
+          <button id="btn-copy-body" class="btn btn-secondary btn-sm" onclick="copyResponseBody()">[Copy Body]</button>
         </div>
       </div>
-      <pre class="code-pre"><code id="response-body-code">${escapeHtml(bodyText)}</code></pre>
+      <pre class="code-pre"><code id="response-body-code">${displayHtml}</code></pre>
     </div>
   `;
 }
@@ -551,9 +880,12 @@ function renderRawTab(d, container) {
 function formatBodyJson() {
   const codeEl = document.getElementById('response-body-code');
   if (!codeEl) return;
+  const raw = currentResponseBodyText || codeEl.textContent || '';
   try {
-    const obj = JSON.parse(codeEl.textContent);
-    codeEl.textContent = JSON.stringify(obj, null, 2);
+    const obj = JSON.parse(raw);
+    const formatted = JSON.stringify(obj, null, 2);
+    currentResponseBodyText = formatted;
+    codeEl.innerHTML = RupostCards.highlightJson(formatted);
   } catch (e) {
     // not valid JSON, ignore
   }
@@ -562,7 +894,8 @@ function formatBodyJson() {
 function copyResponseBody() {
   const codeEl = document.getElementById('response-body-code');
   if (!codeEl) return;
-  navigator.clipboard.writeText(codeEl.textContent).then(() => {
+  const raw = currentResponseBodyText || codeEl.textContent || '';
+  navigator.clipboard.writeText(raw).then(() => {
     const btn = document.getElementById('btn-copy-body');
     if (btn) {
       const orig = btn.textContent;
@@ -582,6 +915,9 @@ function initEditorEvents() {
   editor.addEventListener('input', () => {
     updateGutter();
     updateEditorMeta();
+    if (editorMode === 'split') {
+      scheduleMarkdownRender();
+    }
   });
 
   editor.addEventListener('scroll', () => {
@@ -647,9 +983,11 @@ function initKeyboardShortcuts() {
       openImportModal();
       return;
     }
-    // Escape -> Close modal
+    // Escape -> Close modal & custom selects
     if (e.key === 'Escape') {
       closeImportModal();
+      closeExportModal();
+      closeAllCustomSelects();
     }
   });
 }
@@ -686,14 +1024,14 @@ async function submitImport() {
         generate_mock: generateMock
       })
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       const generatedCode = json.data.markdown_blocks.join('\n\n');
       insertIntoEditor(generatedCode);
       closeImportModal();
       document.getElementById('import-textarea').value = '';
     } else {
-      alert('Import failed: ' + (json.error || 'Invalid format'));
+      alert('Import failed: ' + ((json && json.error) || `HTTP ${res.status}: Invalid format`));
     }
   } catch (e) {
     alert('Request exception: ' + e.message);
@@ -702,34 +1040,1169 @@ async function submitImport() {
 
 function insertIntoEditor(text) {
   const editor = document.getElementById('code-editor');
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
+  const start = editor.selectionStart ?? editor.value.length;
+  const end = editor.selectionEnd ?? editor.value.length;
   const current = editor.value;
   editor.value = current.substring(0, start) + '\n\n' + text + '\n\n' + current.substring(end);
   updateGutter();
   updateEditorMeta();
+  if (editorMode !== 'source') {
+    renderMarkdownPreview();
+  }
+}
+
+// 6.1 Markdown & HTTP Card View Mode + Live Preview Renderer
+function isMarkdownFile(path) {
+  return typeof path === 'string' && path.toLowerCase().endsWith('.md');
+}
+
+function isHttpFile(path) {
+  return typeof path === 'string' && path.toLowerCase().endsWith('.http');
+}
+
+function syncEditorModeForFile(path) {
+  const modeSwitch = document.getElementById('editor-mode-switch');
+  const splitBtn = document.querySelector('#editor-mode-switch .mode-btn[data-mode="split"]');
+  if (isMarkdownFile(path)) {
+    if (modeSwitch) modeSwitch.style.display = 'inline-flex';
+    if (splitBtn && splitBtn.style) splitBtn.style.display = '';
+    setEditorMode('preview');
+  } else if (isHttpFile(path)) {
+    if (modeSwitch) modeSwitch.style.display = 'inline-flex';
+    if (splitBtn && splitBtn.style) splitBtn.style.display = 'none';
+    setEditorMode('preview');
+  } else {
+    if (modeSwitch) modeSwitch.style.display = 'none';
+    setEditorMode('source');
+  }
+}
+
+function setEditorMode(mode) {
+  editorMode = mode;
+  const sourcePane = document.getElementById('editor-source-pane');
+  const previewPane = document.getElementById('markdown-preview');
+  const wrapper = document.getElementById('editor-wrapper');
+
+  if (sourcePane) {
+    sourcePane.style.display = mode === 'preview' ? 'none' : 'flex';
+  }
+  if (previewPane) {
+    previewPane.style.display = mode === 'source' ? 'none' : 'block';
+  }
+  if (wrapper && wrapper.classList) {
+    wrapper.classList.toggle('is-split', mode === 'split');
+  }
+
+  document.querySelectorAll('#editor-mode-switch .mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+
+  if (mode === 'preview' || mode === 'split') {
+    renderMarkdownPreview();
+  }
+}
+
+function scheduleMarkdownRender() {
+  if (markdownRenderTimer) clearTimeout(markdownRenderTimer);
+  markdownRenderTimer = setTimeout(() => {
+    renderMarkdownPreview();
+  }, 120);
+}
+
+function upgradePreviewCodeBlocks(previewPane) {
+  if (!previewPane || !previewPane.querySelectorAll) return;
+
+  // 1. Upgrade Markdown ```http / ```rest blocks into unified HTTP Request Cards
+  previewPane.querySelectorAll('.md-http-block').forEach((blockEl) => {
+    const runBtn = blockEl.querySelector('.md-run-btn');
+    const idx = runBtn ? Number(runBtn.dataset.blockIndex) : -1;
+    const cardData = lastRenderedCards[idx] || lastRenderedExecBlocks[idx];
+    if (!Number.isNaN(idx) && cardData) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = RupostCards.renderHttpCardHtml(cardData, idx, {
+        readonly: isReadonly,
+        editedBody: cardEditedBodies.get(idx),
+      });
+      if (wrapper.firstElementChild) {
+        blockEl.replaceWith(wrapper.firstElementChild);
+      }
+    }
+  });
+
+  // 2. Highlight ```json fenced blocks
+  previewPane.querySelectorAll('.md-code-block').forEach((blockEl) => {
+    const langEl = blockEl.querySelector('.md-code-lang');
+    if (langEl && langEl.textContent === 'JSON') {
+      const codeEl = blockEl.querySelector('pre code');
+      if (codeEl) {
+        codeEl.innerHTML = RupostCards.highlightJson(codeEl.textContent || '');
+      }
+    }
+  });
+}
+
+async function safeReadJson(res) {
+  if (typeof res.text === 'function') {
+    const text = await res.text();
+    if (!text || !text.trim()) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+  }
+  if (typeof res.json === 'function') {
+    try {
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function renderMarkdownPreview() {
+  const editor = document.getElementById('code-editor');
+  const previewPane = document.getElementById('markdown-preview');
+  if (!editor || !previewPane) return;
+
+  const seq = ++renderSeq;
+
+  if (isHttpFile(currentFilePath)) {
+    try {
+      const res = await fetch('/api/v1/http/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editor.value || '' }),
+      });
+      const json = await safeReadJson(res);
+      if (seq !== renderSeq) return;
+
+      // 兼容旧版二进制 + --static-dir 场景：404/405 或空响应时回退客户端解析
+      if (res.status === 404 || res.status === 405 || (!json && !res.ok)) {
+        const extracted = RupostCards.extractHttpFileBlocks(editor.value || '');
+        currentHttpFileVars = extracted.fileVariables || {};
+        lastRenderedExecBlocks = extracted.blocks || [];
+        lastRenderedCards = [];
+        const cardsHtml = lastRenderedExecBlocks
+          .map((blk, idx) =>
+            RupostCards.renderHttpCardHtml(blk, idx, {
+              readonly: isReadonly,
+              editedBody: cardEditedBodies.get(idx),
+            })
+          )
+          .join('');
+        previewPane.innerHTML = lastRenderedExecBlocks.length
+          ? `<div class="http-cards-stack">${cardsHtml}</div>`
+          : '<div class="empty-hint"><div class="empty-icon">[EMPTY HTTP FILE]</div><div class="empty-text">Switch to [Source] to add HTTP requests.</div></div>';
+        syncMarkdownRunButtonsReadonly();
+        return;
+      }
+
+      if (!json || !json.success || !json.data) {
+        previewPane.innerHTML = `
+          <div class="error-banner" style="margin: 20px;">
+            <div class="error-banner-head">
+              <span>[PARSE ERR]</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="setEditorMode('source')">[Switch to Source]</button>
+            </div>
+            <div>${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to parse .http document`)}</div>
+          </div>
+        `;
+        return;
+      }
+      currentHttpFileVars = json.data.variables || {};
+      lastRenderedCards = Array.isArray(json.data.cards) ? json.data.cards : [];
+      lastRenderedExecBlocks = lastRenderedCards.map((c) => c.raw_block);
+      if (lastRenderedCards.length === 0) {
+        previewPane.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EMPTY HTTP FILE]</div><div class="empty-text">Switch to [Source] to add HTTP requests.</div></div>';
+        return;
+      }
+      const cardsHtml = lastRenderedCards
+        .map((card, idx) =>
+          RupostCards.renderHttpCardHtml(card, idx, {
+            readonly: isReadonly,
+            editedBody: cardEditedBodies.get(idx),
+          })
+        )
+        .join('');
+      previewPane.innerHTML = `<div class="http-cards-stack">${cardsHtml}</div>`;
+      syncMarkdownRunButtonsReadonly();
+    } catch (e) {
+      if (seq === renderSeq) {
+        previewPane.innerHTML = `<div class="error-banner" style="margin: 20px;"><div class="error-banner-head"><span>[PARSE ERR]</span><button type="button" class="btn btn-secondary btn-sm" onclick="setEditorMode('source')">[Switch to Source]</button></div><div>${escapeHtml(e.message)}</div></div>`;
+      }
+    }
+    return;
+  }
+
+  currentHttpFileVars = {};
+  try {
+    const res = await fetch('/api/v1/markdown/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: editor.value || '' })
+    });
+    const json = await safeReadJson(res);
+    if (seq !== renderSeq) return;
+    if (json && json.success && json.data) {
+      lastRenderedExecBlocks = Array.isArray(json.data.executable_blocks)
+        ? json.data.executable_blocks
+        : [];
+      lastRenderedCards = Array.isArray(json.data.executable_cards)
+        ? json.data.executable_cards
+        : [];
+      previewPane.innerHTML = `<article class="markdown-body">${json.data.html || ''}</article>`;
+      upgradePreviewCodeBlocks(previewPane);
+      syncMarkdownRunButtonsReadonly();
+    }
+  } catch (e) {
+    if (seq === renderSeq) {
+      previewPane.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[RENDER ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+    }
+  }
+}
+
+function syncMarkdownRunButtonsReadonly() {
+  const previewPane = document.getElementById('markdown-preview');
+  if (!previewPane || !previewPane.querySelectorAll) return;
+  previewPane
+    .querySelectorAll('.md-run-btn, .http-card-run-btn, .http-card-add-body-btn, .http-card-fmt-btn, .http-card-reset-btn')
+    .forEach(btn => {
+      btn.disabled = isReadonly;
+      if (isReadonly) {
+        btn.title = '只读模式下不可用';
+      }
+    });
+  previewPane.querySelectorAll('.http-card-body-editor').forEach(ta => {
+    ta.readOnly = isReadonly;
+  });
+}
+
+function resolveRelativeDocPath(baseFilePath, href) {
+  if (!href || typeof href !== 'string') return null;
+  const trimmed = href.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('#') ||
+    /^(https?:|mailto:|javascript:|data:)/i.test(trimmed)
+  ) {
+    return null;
+  }
+
+  const cleanHref = trimmed.split('#')[0].split('?')[0];
+  if (!cleanHref || !/\.(md|http)$/i.test(cleanHref)) {
+    return null;
+  }
+
+  const baseParts =
+    !cleanHref.startsWith('/') && baseFilePath
+      ? String(baseFilePath).split('/').slice(0, -1)
+      : [];
+  const rawParts = cleanHref.replace(/^\/+/, '').split('/');
+  const resolved = [...baseParts];
+
+  for (const seg of rawParts) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (resolved.length === 0) return null;
+      resolved.pop();
+    } else {
+      resolved.push(seg);
+    }
+  }
+
+  return resolved.length > 0 ? resolved.join('/') : null;
+}
+
+function getEffectiveCardBlock(idx) {
+  const rawBlock = lastRenderedExecBlocks[idx];
+  if (typeof rawBlock !== 'string') return null;
+  if (cardEditedBodies.has(idx)) {
+    return RupostCards.rebuildBlockWithBody(rawBlock, cardEditedBodies.get(idx));
+  }
+  return rawBlock;
+}
+
+function rerenderSingleCard(cardEl, idx) {
+  const cardData = lastRenderedCards[idx] || lastRenderedExecBlocks[idx];
+  if (!cardEl || !cardData) return;
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = RupostCards.renderHttpCardHtml(cardData, idx, {
+    readonly: isReadonly,
+    editedBody: cardEditedBodies.get(idx),
+  });
+  if (wrapper.firstElementChild) {
+    cardEl.replaceWith(wrapper.firstElementChild);
+  }
+}
+
+function initMarkdownPreviewEvents() {
+  const previewPane = document.getElementById('markdown-preview');
+  if (!previewPane) return;
+
+  previewPane.addEventListener('input', (e) => {
+    const editorEl = e.target.closest ? e.target.closest('.http-card-body-editor') : null;
+    if (!editorEl) return;
+    const idx = Number(editorEl.dataset.cardIndex);
+    if (Number.isNaN(idx)) return;
+    const rawBlock = lastRenderedExecBlocks[idx];
+    const origBody = typeof rawBlock === 'string' ? RupostCards.parseHttpBlock(rawBlock).body : '';
+    const nextVal = editorEl.value;
+    if (nextVal === origBody) {
+      cardEditedBodies.delete(idx);
+    } else {
+      cardEditedBodies.set(idx, nextVal);
+    }
+    const card = editorEl.closest('.http-card');
+    if (card) {
+      const resetBtn = card.querySelector('.http-card-reset-btn');
+      if (resetBtn) resetBtn.style.display = cardEditedBodies.has(idx) ? '' : 'none';
+      const label = card.querySelector('.http-card-section-label');
+      if (label) {
+        label.innerHTML = `Request Body ${cardEditedBodies.has(idx) ? '<span class="modified-pill">[Modified]</span>' : ''}`;
+      }
+    }
+  });
+
+  previewPane.addEventListener('click', (e) => {
+    const runBtn = e.target.closest ? e.target.closest('.http-card-run-btn, .md-run-btn') : null;
+    if (runBtn) {
+      if (isReadonly) return;
+      const idx = Number(runBtn.dataset.cardIndex ?? runBtn.dataset.blockIndex);
+      const effectiveBlock = getEffectiveCardBlock(idx);
+      if (effectiveBlock) {
+        executeRawBlock(effectiveBlock, runBtn, currentHttpFileVars);
+      }
+      return;
+    }
+
+    const exportBtn = e.target.closest ? e.target.closest('.http-card-export-btn') : null;
+    if (exportBtn) {
+      const idx = Number(exportBtn.dataset.cardIndex);
+      const effectiveBlock = getEffectiveCardBlock(idx);
+      if (effectiveBlock) {
+        openExportModal(effectiveBlock);
+      }
+      return;
+    }
+
+    const mockBtn = e.target.closest ? e.target.closest('.http-card-mock-btn') : null;
+    if (mockBtn) {
+      const idx = Number(mockBtn.dataset.cardIndex);
+      const effectiveBlock = getEffectiveCardBlock(idx);
+      if (effectiveBlock) {
+        openMockSimulatorForBlock(effectiveBlock);
+      }
+      return;
+    }
+
+    const addBodyBtn = e.target.closest ? e.target.closest('.http-card-add-body-btn') : null;
+    if (addBodyBtn) {
+      if (isReadonly) return;
+      const card = addBodyBtn.closest('.http-card');
+      const ta = card && card.querySelector('.http-card-body-editor');
+      const fmtBtn = card && card.querySelector('.http-card-fmt-btn');
+      if (ta) {
+        ta.style.display = 'block';
+        ta.focus();
+      }
+      if (fmtBtn) fmtBtn.style.display = '';
+      addBodyBtn.style.display = 'none';
+      return;
+    }
+
+    const fmtBtn = e.target.closest ? e.target.closest('.http-card-fmt-btn') : null;
+    if (fmtBtn) {
+      if (isReadonly) return;
+      const idx = Number(fmtBtn.dataset.cardIndex);
+      const card = fmtBtn.closest('.http-card');
+      const ta = card && card.querySelector('.http-card-body-editor');
+      if (ta) {
+        try {
+          const formatted = JSON.stringify(JSON.parse(ta.value), null, 2);
+          ta.value = formatted;
+          cardEditedBodies.set(idx, formatted);
+          rerenderSingleCard(card, idx);
+        } catch (err) {
+          // Non-JSON body: ignore
+        }
+      }
+      return;
+    }
+
+    const resetBtn = e.target.closest ? e.target.closest('.http-card-reset-btn') : null;
+    if (resetBtn) {
+      if (isReadonly) return;
+      const idx = Number(resetBtn.dataset.cardIndex);
+      cardEditedBodies.delete(idx);
+      rerenderSingleCard(resetBtn.closest('.http-card'), idx);
+      return;
+    }
+
+    const link = e.target.closest ? e.target.closest('a[href]') : null;
+    if (!link) return;
+    const rawHref = link.getAttribute('href') || '';
+    const resolvedDoc = resolveRelativeDocPath(currentFilePath, rawHref);
+    if (resolvedDoc) {
+      e.preventDefault();
+      openFile(resolvedDoc);
+    } else if (/^https?:\/\//i.test(rawHref)) {
+      e.preventDefault();
+      window.open(rawHref, '_blank', 'noopener,noreferrer');
+    }
+  });
 }
 
 function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return RupostCards.escapeHtml(str);
+}
+
+// 9. Block Export Modal (POST /api/v1/export)
+function stripMarkdownFence(raw) {
+  const lines = String(raw || '').trim().split('\n');
+  if (lines.length >= 2 && lines[0].trim().startsWith('```') && lines[lines.length - 1].trim() === '```') {
+    return lines.slice(1, -1).join('\n');
+  }
+  return String(raw || '');
+}
+
+async function openExportModal(rawBlock) {
+  exportTargetBlock = stripMarkdownFence(rawBlock);
+  const modal = document.getElementById('export-modal');
+  if (modal) modal.style.display = 'flex';
+  await refreshExportCommand();
+}
+
+function closeExportModal() {
+  const modal = document.getElementById('export-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function refreshExportCommand() {
+  const preEl = document.getElementById('export-command-pre');
+  const warnEl = document.getElementById('export-warnings');
+  const fmtEl = document.getElementById('export-format-select');
+  if (!preEl) return;
+
+  const format = fmtEl ? fmtEl.value : 'curl';
+  preEl.textContent = 'Generating...';
+  if (warnEl) warnEl.textContent = '';
+
+  const payload = {
+    raw_block: exportTargetBlock,
+    format,
+    file_path: currentFilePath || undefined,
+  };
+  const envName = getSelectedEnv();
+  if (envName) payload.env = envName;
+  if (currentHttpFileVars && Object.keys(currentHttpFileVars).length > 0) {
+    payload.extra_variables = currentHttpFileVars;
+  }
+
+  try {
+    const res = await fetch('/api/v1/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
+      preEl.textContent = json.data.command || '';
+      if (warnEl && Array.isArray(json.data.warnings) && json.data.warnings.length > 0) {
+        warnEl.textContent = json.data.warnings.join(' | ');
+      }
+    } else {
+      preEl.textContent = `[ERR] ${(json && json.error) || `HTTP ${res.status}: Export failed`}`;
+    }
+  } catch (e) {
+    preEl.textContent = `[NETWORK ERR] ${e.message}`;
+  }
+}
+
+function copyExportCommand() {
+  const preEl = document.getElementById('export-command-pre');
+  if (!preEl || !navigator.clipboard) return;
+  navigator.clipboard.writeText(preEl.textContent || '').then(() => {
+    const btn = document.getElementById('btn-copy-export');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '[Copied!]';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }
+  });
+}
+
+// 10. Mock Rule Simulator Tab (POST /api/v1/mock/simulate)
+function parseKvInput(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const out = {};
+        Object.entries(parsed).forEach(([k, v]) => {
+          out[k] = String(v);
+        });
+        return out;
+      }
+    } catch (e) {
+      // fall through to line parser
+    }
+  }
+  const map = {};
+  trimmed.split('\n').forEach((line) => {
+    const sepIdx = line.includes(':') ? line.indexOf(':') : line.indexOf('=');
+    if (sepIdx > 0) {
+      const k = line.slice(0, sepIdx).trim();
+      const v = line.slice(sepIdx + 1).trim();
+      if (k) map[k] = v;
+    }
+  });
+  return map;
+}
+
+function extractPathFromUrl(rawUrl) {
+  if (!rawUrl) return '/';
+  try {
+    const u = new URL(rawUrl.replace(/\{\{[^}]+\}\}/g, 'placeholder'));
+    return u.pathname || '/';
+  } catch (e) {
+    const clean = rawUrl.split('?')[0];
+    return clean.startsWith('/') ? clean : '/';
+  }
+}
+
+function openMockSimulatorForBlock(rawBlock) {
+  const parsed = RupostCards.parseHttpBlock(rawBlock);
+  mockDraft.method = parsed.method || 'GET';
+  mockDraft.path = extractPathFromUrl(parsed.url);
+  mockDraft.body = parsed.body || '';
+  mockDraft.raw_block = rawBlock;
+  mockDraft.file_path = currentFilePath || mockDraft.file_path;
+  mockDraft.lastResult = null;
+  switchGlobalPage('mock');
+}
+
+async function refreshMockWorkspaceData() {
+  try {
+    const [routesRes, serversRes] = await Promise.all([
+      fetch('/api/v1/mock/routes'),
+      fetch('/api/v1/mock/servers'),
+    ]);
+    const routesJson = await safeReadJson(routesRes);
+    const serversJson = await safeReadJson(serversRes);
+    if (routesJson && routesJson.success && Array.isArray(routesJson.data)) {
+      mockWorkspaceRoutes = routesJson.data;
+      if (!mockDraft.raw_block && mockWorkspaceRoutes.length > 0) {
+        selectMockRouteByIndex(0, false);
+      }
+    }
+    if (serversJson && serversJson.success && Array.isArray(serversJson.data)) {
+      mockRunningServers = serversJson.data;
+    }
+  } catch (e) {
+    console.error('Failed to load mock workspace data:', e);
+  }
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+function selectMockRouteByIndex(idx, rerender = true) {
+  const route = mockWorkspaceRoutes[idx];
+  if (!route) return;
+  mockDraft.method = route.method || 'GET';
+  mockDraft.path = extractPathFromUrl(route.path);
+  mockDraft.raw_block = route.raw_block;
+  mockDraft.file_path = route.file_path;
+  const parsed = RupostCards.parseHttpBlock(route.raw_block);
+  mockDraft.body = parsed.body || '';
+  mockDraft.lastResult = null;
+  if (rerender && activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+async function startManagedMockServer() {
+  if (isReadonly) return;
+  const fileEl = document.getElementById('mock-server-file');
+  const portEl = document.getElementById('mock-server-port');
+  const filePath = fileEl ? fileEl.value : mockDraft.file_path;
+  const rawPort = portEl ? portEl.value.trim() : '';
+  const portVal = rawPort === '' ? 0 : Number(rawPort);
+
+  mockServerError = '';
+  if (!filePath) {
+    mockServerError = 'Please select a Mock document first.';
+    if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
+    return;
+  }
+  if (!Number.isInteger(portVal) || portVal < 0 || portVal > 65535) {
+    mockServerError = 'Port must be an integer between 0 and 65535.';
+    if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/v1/mock/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_path: filePath, port: portVal }),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
+      mockRunningServers = [...mockRunningServers.filter((s) => s.id !== json.data.id), json.data];
+    } else {
+      mockServerError = (json && json.error) || `HTTP ${res.status}: Failed to start mock server`;
+    }
+  } catch (e) {
+    mockServerError = e.message;
+  }
+
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+async function stopManagedMockServer(id) {
+  if (isReadonly) return;
+  mockServerError = '';
+  try {
+    const res = await fetch('/api/v1/mock/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success) {
+      mockRunningServers = mockRunningServers.filter((s) => s.id !== id);
+    } else {
+      mockServerError = (json && json.error) || `HTTP ${res.status}: Failed to stop mock server`;
+    }
+  } catch (e) {
+    mockServerError = e.message;
+  }
+
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+function renderMockTab(container) {
+  if (!container) return;
+  const uniqueFiles = Array.from(new Set(mockWorkspaceRoutes.map((r) => r.file_path)));
+  if (mockDraft.file_path && !uniqueFiles.includes(mockDraft.file_path)) {
+    uniqueFiles.unshift(mockDraft.file_path);
+  }
+  const selectedFile = mockDraft.file_path || uniqueFiles[0] || '';
+
+  const fileOptsHtml = uniqueFiles.length
+    ? uniqueFiles
+        .map((f) => `<option value="${escapeHtml(f)}" ${f === selectedFile ? 'selected' : ''}>${escapeHtml(f)}</option>`)
+        .join('')
+    : '<option value="">(No mock files found)</option>';
+
+  const serversHtml = mockRunningServers.length
+    ? mockRunningServers
+        .map(
+          (s) => `
+          <div class="mock-server-pill">
+            <span class="mock-live-tag">[LIVE :${s.port}]</span>
+            <span>${escapeHtml(s.file_path)} (${s.route_count} routes)</span>
+            <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer" style="color: var(--accent-primary);">${escapeHtml(s.url)}</a>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="stopManagedMockServer('${escapeHtml(s.id)}')" ${isReadonly ? 'disabled' : ''}>Stop</button>
+          </div>`
+        )
+        .join('')
+    : '<span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">No managed mock server running. Pick a file and click [Start Mock Server].</span>';
+
+  const routesHtml = mockWorkspaceRoutes.length
+    ? mockWorkspaceRoutes
+        .map((r, idx) => {
+          const isActive = mockDraft.raw_block && mockDraft.raw_block === r.raw_block;
+          return `
+            <li class="mock-route-item ${isActive ? 'active' : ''}" onclick="selectMockRouteByIndex(${idx})">
+              <div class="mock-route-top">
+                <span class="method-badge ${RupostCards.methodBadgeClass(r.method)}">${escapeHtml(r.method)}</span>
+                <span>${escapeHtml(r.path)}</span>
+              </div>
+              <div class="mock-route-file">${escapeHtml(r.file_path)}</div>
+            </li>`;
+        })
+        .join('')
+    : '<div class="empty-hint"><div class="empty-text">No @mock routes discovered in workspace.</div></div>';
+
+  const simResult = mockDraft.lastResult;
+  let resultHtml = '<div class="empty-hint"><div class="empty-text">Configure the incoming probe request and click [Simulate Mock Match].</div></div>';
+  if (simResult) {
+    if (simResult.error) {
+      resultHtml = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(simResult.error)}</span></div>`;
+    } else {
+      const evalsHtml = (simResult.evaluations || [])
+        .map(
+          (ev) => `
+          <li class="assertion-item">
+            <span class="assert-tag ${ev.passed ? 'pass' : 'fail'}">${ev.passed ? '[PASS]' : '[FAIL]'}</span>
+            <span class="assert-expr">${escapeHtml(ev.condition_str)}</span>
+            <span class="assert-detail">Expected: ${escapeHtml(ev.expected)} | Actual: ${escapeHtml(ev.actual ?? '<none>')}</span>
+          </li>`
+        )
+        .join('');
+      resultHtml = `
+        <div class="timing-panel">
+          <div class="timing-header">
+            <span>[MATCHED] ${escapeHtml(simResult.matched_variant_name)}</span>
+            <span>HTTP ${simResult.expected_status}</span>
+          </div>
+        </div>
+        ${evalsHtml ? `<ul class="assertions-list">${evalsHtml}</ul>` : '<div class="empty-hint"><div class="empty-text">Matched default fallback variant (no conditions).</div></div>'}
+      `;
+    }
+  }
+
+  container.innerHTML = `
+    ${buildGlobalPageHeader('[MOCK STUDIO]', 'Mock Server Manager & Rule Probe', 'refreshMockWorkspaceData()')}
+    <div class="global-page-body">
+      <section class="mock-server-bar">
+        <div class="mock-server-controls">
+          <span class="pane-tag">[HOSTED MOCK]</span>
+          <select id="mock-server-file" class="env-select" style="min-width: 260px;">${fileOptsHtml}</select>
+          <input id="mock-server-port" class="mock-port-input" type="number" min="0" max="65535" placeholder="Port (0=auto)" value="9000" />
+          <button type="button" id="btn-start-mock-server" class="btn btn-success" onclick="startManagedMockServer()" ${isReadonly ? 'disabled' : ''}>&gt; Start Mock Server</button>
+        </div>
+        ${mockServerError ? `<div class="error-banner" style="margin-bottom:0;">${escapeHtml(mockServerError)}</div>` : ''}
+        <div id="mock-running-servers" class="mock-servers-list">${serversHtml}</div>
+      </section>
+
+      <div class="mock-page-3col">
+        <section class="global-panel-card">
+          <div class="global-panel-title">Workspace Mock Routes (${mockWorkspaceRoutes.length})</div>
+          <ul class="mock-routes-list">${routesHtml}</ul>
+        </section>
+        <section class="global-panel-card">
+          <div class="global-panel-title">1. Incoming Probe Request</div>
+          <div class="mock-probe-form">
+            <div class="mock-probe-row">
+              <select id="mock-method" class="env-select" style="width: 100px;">
+                ${['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => `<option value="${m}" ${mockDraft.method === m ? 'selected' : ''}>${m}</option>`).join('')}
+              </select>
+              <input id="mock-path" class="mock-input" type="text" value="${escapeHtml(mockDraft.path)}" placeholder="/api/resource" />
+            </div>
+            <textarea id="mock-headers" class="mock-textarea" placeholder="Headers (JSON or Key: Value per line)">${escapeHtml(mockDraft.headers)}</textarea>
+            <textarea id="mock-query" class="mock-textarea" placeholder="Query (JSON or key=value per line)">${escapeHtml(mockDraft.query)}</textarea>
+            <textarea id="mock-body" class="mock-textarea" placeholder="Request Body (optional)">${escapeHtml(mockDraft.body)}</textarea>
+            <button type="button" id="btn-mock-simulate" class="btn btn-primary" onclick="runMockSimulate()">&gt; Simulate Mock Match</button>
+          </div>
+        </section>
+        <section class="global-panel-card">
+          <div class="global-panel-title">2. Variant Evaluation Result</div>
+          <div id="mock-sim-result">${resultHtml}</div>
+        </section>
+      </div>
+    </div>
+  `;
+  enhanceSelect(document.getElementById('mock-server-file'));
+  enhanceSelect(document.getElementById('mock-method'));
+}
+
+async function runMockSimulate() {
+  const methodEl = document.getElementById('mock-method');
+  const pathEl = document.getElementById('mock-path');
+  const headersEl = document.getElementById('mock-headers');
+  const queryEl = document.getElementById('mock-query');
+  const bodyEl = document.getElementById('mock-body');
+
+  if (methodEl) mockDraft.method = methodEl.value;
+  if (pathEl) mockDraft.path = pathEl.value;
+  if (headersEl) mockDraft.headers = headersEl.value;
+  if (queryEl) mockDraft.query = queryEl.value;
+  if (bodyEl) mockDraft.body = bodyEl.value;
+
+  const rawBlock = mockDraft.raw_block || (lastRenderedExecBlocks[0] || '');
+  if (!rawBlock) {
+    mockDraft.lastResult = { error: 'Select a document or click [Mock] on a request card first.' };
+    if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/v1/mock/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: mockDraft.method,
+        path: mockDraft.path,
+        headers: parseKvInput(mockDraft.headers),
+        query: parseKvInput(mockDraft.query),
+        body: mockDraft.body || null,
+        raw_block: rawBlock,
+      }),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
+      mockDraft.lastResult = json.data;
+    } else {
+      mockDraft.lastResult = { error: (json && json.error) || `HTTP ${res.status}: Simulation failed` };
+    }
+  } catch (e) {
+    mockDraft.lastResult = { error: e.message };
+  }
+
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
+// 11. P2 Observability: Session, History, Diagnose, WebSocket Bridge
+let activeWsBridge = null;
+let wsLogEntries = [];
+
+async function renderSessionTab(container) {
+  if (!container) return;
+  container.innerHTML = `${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading session state...</div></div></div>`;
+  try {
+    const res = await fetch('/api/v1/session');
+    const json = await safeReadJson(res);
+    if (!json || !json.success || !json.data) {
+      container.innerHTML = `${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load session`)}</span></div></div>`;
+      return;
+    }
+    const { captured_variables: vars = {}, has_cookie_state } = json.data;
+    const keys = Object.keys(vars);
+    const rowsHtml = keys.length
+      ? `<table class="headers-table"><thead><tr><th>Variable</th><th>Value (Masked)</th></tr></thead><tbody>${keys
+          .map((k) => `<tr><td class="header-name">${escapeHtml(k)}</td><td class="header-value">${escapeHtml(vars[k])}</td></tr>`)
+          .join('')}</tbody></table>`
+      : '<div class="empty-hint"><div class="empty-text">No @capture variables recorded in current browser session yet.</div></div>';
+
+    container.innerHTML = `
+      ${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}
+      <div class="global-page-body">
+        <div class="timing-panel">
+          <div class="timing-header">
+            <span>[ACTIVE BROWSER SESSION]</span>
+            <span>Variables: ${keys.length}</span>
+          </div>
+          <div style="font-family: var(--font-mono); font-size: 11px; margin-top: 6px; color: var(--text-secondary);">
+            Upstream Cookie Bridge: <strong>${has_cookie_state ? 'Active' : 'Empty'}</strong>
+          </div>
+        </div>
+        <div class="global-panel-card">${rowsHtml}</div>
+      </div>
+    `;
+  } catch (e) {
+    container.innerHTML = `${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div></div>`;
+  }
+}
+
+async function renderHistoryTab(container) {
+  if (!container) return;
+  const header = buildGlobalPageHeader('[HISTORY]', 'Workspace Request History', "switchGlobalPage('history')");
+  if (isReadonly) {
+    container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">History access is disabled in read-only mode.</div></div></div>`;
+    return;
+  }
+  container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading workspace history...</div></div></div>`;
+  try {
+    const res = await fetch('/api/v1/history?limit=25');
+    const json = await safeReadJson(res);
+    if (!json || !json.success || !Array.isArray(json.data)) {
+      container.innerHTML = `${header}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load history`)}</span></div></div>`;
+      return;
+    }
+    if (json.data.length === 0) {
+      container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[EMPTY HISTORY]</div><div class="empty-text">No workspace-scoped history entries found.</div></div></div>`;
+      return;
+    }
+    const itemsHtml = json.data
+      .map(
+        (item) => `
+        <li class="assertion-item">
+          <span class="assert-tag ${item.status < 400 ? 'pass' : 'fail'}">${escapeHtml(item.method)} ${item.status}</span>
+          <span class="assert-expr">${escapeHtml(item.url)}</span>
+          <span class="assert-detail">${item.duration_ms} ms | ${escapeHtml(item.source || '')}</span>
+        </li>`
+      )
+      .join('');
+    container.innerHTML = `${header}<div class="global-page-body"><ul class="assertions-list">${itemsHtml}</ul></div>`;
+  } catch (e) {
+    container.innerHTML = `${header}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div></div>`;
+  }
+}
+
+async function runDiagnoseForUrl(targetUrl) {
+  const debugEl = document.getElementById('debug-output');
+  if (!debugEl) return;
+  if (isReadonly) {
+    debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">Diagnose is disabled in read-only mode.</div></div>';
+    return;
+  }
+  debugEl.innerHTML = `<div class="empty-hint"><div class="empty-icon">[DIAGNOSING]</div><div class="empty-text">Probing ${escapeHtml(targetUrl)}...</div></div>`;
+  try {
+    const res = await fetch('/api/v1/diagnose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: targetUrl }),
+    });
+    const json = await safeReadJson(res);
+    if (!json || !json.success || !json.data) {
+      const hint = res.status === 403 ? ' (If targeting a local host, pass --allowed-hosts)' : '';
+      debugEl.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[DIAGNOSE ERR]</span><span class="assert-expr">${escapeHtml(((json && json.error) || `HTTP ${res.status}: Diagnose failed`) + hint)}</span></div>`;
+      return;
+    }
+    const r = json.data;
+    const certHtml = r.cert_info
+      ? `<div class="assertion-item"><span class="assert-tag pass">[TLS CERT]</span><span class="assert-expr">${escapeHtml(r.cert_info.subject)}</span><span class="assert-detail">Issuer: ${escapeHtml(r.cert_info.issuer)} | Days Left: ${r.cert_info.days_remaining}</span></div>`
+      : '';
+    const errHtml = r.connection_error
+      ? `<div class="assertion-item"><span class="assert-tag fail">[CONN ERR]</span><span class="assert-expr">${escapeHtml(r.connection_error)}</span></div>`
+      : '';
+    debugEl.innerHTML = `
+      <div class="timing-panel">
+        <div class="timing-header">
+          <span>[DIAGNOSE REPORT]</span>
+          <span>Total: ${RupostCards.formatDurationObj(r.total_duration)}</span>
+        </div>
+        <div style="font-family: var(--font-mono); font-size: 11px; margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+          <div>DNS: <strong>${RupostCards.formatDurationObj(r.dns_lookup_duration)}</strong></div>
+          <div>TCP: <strong>${RupostCards.formatDurationObj(r.tcp_connect_duration)}</strong></div>
+          <div>TLS: <strong>${RupostCards.formatDurationObj(r.tls_handshake_duration)}</strong></div>
+          <div>TTFB: <strong>${RupostCards.formatDurationObj(r.ttfb)}</strong></div>
+          <div>HTTP: <strong>${r.http_status || '-'} (${escapeHtml(r.http_version || '-')})</strong></div>
+          <div>IPs: <strong>${escapeHtml((r.resolved_ips || []).join(', ') || '-')}</strong></div>
+        </div>
+      </div>
+      ${certHtml}
+      ${errHtml}
+    `;
+  } catch (e) {
+    debugEl.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+  }
+}
+
+function renderWsTab(container) {
+  if (!container) return;
+  const header = buildGlobalPageHeader('[WS BRIDGE]', 'WebSocket Live Frame Debugger');
+  if (isReadonly) {
+    container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">WebSocket bridge is disabled in read-only mode.</div></div></div>`;
+    return;
+  }
+  const connected = activeWsBridge && activeWsBridge.readyState === 1;
+  const logsHtml = wsLogEntries
+    .map(
+      (entry) => `
+      <li class="assertion-item">
+        <span class="assert-tag ${entry.dir === 'IN' ? 'pass' : entry.dir === 'ERR' ? 'fail' : ''}">[${escapeHtml(entry.dir)}]</span>
+        <span class="assert-expr">${escapeHtml(entry.text)}</span>
+      </li>`
+    )
+    .join('');
+
+  container.innerHTML = `
+    ${header}
+    <div class="global-page-body">
+      <div class="global-panel-card" style="margin-bottom: 16px;">
+        <div class="mock-probe-form" style="margin-bottom: 0;">
+          <div class="mock-probe-row">
+            <input id="ws-bridge-url" class="mock-input" type="text" placeholder="wss://echo.websocket.events" value="wss://echo.websocket.events" />
+            <button type="button" class="btn ${connected ? 'btn-secondary' : 'btn-primary'}" onclick="${connected ? 'disconnectWsBridge()' : 'connectWsBridge()'}">${connected ? 'Disconnect' : 'Connect'}</button>
+          </div>
+          <div class="mock-probe-row">
+            <input id="ws-bridge-msg" class="mock-input" type="text" placeholder="Message frame to send..." ${connected ? '' : 'disabled'} />
+            <button type="button" class="btn btn-accent" onclick="sendWsBridgeFrame()" ${connected ? '' : 'disabled'}>Send</button>
+          </div>
+        </div>
+      </div>
+      <ul class="assertions-list">${logsHtml}</ul>
+    </div>
+  `;
+}
+
+function appendWsLog(dir, text) {
+  wsLogEntries.push({ dir, text });
+  if (wsLogEntries.length > 100) wsLogEntries.shift();
+  if (activeGlobalPage === 'ws') {
+    renderWsTab(document.getElementById('global-page-view'));
+  }
+}
+
+function connectWsBridge() {
+  const urlEl = document.getElementById('ws-bridge-url');
+  const targetUrl = urlEl ? urlEl.value.trim() : '';
+  if (!targetUrl) return;
+  if (activeWsBridge) activeWsBridge.close();
+
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const bridgeUrl = `${proto}//${window.location.host}/api/v1/ws/bridge?url=${encodeURIComponent(targetUrl)}`;
+  const ws = new WebSocket(bridgeUrl);
+  activeWsBridge = ws;
+
+  ws.onopen = () => appendWsLog('SYS', `Connected bridge -> ${targetUrl}`);
+  ws.onmessage = (ev) => appendWsLog('IN', String(ev.data));
+  ws.onerror = () => appendWsLog('ERR', 'WebSocket bridge error (check SSRF / allowed-hosts)');
+  ws.onclose = () => {
+    appendWsLog('SYS', 'Bridge closed');
+    activeWsBridge = null;
+    if (activeGlobalPage === 'ws') renderWsTab(document.getElementById('global-page-view'));
+  };
+}
+
+function disconnectWsBridge() {
+  if (activeWsBridge) {
+    activeWsBridge.close();
+    activeWsBridge = null;
+  }
+}
+
+function sendWsBridgeFrame() {
+  const msgEl = document.getElementById('ws-bridge-msg');
+  const msg = msgEl ? msgEl.value : '';
+  if (activeWsBridge && activeWsBridge.readyState === 1 && msg) {
+    activeWsBridge.send(msg);
+    appendWsLog('OUT', msg);
+    if (msgEl) msgEl.value = '';
+  }
+}
+
+// 12. Custom Positioned Select Dropdowns (Fixes native <select> OS popup offset)
+function initCustomSelects() {
+  ['env-select', 'import-format-select', 'export-format-select'].forEach((id) => {
+    enhanceSelect(document.getElementById(id));
+  });
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest || !e.target.closest('.ui-select')) {
+        closeAllCustomSelects();
+      }
+    });
+  }
+}
+
+function closeAllCustomSelects(exceptEl = null) {
+  if (!document.querySelectorAll) return;
+  document.querySelectorAll('.ui-select.open').forEach((wrap) => {
+    if (wrap !== exceptEl) wrap.classList.remove('open');
+  });
+}
+
+function enhanceSelect(selectEl) {
+  if (!selectEl || !selectEl.parentNode || selectEl.dataset.enhanced === '1') return;
+  selectEl.dataset.enhanced = '1';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'ui-select' + (selectEl.classList && selectEl.classList.contains('form-select') ? ' ui-select-full' : '');
+  if (selectEl.style && selectEl.style.width) {
+    wrapper.style.width = selectEl.style.width;
+  }
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'ui-select-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'ui-select-label';
+  const caretSpan = document.createElement('span');
+  caretSpan.className = 'ui-select-caret';
+  caretSpan.textContent = 'v';
+  trigger.appendChild(labelSpan);
+  trigger.appendChild(caretSpan);
+
+  const menu = document.createElement('ul');
+  menu.className = 'ui-select-menu';
+  menu.setAttribute('role', 'listbox');
+
+  trigger.onclick = (e) => {
+    e.stopPropagation();
+    const isOpen = wrapper.classList.contains('open');
+    closeAllCustomSelects(wrapper);
+    wrapper.classList.toggle('open', !isOpen);
+  };
+
+  wrapper.appendChild(trigger);
+  wrapper.appendChild(menu);
+
+  selectEl.parentNode.insertBefore(wrapper, selectEl.nextSibling);
+  selectEl.style.display = 'none';
+  selectEl._customWrapper = wrapper;
+
+  syncCustomSelect(selectEl);
+}
+
+function syncCustomSelect(selectEl) {
+  if (!selectEl || !selectEl._customWrapper) return;
+  const wrapper = selectEl._customWrapper;
+  const labelSpan = wrapper.querySelector('.ui-select-label');
+  const menu = wrapper.querySelector('.ui-select-menu');
+  if (!menu || !labelSpan) return;
+
+  menu.innerHTML = '';
+  const options = Array.from(selectEl.options || []);
+  const selectedOpt = options.find((o) => o.value === selectEl.value) || options[0];
+  labelSpan.textContent = selectedOpt ? selectedOpt.textContent : '';
+
+  options.forEach((opt) => {
+    const li = document.createElement('li');
+    li.className = 'ui-select-option' + (opt.value === selectEl.value ? ' selected' : '');
+    li.setAttribute('role', 'option');
+    li.textContent = opt.textContent;
+    li.onclick = (e) => {
+      e.stopPropagation();
+      selectEl.value = opt.value;
+      wrapper.classList.remove('open');
+      syncCustomSelect(selectEl);
+      if (typeof selectEl.onchange === 'function') {
+        selectEl.onchange();
+      } else if (typeof Event !== 'undefined' && selectEl.dispatchEvent) {
+        selectEl.dispatchEvent(new Event('change'));
+      }
+    };
+    menu.appendChild(li);
+  });
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     applyReadonlyState,
     runSuite,
+    executeRawBlock,
     escapeHtml,
     applyTheme,
     toggleTheme,
+    toggleDir,
+    renderFileList,
+    filterFiles,
+    isMarkdownFile,
+    setEditorMode,
+    syncEditorModeForFile,
+    renderMarkdownPreview,
+    resolveRelativeDocPath,
+    insertIntoEditor,
+    loadEnvs,
+    getSelectedEnv,
+    openExportModal,
+    refreshExportCommand,
+    runMockSimulate,
+    parseKvInput,
+    renderSessionTab,
+    renderHistoryTab,
+    runDiagnoseForUrl,
+    renderOverviewTab,
+    switchGlobalPage,
+    getActiveGlobalPage: () => activeGlobalPage,
+    startManagedMockServer,
+    stopManagedMockServer,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },
     getAllFiles: () => allFiles,
+    getExpandedDirs: () => Array.from(expandedDirs),
+    clearTreeState: () => {
+      expandedDirs.clear();
+      dirCache.clear();
+      loadingDirs.clear();
+    },
   };
 }

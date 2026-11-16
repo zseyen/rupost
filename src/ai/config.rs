@@ -109,10 +109,8 @@ fn parse_user_file(path: &std::path::Path) -> Result<(Option<String>, Option<Str
 
 /// 探测本地 OpenAI 兼容端点（`GET {base}/models`，2s 超时），成功返回 (base_url, model)
 async fn probe_local(base: &str) -> Option<(String, String)> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .ok()?;
+    let client =
+        crate::http::client::build_plain_http_client(std::time::Duration::from_secs(2)).ok()?;
     let url = format!("{}/models", base.trim_end_matches('/'));
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {

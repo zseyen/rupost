@@ -243,6 +243,19 @@ impl RedactionPolicy {
         extra_keys: impl IntoIterator<Item = impl AsRef<str>>,
         ignore_keys: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Self {
+        Self::new_with_sink(
+            extra_keys,
+            ignore_keys,
+            &crate::diagnostics::StderrWarningSink,
+        )
+    }
+
+    /// 构建包含外部配置与活文档标注的定制策略（通过 `WarningSink` 传递护栏阻断告警）
+    pub fn new_with_sink(
+        extra_keys: impl IntoIterator<Item = impl AsRef<str>>,
+        ignore_keys: impl IntoIterator<Item = impl AsRef<str>>,
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> Self {
         let mut policy = Self::builtin();
 
         for key in extra_keys {
@@ -259,8 +272,12 @@ impl RedactionPolicy {
             }
             // R3 安全护栏：严禁豁免硬键！
             if is_hard_sensitive_key(normalized.as_str()) {
-                eprintln!(
-                    "[warn] 安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！"
+                sink.emit(
+                    crate::diagnostics::WarningSeverity::Security,
+                    "security::redact",
+                    &format!(
+                        "安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！"
+                    ),
                 );
                 continue;
             }
@@ -272,6 +289,15 @@ impl RedactionPolicy {
 
     /// 结合请求级元数据 (@sensitive / @no-redact) 派生新策略（活文档就地标注优先于全局配置）
     pub fn with_request_metadata(&self, meta: &crate::parser::types::RequestMetadata) -> Self {
+        self.with_request_metadata_with_sink(meta, &crate::diagnostics::StderrWarningSink)
+    }
+
+    /// 结合请求级元数据派生新策略（通过 `WarningSink` 传递护栏阻断告警）
+    pub fn with_request_metadata_with_sink(
+        &self,
+        meta: &crate::parser::types::RequestMetadata,
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> Self {
         if meta.sensitive_keys.is_empty() && meta.no_redact_keys.is_empty() {
             return self.clone();
         }
@@ -288,8 +314,10 @@ impl RedactionPolicy {
                 continue;
             }
             if is_hard_sensitive_key(normalized.as_str()) {
-                eprintln!(
-                    "[warn] 安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！"
+                sink.emit(
+                    crate::diagnostics::WarningSeverity::Security,
+                    "security::redact",
+                    &format!("安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！"),
                 );
                 continue;
             }

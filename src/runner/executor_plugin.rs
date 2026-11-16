@@ -128,8 +128,10 @@ pub(crate) async fn run_plugin_stage(
     }
 
     if stage.degraded {
+        let sink = crate::diagnostics::StderrWarningSink;
         for warning in &stage.warnings {
-            eprintln!("[WARN] {warning}");
+            use crate::diagnostics::{WarningSeverity, WarningSink};
+            sink.emit(WarningSeverity::Warn, "executor_plugin", warning);
         }
     }
 

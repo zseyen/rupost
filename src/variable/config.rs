@@ -84,12 +84,23 @@ impl ConfigLoader {
 
     /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
     pub fn find_and_load_redaction_policy() -> crate::security::redact::RedactionPolicy {
+        Self::find_and_load_redaction_policy_with_sink(&crate::diagnostics::StderrWarningSink)
+    }
+
+    /// 查找并加载脱敏策略配置 [export.redaction]（通过 `WarningSink` 输出异常告警）
+    pub fn find_and_load_redaction_policy_with_sink(
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> crate::security::redact::RedactionPolicy {
         let Some(path) = Self::find_config_path() else {
             return crate::security::redact::RedactionPolicy::builtin();
         };
         let (policy, warning) = Self::load_redaction_policy_from_path(&path);
         if let Some(w) = warning {
-            eprintln!("{w}");
+            sink.emit(
+                crate::diagnostics::WarningSeverity::Warn,
+                "variable::config",
+                &w,
+            );
         }
         policy
     }

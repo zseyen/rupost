@@ -1,10 +1,17 @@
-//! 跨平台差异统一适配层（Home 目录、POSIX 文件权限、进程信号退出码）。
+//! 跨平台差异统一适配层（Home 目录、POSIX 文件权限、进程信号退出码、进程组守卫）。
 //!
 //! 全仓业务与测试代码应通过本模块访问平台相关能力，避免散落 `#[cfg(unix)]`
 //! 或在 Windows 下因 `dirs::home_dir()` 忽略 `HOME` 环境变量而导致隔离失效。
 
+pub mod process;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+
+pub use process::{
+    ProcessGroupGuard, WaitOutcome, configure_process_group, kill_process_group_pid,
+    wait_with_timeout_and_cancel,
+};
 
 /// 工作区与用户目录下的默认状态目录名（`.rupost`）。
 pub const DEFAULT_RUPOST_DIR: &str = ".rupost";

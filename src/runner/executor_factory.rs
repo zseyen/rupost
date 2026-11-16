@@ -4,6 +4,7 @@
 //! 插件注册表从未装配——本机已安装的非 optional 插件指令在两入口假性报
 //! "插件未安装"阻断。本工厂把注册表装配收口为表现层"即调即走"的单点。
 
+use crate::diagnostics::{StderrWarningSink, WarningSeverity, WarningSink};
 use crate::platform;
 use crate::plugin::pipeline::PluginRuntimeOptions;
 use crate::plugin::{DiscoverOptions, PluginRegistry};
@@ -18,24 +19,37 @@ pub fn discover_plugin_registry(
     discover: &DiscoverOptions,
     authorized_env_keys: &HashSet<String>,
 ) -> Arc<PluginRegistry> {
+    discover_plugin_registry_with_sink(discover, authorized_env_keys, &StderrWarningSink)
+}
+
+/// 允许注入 `WarningSink` 的插件注册表发现（TUI/Web/测试通过 `BufferedWarningSink` 收敛告警）。
+pub fn discover_plugin_registry_with_sink(
+    discover: &DiscoverOptions,
+    authorized_env_keys: &HashSet<String>,
+    sink: &dyn WarningSink,
+) -> Arc<PluginRegistry> {
     let cache_path = platform::rupost_path("registry.json")
         .unwrap_or_else(|| PathBuf::from(".rupost-registry.json"));
     match PluginRegistry::load_or_discover(discover, &cache_path) {
         Ok(reg) => {
             for warning in &reg.warnings {
-                eprintln!("[!] {warning}");
+                sink.emit(WarningSeverity::Info, "executor_factory", warning);
             }
             let mut directives: Vec<String> = reg.hooks.keys().cloned().collect();
             directives.sort();
             directives.dedup();
             for warning in reg.collect_missing_env_warnings(&directives, authorized_env_keys) {
-                eprintln!("[WARN] {warning}");
+                sink.emit(WarningSeverity::Warn, "executor_factory", &warning);
             }
             Arc::new(reg)
         }
         Err(e) => {
             // 反静默：发现失败必须可见；回退空注册表确保插件管线与严格门禁不旁路
-            eprintln!("[!] 插件注册表发现失败（插件注解将按缺失门禁/降级处理）: {e}");
+            sink.emit(
+                WarningSeverity::Info,
+                "executor_factory",
+                &format!("插件注册表发现失败（插件注解将按缺失门禁/降级处理）: {e}"),
+            );
             Arc::new(PluginRegistry::new())
         }
     }
@@ -88,6 +102,38 @@ pub fn build_interactive_executor_with_options(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_discover_plugin_registry_with_sink_captures_warnings_without_stderr() {
+        use crate::diagnostics::BufferedWarningSink;
+        let dir = tempfile::tempdir().unwrap();
+        let plugins_dir = dir.path().join(".rupost").join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        std::fs::write(
+            plugins_dir.join("rupost-plugin-sink-probe"),
+            "#!/bin/sh\nexit 0\n",
+        )
+        .unwrap();
+        let _ =
+            crate::platform::set_unix_mode(&plugins_dir.join("rupost-plugin-sink-probe"), 0o755);
+        std::fs::write(
+            plugins_dir.join("rupost-plugin-sink-probe.json"),
+            r#"{"manifest_version":"1.0","name":"sink-probe","version":"0.1.0","description":"probe","commands":[],"hooks":[{"directive":"auth","alias":"sink-probe","stage":"prepare","cache_scope":"none","requires_env":["MISSING_ENV_FOR_SINK_TEST"],"parameters_schema":{}}]}"#,
+        )
+        .unwrap();
+
+        let sink = BufferedWarningSink::new();
+        let discover = DiscoverOptions {
+            allow_project_plugins: true,
+            project_root: Some(dir.path().to_path_buf()),
+        };
+        let _reg = discover_plugin_registry_with_sink(&discover, &HashSet::new(), &sink);
+        let msgs = sink.messages();
+        assert!(
+            msgs.iter().any(|m| m.contains("MISSING_ENV_FOR_SINK_TEST")),
+            "未放行环境变量告警必须通过 WarningSink 确定性捕获: {msgs:?}"
+        );
+    }
 
     /// T3/T4/T5（WP-2026-11-14-01）：with_options 映射 + zero-diff 防假守护 + env 豁免。
     #[test]

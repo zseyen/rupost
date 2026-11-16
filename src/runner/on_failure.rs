@@ -64,8 +64,7 @@ pub async fn run_hook(
     command.env("RUPOST_FAILED_TRACE_ID", trace_id.unwrap_or_default());
     command.kill_on_drop(true);
     command.stdin(Stdio::null());
-    #[cfg(unix)]
-    command.process_group(0);
+    crate::platform::configure_process_group(command.as_std_mut());
 
     let spawned = command
         .stdout(Stdio::piped())
@@ -91,7 +90,7 @@ pub async fn run_hook(
         },
         // 超时：future 被 drop（kill_on_drop 杀直接子进程），再对整组补刀清理孙进程
         Err(_) => {
-            kill_process_group(pgid);
+            crate::platform::kill_process_group_pid(pgid);
             HookOutcome {
                 timed_out: true,
                 exit_success: false,
@@ -108,22 +107,6 @@ pub async fn run_hook(
         },
     }
 }
-
-/// unix：对钩子独占的进程组发 SIGKILL（pgid == 钩子 sh 的 pid，由 process_group(0) 保证）。
-/// windows：无进程组语义，退化为仅直接子进程（kill_on_drop 已覆盖）。
-#[cfg(unix)]
-fn kill_process_group(pgid: Option<u32>) {
-    if let Some(pgid) = pgid {
-        // SAFETY: killpg 对任意 pgid 调用都是内存安全的纯系统调用；
-        // 进程组由我们自己 spawn 创建，不会误伤无关进程组。
-        unsafe {
-            libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(_pgid: Option<u32>) {}
 
 /// 对整个批次执行失败钩子环节（渲染前调用，使"无 trace 头"警告进入报告与 explain 上下文）。
 /// 逐条串行触发保证输出确定性；钩子的任何失败只产生 stderr 提示，绝不改变退出码。

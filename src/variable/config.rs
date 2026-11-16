@@ -1,4 +1,8 @@
+use crate::diagnostics::{StderrWarningSink, WarningSeverity, WarningSink};
 use crate::platform;
+use crate::security::redact::RedactionPolicy;
+use crate::variable::PluginTomlConfig;
+use crate::variable::env_file::{EnvFileOutcome, load_env_file};
 use crate::variable::resolver::VariableResolver;
 use crate::variable::types::{VariableConfig, VariableContext};
 use std::collections::HashMap;
@@ -52,17 +56,15 @@ impl ConfigLoader {
     }
 
     /// 从指定路径加载脱敏策略，区分“文件不存在”（静默回退）与“读取/解析失败”（返回告警并回退内置默认策略）。
-    fn load_redaction_policy_from_path(
-        path: &Path,
-    ) -> (crate::security::redact::RedactionPolicy, Option<String>) {
+    fn load_redaction_policy_from_path(path: &Path) -> (RedactionPolicy, Option<String>) {
         if !path.exists() {
-            return (crate::security::redact::RedactionPolicy::builtin(), None);
+            return (RedactionPolicy::builtin(), None);
         }
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(e) => {
                 return (
-                    crate::security::redact::RedactionPolicy::builtin(),
+                    RedactionPolicy::builtin(),
                     Some(format!(
                         "[!] 读取 {} 失败: {e}，已回退到内置默认脱敏策略",
                         path.display()
@@ -70,10 +72,10 @@ impl ConfigLoader {
                 );
             }
         };
-        match crate::security::redact::RedactionPolicy::from_toml_str(&content) {
+        match RedactionPolicy::from_toml_str(&content) {
             Ok(policy) => (policy, None),
             Err(e) => (
-                crate::security::redact::RedactionPolicy::builtin(),
+                RedactionPolicy::builtin(),
                 Some(format!(
                     "[!] 解析 {} 脱敏策略失败: {e}，已回退到内置默认脱敏策略",
                     path.display()
@@ -83,16 +85,14 @@ impl ConfigLoader {
     }
 
     /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
-    pub fn find_and_load_redaction_policy() -> crate::security::redact::RedactionPolicy {
-        Self::find_and_load_redaction_policy_with_sink(&crate::diagnostics::StderrWarningSink)
+    pub fn find_and_load_redaction_policy() -> RedactionPolicy {
+        Self::find_and_load_redaction_policy_with_sink(&StderrWarningSink)
     }
 
     /// 查找并加载脱敏策略配置 [export.redaction]（通过 `WarningSink` 输出异常告警）
-    pub fn find_and_load_redaction_policy_with_sink(
-        sink: &dyn crate::diagnostics::WarningSink,
-    ) -> crate::security::redact::RedactionPolicy {
+    pub fn find_and_load_redaction_policy_with_sink(sink: &dyn WarningSink) -> RedactionPolicy {
         let Some(path) = Self::find_config_path() else {
-            return crate::security::redact::RedactionPolicy::builtin();
+            return RedactionPolicy::builtin();
         };
         Self::load_redaction_policy_from_path_with_sink(&path, sink)
     }
@@ -100,16 +100,12 @@ impl ConfigLoader {
     /// 从指定路径加载脱敏策略配置并通过 `WarningSink` 输出异常告警（消除重复 `[!]` 前缀）。
     pub fn load_redaction_policy_from_path_with_sink(
         path: &Path,
-        sink: &dyn crate::diagnostics::WarningSink,
-    ) -> crate::security::redact::RedactionPolicy {
+        sink: &dyn WarningSink,
+    ) -> RedactionPolicy {
         let (policy, warning) = Self::load_redaction_policy_from_path(path);
         if let Some(w) = warning {
             let stripped = w.strip_prefix("[!] ").unwrap_or(&w);
-            sink.emit(
-                crate::diagnostics::WarningSeverity::Alert,
-                "variable::config",
-                stripped,
-            );
+            sink.emit(WarningSeverity::Alert, "variable::config", stripped);
         }
         policy
     }
@@ -141,9 +137,9 @@ impl ConfigLoader {
     /// B3（免重填主线）：读取 `rupost.toml [plugins]` 段——TUI/Web 交互入口专用单点。
     /// 缺失/无段 → 默认；解析失败 → 默认 + 指名告警（与 find_and_load 告警策略一致）。
     /// TUI/Web 均经此单点，禁止各自解析 toml。
-    pub fn find_and_load_plugin_config() -> (crate::variable::PluginTomlConfig, Vec<String>) {
+    pub fn find_and_load_plugin_config() -> (PluginTomlConfig, Vec<String>) {
         let Some(path) = Self::find_config_path() else {
-            return (crate::variable::PluginTomlConfig::default(), Vec::new());
+            return (PluginTomlConfig::default(), Vec::new());
         };
         Self::load_plugin_config_from_path(&path)
     }
@@ -151,17 +147,17 @@ impl ConfigLoader {
     /// 可注入路径变体（测试用，避免 set_current_dir 全局状态污染）
     pub fn load_plugin_config_from_path<P: AsRef<Path>>(
         path: P,
-    ) -> (crate::variable::PluginTomlConfig, Vec<String>) {
+    ) -> (PluginTomlConfig, Vec<String>) {
         let mut warnings = Vec::new();
         let path = path.as_ref();
         match Self::load_from_path(path) {
             Ok(config) => match config.plugins {
                 Some(cfg) => (cfg, warnings),
-                None => (crate::variable::PluginTomlConfig::default(), warnings),
+                None => (PluginTomlConfig::default(), warnings),
             },
             Err(e) => {
                 warnings.push(format!("rupost.toml [plugins] 段解析失败，已回退默认: {e}"));
-                (crate::variable::PluginTomlConfig::default(), warnings)
+                (PluginTomlConfig::default(), warnings)
             }
         }
     }
@@ -212,7 +208,7 @@ impl ConfigLoader {
         // 2. 加载本地局部 `.env` 文件（覆盖 toml）——决策统一走 load_env_file
         if let Some((path, explicit)) = env_file {
             apply_env_file(
-                crate::variable::env_file::load_env_file(Path::new(path), explicit),
+                load_env_file(Path::new(path), explicit),
                 &mut vars,
                 &mut warnings,
             );
@@ -223,10 +219,8 @@ impl ConfigLoader {
         let mut env_specific_missed = false;
         if let Some(name) = env_name {
             let env_file_name = format!(".env.{name}");
-            let outcome =
-                crate::variable::env_file::load_env_file(Path::new(&env_file_name), false);
-            env_specific_missed =
-                matches!(outcome, crate::variable::env_file::EnvFileOutcome::Silent);
+            let outcome = load_env_file(Path::new(&env_file_name), false);
+            env_specific_missed = matches!(outcome, EnvFileOutcome::Silent);
             apply_env_file(outcome, &mut vars, &mut warnings);
         }
 
@@ -334,18 +328,18 @@ impl ConfigLoader {
 /// 将 env 文件加载决策合并进变量表（`Warn` 文本转出站 warning）。
 /// `.env` / `--env-file` / `.env.<env>` 三个加载点共用，DRY 归口。
 fn apply_env_file(
-    outcome: crate::variable::env_file::EnvFileOutcome,
+    outcome: EnvFileOutcome,
     vars: &mut HashMap<String, String>,
     warnings: &mut Vec<String>,
 ) {
     match outcome {
-        crate::variable::env_file::EnvFileOutcome::Loaded(env_vars) => {
+        EnvFileOutcome::Loaded(env_vars) => {
             for (key, value) in env_vars {
                 vars.insert(key, value);
             }
         }
-        crate::variable::env_file::EnvFileOutcome::Silent => {}
-        crate::variable::env_file::EnvFileOutcome::Warn(msg) => warnings.push(msg),
+        EnvFileOutcome::Silent => {}
+        EnvFileOutcome::Warn(msg) => warnings.push(msg),
     }
 }
 
@@ -422,12 +416,12 @@ base_url = \"http://x\"",
         // 形态 2：无 [plugins] 段 → 默认
         std::fs::write(&toml_path, "[environments.dev]\nbase_url = \"http://x\"").unwrap();
         let (cfg2, _) = ConfigLoader::load_plugin_config_from_path(&toml_path);
-        assert_eq!(cfg2, crate::variable::PluginTomlConfig::default());
+        assert_eq!(cfg2, PluginTomlConfig::default());
 
         // 形态 3：损坏 toml → 默认 + 指名告警（不 panic）
         std::fs::write(&toml_path, "[plugins\nbroken").unwrap();
         let (cfg3, warnings3) = ConfigLoader::load_plugin_config_from_path(&toml_path);
-        assert_eq!(cfg3, crate::variable::PluginTomlConfig::default());
+        assert_eq!(cfg3, PluginTomlConfig::default());
         assert!(
             warnings3.iter().any(|w| w.contains("[plugins]")),
             "解析失败必须指名 [plugins] 段: {:?}",
@@ -435,6 +429,7 @@ base_url = \"http://x\"",
         );
     }
     use super::*;
+    use crate::diagnostics::{BufferedWarningSink, warning_sink::format_stderr_line};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -872,15 +867,12 @@ sensitive_keys = ["x_custom_secret"]
         let dir = tempfile::tempdir().unwrap();
         let broken = dir.path().join("broken.toml");
         std::fs::write(&broken, "[export.redaction\nbad").unwrap();
-        let sink = crate::diagnostics::BufferedWarningSink::new();
+        let sink = BufferedWarningSink::new();
         let _policy = ConfigLoader::load_redaction_policy_from_path_with_sink(&broken, &sink);
         let recs = sink.records();
         assert_eq!(recs.len(), 1);
-        assert_eq!(recs[0].severity, crate::diagnostics::WarningSeverity::Alert);
-        let formatted = crate::diagnostics::warning_sink::format_stderr_line(
-            recs[0].severity,
-            &recs[0].message,
-        );
+        assert_eq!(recs[0].severity, WarningSeverity::Alert);
+        let formatted = format_stderr_line(recs[0].severity, &recs[0].message);
         assert!(formatted.starts_with("[!] "));
         assert!(!formatted.contains("[!] [!]") && !formatted.contains("[WARN] [!]"));
     }

@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 use serde_json::json;
 
@@ -79,7 +81,7 @@ impl SuiteHookCache {
     ) -> std::sync::Arc<tokio::sync::Mutex<Option<super::PluginPatch>>> {
         let mut map = self.slots.lock().unwrap_or_else(|p| p.into_inner());
         map.entry(key.to_string())
-            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(None)))
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
             .clone()
     }
 }

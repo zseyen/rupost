@@ -1,3 +1,4 @@
+use crate::variable::capture::VariableCapture;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -82,7 +83,7 @@ pub enum WsAction {
         /// 步骤级局部断言列表
         assertions: Vec<String>,
         /// 步骤级局部变量捕获列表
-        captures: Vec<crate::variable::capture::VariableCapture>,
+        captures: Vec<VariableCapture>,
     },
     /// 主动断开连接
     Close,

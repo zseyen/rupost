@@ -1,6 +1,7 @@
 use crate::assertion::find_operator;
 use crate::parser::metadata::parse_duration;
 use crate::utils::jsonpath::parse_jsonpath_to_segments;
+use crate::variable::capture::VariableCapture;
 use crate::ws::frame::{FrameDirection, WsAction, WsFrame, WsFrameType};
 use std::time::Duration;
 
@@ -106,11 +107,7 @@ impl WsActionParser {
                                 let source_str =
                                     content[var_name.len() + rel + "from".len()..].trim();
                                 if !var_name.is_empty() && !source_str.is_empty() {
-                                    captures.push(
-                                        crate::variable::capture::VariableCapture::parse(
-                                            var_name, source_str,
-                                        ),
-                                    );
+                                    captures.push(VariableCapture::parse(var_name, source_str));
                                 }
                             }
                         }
@@ -206,6 +203,7 @@ fn precompile_jsonpath(condition: &str) -> (Option<Vec<String>>, Option<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::variable::capture::CaptureSource;
 
     #[test]
     fn test_parse_simple_actions() {
@@ -333,7 +331,7 @@ mod tests {
             assert_eq!(captures[0].name, "from_price");
             assert_eq!(
                 captures[0].source,
-                crate::variable::capture::CaptureSource::Body("price".to_string())
+                CaptureSource::Body("price".to_string())
             );
         } else {
             panic!("Expected Expect action");

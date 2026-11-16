@@ -5,26 +5,28 @@
 //! 回灌为**最低优先级层**（只补缺，绝不覆盖 `--var`/`.env`/toml 显式值）——
 //! token 型 API 第二次运行免重跑登录。
 
-use crate::Result;
+use crate::security::fs::write_private_file_atomic;
+use crate::{Result, RupostError};
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 
 /// 持久化捕获变量（0600 + 原子替换，防 symlink/权限漂移）
 pub fn save_var_state(path: &Path, vars: &HashMap<String, String>) -> Result<()> {
     let json = serde_json::to_vec_pretty(&vars)?;
-    crate::security::fs::write_private_file_atomic(path, &json)
+    write_private_file_atomic(path, &json)
 }
 
 /// 读取持久化变量；文件缺失/损坏返回 None（损坏不静默——由调用方告警区分缺失与损坏）
 pub fn load_var_state(path: &Path) -> Option<Result<HashMap<String, String>>> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(e) => return Some(Err(crate::RupostError::IoError(e))),
+        Err(e) if e.kind() == ErrorKind::NotFound => return None,
+        Err(e) => return Some(Err(RupostError::IoError(e))),
     };
     match serde_json::from_str::<HashMap<String, String>>(&raw) {
         Ok(vars) => Some(Ok(vars)),
-        Err(e) => Some(Err(crate::RupostError::JsonError(e))),
+        Err(e) => Some(Err(RupostError::JsonError(e))),
     }
 }
 
@@ -46,6 +48,7 @@ pub fn backfill_missing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::variable::VariableContext;
 
     #[test]
     fn test_var_state_roundtrip_and_missing() {
@@ -79,7 +82,7 @@ mod tests {
 
     #[test]
     fn test_backfill_missing_never_overrides_explicit_values() {
-        let mut ctx = crate::variable::VariableContext::new();
+        let mut ctx = VariableContext::new();
         ctx.insert("auth_token", "explicit-value");
         ctx.insert("fresh_key", "from-capture");
         let mut persisted = HashMap::new();

@@ -37,13 +37,14 @@ $RUPOST POST http://127.0.0.1:18800/up -H 'X-Tag: manual' --raw 'hello'
 ```
 **预期**：200；服务端（http.server 日志）可见 POST 与 `X-Tag` 头。
 
-### M1.3 内联双风格边界（实测锁定）
+### M1.3 内联双风格边界（WP-P2c 修复后实测锁定）
 ```bash
 $RUPOST GET http://127.0.0.1:18800/                # ✅ httpie 纯形式（无旗标）→ 200
-$RUPOST --verbose GET http://127.0.0.1:18800/      # exit 2:"未知命令 '--verbose'"(根路由裁决序)
-$RUPOST GET http://127.0.0.1:18800/ --verbose      # exit 1:切换 curl 解析器,方法 token 被当 URL(登记的边界)
+$RUPOST GET http://127.0.0.1:18800/ --verbose      # ✅ 尾部旗标被容忍 → 200（WP-P2c 修复）
+$RUPOST GET --verbose http://127.0.0.1:18800/      # ✅ 旗标夹中间 → 200（WP-P2c 修复）
+$RUPOST --verbose GET http://127.0.0.1:18800/      # exit 2:"未知命令 '--verbose'"(根路由裁决序,旗标前置=非 rupost 形态)
 ```
-**讲解**：旗标存在会切换 curl 解析器（curl 语义：首个位置参数即 URL）——httpie 方法前置形式**不可与旗标混用**；需要 verbose 的场景请走 `t` 子命令（`rupost t suite.http -v`）。AGENTS §5 的"全局参数位置契约"约束的是**子命令模式**的全局旗标（如 `--no-history`，见 M18）。
+**讲解（WP-P2c 修复）**：此前任何旗标存在都会误切 curl 解析器（方法 token 被当 URL 吞掉）。修复后解析器选择按**方法前置**判定——首个裸 token 为标准 HTTP 方法即走 httpie 解析器，尾部/中间旗标被容忍（verbose 输出未实现，忽略不阻断）；旗标**前置**（`--verbose GET …`）仍走根路由裁决（exit 2"未知命令"）——那是"非 rupost 形态"的诚实拒绝，AGENTS §5 的"全局参数位置契约"（全局旗标须在子命令前）维持不变。
 
 ---
 

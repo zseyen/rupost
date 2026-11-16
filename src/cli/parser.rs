@@ -25,8 +25,15 @@ pub fn parse_args(args: &[String]) -> Result<ParsedRequest> {
         debug!("Detected httpie-style command");
         parse_httpie(filtered_args[1..].to_vec())?
     } else {
-        // 根据参数特征判断是 curl 风格还是 httpie 风格
-        let is_curl = filtered_args.iter().any(|a| a.starts_with('-'));
+        // 根据参数特征判断是 curl 风格还是 httpie 风格（WP-P2c 边界修复）：
+        // 方法前置（首个 token 为标准 HTTP 方法）= httpie 形态——即使携带旗标
+        //（旗标的存在此前会误切 curl 解析器，把方法 token 当 URL 吞掉）；
+        // 真 curl 形态（首 token 为旗标，如 `-X POST url`）才走 curl 解析器
+        let first_token_is_method = filtered_args
+            .first()
+            .map(|a| !a.starts_with('-') && Method::is_standard(a))
+            .unwrap_or(false);
+        let is_curl = !first_token_is_method;
         if is_curl {
             debug!("Using curl parser");
             parse_curl(filtered_args)?
@@ -226,7 +233,12 @@ fn parse_httpie(args: Vec<String>) -> Result<ParsedRequest> {
         method = args_iter.next().unwrap().to_uppercase();
     }
 
-    // Step 2: 下一个非键值对参数即为 URL
+    // Step 2: 下一个非键值对参数即为 URL（WP-P2c：跳过旗标 token，如 --verbose）
+    while let Some(next) = args_iter.peek()
+        && next.starts_with('-')
+    {
+        args_iter.next();
+    }
     if let Some(next) = args_iter.peek()
         && !is_key_value_param(next)
     {

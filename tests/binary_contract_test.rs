@@ -150,11 +150,42 @@ fn test_inline_style_boundaries() {
         .code(2)
         .stderr(contains("未知命令"));
 
-    // ③ 混合形态：curl 解析器接管（登记的解析器选择边界，锁失败事实本身）
+    // ③ 混合形态（WP-P2c 修复后）：方法前置 + 尾部旗标 → httpie 解析器接管，
+    //    未知旗标被容忍（verbose 输出未实现，登记）——200 可用
     cmd(dir.path(), history.path())
         .args(["GET", &url, "--verbose"])
         .assert()
-        .code(1);
+        .code(0)
+        .stdout(contains("200"));
+}
+
+/// 例 3b（WP-P2c 补充）：旗标夹在方法与 URL 之间 → 同样 httpie 解析、URL 正确
+#[test]
+fn test_inline_flag_between_method_and_url() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = tempfile::tempdir().unwrap();
+    let mock = MockServer::start(
+        r#"[{"method":"GET","path":"/ok","variants":[{"condition":null,"status":200,"headers":{},"response_body":"ok"}]}]"#,
+    );
+    let url = format!("http://127.0.0.1:{}/ok", mock.port);
+
+    cmd(dir.path(), history.path())
+        .args(["GET", "--verbose", &url])
+        .assert()
+        .code(0)
+        .stdout(contains("200"));
+}
+
+/// 例 3c（WP-P2c 边界）：旗标最前（非方法前置形态）→ 仍走根路由裁决（未知命令 exit 2）
+#[test]
+fn test_flag_first_unknown_command_exits_2() {
+    let dir = tempfile::tempdir().unwrap();
+    let history = tempfile::tempdir().unwrap();
+    cmd(dir.path(), history.path())
+        .args(["--verbose", "GET", "http://127.0.0.1:9/ok"])
+        .assert()
+        .code(2)
+        .stderr(contains("未知命令"));
 }
 
 /// 例 4（M2.3）：--only 越界 → 可读中文错误 + exit 1

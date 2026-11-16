@@ -1,3 +1,4 @@
+use crate::error::RupostError;
 use crate::parser::parse_document_by_path;
 use crate::web::server::AppState;
 use crate::web::types::{ApiResponse, SaveFileRequest, SaveFileResponse};
@@ -47,7 +48,7 @@ pub async fn save_file_handler(
         ),
         // 安全拦截（目录穿越/隐藏文件/扩展名白名单）精准映射 403，其余存储错误保持 400
         Err(e) => {
-            let status = if matches!(e, crate::error::RupostError::SecurityViolation(_)) {
+            let status = if matches!(e, RupostError::SecurityViolation(_)) {
                 StatusCode::FORBIDDEN
             } else {
                 StatusCode::BAD_REQUEST

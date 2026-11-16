@@ -1,3 +1,4 @@
+use crate::error::RupostError;
 use crate::parser::parse_document_by_path;
 use crate::variable::config::ConfigLoader;
 use crate::web::server::AppState;
@@ -95,7 +96,7 @@ pub async fn create_file_handler(
             })),
         ),
         Err(e) => {
-            let status = if matches!(e, crate::error::RupostError::SecurityViolation(_)) {
+            let status = if matches!(e, RupostError::SecurityViolation(_)) {
                 StatusCode::FORBIDDEN
             } else if e.to_string().contains("already exists") {
                 StatusCode::CONFLICT

@@ -1,6 +1,6 @@
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// 通用 API 包装结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,7 +239,7 @@ pub struct ExportBlockResponse {
 /// 当前浏览器会话状态摘要（仅限当前 rupost_session）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStateResponse {
-    pub captured_variables: std::collections::BTreeMap<String, String>,
+    pub captured_variables: BTreeMap<String, String>,
     pub has_cookie_state: bool,
 }
 

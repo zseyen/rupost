@@ -1,6 +1,7 @@
 use crate::mock::compiler::MockCompiler;
 use crate::mock::variant::{CompareOp, ConditionSource};
 use crate::parser::MarkdownFileParser;
+use crate::utils::jsonpath::JsonPathResolver;
 use crate::web::server::AppState;
 use crate::web::types::{
     ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse,
@@ -86,7 +87,7 @@ pub async fn simulate_mock_handler(
                         serde_json::from_str::<serde_json::Value>(body_str)
                             .ok()
                             .and_then(|json| {
-                                crate::utils::jsonpath::JsonPathResolver::resolve(&json, &cond.key)
+                                JsonPathResolver::resolve(&json, &cond.key)
                                     .map(|v| match v {
                                         serde_json::Value::String(s) => s.clone(),
                                         other => other.to_string(),

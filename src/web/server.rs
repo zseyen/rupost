@@ -3,6 +3,7 @@ use crate::RupostError;
 use crate::http::url::is_loopback_host;
 use crate::web::assets::{AssetProvider, EmbeddedAssetProvider};
 use crate::web::handlers;
+use crate::web::session::WebSessionStore;
 use crate::web::store::{DocumentStore, LocalFsDocumentStore};
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Path as AxumPath, Request, State};
@@ -12,7 +13,10 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use std::path::PathBuf;
+use std::result::Result as StdResult;
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tower_http::cors::CorsLayer;
 
 /// Web 工作台配置
 #[derive(Clone)]
@@ -47,15 +51,15 @@ pub struct AppState {
     pub store: Arc<dyn DocumentStore>,
     pub assets: Arc<dyn AssetProvider>,
     pub readonly: bool,
-    pub working_dir: std::path::PathBuf,
+    pub working_dir: PathBuf,
     pub default_env: Option<String>,
     pub allowed_hosts: Vec<String>,
     /// R-4（免重填）+ WP-1（P0 隔离）：按浏览器会话隔离的执行态资产
     /// （cookie 桥 + 捕获变量；进程内存储，`Cookie: rupost_session=<opaque>`
     /// 划分边界，跨客户端零共享；--dev 宽松 CORS 不构成共享身份的理由）
-    pub sessions: Arc<crate::web::session::WebSessionStore>,
+    pub sessions: Arc<WebSessionStore>,
     /// WP-R2：Web 复现包输出根（服务端管辖路径，客户端零路径输入）
-    pub incident_root: std::path::PathBuf,
+    pub incident_root: PathBuf,
 }
 
 /// 检查 Host 标头是否属于安全白名单（本地基础名单 + 用户自定义名单，防御 DNS Rebinding）
@@ -86,7 +90,7 @@ async fn host_guard_middleware(
     State(state): State<AppState>,
     req: Request,
     next: Next,
-) -> std::result::Result<Response, (StatusCode, &'static str)> {
+) -> StdResult<Response, (StatusCode, &'static str)> {
     // 1. RFC 9112 契约：HTTP/1.1 请求必须携带 Host 标头，缺失即拒绝（杜绝 HTTP/1.0 绕过）
     let Some(host_val) = req.headers().get(HOST) else {
         return Err((StatusCode::BAD_REQUEST, "Missing Host header"));
@@ -107,7 +111,7 @@ async fn host_guard_middleware(
 
 /// 构造统一的 Web Router
 pub fn create_web_router(config: WebServerConfig) -> Router {
-    let cors = config.dev.then(tower_http::cors::CorsLayer::permissive);
+    let cors = config.dev.then(CorsLayer::permissive);
     let incident_root = config.working_dir.join(".rupost").join("incidents");
     let state = AppState {
         store: config.store,
@@ -116,7 +120,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         working_dir: config.working_dir,
         default_env: config.default_env,
         allowed_hosts: config.allowed_hosts,
-        sessions: Arc::new(crate::web::session::WebSessionStore::default()),
+        sessions: Arc::new(WebSessionStore::default()),
         incident_root,
     };
 
@@ -202,7 +206,7 @@ pub async fn run_web_server(config: WebServerConfig, host: &str, port: u16) -> R
     }
     let app = create_web_router(config);
     let addr = format!("{}:{}", host, port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = TcpListener::bind(&addr).await?;
     println!("\n  🚀 rupost 活文档工作台启动成功");
     println!("  ➜  地址: http://{}", addr);
     println!("  ➜  按 Ctrl+C 停止服务\n");

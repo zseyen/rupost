@@ -1,4 +1,6 @@
 use crate::diagnostics::{BufferedWarningSink, WarningSink};
+use crate::history::create_incident_bundle;
+use crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES;
 use crate::parser::parse_document_by_path;
 use crate::plugin::DiscoverOptions;
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
@@ -8,7 +10,7 @@ use crate::runner::interactive_session::{
     backfill_session_vars, export_session_cookies, harvest_session_deltas, import_session_cookies,
 };
 use crate::security::fs::env_flag_enabled;
-use crate::utils::path_guard::is_http_doc;
+use crate::utils::path_guard::{is_http_doc, normalize_posix_path};
 use crate::variable::{ConfigLoader, PluginTomlConfig, VariableContext, WorkspaceConfig};
 use crate::web::server::AppState;
 use crate::web::session::{SessionHandle, cookie_header_of, session_set_cookie_value};
@@ -21,9 +23,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::{HeaderMap, HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
+use chrono::Utc;
 use std::collections::HashMap;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::task::spawn_blocking;
+use uuid::Uuid;
 
 /// WP-R7：Web 复现包保留上限——创建前裁剪最旧（安全分析残余收口；CLI 通道
 /// 是用户显式路径，不做保留策略）。并发双跑可轻微超上限：无锁容差，
@@ -43,11 +50,11 @@ fn is_server_named_incident(name: &str) -> bool {
 }
 
 /// 匹配目录数 >= max 时按名称升序（即时间序）删除最旧
-fn prune_incident_dirs(root: &std::path::Path, max: usize) {
+fn prune_incident_dirs(root: &Path, max: usize) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
-    let mut named: Vec<std::ffi::OsString> = entries
+    let mut named: Vec<OsString> = entries
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.metadata().map(|m| m.is_dir()).unwrap_or(false)
@@ -71,9 +78,9 @@ fn prune_incident_dirs(root: &std::path::Path, max: usize) {
 /// B3（WP-2026-11-14-01）：请求覆盖 > 工作区 toml [plugins] > 默认 的合并（单点 SSOT，
 /// run_block/run_suite 共用，直接基于 `WorkspaceConfig.plugins` 叠加，避免二次读盘与 `current_dir` 漂移）。
 fn apply_plugin_overrides(
-    mut cfg: crate::variable::PluginTomlConfig,
-    overrides: Option<&crate::web::types::PluginOverrides>,
-) -> crate::variable::PluginTomlConfig {
+    mut cfg: PluginTomlConfig,
+    overrides: Option<&PluginOverrides>,
+) -> PluginTomlConfig {
     if let Some(ov) = overrides {
         if let Some(v) = ov.allow_missing_plugins {
             cfg.allow_missing_plugins = v;
@@ -385,7 +392,7 @@ pub async fn run_suite_handler(
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
     // B3：请求覆盖 > toml [plugins] > 默认（接入 WorkspaceConfig 与 BufferedWarningSink）
-    let start_time = std::time::Instant::now();
+    let start_time = Instant::now();
     let (executor, plugin_cfg, sink) =
         build_web_executor(&state.working_dir, req.plugin_overrides.as_ref());
     for w in sink.messages() {
@@ -447,27 +454,25 @@ pub async fn run_suite_handler(
     if req.incident == Some(true) && failed > 0 {
         let bundle_name = format!(
             "{}-{}",
-            chrono::Utc::now().format("%Y%m%dT%H%M%S"),
-            &uuid::Uuid::new_v4().simple().to_string()[..8],
+            Utc::now().format("%Y%m%dT%H%M%S"),
+            &Uuid::new_v4().simple().to_string()[..8],
         );
         let target = state.incident_root.join(&bundle_name);
-        let rel_display = crate::utils::path_guard::normalize_posix_path(
-            std::path::Path::new(".rupost/incidents").join(&bundle_name),
-        );
-        let batch = vec![(std::path::PathBuf::from(&req.path), results)];
+        let rel_display = normalize_posix_path(Path::new(".rupost/incidents").join(&bundle_name));
+        let batch = vec![(PathBuf::from(&req.path), results)];
         let resolved_paths = vec![req.path.clone()];
         let env_owned = target_env.map(str::to_string);
         let incident_root_for_prune = state.incident_root.clone();
 
-        let bundle_res = tokio::task::spawn_blocking(move || {
+        let bundle_res = spawn_blocking(move || {
             // WP-R7：创建前裁剪最旧（32 上限；并发容差见常量注释）
             prune_incident_dirs(&incident_root_for_prune, MAX_INCIDENT_BUNDLES);
-            crate::history::create_incident_bundle(
+            create_incident_bundle(
                 &batch,
                 &resolved_paths,
                 env_owned.as_deref(),
                 &[],
-                crate::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
+                DEFAULT_MAX_SNAPSHOT_BODY_BYTES,
                 &target,
             )
         })

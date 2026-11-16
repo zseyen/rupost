@@ -6,6 +6,8 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::result::Result as StdResult;
+use tokio::net::lookup_host;
 use url::Url;
 
 /// 判断 IP 是否属于内网、回环、链路本地（如云元数据 169.254.169.254）或多播/未指定地址
@@ -46,7 +48,7 @@ pub async fn validate_outbound_url(
     raw_url: &str,
     allowed_schemes: &[&str],
     allowed_hosts: &[String],
-) -> std::result::Result<Url, String> {
+) -> StdResult<Url, String> {
     let parsed = Url::parse(raw_url.trim()).map_err(|e| format!("Invalid URL: {}", e))?;
     if !allowed_schemes.contains(&parsed.scheme()) {
         return Err(format!(
@@ -88,7 +90,7 @@ pub async fn validate_outbound_url(
 
     // DNS 解析预检：若解析结果包含受限 IP，阻断 DNS Rebinding
     if let Some(port) = parsed.port_or_known_default()
-        && let Ok(addrs) = tokio::net::lookup_host((host_clean, port)).await
+        && let Ok(addrs) = lookup_host((host_clean, port)).await
     {
         for addr in addrs {
             if is_restricted_ip(addr.ip()) {

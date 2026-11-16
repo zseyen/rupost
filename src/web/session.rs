@@ -12,6 +12,8 @@
 //! - 无 Cookie / 未知 ID / 非法格式 / 过期一律等价新会话，不向客户端泄露内部原因；
 //! - 绝不跨 `.await` 持锁：load 返回克隆快照供执行，执行完成后仅短临界区合并增量。
 
+use axum::http::HeaderMap;
+use axum::http::header::COOKIE;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -81,10 +83,8 @@ pub fn session_set_cookie_value(session_id: &str) -> String {
 }
 
 /// 从请求头提取 Cookie 字符串（SSOT：run / session 处理器共用）
-pub fn cookie_header_of(headers: &axum::http::HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
+pub fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
+    headers.get(COOKIE).and_then(|v| v.to_str().ok())
 }
 
 impl WebSessionStore {

@@ -1,4 +1,5 @@
 use crate::error::RupostError;
+use crate::mock::matcher::SwappableMatcher;
 use crate::mock::server::axum_adapter::serve_matcher_with_shutdown;
 use crate::mock::server::build_mock_matcher;
 use crate::security::PathSandbox;
@@ -23,6 +24,7 @@ const SKIP_SCAN_DIRS: &[&str] = &["target", "node_modules", "benches"];
 
 struct RunningMockEntry {
     info: MockServerInfo,
+    swappable: Arc<SwappableMatcher>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
@@ -158,12 +160,14 @@ impl WebMockManager {
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let matcher_arc = Arc::new(matcher);
+        let swappable = Arc::new(SwappableMatcher::new(Arc::new(matcher)));
+        let matcher_for_task = Arc::clone(&swappable);
         let task = tokio::spawn(async move {
-            let _ = serve_matcher_with_shutdown(listener, matcher_arc, enable_cors, async move {
-                let _ = shutdown_rx.await;
-            })
-            .await;
+            let _ =
+                serve_matcher_with_shutdown(listener, matcher_for_task, enable_cors, async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
         });
 
         let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
@@ -171,6 +175,7 @@ impl WebMockManager {
             id,
             RunningMockEntry {
                 info: info.clone(),
+                swappable,
                 shutdown_tx: Some(shutdown_tx),
                 task,
             },
@@ -179,12 +184,12 @@ impl WebMockManager {
         Ok(info)
     }
 
-    pub fn stop_server(
-        &self,
+    fn find_server_key(
+        guard: &HashMap<String, RunningMockEntry>,
         id: Option<&str>,
         port: Option<u16>,
-    ) -> Result<MockServerInfo, MockManagerError> {
-        let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        action: &str,
+    ) -> Result<String, MockManagerError> {
         let target_id = if let Some(id_val) = id {
             if guard.contains_key(id_val) {
                 Some(id_val.to_string())
@@ -199,16 +204,71 @@ impl WebMockManager {
         } else {
             return Err(MockManagerError::new(
                 StatusCode::BAD_REQUEST,
-                "Provide either 'id' or 'port' to stop a mock server",
+                format!("Provide either 'id' or 'port' to {action} a mock server"),
             ));
         };
 
-        let Some(key) = target_id else {
-            return Err(MockManagerError::new(
-                StatusCode::NOT_FOUND,
-                "Running mock server not found",
-            ));
+        target_id.ok_or_else(|| {
+            MockManagerError::new(StatusCode::NOT_FOUND, "Running mock server not found")
+        })
+    }
+
+    pub fn reload_server(
+        &self,
+        working_dir: &Path,
+        id: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<MockServerInfo, MockManagerError> {
+        let (key, file_path, swappable) = {
+            let guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+            let key = Self::find_server_key(&guard, id, port, "reload")?;
+            let entry = &guard[&key];
+            (key, entry.info.file_path.clone(), Arc::clone(&entry.swappable))
         };
+
+        // 锁外校验沙箱并重新编译；编译失败保留旧 Matcher 不中断原端口服务
+        let sandbox = PathSandbox::new(working_dir)
+            .with_extensions(LIVE_DOC_EXTENSIONS)
+            .allow_hidden(false);
+        let safe_path = sandbox.resolve_safe_path(&file_path).map_err(|e| {
+            let status = if matches!(e, RupostError::SecurityViolation(_)) {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            MockManagerError::new(status, e.to_string())
+        })?;
+        let safe_path_str = safe_path.to_string_lossy().to_string();
+        let (new_matcher, route_count) = build_mock_matcher(&safe_path_str).map_err(|e| {
+            MockManagerError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Failed to compile mock: {e}"),
+            )
+        })?;
+        if route_count == 0 {
+            return Err(MockManagerError::new(
+                StatusCode::BAD_REQUEST,
+                format!("No @mock routes found in {file_path}"),
+            ));
+        }
+
+        swappable.swap(Arc::new(new_matcher));
+
+        let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = guard.get_mut(&key).ok_or_else(|| {
+            MockManagerError::new(StatusCode::NOT_FOUND, "Running mock server not found")
+        })?;
+        entry.info.route_count = route_count;
+        Ok(entry.info.clone())
+    }
+
+    pub fn stop_server(
+        &self,
+        id: Option<&str>,
+        port: Option<u16>,
+    ) -> Result<MockServerInfo, MockManagerError> {
+        let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+        let key = Self::find_server_key(&guard, id, port, "stop")?;
 
         let mut entry = guard.remove(&key).unwrap();
         if let Some(tx) = entry.shutdown_tx.take() {
@@ -278,6 +338,7 @@ fn scan_dir_for_mocks(root: &Path, dir: &Path, depth: usize, out: &mut Vec<MockR
                     method: card.method,
                     path: card.url,
                     raw_block: card.raw_block,
+                    variant_count: card.mock_variant_count,
                 });
             }
         }
@@ -351,5 +412,47 @@ not found
         let stopped = mgr.stop_server(Some(&info.id), None).unwrap();
         assert_eq!(stopped.port, info.port);
         assert!(mgr.list_servers().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_mock_manager_reload_server_swaps_and_preserves_on_error() {
+        let dir = TempDir::new().unwrap();
+        let doc = dir.path().join("reload.md");
+        std::fs::write(
+            &doc,
+            "```http\nGET /api/ver\n\n@mock-when query.v == 1\nHTTP/1.1 200 OK\n\nv1-cond\n\n@mock-default\nHTTP/1.1 200 OK\n\nv1\n```\n",
+        )
+        .unwrap();
+
+        let routes = discover_workspace_mock_routes(dir.path());
+        assert_eq!(routes[0].variant_count, 2);
+
+        let mgr = WebMockManager::default();
+        let info = mgr.start_server(dir.path(), "reload.md", Some(0), true).await.unwrap();
+        let resp1 = reqwest::get(format!("{}/api/ver", info.url)).await.unwrap();
+        assert_eq!(resp1.text().await.unwrap(), "v1");
+
+        // 改写磁盘为 v2 并原地重载（端口不变）
+        std::fs::write(
+            &doc,
+            "```http\nGET /api/ver\n\n@mock-default\nHTTP/1.1 200 OK\n\nv2\n```\n",
+        )
+        .unwrap();
+        let reloaded = mgr.reload_server(dir.path(), Some(&info.id), None).unwrap();
+        assert_eq!(reloaded.port, info.port);
+        let resp2 = reqwest::get(format!("{}/api/ver", info.url)).await.unwrap();
+        assert_eq!(resp2.text().await.unwrap(), "v2");
+
+        // 改写为非法表达式：reload 报错，旧服务继续返回 v2
+        std::fs::write(
+            &doc,
+            "```http\nGET /api/ver\n\n@mock-when invalid_syntax\nHTTP/1.1 200 OK\n\nbroken\n```\n",
+        )
+        .unwrap();
+        assert!(mgr.reload_server(dir.path(), Some(&info.id), None).is_err());
+        let resp3 = reqwest::get(format!("{}/api/ver", info.url)).await.unwrap();
+        assert_eq!(resp3.text().await.unwrap(), "v2");
+
+        let _ = mgr.stop_server(Some(&info.id), None);
     }
 }

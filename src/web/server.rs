@@ -155,6 +155,10 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
             "/mock/start",
             post(handlers::mock::start_mock_server_handler),
         )
+        .route(
+            "/mock/reload",
+            post(handlers::mock::reload_mock_server_handler),
+        )
         .route("/mock/stop", post(handlers::mock::stop_mock_server_handler))
         .route("/import", post(handlers::import::import_handler))
         .route("/import/curl", post(handlers::import::import_curl_handler))

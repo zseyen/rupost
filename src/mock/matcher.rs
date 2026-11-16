@@ -2,6 +2,7 @@ use crate::mock::trie::{RouteSegment, TrieNode};
 use crate::mock::variant::{EvalContext, MockVariant};
 use crate::variable::{VariableContext, VariableResolver};
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct MockRequest {
@@ -22,6 +23,31 @@ pub struct MockResponse {
 
 pub trait MockMatcher: Send + Sync {
     fn match_request(&self, req: &MockRequest) -> Option<MockResponse>;
+}
+
+/// 支持运行时原子替换内部 Matcher 的线程安全包装器（用于 Web 原地热重载）
+pub struct SwappableMatcher {
+    inner: RwLock<Arc<dyn MockMatcher>>,
+}
+
+impl SwappableMatcher {
+    pub fn new(initial: Arc<dyn MockMatcher>) -> Self {
+        Self {
+            inner: RwLock::new(initial),
+        }
+    }
+
+    pub fn swap(&self, next: Arc<dyn MockMatcher>) {
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        *guard = next;
+    }
+}
+
+impl MockMatcher for SwappableMatcher {
+    fn match_request(&self, req: &MockRequest) -> Option<MockResponse> {
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        guard.match_request(req)
+    }
 }
 
 pub struct TrieRouteMatcher {

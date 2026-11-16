@@ -223,6 +223,8 @@ pub struct HttpCardDto {
     pub body: Option<String>,
     pub directives: Vec<String>,
     pub has_mock: bool,
+    #[serde(default)]
+    pub mock_variant_count: usize,
     pub is_websocket: bool,
     pub raw_block: String,
 }
@@ -242,6 +244,8 @@ pub struct MockRouteItemDto {
     pub method: String,
     pub path: String,
     pub raw_block: String,
+    #[serde(default)]
+    pub variant_count: usize,
 }
 
 /// 运行中的 Web 托管 Mock 实例信息
@@ -267,6 +271,15 @@ pub struct StartMockRequest {
 /// 停止托管 Mock 服务请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopMockRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
+/// 原地重载托管 Mock 服务请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReloadMockRequest {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]

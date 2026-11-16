@@ -6,8 +6,8 @@ use crate::variable::{VariableContext, VariableResolver};
 use crate::web::mock_manager::discover_workspace_mock_routes;
 use crate::web::server::AppState;
 use crate::web::types::{
-    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse, StartMockRequest,
-    StopMockRequest,
+    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse, ReloadMockRequest,
+    StartMockRequest, StopMockRequest,
 };
 use axum::Json;
 use axum::extract::State;
@@ -221,6 +221,29 @@ pub async fn stop_mock_server_handler(
     }
 
     match state.mock_manager.stop_server(req.id.as_deref(), req.port) {
+        Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
+        Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
+}
+
+/// 原地热重载托管 Mock HTTP 服务（只读模式禁止，编译失败保留旧路由）
+pub async fn reload_mock_server_handler(
+    State(state): State<AppState>,
+    Json(req): Json<ReloadMockRequest>,
+) -> impl IntoResponse {
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "Reloading mock servers is disabled in read-only mode",
+            )),
+        );
+    }
+
+    match state
+        .mock_manager
+        .reload_server(&state.working_dir, req.id.as_deref(), req.port)
+    {
         Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
         Err(err) => (err.status, Json(ApiResponse::err(err.message))),
     }

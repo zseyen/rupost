@@ -581,3 +581,69 @@ test('parseKvInput parses JSON and line-based key:value / key=value', () => {
   });
   assert.deepEqual(app.parseKvInput('role=admin\npage=2'), { role: 'admin', page: '2' });
 });
+
+test('renderSessionTab renders masked session variables', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  const container = getOrCreateElement('debug-output');
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/session') {
+      return {
+        json: async () => ({
+          success: true,
+          data: {
+            has_cookie_state: true,
+            captured_variables: { user_id: '42', token: '***' },
+          },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.renderSessionTab(container);
+  assert.match(container.innerHTML, /\[SESSION STATE\]/);
+  assert.match(container.innerHTML, /user_id/);
+  assert.match(container.innerHTML, /\*\*\*/);
+});
+
+test('runDiagnoseForUrl formats Duration {secs, nanos} and shows 403 SSRF hint', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+  const debugEl = getOrCreateElement('debug-output');
+
+  global.fetch = async () => ({
+    status: 200,
+    json: async () => ({
+      success: true,
+      data: {
+        url: 'https://example.com',
+        dns_lookup_duration: { secs: 0, nanos: 12000000 },
+        tcp_connect_duration: { secs: 0, nanos: 24000000 },
+        tls_handshake_duration: null,
+        ttfb: { secs: 0, nanos: 50000000 },
+        total_duration: { secs: 0, nanos: 90000000 },
+        http_status: 200,
+        http_version: 'HTTP/1.1',
+        resolved_ips: ['93.184.216.34'],
+      },
+    }),
+  });
+
+  await app.runDiagnoseForUrl('https://example.com');
+  assert.match(debugEl.innerHTML, /12\.0 ms/);
+  assert.match(debugEl.innerHTML, /93\.184\.216\.34/);
+
+  global.fetch = async () => ({
+    status: 403,
+    json: async () => ({
+      success: false,
+      error: 'Blocked by SSRF guard',
+    }),
+  });
+  await app.runDiagnoseForUrl('http://127.0.0.1:8080');
+  assert.match(debugEl.innerHTML, /--allowed-hosts/);
+});

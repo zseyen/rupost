@@ -92,8 +92,8 @@ async function applyReadonlyState() {
   try {
     const res = await fetch('/api/v1/meta');
     const json = await res.json();
-    if (json.success && json.data && json.data.readonly) {
-      isReadonly = true;
+    isReadonly = Boolean(json.success && json.data && json.data.readonly);
+    if (isReadonly) {
       const badge = document.getElementById('readonly-badge');
       if (badge) badge.style.display = 'inline-block';
 
@@ -461,10 +461,20 @@ async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
       updateSummaryPill(json.data);
       renderInspectorTab(activeInspectorTab);
     } else {
-      debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[EXEC ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Execution failed')}</span></div>`;
+      const parsed = RupostCards.parseHttpBlock(rawBlock);
+      const diagBtn =
+        !isReadonly && parsed.url
+          ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-left:auto;" onclick="runDiagnoseForUrl('${escapeHtml(parsed.url)}')">[Diagnose]</button>`
+          : '';
+      debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[EXEC ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Execution failed')}</span>${diagBtn}</div>`;
     }
   } catch (e) {
-    debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+    const parsed = RupostCards.parseHttpBlock(rawBlock);
+    const diagBtn =
+      !isReadonly && parsed.url
+        ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-left:auto;" onclick="runDiagnoseForUrl('${escapeHtml(parsed.url)}')">[Diagnose]</button>`
+        : '';
+    debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span>${diagBtn}</div>`;
   } finally {
     if (triggerBtn) {
       triggerBtn.disabled = isReadonly;
@@ -581,6 +591,18 @@ function renderInspectorTab(tab) {
   const debugEl = document.getElementById('debug-output');
   if (tab === 'mock') {
     renderMockTab(debugEl);
+    return;
+  }
+  if (tab === 'session') {
+    renderSessionTab(debugEl);
+    return;
+  }
+  if (tab === 'history') {
+    renderHistoryTab(debugEl);
+    return;
+  }
+  if (tab === 'ws') {
+    renderWsTab(debugEl);
     return;
   }
   if (!lastDebugData) {
@@ -1522,6 +1544,212 @@ async function runMockSimulate() {
   }
 }
 
+// 11. P2 Observability: Session, History, Diagnose, WebSocket Bridge
+let activeWsBridge = null;
+let wsLogEntries = [];
+
+async function renderSessionTab(container) {
+  container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading session state...</div></div>';
+  try {
+    const res = await fetch('/api/v1/session');
+    const json = await res.json();
+    if (!json.success || !json.data) {
+      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Failed to load session')}</span></div>`;
+      return;
+    }
+    const { captured_variables: vars = {}, has_cookie_state } = json.data;
+    const keys = Object.keys(vars);
+    const rowsHtml = keys.length
+      ? `<table class="headers-table"><thead><tr><th>Variable</th><th>Value (Masked)</th></tr></thead><tbody>${keys
+          .map((k) => `<tr><td class="header-name">${escapeHtml(k)}</td><td class="header-value">${escapeHtml(vars[k])}</td></tr>`)
+          .join('')}</tbody></table>`
+      : '<div class="empty-hint"><div class="empty-text">No @capture variables recorded in current browser session yet.</div></div>';
+
+    container.innerHTML = `
+      <div class="timing-panel">
+        <div class="timing-header">
+          <span>[SESSION STATE]</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="switchInspectorTab('session')">[Refresh]</button>
+        </div>
+        <div style="font-family: var(--font-mono); font-size: 11px; margin-top: 6px; color: var(--text-secondary);">
+          Upstream Cookie Bridge: <strong>${has_cookie_state ? 'Active' : 'Empty'}</strong> | Variables: <strong>${keys.length}</strong>
+        </div>
+      </div>
+      ${rowsHtml}
+    `;
+  } catch (e) {
+    container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+  }
+}
+
+async function renderHistoryTab(container) {
+  if (isReadonly) {
+    container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">History access is disabled in read-only mode.</div></div>';
+    return;
+  }
+  container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading workspace history...</div></div>';
+  try {
+    const res = await fetch('/api/v1/history?limit=25');
+    const json = await res.json();
+    if (!json.success || !Array.isArray(json.data)) {
+      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Failed to load history')}</span></div>`;
+      return;
+    }
+    if (json.data.length === 0) {
+      container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EMPTY HISTORY]</div><div class="empty-text">No workspace-scoped history entries found.</div></div>';
+      return;
+    }
+    const itemsHtml = json.data
+      .map(
+        (item) => `
+        <li class="assertion-item">
+          <span class="assert-tag ${item.status < 400 ? 'pass' : 'fail'}">${escapeHtml(item.method)} ${item.status}</span>
+          <span class="assert-expr">${escapeHtml(item.url)}</span>
+          <span class="assert-detail">${item.duration_ms} ms | ${escapeHtml(item.source || '')}</span>
+        </li>`
+      )
+      .join('');
+    container.innerHTML = `
+      <div class="timing-panel">
+        <div class="timing-header">
+          <span>[WORKSPACE HISTORY]</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="switchInspectorTab('history')">[Refresh]</button>
+        </div>
+      </div>
+      <ul class="assertions-list">${itemsHtml}</ul>
+    `;
+  } catch (e) {
+    container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+  }
+}
+
+async function runDiagnoseForUrl(targetUrl) {
+  const debugEl = document.getElementById('debug-output');
+  if (!debugEl) return;
+  if (isReadonly) {
+    debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">Diagnose is disabled in read-only mode.</div></div>';
+    return;
+  }
+  debugEl.innerHTML = `<div class="empty-hint"><div class="empty-icon">[DIAGNOSING]</div><div class="empty-text">Probing ${escapeHtml(targetUrl)}...</div></div>`;
+  try {
+    const res = await fetch('/api/v1/diagnose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: targetUrl }),
+    });
+    const json = await res.json();
+    if (!json.success || !json.data) {
+      const hint = res.status === 403 ? ' (If targeting a local host, pass --allowed-hosts)' : '';
+      debugEl.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[DIAGNOSE ERR]</span><span class="assert-expr">${escapeHtml((json.error || 'Diagnose failed') + hint)}</span></div>`;
+      return;
+    }
+    const r = json.data;
+    const certHtml = r.cert_info
+      ? `<div class="assertion-item"><span class="assert-tag pass">[TLS CERT]</span><span class="assert-expr">${escapeHtml(r.cert_info.subject)}</span><span class="assert-detail">Issuer: ${escapeHtml(r.cert_info.issuer)} | Days Left: ${r.cert_info.days_remaining}</span></div>`
+      : '';
+    const errHtml = r.connection_error
+      ? `<div class="assertion-item"><span class="assert-tag fail">[CONN ERR]</span><span class="assert-expr">${escapeHtml(r.connection_error)}</span></div>`
+      : '';
+    debugEl.innerHTML = `
+      <div class="timing-panel">
+        <div class="timing-header">
+          <span>[DIAGNOSE REPORT]</span>
+          <span>Total: ${RupostCards.formatDurationObj(r.total_duration)}</span>
+        </div>
+        <div style="font-family: var(--font-mono); font-size: 11px; margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+          <div>DNS: <strong>${RupostCards.formatDurationObj(r.dns_lookup_duration)}</strong></div>
+          <div>TCP: <strong>${RupostCards.formatDurationObj(r.tcp_connect_duration)}</strong></div>
+          <div>TLS: <strong>${RupostCards.formatDurationObj(r.tls_handshake_duration)}</strong></div>
+          <div>TTFB: <strong>${RupostCards.formatDurationObj(r.ttfb)}</strong></div>
+          <div>HTTP: <strong>${r.http_status || '-'} (${escapeHtml(r.http_version || '-')})</strong></div>
+          <div>IPs: <strong>${escapeHtml((r.resolved_ips || []).join(', ') || '-')}</strong></div>
+        </div>
+      </div>
+      ${certHtml}
+      ${errHtml}
+    `;
+  } catch (e) {
+    debugEl.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+  }
+}
+
+function renderWsTab(container) {
+  if (isReadonly) {
+    container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">WebSocket bridge is disabled in read-only mode.</div></div>';
+    return;
+  }
+  const connected = activeWsBridge && activeWsBridge.readyState === 1;
+  const logsHtml = wsLogEntries
+    .map(
+      (entry) => `
+      <li class="assertion-item">
+        <span class="assert-tag ${entry.dir === 'IN' ? 'pass' : entry.dir === 'ERR' ? 'fail' : ''}">[${escapeHtml(entry.dir)}]</span>
+        <span class="assert-expr">${escapeHtml(entry.text)}</span>
+      </li>`
+    )
+    .join('');
+
+  container.innerHTML = `
+    <div class="mock-probe-form">
+      <div class="mock-probe-row">
+        <input id="ws-bridge-url" class="mock-input" type="text" placeholder="wss://echo.websocket.events" value="wss://echo.websocket.events" />
+        <button type="button" class="btn ${connected ? 'btn-secondary' : 'btn-primary'}" onclick="${connected ? 'disconnectWsBridge()' : 'connectWsBridge()'}">${connected ? 'Disconnect' : 'Connect'}</button>
+      </div>
+      <div class="mock-probe-row">
+        <input id="ws-bridge-msg" class="mock-input" type="text" placeholder="Message frame to send..." ${connected ? '' : 'disabled'} />
+        <button type="button" class="btn btn-accent" onclick="sendWsBridgeFrame()" ${connected ? '' : 'disabled'}>Send</button>
+      </div>
+    </div>
+    <ul class="assertions-list">${logsHtml}</ul>
+  `;
+}
+
+function appendWsLog(dir, text) {
+  wsLogEntries.push({ dir, text });
+  if (wsLogEntries.length > 100) wsLogEntries.shift();
+  if (activeInspectorTab === 'ws') {
+    renderWsTab(document.getElementById('debug-output'));
+  }
+}
+
+function connectWsBridge() {
+  const urlEl = document.getElementById('ws-bridge-url');
+  const targetUrl = urlEl ? urlEl.value.trim() : '';
+  if (!targetUrl) return;
+  if (activeWsBridge) activeWsBridge.close();
+
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const bridgeUrl = `${proto}//${window.location.host}/api/v1/ws/bridge?url=${encodeURIComponent(targetUrl)}`;
+  const ws = new WebSocket(bridgeUrl);
+  activeWsBridge = ws;
+
+  ws.onopen = () => appendWsLog('SYS', `Connected bridge -> ${targetUrl}`);
+  ws.onmessage = (ev) => appendWsLog('IN', String(ev.data));
+  ws.onerror = () => appendWsLog('ERR', 'WebSocket bridge error (check SSRF / allowed-hosts)');
+  ws.onclose = () => {
+    appendWsLog('SYS', 'Bridge closed');
+    activeWsBridge = null;
+    if (activeInspectorTab === 'ws') renderWsTab(document.getElementById('debug-output'));
+  };
+}
+
+function disconnectWsBridge() {
+  if (activeWsBridge) {
+    activeWsBridge.close();
+    activeWsBridge = null;
+  }
+}
+
+function sendWsBridgeFrame() {
+  const msgEl = document.getElementById('ws-bridge-msg');
+  const msg = msgEl ? msgEl.value : '';
+  if (activeWsBridge && activeWsBridge.readyState === 1 && msg) {
+    activeWsBridge.send(msg);
+    appendWsLog('OUT', msg);
+    if (msgEl) msgEl.value = '';
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     applyReadonlyState,
@@ -1545,6 +1773,9 @@ if (typeof module !== 'undefined' && module.exports) {
     refreshExportCommand,
     runMockSimulate,
     parseKvInput,
+    renderSessionTab,
+    renderHistoryTab,
+    runDiagnoseForUrl,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },

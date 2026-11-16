@@ -190,7 +190,10 @@ impl HistoryStorage {
         chunk_size: usize,
     ) -> Result<Vec<HistoryEntry>> {
         let mut pos = file.seek(SeekFrom::End(0)).map_err(RupostError::IoError)?;
-        let mut collected = Vec::with_capacity(n);
+        // 预分配上限与用户可控 n 解耦（审查 P1-5：`--limit usize::MAX` 此前
+        // capacity overflow abort；实际收集量仍由 n 与文件行数双重约束，
+        // 预分配只是优化手段，cap 不改变语义）
+        let mut collected = Vec::with_capacity(n.min(4096));
         // 逆向暂存未遇到 '\n' 的尾部块（由后向前存放），避免单条大行反复 O(K^2) 拷贝
         let mut pending_tail_chunks: Vec<Vec<u8>> = Vec::new();
         let chunk_size = chunk_size.max(1);

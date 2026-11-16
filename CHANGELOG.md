@@ -6,6 +6,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **解析器选择边界修复（WP-P2c）**：`GET url --verbose` 等旗标混入形态此前误切 curl 解析器（方法 token 被当 URL 吞掉）——现按"方法前置"判定（首 token 为标准 HTTP 方法 → httpie 解析器，未知旗标容忍），旗标前置仍走根路由裁决 exit 2（`fix(parser,cli)` 5a290e05）。
+
+### Added
+
+- **测试基建与 CI 扩展**：`tests/binary_contract_test.rs`（assert_cmd 形态二进制契约 9 例）、`tests/binary_output_golden_test.rs`（ast/validate 黄金精确断言）、`.config/nextest.toml`（optional 试点）、`ci.yml` 新增 `smoke-bash` / `e2e-pytest` / `nextest-pilot` 三个 job（`--contract-baseline` 契约漂移基线已于 `[0.4.0]` 登记，此处去重）。
+
 ## [0.4.0] - 2026-11-15
 
 ### Added

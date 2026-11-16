@@ -94,8 +94,8 @@ function toggleTheme() {
 async function applyReadonlyState() {
   try {
     const res = await fetch('/api/v1/meta');
-    const json = await res.json();
-    isReadonly = Boolean(json.success && json.data && json.data.readonly);
+    const json = await safeReadJson(res);
+    isReadonly = Boolean(json && json.success && json.data && json.data.readonly);
     if (isReadonly) {
       const badge = document.getElementById('readonly-badge');
       if (badge) badge.style.display = 'inline-block';
@@ -124,8 +124,8 @@ async function loadEnvs() {
   if (!selectEl) return;
   try {
     const res = await fetch('/api/v1/envs');
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       const envs = Array.isArray(json.data.environments) ? json.data.environments : [];
       const def = json.data.default_env || '';
       selectEl.innerHTML = '';
@@ -160,8 +160,8 @@ async function loadFiles() {
   try {
     dirCache.clear();
     const res = await fetch('/api/v1/files');
-    const json = await res.json();
-    if (json.success && Array.isArray(json.data)) {
+    const json = await safeReadJson(res);
+    if (json && json.success && Array.isArray(json.data)) {
       allFiles = json.data;
 
       // 保留已展开目录的状态并刷新其子内容
@@ -170,8 +170,8 @@ async function loadFiles() {
           Array.from(expandedDirs).map(async (dirPath) => {
             try {
               const subRes = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
-              const subJson = await subRes.json();
-              if (subJson.success && Array.isArray(subJson.data)) {
+              const subJson = await safeReadJson(subRes);
+              if (subJson && subJson.success && Array.isArray(subJson.data)) {
                 dirCache.set(dirPath, subJson.data);
               } else {
                 expandedDirs.delete(dirPath);
@@ -228,8 +228,8 @@ async function toggleDir(dirPath) {
 
   try {
     const res = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
-    const json = await res.json();
-    if (json.success && Array.isArray(json.data)) {
+    const json = await safeReadJson(res);
+    if (json && json.success && Array.isArray(json.data)) {
       dirCache.set(dirPath, json.data);
       expandedDirs.add(dirPath);
     }
@@ -363,8 +363,8 @@ function filterFiles() {
 async function openFile(path) {
   try {
     const res = await fetch(`/api/v1/file?path=${encodeURIComponent(path)}`);
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       currentFilePath = path;
 
       const fileLabel = document.getElementById('active-file-label');
@@ -408,15 +408,16 @@ async function saveActiveFile() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: currentFilePath, content })
     });
-    const json = await res.json();
-    if (res.ok && json.success) {
+    const json = await safeReadJson(res);
+    if (res.ok && json && json.success) {
       statusEl.textContent = '[OK] Saved & Verified';
       statusEl.style.color = 'var(--accent-pass)';
       setTimeout(() => { statusEl.textContent = ''; }, 3000);
     } else {
-      statusEl.textContent = '[ERR] ' + (json.error || 'Syntax Guard Error');
+      const errMsg = (json && json.error) || `HTTP ${res.status}: Syntax Guard Error`;
+      statusEl.textContent = '[ERR] ' + errMsg;
       statusEl.style.color = 'var(--accent-fail)';
-      alert(`Save Rejected (Syntax Guard):\n${json.error}`);
+      alert(`Save Rejected (Syntax Guard):\n${errMsg}`);
     }
   } catch (e) {
     statusEl.textContent = '[ERR] Network Error';
@@ -460,8 +461,8 @@ async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       lastDebugData = json.data;
       updateSummaryPill(json.data);
       renderInspectorTab(activeInspectorTab);
@@ -471,7 +472,7 @@ async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
         !isReadonly && parsed.url
           ? `<button type="button" class="btn btn-secondary btn-sm" style="margin-left:auto;" onclick="runDiagnoseForUrl('${escapeHtml(parsed.url)}')">[Diagnose]</button>`
           : '';
-      debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[EXEC ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Execution failed')}</span>${diagBtn}</div>`;
+      debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[EXEC ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Execution failed`)}</span>${diagBtn}</div>`;
     }
   } catch (e) {
     const parsed = RupostCards.parseHttpBlock(rawBlock);
@@ -507,8 +508,8 @@ async function runSuite() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(suitePayload)
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       const suite = json.data;
       let html = `
         <div class="timing-panel">
@@ -981,8 +982,8 @@ async function submitImport() {
         generate_mock: generateMock
       })
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       const generatedCode = json.data.markdown_blocks.join('\n\n');
       insertIntoEditor(generatedCode);
       closeImportModal();
@@ -1200,9 +1201,9 @@ async function renderMarkdownPreview() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: editor.value || '' })
     });
-    const json = await res.json();
+    const json = await safeReadJson(res);
     if (seq !== renderSeq) return;
-    if (json.success && json.data) {
+    if (json && json.success && json.data) {
       lastRenderedExecBlocks = Array.isArray(json.data.executable_blocks)
         ? json.data.executable_blocks
         : [];
@@ -1412,13 +1413,7 @@ function initMarkdownPreviewEvents() {
 }
 
 function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return RupostCards.escapeHtml(str);
 }
 
 // 9. Block Export Modal (POST /api/v1/export)
@@ -1469,8 +1464,8 @@ async function refreshExportCommand() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       preEl.textContent = json.data.command || '';
       if (warnEl && Array.isArray(json.data.warnings) && json.data.warnings.length > 0) {
         warnEl.textContent = json.data.warnings.join(' | ');
@@ -1627,8 +1622,8 @@ async function runMockSimulate() {
         raw_block: rawBlock,
       }),
     });
-    const json = await res.json();
-    if (json.success && json.data) {
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
       mockDraft.lastResult = json.data;
     } else {
       mockDraft.lastResult = { error: json.error || 'Simulation failed' };
@@ -1650,9 +1645,9 @@ async function renderSessionTab(container) {
   container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading session state...</div></div>';
   try {
     const res = await fetch('/api/v1/session');
-    const json = await res.json();
-    if (!json.success || !json.data) {
-      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Failed to load session')}</span></div>`;
+    const json = await safeReadJson(res);
+    if (!json || !json.success || !json.data) {
+      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load session`)}</span></div>`;
       return;
     }
     const { captured_variables: vars = {}, has_cookie_state } = json.data;
@@ -1688,9 +1683,9 @@ async function renderHistoryTab(container) {
   container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading workspace history...</div></div>';
   try {
     const res = await fetch('/api/v1/history?limit=25');
-    const json = await res.json();
-    if (!json.success || !Array.isArray(json.data)) {
-      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(json.error || 'Failed to load history')}</span></div>`;
+    const json = await safeReadJson(res);
+    if (!json || !json.success || !Array.isArray(json.data)) {
+      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load history`)}</span></div>`;
       return;
     }
     if (json.data.length === 0) {
@@ -1735,10 +1730,10 @@ async function runDiagnoseForUrl(targetUrl) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: targetUrl }),
     });
-    const json = await res.json();
-    if (!json.success || !json.data) {
+    const json = await safeReadJson(res);
+    if (!json || !json.success || !json.data) {
       const hint = res.status === 403 ? ' (If targeting a local host, pass --allowed-hosts)' : '';
-      debugEl.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[DIAGNOSE ERR]</span><span class="assert-expr">${escapeHtml((json.error || 'Diagnose failed') + hint)}</span></div>`;
+      debugEl.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[DIAGNOSE ERR]</span><span class="assert-expr">${escapeHtml(((json && json.error) || `HTTP ${res.status}: Diagnose failed`) + hint)}</span></div>`;
       return;
     }
     const r = json.data;

@@ -37,53 +37,12 @@ fn check_tofu_seen(tofu_cache: &Path, fingerprint: &str) -> bool {
 }
 
 fn record_tofu_approval(tofu_cache: &Path, fingerprint: &str) -> rupost::Result<()> {
-    use std::io::Write;
     if fingerprint.chars().any(|c| c.is_control()) {
         return Err(rupost::RupostError::SecurityViolation(
             "TOFU 指纹包含非法控制字符".to_string(),
         ));
     }
-    if let Some(parent) = tofu_cache.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        rupost::security::fs::ensure_private_dir(parent)?;
-    }
-    if std::fs::symlink_metadata(tofu_cache).is_ok()
-        && !rupost::security::fs::is_owner_only_regular_file(tofu_cache)
-    {
-        return Err(rupost::RupostError::SecurityViolation(format!(
-            "拒绝写入不可信 TOFU 缓存（非本人所属常规文件或权限过宽）: {}",
-            tofu_cache.display()
-        )));
-    }
-    #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(tofu_cache)?;
-        let meta = file.metadata()?;
-        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } {
-            return Err(rupost::RupostError::SecurityViolation(format!(
-                "TOFU 缓存文件属主或类型校验失败: {}",
-                tofu_cache.display()
-            )));
-        }
-        if meta.permissions().mode() & 0o077 != 0 {
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        file
-    };
-    #[cfg(not(unix))]
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(tofu_cache)?;
-    writeln!(file, "{fingerprint}")?;
-    Ok(())
+    rupost::security::fs::AtomicFileWriter::append_private_line(tofu_cache, fingerprint)
 }
 
 fn verify_or_prompt_tofu(

@@ -252,6 +252,65 @@ where
     result
 }
 
+/// 统一安全落盘写手：收口私有目录创建、Unix `0o600` / `O_NOFOLLOW` 校验与原子替换/安全追加。
+pub struct AtomicFileWriter;
+
+impl AtomicFileWriter {
+    /// 原子覆写私有文件（先写同目录 `0o600` 临时文件再 `rename` 覆盖）。
+    pub fn write_atomic(target: &Path, bytes: &[u8]) -> Result<()> {
+        if let Some(parent) = target.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            ensure_private_dir(parent)?;
+        }
+        write_private_file_atomic(target, bytes)
+    }
+
+    /// 向私有普通文件安全追加一行（Unix 强制 `O_NOFOLLOW` + `0o600` + 属主校验）。
+    pub fn append_private_line(target: &Path, line: &str) -> Result<()> {
+        use std::io::Write;
+        if let Some(parent) = target.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            ensure_private_dir(parent)?;
+        }
+        if std::fs::symlink_metadata(target).is_ok() && !is_owner_only_regular_file(target) {
+            return Err(RupostError::SecurityViolation(format!(
+                "拒绝写入不可信私有文件（非本人所属常规文件或权限过宽）: {}",
+                target.display()
+            )));
+        }
+        #[cfg(unix)]
+        let mut file = {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(target)?;
+            let meta = file.metadata()?;
+            if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } {
+                return Err(RupostError::SecurityViolation(format!(
+                    "私有文件属主或类型校验失败: {}",
+                    target.display()
+                )));
+            }
+            if meta.permissions().mode() & 0o077 != 0 {
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            file
+        };
+        #[cfg(not(unix))]
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(target)?;
+        writeln!(file, "{line}")?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

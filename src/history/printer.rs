@@ -1,5 +1,5 @@
 use super::gc;
-use super::storage::get_storage;
+use super::storage::HistoryStorage;
 use crate::Result;
 use crate::platform;
 use crate::utils::text::truncate_chars;
@@ -7,7 +7,7 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, Table};
 
 pub fn list_history(limit: usize, reverse: bool) -> Result<()> {
-    let storage = get_storage();
+    let storage = HistoryStorage::new();
     let mut entries = storage.tail(limit)?;
 
     if reverse {
@@ -43,7 +43,7 @@ pub fn list_history(limit: usize, reverse: bool) -> Result<()> {
 }
 
 pub fn show_history(target: &str) -> Result<()> {
-    let storage = get_storage();
+    let storage = HistoryStorage::new();
     let entries = storage.list()?;
     if entries.is_empty() {
         println!("No history entries found.");

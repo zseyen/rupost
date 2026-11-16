@@ -6,7 +6,6 @@ use crate::platform;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
@@ -251,12 +250,6 @@ impl HistoryStorage {
 
         Ok(())
     }
-}
-
-// Global instance helper if needed
-pub fn get_storage() -> &'static HistoryStorage {
-    static STORAGE: OnceLock<HistoryStorage> = OnceLock::new();
-    STORAGE.get_or_init(HistoryStorage::new)
 }
 
 // 兼容重导出：黑匣子/重放快照 I/O 与脱敏已按职责拆至 snapshot_io / snapshot_legacy / snapshot_mask

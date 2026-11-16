@@ -75,11 +75,6 @@ pub fn load_cache(cache_path: &Path) -> Option<RegistryCacheFile> {
 
 /// 原子化持久化保存到磁盘缓存文件（0700 私有目录 + 唯一临时文件 + 强制 0600 + rename）
 pub fn save_cache_atomic(cache: &RegistryCacheFile, target_file: &Path) -> Result<()> {
-    if let Some(parent) = target_file.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        crate::security::fs::ensure_private_dir(parent)?;
-    }
     let json_str = serde_json::to_string_pretty(cache)?;
-    crate::security::fs::write_private_file_atomic(target_file, json_str.as_bytes())
+    crate::security::fs::AtomicFileWriter::write_atomic(target_file, json_str.as_bytes())
 }

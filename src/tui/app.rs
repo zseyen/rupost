@@ -113,7 +113,7 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
         state.rebuild_visible_tree_nodes();
     }
     // 载入历史记录
-    state.history_list = crate::history::storage::get_storage()
+    state.history_list = crate::history::storage::HistoryStorage::new()
         .tail(100)
         .unwrap_or_default();
     state.history_list.reverse();
@@ -181,7 +181,7 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                     state.response_scroll = 0; // 请求结束重置滚动
 
                     // 从存储重新载入最新 100 条请求历史并倒序
-                    state.history_list = crate::history::storage::get_storage()
+                    state.history_list = crate::history::storage::HistoryStorage::new()
                         .tail(100)
                         .unwrap_or_default();
                     state.history_list.reverse();

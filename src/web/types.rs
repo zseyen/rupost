@@ -94,7 +94,7 @@ pub struct RunBlockResponse {
 pub use crate::importer::{ImportFormat, ImportRequest, ImportResponse, default_import_format};
 
 /// Mock 规则仿真探针入参
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MockSimulateRequest {
     pub method: String,
     pub path: String,
@@ -106,6 +106,8 @@ pub struct MockSimulateRequest {
     pub body: Option<String>,
     /// 待测试的 Markdown 代码块或变体规则描述
     pub raw_block: String,
+    #[serde(default)]
+    pub file_path: Option<String>,
 }
 
 /// 工作台元信息（前端只读态感知）
@@ -173,6 +175,14 @@ pub struct MockSimulateResponse {
     pub matched_variant_name: String,
     pub expected_status: u16,
     pub evaluations: Vec<ConditionEvaluation>,
+    #[serde(default)]
+    pub matched_pattern: Option<String>,
+    #[serde(default)]
+    pub captured_params: HashMap<String, String>,
+    #[serde(default)]
+    pub response_headers: HashMap<String, String>,
+    #[serde(default)]
+    pub response_body: Option<String>,
 }
 
 /// Markdown 渲染请求

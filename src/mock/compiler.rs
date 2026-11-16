@@ -31,7 +31,7 @@ impl MockCompiler {
                 continue;
             }
 
-            let path = req.url.clone();
+            let path = Self::extract_route_path(&req.url);
             let method = req.method_or_default().to_string();
 
             let mut variants = Vec::new();
@@ -78,6 +78,42 @@ impl MockCompiler {
             });
         }
         Ok(routes)
+    }
+
+    /// 纯词法提取规范化路由路径（保留 `:id` 与 `{id}`，不做 URL 百分号编码）：
+    /// 剥离 `?query`、`#fragment`、前导 `{{...}}` 变量前缀及 `scheme://host`。
+    pub fn extract_route_path(raw_url: &str) -> String {
+        let trimmed = raw_url.trim();
+        let without_frag = trimmed.split('#').next().unwrap_or(trimmed);
+        let without_query = without_frag.split('?').next().unwrap_or(without_frag).trim();
+
+        // 剥离前导模板变量（例如 "{{base_url}}/api/users/:id"）
+        let after_var = if let Some(rest) = without_query.strip_prefix("{{")
+            && let Some(end_brace) = rest.find("}}")
+        {
+            rest[end_brace + 2..].trim()
+        } else {
+            without_query
+        };
+
+        // 剥离 scheme://host（例如 "http://localhost:9000/api/orders/{id}"）
+        let path_part = if let Some(scheme_pos) = after_var.find("://") {
+            let after_scheme = &after_var[scheme_pos + 3..];
+            match after_scheme.find('/') {
+                Some(slash_pos) => &after_scheme[slash_pos..],
+                None => "/",
+            }
+        } else {
+            after_var
+        };
+
+        if path_part.is_empty() {
+            "/".to_string()
+        } else if path_part.starts_with('/') {
+            path_part.to_string()
+        } else {
+            format!("/{path_part}")
+        }
     }
 
     /// 将表达式解析为 VariantCondition
@@ -241,5 +277,25 @@ mod tests {
         assert!(routes[0].variants[0].condition.is_some());
         assert_eq!(routes[0].variants[1].status, 403);
         assert!(routes[0].variants[1].condition.is_none());
+    }
+
+    #[test]
+    fn test_extract_route_path_preserves_braces_and_strips_base_url() {
+        assert_eq!(
+            MockCompiler::extract_route_path("{{base_url}}/api/users/:id?debug=1#top"),
+            "/api/users/:id"
+        );
+        assert_eq!(
+            MockCompiler::extract_route_path("http://localhost:9000/api/orders/{id}?a=1"),
+            "/api/orders/{id}"
+        );
+        assert_eq!(
+            MockCompiler::extract_route_path("https://example.com"),
+            "/"
+        );
+        assert_eq!(
+            MockCompiler::extract_route_path("api/v1/ping?x=1"),
+            "/api/v1/ping"
+        );
     }
 }

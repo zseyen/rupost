@@ -326,6 +326,7 @@ Content-Type: application/json
         query: Default::default(),
         body: None,
         raw_block: mock_block.to_string(),
+        file_path: None,
     };
     let req = Request::builder()
         .header("host", "127.0.0.1")
@@ -355,6 +356,7 @@ Content-Type: application/json
         query: Default::default(),
         body: None,
         raw_block: mock_block.to_string(),
+        file_path: None,
     };
     let req = Request::builder()
         .header("host", "127.0.0.1")

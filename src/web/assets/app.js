@@ -1750,14 +1750,28 @@ function renderMockTab(container) {
           </li>`
         )
         .join('');
+      const isMatched = simResult.matched_variant_index !== null && simResult.matched_variant_index !== undefined;
+      const statusBadge = isMatched ? '[MATCHED]' : '[UNMATCHED]';
+      const paramsEntries = Object.entries(simResult.captured_params || {});
+      const paramsHtml = paramsEntries.length
+        ? `<div class="timing-panel"><div class="timing-header"><span>[PARAMS] ${paramsEntries.map(([k, v]) => `${escapeHtml(k)}=${escapeHtml(v)}`).join(', ')}</span></div></div>`
+        : '';
+      const bodyPreviewHtml = simResult.response_body !== null && simResult.response_body !== undefined
+        ? `<pre class="code-preview" style="margin-top:8px;">${escapeHtml(simResult.response_body)}</pre>`
+        : '';
+      const fallbackHint = isMatched
+        ? '<div class="empty-hint"><div class="empty-text">Matched default fallback variant (no conditions).</div></div>'
+        : '<div class="empty-hint"><div class="empty-text">No route or variant matched (404).</div></div>';
       resultHtml = `
         <div class="timing-panel">
           <div class="timing-header">
-            <span>[MATCHED] ${escapeHtml(simResult.matched_variant_name)}</span>
+            <span>${statusBadge} ${escapeHtml(simResult.matched_variant_name)}${simResult.matched_pattern ? ` (${escapeHtml(simResult.matched_pattern)})` : ''}</span>
             <span>HTTP ${simResult.expected_status}</span>
           </div>
         </div>
-        ${evalsHtml ? `<ul class="assertions-list">${evalsHtml}</ul>` : '<div class="empty-hint"><div class="empty-text">Matched default fallback variant (no conditions).</div></div>'}
+        ${paramsHtml}
+        ${evalsHtml ? `<ul class="assertions-list">${evalsHtml}</ul>` : fallbackHint}
+        ${bodyPreviewHtml}
       `;
     }
   }
@@ -1838,6 +1852,7 @@ async function runMockSimulate() {
         query: parseKvInput(mockDraft.query),
         body: mockDraft.body || null,
         raw_block: rawBlock,
+        file_path: mockDraft.file_path || null,
       }),
     });
     const json = await safeReadJson(res);

@@ -47,25 +47,6 @@ enum MockFileConfig {
     Snapshots(Vec<SnapshotEntry>),
 }
 
-fn extract_path(url_str: &str) -> String {
-    if let Ok(parsed) = url::Url::parse(url_str) {
-        parsed.path().to_string()
-    } else {
-        let path_with_query = if url_str.starts_with('/') {
-            url_str
-        } else if let Some(slash_pos) = url_str.find('/') {
-            &url_str[slash_pos..]
-        } else {
-            "/"
-        };
-        if let Some(q_pos) = path_with_query.find('?') {
-            path_with_query[..q_pos].to_string()
-        } else {
-            path_with_query.to_string()
-        }
-    }
-}
-
 /// 解析 mock 配置文件/文档，并启动 Mock 服务器
 pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> {
     let is_doc = is_live_doc(file_path);
@@ -115,7 +96,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
                     continue;
                 };
 
-                let path = extract_path(&s.request.url);
+                let path = MockCompiler::extract_route_path(&s.request.url);
                 let method = s.request.method.to_uppercase();
 
                 let condition = if let Ok(parsed) = url::Url::parse(&s.request.url) {

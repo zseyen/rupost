@@ -54,6 +54,18 @@ impl TrieRouteMatcher {
             },
         );
     }
+
+    /// 只读匹配路由并捕获路径参数（供 Web 仿真探针复用，避免双套匹配逻辑）
+    pub fn match_route_with_params(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Option<(&str, &[MockVariant], HashMap<String, String>)> {
+        let method_upper = method.to_uppercase();
+        let trie = self.routes.get(&method_upper)?;
+        let ((pattern, variants), params) = trie.match_path(path)?;
+        Some((pattern.as_str(), variants.as_slice(), params))
+    }
 }
 
 impl MockMatcher for TrieRouteMatcher {

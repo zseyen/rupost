@@ -145,10 +145,7 @@ impl DocumentStore for LocalFsDocumentStore {
     async fn create_document(&self, path: &str, content: &str) -> Result<usize> {
         let safe_path = self.document_sandbox().resolve_safe_path(path)?;
         if safe_path.exists() {
-            return Err(RupostError::Other(format!(
-                "File already exists: {}",
-                path
-            )));
+            return Err(RupostError::Other(format!("File already exists: {}", path)));
         }
         if let Some(parent) = safe_path.parent()
             && !parent.exists()

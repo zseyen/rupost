@@ -52,7 +52,10 @@ pub fn parsed_request_to_card_dto(req: &ParsedRequest, raw_block: String) -> Htt
         directives.push(format!("@assert {assert_expr}"));
     }
     if !req.metadata.mock_variants.is_empty() {
-        directives.push(format!("@mock ({} variants)", req.metadata.mock_variants.len()));
+        directives.push(format!(
+            "@mock ({} variants)",
+            req.metadata.mock_variants.len()
+        ));
     }
 
     HttpCardDto {
@@ -77,7 +80,10 @@ fn slice_raw_blocks(content: &str, requests: &[ParsedRequest]) -> Vec<String> {
 
     let mut start_indices = Vec::with_capacity(requests.len());
     for (i, req) in requests.iter().enumerate() {
-        let anchor = req.line_number.saturating_sub(1).min(lines.len().saturating_sub(1));
+        let anchor = req
+            .line_number
+            .saturating_sub(1)
+            .min(lines.len().saturating_sub(1));
         let floor = if i == 0 {
             0
         } else {
@@ -174,7 +180,10 @@ Accept: application/json
         assert_eq!(card.title, "get-profile");
         assert_eq!(card.method, "GET");
         assert_eq!(card.url, "{{base_url}}/v1/users/1");
-        assert!(card.body.is_none(), "空行后的 # @assert 不得被误认为 Request Body");
+        assert!(
+            card.body.is_none(),
+            "空行后的 # @assert 不得被误认为 Request Body"
+        );
         assert!(
             card.directives.iter().any(|d| d == "@assert status == 200"),
             "directives 应包含 @assert status == 200: {:?}",
@@ -199,7 +208,10 @@ Content-Type: application/json
 {\"ok\": true}
 ";
         let res = parse_http_document_to_cards(src).unwrap();
-        assert_eq!(res.variables.get("tenant").map(String::as_str), Some("east_01"));
+        assert_eq!(
+            res.variables.get("tenant").map(String::as_str),
+            Some("east_01")
+        );
         assert_eq!(res.cards.len(), 2);
         assert_eq!(res.cards[1].method, "POST");
         assert_eq!(res.cards[1].body.as_deref(), Some("{\"ok\": true}"));

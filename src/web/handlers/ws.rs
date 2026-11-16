@@ -62,7 +62,11 @@ async fn handle_ws_bridge(mut client_ws: WebSocket, target_url: String) {
         Err(err) => {
             let _ = client_ws
                 .send(Message::Text(
-                    format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::json!(err)).into(),
+                    format!(
+                        "{{\"type\":\"error\",\"error\":{}}}",
+                        serde_json::json!(err)
+                    )
+                    .into(),
                 ))
                 .await;
             let _ = client_ws.close().await;

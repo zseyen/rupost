@@ -1453,7 +1453,10 @@ async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
         .header("host", "127.0.0.1")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(ro_app.clone().oneshot(h_req).await.unwrap().status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        ro_app.clone().oneshot(h_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
 
     let d_req = Request::builder()
         .method("POST")
@@ -1462,7 +1465,10 @@ async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
         .header("content-type", "application/json")
         .body(Body::from(r#"{"url":"https://example.com"}"#))
         .unwrap();
-    assert_eq!(ro_app.clone().oneshot(d_req).await.unwrap().status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        ro_app.clone().oneshot(d_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
 
     // 2. 非只读模式下 SSRF 护栏拦截内网/元数据/非法协议
     let rw_app = create_web_router(WebServerConfig {
@@ -1474,9 +1480,14 @@ async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
         .uri("/api/v1/diagnose")
         .header("host", "127.0.0.1")
         .header("content-type", "application/json")
-        .body(Body::from(r#"{"url":"http://169.254.169.254/latest/meta-data/"}"#))
+        .body(Body::from(
+            r#"{"url":"http://169.254.169.254/latest/meta-data/"}"#,
+        ))
         .unwrap();
-    assert_eq!(rw_app.clone().oneshot(ssrf_req).await.unwrap().status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        rw_app.clone().oneshot(ssrf_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
 
     // 3. /history 在非只读下正常返回 200 数组
     let h_ok = Request::builder()
@@ -1485,7 +1496,10 @@ async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
         .header("host", "127.0.0.1")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(rw_app.clone().oneshot(h_ok).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        rw_app.clone().oneshot(h_ok).await.unwrap().status(),
+        StatusCode::OK
+    );
 
     // 4. /ws/bridge 在只读模式与 SSRF 地址下均返回 403 Forbidden（需带 WebSocket 升级头）
     let ws_ro_req = Request::builder()

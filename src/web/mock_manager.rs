@@ -120,7 +120,10 @@ impl WebMockManager {
 
         let safe_path_str = safe_path.to_string_lossy().to_string();
         let (matcher, route_count) = build_mock_matcher(&safe_path_str).map_err(|e| {
-            MockManagerError::new(StatusCode::BAD_REQUEST, format!("Failed to compile mock: {e}"))
+            MockManagerError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Failed to compile mock: {e}"),
+            )
         })?;
         if route_count == 0 {
             return Err(MockManagerError::new(
@@ -131,10 +134,7 @@ impl WebMockManager {
 
         let addr = format!("127.0.0.1:{bind_port}");
         let listener = TcpListener::bind(&addr).await.map_err(|e| {
-            MockManagerError::new(
-                StatusCode::CONFLICT,
-                format!("Failed to bind {addr}: {e}"),
-            )
+            MockManagerError::new(StatusCode::CONFLICT, format!("Failed to bind {addr}: {e}"))
         })?;
         let actual_port = listener
             .local_addr()
@@ -228,12 +228,7 @@ pub fn discover_workspace_mock_routes(working_dir: &Path) -> Vec<MockRouteItemDt
     routes
 }
 
-fn scan_dir_for_mocks(
-    root: &Path,
-    dir: &Path,
-    depth: usize,
-    out: &mut Vec<MockRouteItemDto>,
-) {
+fn scan_dir_for_mocks(root: &Path, dir: &Path, depth: usize, out: &mut Vec<MockRouteItemDto>) {
     if depth > MAX_SCAN_DEPTH {
         return;
     }

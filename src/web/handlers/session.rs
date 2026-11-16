@@ -87,9 +87,14 @@ mod tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let api_res: ApiResponse<SessionStateResponse> = serde_json::from_slice(&body).unwrap();
         let data = api_res.data.unwrap();
-        assert_eq!(data.captured_variables.get("user_id").map(String::as_str), Some("42"));
+        assert_eq!(
+            data.captured_variables.get("user_id").map(String::as_str),
+            Some("42")
+        );
         assert_ne!(
-            data.captured_variables.get("access_token").map(String::as_str),
+            data.captured_variables
+                .get("access_token")
+                .map(String::as_str),
             Some("secret-jwt-token")
         );
     }

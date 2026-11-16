@@ -329,10 +329,7 @@ mod tests {
         if let WsAction::Expect { captures, .. } = &actions[0] {
             assert_eq!(captures.len(), 1);
             assert_eq!(captures[0].name, "from_price");
-            assert_eq!(
-                captures[0].source,
-                CaptureSource::Body("price".to_string())
-            );
+            assert_eq!(captures[0].source, CaptureSource::Body("price".to_string()));
         } else {
             panic!("Expected Expect action");
         }

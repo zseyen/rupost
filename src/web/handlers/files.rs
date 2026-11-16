@@ -107,7 +107,10 @@ pub async fn create_file_handler(
             };
             (
                 status,
-                Json(ApiResponse::err(format!("Failed to create document: {}", e))),
+                Json(ApiResponse::err(format!(
+                    "Failed to create document: {}",
+                    e
+                ))),
             )
         }
     }
@@ -158,6 +161,9 @@ pub async fn list_envs_handler(State(state): State<AppState>) -> impl IntoRespon
 pub async fn parse_http_handler(Json(req): Json<ParseHttpRequest>) -> impl IntoResponse {
     match parse_http_document_to_cards(&req.content) {
         Ok(parsed) => (StatusCode::OK, Json(ApiResponse::ok(parsed))),
-        Err(err) => (StatusCode::UNPROCESSABLE_ENTITY, Json(ApiResponse::err(err))),
+        Err(err) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiResponse::err(err)),
+        ),
     }
 }

@@ -90,11 +90,10 @@ pub async fn simulate_mock_handler(
                         serde_json::from_str::<serde_json::Value>(body_str)
                             .ok()
                             .and_then(|json| {
-                                JsonPathResolver::resolve(&json, &cond.key)
-                                    .map(|v| match v {
-                                        serde_json::Value::String(s) => s.clone(),
-                                        other => other.to_string(),
-                                    })
+                                JsonPathResolver::resolve(&json, &cond.key).map(|v| match v {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                })
                             })
                     } else {
                         Some(body_str.to_string())
@@ -200,10 +199,7 @@ pub async fn stop_mock_server_handler(
         );
     }
 
-    match state
-        .mock_manager
-        .stop_server(req.id.as_deref(), req.port)
-    {
+    match state.mock_manager.stop_server(req.id.as_deref(), req.port) {
         Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
         Err(err) => (err.status, Json(ApiResponse::err(err.message))),
     }

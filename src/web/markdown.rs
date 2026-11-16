@@ -98,9 +98,13 @@ pub fn render_markdown_to_html(content: &str) -> RenderMarkdownResponse {
                     current_code_body.push_str(&text);
                 }
                 Event::End(TagEnd::CodeBlock) => {
-                    let html_block =
-                        build_code_block_html(&current_code_lang, &current_code_body, &mut executable_blocks);
-                    transformed_events.push(Event::Html(CowStr::Boxed(html_block.into_boxed_str())));
+                    let html_block = build_code_block_html(
+                        &current_code_lang,
+                        &current_code_body,
+                        &mut executable_blocks,
+                    );
+                    transformed_events
+                        .push(Event::Html(CowStr::Boxed(html_block.into_boxed_str())));
                     in_code_block = false;
                     current_code_lang.clear();
                     current_code_body.clear();
@@ -178,11 +182,7 @@ pub fn render_markdown_to_html(content: &str) -> RenderMarkdownResponse {
     }
 }
 
-fn build_code_block_html(
-    lang: &str,
-    code: &str,
-    executable_blocks: &mut Vec<String>,
-) -> String {
+fn build_code_block_html(lang: &str, code: &str, executable_blocks: &mut Vec<String>) -> String {
     let escaped_code = escape_html_text(code);
     let escaped_lang = escape_html_text(&lang.to_ascii_uppercase());
 
@@ -264,11 +264,20 @@ echo \"hello\"
         let res = render_markdown_to_html(md);
         assert_eq!(res.executable_blocks.len(), 1);
         assert!(res.executable_blocks[0].contains("POST https://httpbin.org/post"));
-        assert!(res.html.contains("class=\"btn btn-accent btn-sm md-run-btn\""));
+        assert!(
+            res.html
+                .contains("class=\"btn btn-accent btn-sm md-run-btn\"")
+        );
         assert!(res.html.contains("data-block-index=\"0\""));
-        assert!(res.html.contains("<span class=\"md-code-lang\">HTTP</span>"));
+        assert!(
+            res.html
+                .contains("<span class=\"md-code-lang\">HTTP</span>")
+        );
         // bash block should show language header without run button
-        assert!(res.html.contains("<span class=\"md-code-lang\">BASH</span>"));
+        assert!(
+            res.html
+                .contains("<span class=\"md-code-lang\">BASH</span>")
+        );
         assert_eq!(res.html.matches("md-run-btn").count(), 1);
     }
 
@@ -293,7 +302,10 @@ Inline <img src=x onerror=alert(1)> html
         assert!(!res.html.contains("javascript:"));
         assert!(!res.html.contains("//evil.com"));
         assert!(!res.html.contains("data:text/html"));
-        assert!(res.html.contains("&lt;script&gt;alert('xss')&lt;/script&gt;"));
+        assert!(
+            res.html
+                .contains("&lt;script&gt;alert('xss')&lt;/script&gt;")
+        );
         assert!(res.html.contains("href=\"https://example.com/docs?a=1\""));
         assert!(res.html.contains("href=\"doc/guides/quickstart.md\""));
     }

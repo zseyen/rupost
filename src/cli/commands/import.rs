@@ -1,6 +1,7 @@
 //! `rupost import`：外部格式导入子命令枚举与 curl 参数。
 
 use clap::{Parser, Subcommand};
+use rupost::importer::curl::CurlImportRequest;
 
 #[derive(Subcommand)]
 pub enum ImportCommands {
@@ -28,7 +29,7 @@ pub struct ImportCurlArgs {
 }
 
 impl ImportCurlArgs {
-    pub fn into_request(self) -> rupost::importer::curl::CurlImportRequest {
+    pub fn into_request(self) -> CurlImportRequest {
         // trailing_var_arg 拦截（AGENTS §5 同源陷阱）：位置参数之后的 -o/--output/--out
         // 与 --templatize-host 属 rupost 侧开关——从 CURL 序列中摘出。
         // 已知取舍：curl 自身的 -o（响应落盘）语义在此被覆盖——devtools 复制的
@@ -49,7 +50,7 @@ impl ImportCurlArgs {
             }
         }
 
-        rupost::importer::curl::CurlImportRequest {
+        CurlImportRequest {
             raw: kept.join(" "),
             output,
             templatize_host,

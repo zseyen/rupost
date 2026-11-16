@@ -1,11 +1,16 @@
 //! 测试套件结果呈现与落盘（CLI 表现层职责，从 `runner::app` 剥离）。
 
 use colored::Colorize;
-use rupost::Result;
+use rupost::ai::triage::run_inline_triage;
 use rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES;
-use rupost::history::save_batch_snapshot;
+use rupost::history::{create_incident_bundle, save_batch_snapshot};
+use rupost::report::contract::{build_contract_summary, diff_contracts, load_baseline, save_baseline};
+use rupost::report::{ReportFileFormat, write_report_files};
 use rupost::runner::app::SuiteNotice;
 use rupost::runner::{TestReporter, TestSuiteOptions, TestSuiteOutcome};
+use rupost::utils::path_guard::normalize_posix_path;
+use rupost::{Result, RupostError};
+use std::path::Path;
 
 /// 渲染测试套件执行结果并按需落盘快照/报告文件。
 pub async fn present_suite_outcome(
@@ -67,7 +72,7 @@ pub async fn present_suite_outcome(
                     && !r.skipped
                     && let Some(line) = r.source_line
                 {
-                    let display_path = rupost::utils::path_guard::normalize_posix_path(path);
+                    let display_path = normalize_posix_path(path);
                     println!("    {display_path}:{line}");
                 }
                 if options.explain {
@@ -93,7 +98,7 @@ pub async fn present_suite_outcome(
 
         TestReporter::print_batch_summary(&outcome.batch_results, outcome.duration);
         if options.triage {
-            rupost::ai::triage::run_inline_triage(&outcome.batch_results).await;
+            run_inline_triage(&outcome.batch_results).await;
         }
     }
 
@@ -113,7 +118,7 @@ pub async fn present_suite_outcome(
     }
 
     // 报告文件输出（表现层职责）
-    if let Some(written) = rupost::report::write_report_files(
+    if let Some(written) = write_report_files(
         &outcome.batch_results,
         &options.report,
         options.report_file.as_deref(),
@@ -122,8 +127,8 @@ pub async fn present_suite_outcome(
         if written.overwritten {
             eprintln!("[!] 报告文件已存在，将覆盖: {}", written.path.display());
         }
-        let is_html = matches!(written.format, rupost::report::ReportFileFormat::Html);
-        let is_junit = matches!(written.format, rupost::report::ReportFileFormat::Junit);
+        let is_html = matches!(written.format, ReportFileFormat::Html);
+        let is_junit = matches!(written.format, ReportFileFormat::Junit);
         if (is_html && (options.verbose || options.report.eq_ignore_ascii_case("html")))
             || (is_junit
                 && (options.verbose
@@ -137,14 +142,14 @@ pub async fn present_suite_outcome(
     // WP-P2b：契约漂移基线（只记确定性字段；漂移不改变退出码）。
     // 审查 P2 修正：基线 I/O 错误走 ContractBaselineError（exit 2），且**不得
     // 跳过其后的复现包块**——先执行 incident 再回传基线错误。
-    let mut contract_err: Option<rupost::RupostError> = None;
+    let mut contract_err: Option<RupostError> = None;
     if let Some(baseline_path) = &options.contract_baseline {
-        let summary = rupost::report::contract::build_contract_summary(&outcome.batch_results);
-        match rupost::report::contract::load_baseline(std::path::Path::new(baseline_path)) {
+        let summary = build_contract_summary(&outcome.batch_results);
+        match load_baseline(Path::new(baseline_path)) {
             Ok(baseline) => {
                 match &baseline {
                     Some(base) => {
-                        let drift = rupost::report::contract::diff_contracts(base, &summary);
+                        let drift = diff_contracts(base, &summary);
                         // 审查 P2 修正：静默消失必须可见（防空运行覆写基线侵蚀信号）
                         if drift.removed > 0 {
                             eprintln!(
@@ -185,20 +190,15 @@ pub async fn present_suite_outcome(
                         "⚠ 本次运行无任何已求值契约（疑似服务端宕机/全错运行）——拒绝覆写非空基线，防漂移信号被侵蚀"
                     );
                 } else {
-                    if let Err(e) = rupost::report::contract::save_baseline(
-                        std::path::Path::new(baseline_path),
-                        &summary,
-                    ) {
-                        contract_err = Some(rupost::RupostError::ContractBaselineError(
-                            e.to_user_friendly_string(),
-                        ));
+                    if let Err(e) = save_baseline(Path::new(baseline_path), &summary) {
+                        contract_err =
+                            Some(RupostError::ContractBaselineError(e.to_user_friendly_string()));
                     }
                 }
             }
             Err(e) => {
-                contract_err = Some(rupost::RupostError::ContractBaselineError(
-                    e.to_user_friendly_string(),
-                ));
+                contract_err =
+                    Some(RupostError::ContractBaselineError(e.to_user_friendly_string()));
             }
         }
     }
@@ -208,7 +208,7 @@ pub async fn present_suite_outcome(
     // 工件 I/O 失败经专用错误变体 exit 2，不掩盖测试本身的 exit 1 结果。
     if let Some(incident_out) = &options.incident_out {
         if outcome.has_failure {
-            rupost::history::create_incident_bundle(
+            create_incident_bundle(
                 &outcome.batch_results,
                 &outcome.resolved_paths,
                 options.env.as_deref(),
@@ -216,9 +216,9 @@ pub async fn present_suite_outcome(
                 options
                     .max_snapshot_body_bytes
                     .unwrap_or(DEFAULT_MAX_SNAPSHOT_BODY_BYTES),
-                std::path::Path::new(incident_out),
+                Path::new(incident_out),
             )
-            .map_err(|e| rupost::RupostError::IncidentBundleError(e.to_user_friendly_string()))?;
+            .map_err(|e| RupostError::IncidentBundleError(e.to_user_friendly_string()))?;
             eprintln!(
                 "[i] 故障复现包已生成: {incident_out}（强制脱敏；可用 `rupost replay {incident_out}/snapshot.json --target <URL>` 重放，`rupost ai triage --snapshot {incident_out}/snapshot.json` 分诊）"
             );

@@ -419,10 +419,11 @@ async fn test_r11_mock_toggle_serves_and_stops() {
     )
     .unwrap();
 
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
     let mut state = AppState::new();
     state.editor_file_path = Some(file.to_string_lossy().into_owned());
 
-    rupost::tui::integrations::toggle_mock_server(&mut state).await;
+    rupost::tui::integrations::toggle_mock_server(&mut state, &tx).await;
     eprintln!("DEBUG-R11: last_error={:?}", state.last_error);
     let session = state.mock_session.as_ref().expect("mock session must open");
     let port = session.port;
@@ -442,6 +443,6 @@ async fn test_r11_mock_toggle_serves_and_stops() {
     assert_eq!(resp.status().as_u16(), 200);
 
     // 停止：M 再按
-    rupost::tui::integrations::toggle_mock_server(&mut state).await;
+    rupost::tui::integrations::toggle_mock_server(&mut state, &tx).await;
     assert!(state.mock_session.is_none(), "session must close");
 }

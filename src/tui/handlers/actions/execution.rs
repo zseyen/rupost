@@ -1,7 +1,13 @@
 //! 执行编排动作：快速授权注入、单请求/多请求 streaming 触发（R2/R3/R4/R5/R7）。
 
+use crate::diagnostics::{BufferedWarningSink, WarningSink};
+use crate::plugin::DiscoverOptions;
+use crate::runner::executor_factory::build_interactive_executor_with_options_and_arc_sink;
+use crate::security::fs::env_flag_enabled;
 use crate::tui::event::{Action, TuiEvent};
 use crate::tui::state::{AppState, SidebarTab};
+use crate::variable::ConfigLoader;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// 快速授权注入（R3 决策表）：
@@ -133,23 +139,21 @@ async fn trigger_file_execution(
     // R5：cookie 会话延续——桥接上一次运行的导出状态。
     // B-1 组合根收口：交互执行器经共享工厂装配本机插件注册表（免假性"未安装"阻断）
     // B3（WP-2026-11-14-01）：toml [plugins] 段 → 交互执行器（告警走状态栏）
-    let (plugin_cfg, plugin_warnings) =
-        crate::variable::ConfigLoader::find_and_load_plugin_config();
+    let (plugin_cfg, plugin_warnings) = ConfigLoader::find_and_load_plugin_config();
     for w in &plugin_warnings {
         tracing::warn!("tui plugins config: {w}");
     }
-    let sink = crate::diagnostics::BufferedWarningSink::new();
-    let mut executor =
-        crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
-            &crate::plugin::DiscoverOptions {
-                allow_project_plugins: plugin_cfg.allow_project_plugins
-                    || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-                project_root: None,
-            },
-            &plugin_cfg,
-            plugin_cfg.strict_vars,
-            &sink,
-        );
+    let sink = Arc::new(BufferedWarningSink::new());
+    let mut executor = build_interactive_executor_with_options_and_arc_sink(
+        &DiscoverOptions {
+            allow_project_plugins: plugin_cfg.allow_project_plugins
+                || env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            project_root: None,
+        },
+        &plugin_cfg,
+        plugin_cfg.strict_vars,
+        Arc::clone(&sink) as Arc<dyn WarningSink>,
+    );
     for w in sink.messages() {
         tracing::warn!("tui executor warning: {w}");
     }

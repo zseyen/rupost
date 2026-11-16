@@ -116,6 +116,22 @@ pub fn build_interactive_executor_with_options_and_sink(
         .with_plugins(registry, plugin_runtime)
 }
 
+/// 挂载共享 `Arc<dyn WarningSink>` 的交互执行器（覆盖装配期与运行期插件降级告警）。
+pub fn build_interactive_executor_with_options_and_arc_sink(
+    discover: &DiscoverOptions,
+    plugin_cfg: &crate::variable::PluginTomlConfig,
+    strict_vars: bool,
+    sink: Arc<dyn WarningSink>,
+) -> TestExecutor {
+    build_interactive_executor_with_options_and_sink(
+        discover,
+        plugin_cfg,
+        strict_vars,
+        sink.as_ref(),
+    )
+    .with_warning_sink(sink)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

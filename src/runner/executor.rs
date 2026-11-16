@@ -86,6 +86,7 @@ pub struct TestExecutor {
     pub plugin_registry: Option<Arc<crate::plugin::PluginRegistry>>,
     pub plugin_options: crate::plugin::pipeline::PluginRuntimeOptions,
     pub suite_hook_cache: Arc<crate::plugin::pipeline::SuiteHookCache>,
+    pub warning_sink: Arc<dyn crate::diagnostics::WarningSink>,
 }
 
 impl TestExecutor {
@@ -138,7 +139,14 @@ impl TestExecutor {
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
             suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
+            warning_sink: Arc::new(crate::diagnostics::StderrWarningSink),
         }
+    }
+
+    /// 注入诊断告警接收端（Web/TUI 传入 `BufferedWarningSink` 防止 `stderr` 撕裂）。
+    pub fn with_warning_sink(mut self, sink: Arc<dyn crate::diagnostics::WarningSink>) -> Self {
+        self.warning_sink = sink;
+        self
     }
 
     /// 装配插件注册表与运行时选项（app 层在 discover 后调用）
@@ -232,6 +240,7 @@ impl TestExecutor {
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
             suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
+            warning_sink: Arc::new(crate::diagnostics::StderrWarningSink),
         })
     }
 
@@ -257,6 +266,7 @@ impl TestExecutor {
             plugin_registry: None,
             plugin_options: crate::plugin::pipeline::PluginRuntimeOptions::default(),
             suite_hook_cache: Arc::new(crate::plugin::pipeline::SuiteHookCache::new()),
+            warning_sink: Arc::new(crate::diagnostics::StderrWarningSink),
         }
     }
 
@@ -438,6 +448,7 @@ impl TestExecutor {
                 registry: self.plugin_registry.as_ref(),
                 options: &self.plugin_options,
                 suite_hook_cache: &self.suite_hook_cache,
+                warning_sink: self.warning_sink.as_ref(),
             },
             &unresolved,
             start,
@@ -484,5 +495,24 @@ impl TestExecutor {
 impl Default for TestExecutor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+
+    #[test]
+    fn test_executor_with_warning_sink_captures_emissions() {
+        let sink = Arc::new(BufferedWarningSink::new());
+        let executor = TestExecutor::with_ephemeral_cookies()
+            .with_warning_sink(Arc::clone(&sink) as Arc<dyn crate::diagnostics::WarningSink>);
+
+        executor
+            .warning_sink
+            .emit(WarningSeverity::Warn, "test", "buffered warning");
+
+        assert_eq!(sink.messages(), vec!["buffered warning".to_string()]);
     }
 }

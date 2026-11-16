@@ -1,13 +1,17 @@
+use crate::diagnostics::{BufferedWarningSink, WarningSink};
 use crate::parser::parse_document_by_path;
+use crate::plugin::DiscoverOptions;
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use crate::runner::TestExecutor;
+use crate::runner::executor_factory::build_interactive_executor_with_options_and_arc_sink;
+use crate::security::fs::env_flag_enabled;
 use crate::utils::path_guard::is_http_doc;
-use crate::variable::{ConfigLoader, VariableContext};
+use crate::variable::{ConfigLoader, PluginTomlConfig, VariableContext, WorkspaceConfig};
 use crate::web::server::AppState;
 use crate::web::session::{SessionHandle, session_set_cookie_value};
 use crate::web::types::{
-    ApiResponse, RunBlockRequest, RunBlockResponse, RunSuiteRequest, RunSuiteResponse,
-    SuiteItemResult,
+    ApiResponse, PluginOverrides, RunBlockRequest, RunBlockResponse, RunSuiteRequest,
+    RunSuiteResponse, SuiteItemResult,
 };
 use axum::Json;
 use axum::extract::State;
@@ -15,6 +19,8 @@ use axum::http::StatusCode;
 use axum::http::header::{COOKIE, HeaderMap, HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
 /// WP-R7：Web 复现包保留上限——创建前裁剪最旧（安全分析残余收口；CLI 通道
 /// 是用户显式路径，不做保留策略）。并发双跑可轻微超上限：无锁容差，
@@ -175,6 +181,27 @@ fn json_err_session_response(
     )
 }
 
+/// 装配 Web 交互执行器（请求覆盖 > toml [plugins] > 默认，挂载 BufferedWarningSink）。
+fn build_web_executor(
+    working_dir: &Path,
+    overrides: Option<&PluginOverrides>,
+) -> (TestExecutor, PluginTomlConfig, Arc<BufferedWarningSink>) {
+    let sink = Arc::new(BufferedWarningSink::new());
+    let ws_cfg = WorkspaceConfig::load(working_dir, sink.as_ref());
+    let plugin_cfg = apply_plugin_overrides(ws_cfg.plugins, overrides);
+    let executor = build_interactive_executor_with_options_and_arc_sink(
+        &DiscoverOptions {
+            allow_project_plugins: plugin_cfg.allow_project_plugins
+                || env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            project_root: Some(working_dir.to_path_buf()),
+        },
+        &plugin_cfg,
+        plugin_cfg.strict_vars,
+        Arc::clone(&sink) as Arc<dyn WarningSink>,
+    );
+    (executor, plugin_cfg, sink)
+}
+
 pub async fn run_block_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -247,20 +274,8 @@ pub async fn run_block_handler(
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
     // （显式值恒优先；跨客户端零共享）
     // B3：请求覆盖 > toml [plugins] > 默认（通过 WorkspaceConfig + BufferedWarningSink 单点加载）
-    let sink = crate::diagnostics::BufferedWarningSink::new();
-    let ws_cfg = crate::variable::WorkspaceConfig::load(&state.working_dir, &sink);
-    let plugin_cfg = apply_plugin_overrides(ws_cfg.plugins, req.plugin_overrides.as_ref());
-    let executor =
-        crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
-            &crate::plugin::DiscoverOptions {
-                allow_project_plugins: plugin_cfg.allow_project_plugins
-                    || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-                project_root: Some(state.working_dir.clone()),
-            },
-            &plugin_cfg,
-            plugin_cfg.strict_vars,
-            &sink,
-        );
+    let (executor, plugin_cfg, sink) =
+        build_web_executor(&state.working_dir, req.plugin_overrides.as_ref());
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),
@@ -307,7 +322,11 @@ pub async fn run_block_handler(
         plugin_cfg.strict_plugins,
     );
     let mut warnings = sink.messages();
-    warnings.extend(result.warnings);
+    for w in result.warnings {
+        if !warnings.contains(&w) {
+            warnings.push(w);
+        }
+    }
     let response = RunBlockResponse {
         success: block_success,
         status: result.status,
@@ -382,21 +401,9 @@ pub async fn run_suite_handler(
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
     // B3：请求覆盖 > toml [plugins] > 默认（接入 WorkspaceConfig 与 BufferedWarningSink）
-    let sink = crate::diagnostics::BufferedWarningSink::new();
-    let ws_cfg = crate::variable::WorkspaceConfig::load(&state.working_dir, &sink);
-    let plugin_cfg = apply_plugin_overrides(ws_cfg.plugins, req.plugin_overrides.as_ref());
     let start_time = std::time::Instant::now();
-    let executor =
-        crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
-            &crate::plugin::DiscoverOptions {
-                allow_project_plugins: plugin_cfg.allow_project_plugins
-                    || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-                project_root: Some(state.working_dir.clone()),
-            },
-            &plugin_cfg,
-            plugin_cfg.strict_vars,
-            &sink,
-        );
+    let (executor, plugin_cfg, sink) =
+        build_web_executor(&state.working_dir, req.plugin_overrides.as_ref());
     for w in sink.messages() {
         tracing::warn!("web suite warning: {w}");
     }

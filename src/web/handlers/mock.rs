@@ -1,7 +1,6 @@
 use crate::mock::compiler::MockCompiler;
-use crate::mock::variant::{CompareOp, ConditionSource};
+use crate::mock::variant::{CompareOp, ConditionSource, EvalContext};
 use crate::parser::MarkdownFileParser;
-use crate::utils::jsonpath::JsonPathResolver;
 use crate::web::mock_manager::discover_workspace_mock_routes;
 use crate::web::server::AppState;
 use crate::web::types::{
@@ -66,6 +65,7 @@ pub async fn simulate_mock_handler(
         .unwrap_or(&routes[0]);
 
     let body_str = req.body.as_deref().unwrap_or("");
+    let eval_ctx = EvalContext::new(&req.headers, &req.query, body_str);
     let mut evaluations = Vec::new();
     let mut matched_index = None;
     let mut matched_name = "default".to_string();
@@ -73,41 +73,11 @@ pub async fn simulate_mock_handler(
 
     for (idx, variant) in route.variants.iter().enumerate() {
         if let Some(cond) = &variant.condition {
-            let passed = cond.evaluate(&req.headers, &req.query, body_str);
-
-            let (source_desc, actual_val) = match cond.source {
-                ConditionSource::Header => {
-                    let val = req
-                        .headers
-                        .get(&cond.key)
-                        .or_else(|| {
-                            req.headers
-                                .iter()
-                                .find(|(k, _)| k.eq_ignore_ascii_case(&cond.key))
-                                .map(|(_, v)| v)
-                        })
-                        .cloned();
-                    ("header", val)
-                }
-                ConditionSource::Query => {
-                    let val = req.query.get(&cond.key).cloned();
-                    ("query", val)
-                }
-                ConditionSource::Body => {
-                    let val = if cond.key.starts_with('$') {
-                        serde_json::from_str::<serde_json::Value>(body_str)
-                            .ok()
-                            .and_then(|json| {
-                                JsonPathResolver::resolve(&json, &cond.key).map(|v| match v {
-                                    serde_json::Value::String(s) => s.clone(),
-                                    other => other.to_string(),
-                                })
-                            })
-                    } else {
-                        Some(body_str.to_string())
-                    };
-                    ("body", val)
-                }
+            let detail = cond.evaluate_with_detail(&eval_ctx);
+            let source_desc = match cond.source {
+                ConditionSource::Header => "header",
+                ConditionSource::Query => "query",
+                ConditionSource::Body => "body",
             };
 
             let op_str = match cond.operator {
@@ -121,12 +91,12 @@ pub async fn simulate_mock_handler(
                     "[{}] {} {} {}",
                     source_desc, cond.key, op_str, cond.expected_value
                 ),
-                passed,
+                passed: detail.passed,
                 expected: cond.expected_value.clone(),
-                actual: actual_val,
+                actual: detail.actual,
             });
 
-            if passed && matched_index.is_none() {
+            if detail.passed && matched_index.is_none() {
                 matched_index = Some(idx);
                 matched_name = format!("variant_{}", idx + 1);
                 expected_status = variant.status;

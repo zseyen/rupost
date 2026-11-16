@@ -245,11 +245,7 @@ async fn handle_mock_request(
             use std::convert::Infallible;
             use std::time::Duration;
 
-            let chunks: Vec<String> = mock_resp
-                .body
-                .split('\n')
-                .map(|s| format!("{}\n", s))
-                .collect();
+            let chunks = split_sse_frames(&mock_resp.body);
 
             let stream = stream::unfold((chunks, 0), |(chunks, index)| async move {
                 if index >= chunks.len() {
@@ -284,15 +280,52 @@ async fn handle_mock_request(
             tracing::debug!(method = %mock_req.method, path = %mock_req.path, "mock 404 not found");
         }
 
-        let error_msg = format!(
-            r#"{{"error": "No matching mock route found", "request": {{"method": "{}", "path": "{}"}}}}"#,
-            mock_req.method, mock_req.path
-        );
-        (
-            StatusCode::NOT_FOUND,
-            [("Content-Type", "application/json")],
-            error_msg,
-        )
-            .into_response()
+        not_found_response(&mock_req.method, &mock_req.path)
+    }
+}
+
+/// SSE 事件帧切分：按空行（\n\n 或 \r\n\r\n）界定事件边界，保留多行事件完整性
+fn split_sse_frames(body: &str) -> Vec<String> {
+    let normalized = body.replace("\r\n", "\n");
+    normalized
+        .split("\n\n")
+        .filter(|frame| !frame.trim().is_empty())
+        .map(|frame| format!("{frame}\n\n"))
+        .collect()
+}
+
+/// 使用 serde_json 安全构造 404 响应体，避免路径含特殊字符破坏 JSON 结构
+fn not_found_response(method: &str, path: &str) -> Response {
+    let payload = serde_json::json!({
+        "error": "No matching mock route found",
+        "request": {
+            "method": method,
+            "path": path,
+        }
+    });
+    (StatusCode::NOT_FOUND, axum::Json(payload)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[test]
+    fn test_split_sse_frames_preserves_multiline_events() {
+        let raw = "event: delta\nid: 1\ndata: {\"a\":1}\n\nevent: done\ndata: [DONE]\n\n";
+        let frames = split_sse_frames(raw);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], "event: delta\nid: 1\ndata: {\"a\":1}\n\n");
+        assert_eq!(frames[1], "event: done\ndata: [DONE]\n\n");
+    }
+
+    #[tokio::test]
+    async fn test_not_found_response_escapes_special_chars() {
+        let resp = not_found_response("GET", "/bad\"path\\test");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let bytes = to_bytes(resp.into_body(), 4096).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["request"]["path"], "/bad\"path\\test");
     }
 }

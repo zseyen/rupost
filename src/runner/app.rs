@@ -4,9 +4,10 @@ use crate::runner::on_failure;
 use crate::runner::selector;
 use crate::runner::suite_setup::{build_suite_executor, load_suite_context};
 use crate::runner::{
-    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestResult,
+    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, TestResult,
     WorkflowGraph,
 };
+use crate::parser::scanner::DirectoryScanner;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

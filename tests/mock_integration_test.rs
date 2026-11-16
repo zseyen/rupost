@@ -108,7 +108,8 @@ async fn test_mock_server_integration_flow() {
 async fn test_markdown_api_lifecycle_smoke_tests() {
     use rupost::mock::MockCompiler;
     use rupost::parser::MarkdownFileParser;
-    use rupost::runner::{DependencyResolver, DirectoryScanner, WorkflowGraph};
+    use rupost::parser::scanner::DirectoryScanner;
+    use rupost::runner::{DependencyResolver, WorkflowGraph};
 
     // 1. 测试用例 1-3: 加载 v2_api_evolution.md，验证 V1 兼容、V2 正常、V2 拦截
     let evol_file = "examples/iteration_scenarios/v2_api_evolution.md";

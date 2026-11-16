@@ -9,7 +9,8 @@ use rupost::report::contract::{
 };
 use rupost::report::{ReportFileFormat, write_report_files};
 use rupost::runner::app::SuiteNotice;
-use rupost::runner::{TestReporter, TestSuiteOptions, TestSuiteOutcome};
+use rupost::reporter::TestReporter;
+use rupost::runner::{TestSuiteOptions, TestSuiteOutcome};
 use rupost::utils::path_guard::normalize_posix_path;
 use rupost::{Result, RupostError};
 use std::path::Path;

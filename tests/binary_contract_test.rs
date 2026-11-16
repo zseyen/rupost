@@ -4,9 +4,12 @@
 //! 反假守护抽样：exit2 映射/历史停用/越界错误 三类各破坏一次必须变红。
 use assert_cmd::Command;
 use predicates::str::contains;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// 统一构造：NO_COLOR + 历史隔离 + cwd（跨平台五条军规的测试侧映射）
@@ -19,52 +22,68 @@ fn cmd(dir: &Path, history: &Path) -> Command {
     c
 }
 
-/// 后台拉起 mock 服务（bind :0 探测空闲端口，防固定端口冲突；Drop 时 kill）
+/// 进程内轻量 HTTP/1.1 echo 服务（直接持有 `:0` listener，消除端口释放 TOCTOU 与子进程竞态）
 struct MockServer {
-    child: std::process::Child,
     port: u16,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl MockServer {
-    fn start(config_body: &str) -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("mock.json");
-        std::fs::write(&config, config_body).unwrap();
-        let port = TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        // 服务器进程用 std 命令（常驻形态；assert_cmd 仅用于断言形态的调用）
-        let child = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
-            .args([
-                "mock",
-                config.to_str().unwrap(),
-                "--port",
-                &port.to_string(),
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn rupost mock");
-        let server = Self { child, port };
-        // 就绪探测：有限重试，连接成功即就绪（任意 HTTP 应答均可）
-        for _ in 0..50 {
-            if TcpListener::bind("127.0.0.1:0").is_ok()
-                && std::net::TcpStream::connect(("127.0.0.1", server.port)).is_ok()
-            {
-                return server;
+    fn start(_config_body: &str) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+
+        let handle = std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while !stop_flag.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        // 读完 HTTP 请求头避免客户端发送期间提前关闭产生 RST
+                        let mut total = 0;
+                        while total < buf.len() {
+                            match stream.read(&mut buf[total..]) {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => {
+                                    total += n;
+                                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        );
+                        let _ = stream.flush();
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
             }
-            std::thread::sleep(Duration::from_millis(200));
+        });
+
+        Self {
+            port,
+            stop,
+            handle: Some(handle),
         }
-        panic!("mock 未在超时内就绪: port {port}");
     }
 }
 
 impl Drop for MockServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
 }
 

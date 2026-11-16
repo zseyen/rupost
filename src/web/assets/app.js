@@ -1666,6 +1666,30 @@ async function startManagedMockServer() {
   }
 }
 
+async function reloadManagedMockServer(id) {
+  if (isReadonly) return;
+  mockServerError = '';
+  try {
+    const res = await fetch('/api/v1/mock/reload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const json = await safeReadJson(res);
+    if (json && json.success && json.data) {
+      mockRunningServers = mockRunningServers.map((s) => (s.id === id ? json.data : s));
+    } else {
+      mockServerError = (json && json.error) || `HTTP ${res.status}: Failed to reload mock server`;
+    }
+  } catch (e) {
+    mockServerError = e.message;
+  }
+
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
+  }
+}
+
 async function stopManagedMockServer(id) {
   if (isReadonly) return;
   mockServerError = '';
@@ -1710,8 +1734,9 @@ function renderMockTab(container) {
           (s) => `
           <div class="mock-server-pill">
             <span class="mock-live-tag">[LIVE :${s.port}]</span>
-            <span>${escapeHtml(s.file_path)} (${s.route_count} routes)</span>
+            <span>${escapeHtml(s.file_path)} (${s.route_count} routes, ${s.request_count || 0} reqs)</span>
             <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer" style="color: var(--accent-primary);">${escapeHtml(s.url)}</a>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="reloadManagedMockServer('${escapeHtml(s.id)}')" ${isReadonly ? 'disabled' : ''}>Reload</button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="stopManagedMockServer('${escapeHtml(s.id)}')" ${isReadonly ? 'disabled' : ''}>Stop</button>
           </div>`
         )

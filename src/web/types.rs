@@ -256,6 +256,27 @@ pub struct MockServerInfo {
     pub port: u16,
     pub url: String,
     pub route_count: usize,
+    #[serde(default)]
+    pub request_count: u64,
+}
+
+/// 托管 Mock 单条入站流量事件
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockTrafficItemDto {
+    pub method: String,
+    pub path: String,
+    pub status: u16,
+    pub matched_pattern: Option<String>,
+    pub elapsed_ms: u64,
+}
+
+/// 托管 Mock 流量查询响应
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockTrafficResponse {
+    pub id: String,
+    pub port: u16,
+    pub total_requests: u64,
+    pub events: Vec<MockTrafficItemDto>,
 }
 
 /// 启动托管 Mock 服务请求

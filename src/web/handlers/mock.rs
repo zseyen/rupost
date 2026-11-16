@@ -10,9 +10,10 @@ use crate::web::types::{
     StartMockRequest, StopMockRequest,
 };
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::task::spawn_blocking;
 
@@ -245,6 +246,26 @@ pub async fn reload_mock_server_handler(
         .reload_server(&state.working_dir, req.id.as_deref(), req.port)
     {
         Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
+        Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MockTrafficQuery {
+    pub id: Option<String>,
+    pub port: Option<u16>,
+}
+
+/// 查询托管 Mock 服务的实时入站流量（只读模式可用）
+pub async fn mock_traffic_handler(
+    State(state): State<AppState>,
+    Query(query): Query<MockTrafficQuery>,
+) -> impl IntoResponse {
+    match state
+        .mock_manager
+        .get_traffic(query.id.as_deref(), query.port)
+    {
+        Ok(resp) => (StatusCode::OK, Json(ApiResponse::ok(resp))),
         Err(err) => (err.status, Json(ApiResponse::err(err.message))),
     }
 }

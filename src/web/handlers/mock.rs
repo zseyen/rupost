@@ -12,6 +12,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use tokio::task::spawn_blocking;
 
 pub async fn simulate_mock_handler(
     State(_state): State<AppState>,
@@ -143,7 +144,10 @@ pub async fn simulate_mock_handler(
 
 /// 列出工作区内所有包含 Mock 变体的文档路由（只读模式可用）
 pub async fn list_mock_routes_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let routes = discover_workspace_mock_routes(&state.working_dir);
+    let working_dir = state.working_dir.clone();
+    let routes = spawn_blocking(move || discover_workspace_mock_routes(&working_dir))
+        .await
+        .unwrap_or_default();
     (StatusCode::OK, Json(ApiResponse::ok(routes)))
 }
 

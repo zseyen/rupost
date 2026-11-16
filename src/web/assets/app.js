@@ -1639,12 +1639,17 @@ async function startManagedMockServer() {
     if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
     return;
   }
+  if (!Number.isInteger(portVal) || portVal < 0 || portVal > 65535) {
+    mockServerError = 'Port must be an integer between 0 and 65535.';
+    if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
+    return;
+  }
 
   try {
     const res = await fetch('/api/v1/mock/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_path: filePath, port: Number.isNaN(portVal) ? 0 : portVal }),
+      body: JSON.stringify({ file_path: filePath, port: portVal }),
     });
     const json = await safeReadJson(res);
     if (json && json.success && json.data) {
@@ -1720,7 +1725,7 @@ function renderMockTab(container) {
           return `
             <li class="mock-route-item ${isActive ? 'active' : ''}" onclick="selectMockRouteByIndex(${idx})">
               <div class="mock-route-top">
-                <span class="method-badge ${r.method === 'POST' ? 'method-post' : 'method-get'}">${escapeHtml(r.method)}</span>
+                <span class="method-badge ${RupostCards.methodBadgeClass(r.method)}">${escapeHtml(r.method)}</span>
                 <span>${escapeHtml(r.path)}</span>
               </div>
               <div class="mock-route-file">${escapeHtml(r.file_path)}</div>

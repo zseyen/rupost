@@ -414,6 +414,7 @@
     parseHttpBlock,
     rebuildBlockWithBody,
     renderHttpCardHtml,
+    methodBadgeClass,
     formatDurationObj,
     MAX_HIGHLIGHT_BYTES,
   };

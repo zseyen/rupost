@@ -142,8 +142,10 @@ impl WebMockManager {
             .port();
 
         let id = Uuid::new_v4().simple().to_string()[..8].to_string();
+        let abs_root =
+            std::fs::canonicalize(working_dir).unwrap_or_else(|_| working_dir.to_path_buf());
         let norm_path = safe_path
-            .strip_prefix(working_dir)
+            .strip_prefix(&abs_root)
             .map(normalize_posix_path)
             .unwrap_or_else(|_| file_path.to_string());
 

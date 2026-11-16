@@ -5,7 +5,10 @@ use crate::plugin::pipeline::PluginRuntimeOptions;
 use crate::plugin::{
     DiscoverOptions, PluginRegistry, extract_authorized_env_keys, parse_plugin_env_specs,
 };
+use crate::runner::executor_factory::discover_plugin_registry;
 use crate::runner::{TestExecutor, TestSuiteOptions};
+use crate::security::fs::env_flag_enabled;
+use crate::variable::var_state::{backfill_missing, load_var_state};
 use crate::variable::{ConfigLoader, VariableContext};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,10 +35,10 @@ pub(crate) fn load_suite_context_with_sink(
     var_context.insert("__default_scheme", &options.default_scheme);
     // R-2 免重填：--var-state 回灌为最低优先级层（只补缺；缺失静默、损坏指名告警）
     if let Some(state_path) = &options.var_state {
-        match crate::variable::var_state::load_var_state(Path::new(state_path)) {
+        match load_var_state(Path::new(state_path)) {
             None => {}
             Some(Ok(vars)) => {
-                let filled = crate::variable::var_state::backfill_missing(&mut var_context, &vars);
+                let filled = backfill_missing(&mut var_context, &vars);
                 if filled > 0 {
                     sink.emit(
                         WarningSeverity::Info,
@@ -71,14 +74,11 @@ pub(crate) fn assemble_plugin_runtime(
     };
     let discover_options = DiscoverOptions {
         allow_project_plugins: options.allow_project_plugins
-            || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            || env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
         project_root: None,
     };
     let authorized_env_keys = extract_authorized_env_keys(&options.plugin_env);
-    let registry = crate::runner::executor_factory::discover_plugin_registry(
-        &discover_options,
-        &authorized_env_keys,
-    );
+    let registry = discover_plugin_registry(&discover_options, &authorized_env_keys);
     (registry, plugin_runtime)
 }
 

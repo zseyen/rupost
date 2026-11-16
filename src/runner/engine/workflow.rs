@@ -2,7 +2,7 @@ use crate::Result;
 use crate::error::RupostError;
 use crate::parser::ParsedFile;
 use crate::runner::path::{display_path, resolve_dep_path};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 /// 依赖闭包执行计划：拓扑执行序 + 节点到其直接依赖的映射（R-1）
@@ -70,7 +70,7 @@ impl WorkflowGraph {
                 }
             }
         }
-        let closure_keys: std::collections::HashSet<PathBuf> = closure.keys().cloned().collect();
+        let closure_keys: HashSet<PathBuf> = closure.keys().cloned().collect();
         let mut sub = WorkflowGraph { nodes: closure };
         for node in sub.nodes.values_mut() {
             node.depends_on.retain(|d| closure_keys.contains(d));

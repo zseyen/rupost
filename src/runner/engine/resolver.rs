@@ -2,8 +2,10 @@ use crate::Result;
 use crate::error::RupostError;
 use crate::parser::{HttpFileParser, MarkdownFileParser, ParsedFile};
 use crate::runner::path::{display_path, is_supported_file, resolve_dep_path};
+use crate::utils::path_guard::is_within_roots;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::slice;
 
 /// 递归依赖解析器
 pub struct DependencyResolver;
@@ -91,7 +93,7 @@ impl DependencyResolver {
 
     /// 校验依赖落在任一允许根之下，防止 `@depends-on ../../..` 式越界引用
     fn validate_sandbox(path: &Path, sandbox_roots: &[PathBuf]) -> Result<()> {
-        if !crate::utils::path_guard::is_within_roots(path, sandbox_roots) {
+        if !is_within_roots(path, sandbox_roots) {
             return Err(RupostError::Other(format!(
                 "依赖路径越界：@depends-on 引用的文件不在任何输入路径的目录之下，拒绝加载！文件: {}",
                 display_path(path)
@@ -188,12 +190,12 @@ mod tests {
         fs::write(&file, "GET https://api.example.com/remote").unwrap();
 
         // 根从输入推导（文件 → 父目录），与 cwd 无关
-        let roots = DependencyResolver::sandbox_roots_from_inputs(std::slice::from_ref(&file));
+        let roots = DependencyResolver::sandbox_roots_from_inputs(slice::from_ref(&file));
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0], dir.path().canonicalize().unwrap());
 
         let resolved =
-            DependencyResolver::resolve_and_parse(std::slice::from_ref(&file), &roots).unwrap();
+            DependencyResolver::resolve_and_parse(slice::from_ref(&file), &roots).unwrap();
         assert_eq!(resolved.len(), 1);
         assert!(resolved.contains_key(&file.canonicalize().unwrap()));
     }
@@ -232,7 +234,7 @@ mod tests {
 
         let initial = vec![a_path];
         let resolved =
-            DependencyResolver::resolve_and_parse(&initial, std::slice::from_ref(&sandbox_path))
+            DependencyResolver::resolve_and_parse(&initial, slice::from_ref(&sandbox_path))
                 .unwrap();
 
         assert_eq!(resolved.len(), 2);

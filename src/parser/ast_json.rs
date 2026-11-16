@@ -7,7 +7,7 @@
 //! 契约纪律：**不做解析器类型直接 derive**（内部命名不得泄漏为公共契约）——
 //! 本模块是内部类型与外部 JSON 之间的隔离层；内部 `ParsedFile` 重构不得破坏字段。
 
-use crate::parser::{ParsedFile, parse_document_by_path};
+use crate::parser::ParsedFile;
 use crate::utils::path_guard::normalize_posix_path;
 use serde::Serialize;
 
@@ -80,6 +80,7 @@ pub fn to_ast_document(parsed: &ParsedFile, source_path: &str) -> AstDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::parse_document_by_path;
 
     /// 顶层与请求级键集精确契约（只增不改；新增字段必须显式登记）
     #[test]

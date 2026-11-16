@@ -70,9 +70,8 @@ impl TrieRouteMatcher {
 
 impl MockMatcher for TrieRouteMatcher {
     fn match_request(&self, req: &MockRequest) -> Option<MockResponse> {
-        let method_upper = req.method.to_uppercase();
-        let trie = self.routes.get(&method_upper)?;
-        let ((pattern, variants), params) = trie.match_path(&req.path)?;
+        let (pattern, variants, params) = self.match_route_with_params(&req.method, &req.path)?;
+        let pattern = pattern.to_string();
         let eval_ctx = EvalContext::new(&req.headers, &req.query, &req.body);
 
         for variant in variants {
@@ -101,7 +100,7 @@ impl MockMatcher for TrieRouteMatcher {
                     status: variant.status,
                     headers: resolved_headers,
                     body: resolved_body,
-                    matched_pattern: Some(pattern.clone()),
+                    matched_pattern: Some(pattern),
                 });
             }
         }

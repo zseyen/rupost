@@ -5,7 +5,6 @@ use crate::runner::path::{display_path, is_supported_file, resolve_dep_path};
 use crate::utils::path_guard::is_within_roots;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::slice;
 
 /// 递归依赖解析器
 pub struct DependencyResolver;
@@ -132,6 +131,7 @@ impl DependencyResolver {
 mod tests {
     use super::*;
     use std::fs;
+    use std::slice;
     use tempfile::tempdir;
 
     #[test]

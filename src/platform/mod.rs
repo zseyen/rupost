@@ -46,8 +46,20 @@ pub fn history_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_RUPOST_DIR))
 }
 
-/// 返回项目级流式日志目录（`<history_dir>/logs`）。
+/// 返回项目级流式日志目录（`RUPOST_HISTORY_DIR/logs` > `rupost.toml [paths].logs_dir` > `.rupost/logs`）。
 pub fn history_logs_dir() -> PathBuf {
+    if let Some(env_dir) = std::env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(env_dir).join("logs");
+    }
+    if let Ok(cwd) = std::env::current_dir()
+        && cwd.join("rupost.toml").exists()
+    {
+        let ws = crate::variable::WorkspaceConfig::load(
+            &cwd,
+            &crate::diagnostics::BufferedWarningSink::new(),
+        );
+        return ws.paths.logs_dir;
+    }
     history_dir().join("logs")
 }
 

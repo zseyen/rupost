@@ -28,8 +28,25 @@ impl HistoryStorage {
 
 impl Default for HistoryStorage {
     fn default() -> Self {
-        let path = platform::history_dir().join(HISTORY_FILE);
-        Self { file_path: path }
+        if let Some(env_dir) = std::env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
+            return Self {
+                file_path: PathBuf::from(env_dir).join(HISTORY_FILE),
+            };
+        }
+        if let Ok(cwd) = std::env::current_dir()
+            && cwd.join("rupost.toml").exists()
+        {
+            let ws = crate::variable::WorkspaceConfig::load(
+                &cwd,
+                &crate::diagnostics::BufferedWarningSink::new(),
+            );
+            return Self {
+                file_path: ws.paths.history_file,
+            };
+        }
+        Self {
+            file_path: platform::history_dir().join(HISTORY_FILE),
+        }
     }
 }
 

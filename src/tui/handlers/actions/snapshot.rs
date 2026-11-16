@@ -35,7 +35,7 @@ pub fn save_current_snapshot(state: &mut AppState) {
         entries: vec![entry],
         masking: None,
     };
-    let dir = state.workspace_root.join("snapshots");
+    let dir = crate::tui::integrations::tui_snapshots_dir(&state.workspace_root);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         state.last_error = Some(format!("snapshot dir: {e}"));
         return;

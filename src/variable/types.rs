@@ -158,6 +158,8 @@ pub struct WorkspaceConfig {
     pub project_root: PathBuf,
     pub paths: WorkspacePathsConfig,
     pub plugins: PluginTomlConfig,
+    /// 当 `rupost.toml [paths].snapshots_dir` 显式配置时为 `Some(...)`（供 TUI 保留默认 `snapshots/` 向后兼容）
+    pub explicit_snapshots_dir: Option<PathBuf>,
 }
 
 impl WorkspaceConfig {
@@ -170,6 +172,7 @@ impl WorkspaceConfig {
                 project_root: project_root.to_path_buf(),
                 paths,
                 plugins: PluginTomlConfig::default(),
+                explicit_snapshots_dir: None,
             };
         }
 
@@ -185,6 +188,7 @@ impl WorkspaceConfig {
                     project_root: project_root.to_path_buf(),
                     paths,
                     plugins: PluginTomlConfig::default(),
+                    explicit_snapshots_dir: None,
                 };
             }
         };
@@ -201,17 +205,22 @@ impl WorkspaceConfig {
                     project_root: project_root.to_path_buf(),
                     paths,
                     plugins: PluginTomlConfig::default(),
+                    explicit_snapshots_dir: None,
                 };
             }
         };
 
+        let mut explicit_snapshots_dir = None;
         if let Some(p) = parsed.paths {
-            let resolve = |field: &str, raw: Option<String>, fallback: PathBuf| -> PathBuf {
+            let resolve = |field: &str,
+                           raw: Option<String>,
+                           fallback: PathBuf|
+             -> (PathBuf, bool) {
                 let Some(val) = raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
-                    return fallback;
+                    return (fallback, false);
                 };
                 match resolve_sandboxed_workspace_path(project_root, &val) {
-                    Ok(safe) => safe,
+                    Ok(safe) => (safe, true),
                     Err(reason) => {
                         sink.emit(
                             crate::diagnostics::WarningSeverity::Security,
@@ -221,22 +230,27 @@ impl WorkspaceConfig {
                                 val
                             ),
                         );
-                        fallback
+                        (fallback, false)
                     }
                 }
             };
-            paths.plugins_dir = resolve("plugins_dir", p.plugins_dir, paths.plugins_dir);
-            paths.history_file = resolve("history_file", p.history_file, paths.history_file);
-            paths.logs_dir = resolve("logs_dir", p.logs_dir, paths.logs_dir);
-            paths.cookie_dir = resolve("cookie_dir", p.cookie_dir, paths.cookie_dir);
-            paths.reports_dir = resolve("reports_dir", p.reports_dir, paths.reports_dir);
-            paths.snapshots_dir = resolve("snapshots_dir", p.snapshots_dir, paths.snapshots_dir);
+            paths.plugins_dir = resolve("plugins_dir", p.plugins_dir, paths.plugins_dir).0;
+            paths.history_file = resolve("history_file", p.history_file, paths.history_file).0;
+            paths.logs_dir = resolve("logs_dir", p.logs_dir, paths.logs_dir).0;
+            paths.cookie_dir = resolve("cookie_dir", p.cookie_dir, paths.cookie_dir).0;
+            paths.reports_dir = resolve("reports_dir", p.reports_dir, paths.reports_dir).0;
+            let (snap, customized) = resolve("snapshots_dir", p.snapshots_dir, paths.snapshots_dir);
+            paths.snapshots_dir = snap.clone();
+            if customized {
+                explicit_snapshots_dir = Some(snap);
+            }
         }
 
         Self {
             project_root: project_root.to_path_buf(),
             paths,
             plugins: parsed.plugins.unwrap_or_default(),
+            explicit_snapshots_dir,
         }
     }
 }

@@ -156,19 +156,8 @@ pub async fn resolve_file(path: &Path, dry_run: bool) -> Result<ResolveReport> {
         )));
     }
 
-    atomic_write(path, &out)?;
+    crate::security::fs::AtomicFileWriter::write_atomic(path, out.as_bytes())?;
     Ok(report)
-}
-
-/// 原子写：同目录临时文件 + rename（防半文件/防覆盖语义由调用方界定）
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    let tmp = path.with_extension("resolve.tmp");
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        RupostError::IoError(e)
-    })?;
-    Ok(())
 }
 
 /// CLI 入口：解析参数并执行（dry_run / 输出摘要）

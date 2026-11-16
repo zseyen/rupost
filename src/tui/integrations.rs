@@ -68,9 +68,20 @@ pub async fn replay_latest_snapshot(
     state.last_error = None;
 }
 
+/// 解析 TUI 快照存储目录：若 `rupost.toml [paths].snapshots_dir` 显式配置且合法则采用之，
+/// 否则保持历史默认 `<workspace_root>/snapshots`。
+pub(crate) fn tui_snapshots_dir(workspace_root: &std::path::Path) -> std::path::PathBuf {
+    let ws = crate::variable::WorkspaceConfig::load(
+        workspace_root,
+        &crate::diagnostics::BufferedWarningSink::new(),
+    );
+    ws.explicit_snapshots_dir
+        .unwrap_or_else(|| workspace_root.join("snapshots"))
+}
+
 /// 最近一份快照文件（文件名含时间戳，字典序即时间序）
 fn latest_snapshot_path(state: &AppState) -> Option<std::path::PathBuf> {
-    let dir = state.workspace_root.join("snapshots");
+    let dir = tui_snapshots_dir(&state.workspace_root);
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -181,5 +192,28 @@ pub fn persist_cookie_bridge(state: &AppState) {
         && let Err(e) = std::fs::write(path, json.to_string())
     {
         tracing::warn!("{}: {}: {}", crate::middleware::ERR_COOKIE_PERSIST, path, e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tui_snapshots_dir_defaults_and_honors_custom_toml_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // 1. 无配置时保持历史默认 snapshots/
+        assert_eq!(tui_snapshots_dir(dir.path()), dir.path().join("snapshots"));
+
+        // 2. 配置合法相对路径时命中自定义目录；配置逃逸路径时回退默认
+        std::fs::write(
+            dir.path().join("rupost.toml"),
+            "[paths]\nsnapshots_dir = \"custom/snaps\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            tui_snapshots_dir(dir.path()),
+            dir.path().join("custom/snaps")
+        );
     }
 }

@@ -37,7 +37,15 @@ pub async fn simulate_mock_handler(
         }
     };
 
-    let routes = MockCompiler::compile(&parsed_file);
+    let routes = match MockCompiler::try_compile(&parsed_file) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::err(e.to_string())),
+            );
+        }
+    };
     if routes.is_empty() {
         return (
             StatusCode::BAD_REQUEST,

@@ -125,24 +125,15 @@ pub async fn toggle_mock_server(state: &mut AppState) {
         return;
     }
 
-    // 探测空闲端口（bind :0 → 立即释放 → 传入 serve；微小竞窗可接受）
-    let probe = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
-        Ok(l) => l,
-        Err(e) => {
-            state.last_error = Some(format!("mock port probe: {e}"));
-            return;
-        }
-    };
-    let port = probe.local_addr().map(|a| a.port()).unwrap_or(0);
-    drop(probe);
-
-    let listener = match tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await {
+    // 直接绑定空闲端口并将同一个 TcpListener 交给 serve_matcher，消除二次绑定竞态
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
         Ok(l) => l,
         Err(e) => {
             state.last_error = Some(format!("mock bind: {e}"));
             return;
         }
     };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
 
     let matcher = Arc::new(matcher);
     let handle = tokio::spawn(async move {
@@ -215,5 +206,36 @@ mod tests {
             tui_snapshots_dir(dir.path()),
             dir.path().join("custom/snaps")
         );
+    }
+
+    #[tokio::test]
+    async fn test_toggle_mock_server_starts_serves_and_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc_path = dir.path().join("mock_api.http");
+        std::fs::write(
+            &doc_path,
+            "GET /api/ping\n\n@mock-default\nHTTP/1.1 200 OK\n\npong\n",
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        state.editor_file_path = Some(doc_path.to_string_lossy().into_owned());
+
+        toggle_mock_server(&mut state).await;
+        assert!(state.last_error.is_none(), "unexpected error: {:?}", state.last_error);
+        let port = state.mock_session.as_ref().expect("mock session should start").port;
+        assert!(port > 0);
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/ping"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        assert_eq!(resp.text().await.unwrap(), "pong");
+
+        // 再次 toggle 停止
+        toggle_mock_server(&mut state).await;
+        assert!(state.mock_session.is_none());
     }
 }

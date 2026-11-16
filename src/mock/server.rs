@@ -86,7 +86,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
         let mut all_routes = Vec::new();
         for p in execution_order {
             if let Some(parsed) = files_map.get(&p) {
-                let routes = MockCompiler::compile(parsed);
+                let routes = MockCompiler::try_compile(parsed)?;
                 all_routes.extend(routes);
             }
         }
@@ -156,8 +156,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
 
             route_count = groups.len();
             for ((method, path), mut variants) in groups {
-                variants.sort_by_key(|v| v.condition.is_some());
-                variants.reverse(); // 有条件的在前，兜底的在后
+                variants.sort_by_key(|v| v.condition.is_none()); // 有条件的在前，兜底的在后
                 matcher.add_route(&method, &path, variants);
             }
         }

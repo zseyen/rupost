@@ -27,8 +27,14 @@ impl MockServer for AxumMockServer {
             .await
             .map_err(RupostError::IoError)?;
 
-        serve_matcher(listener, matcher, enable_cors).await
+        serve_matcher_inner(listener, matcher, enable_cors, true, std::future::pending()).await
     }
+}
+
+#[derive(Clone)]
+struct MockServerState {
+    matcher: Arc<dyn MockMatcher>,
+    log_to_stdout: bool,
 }
 
 /// M3：智能 CORS 中间件——预检 OPTIONS 秒回 204；动态回显 Origin；
@@ -106,9 +112,26 @@ pub async fn serve_matcher_with_shutdown<F>(
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    serve_matcher_inner(listener, matcher, enable_cors, false, shutdown).await
+}
+
+async fn serve_matcher_inner<F>(
+    listener: tokio::net::TcpListener,
+    matcher: Arc<dyn MockMatcher>,
+    enable_cors: bool,
+    log_to_stdout: bool,
+    shutdown: F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let state = MockServerState {
+        matcher,
+        log_to_stdout,
+    };
     let app = Router::new()
         .fallback(any(handle_mock_request))
-        .with_state(matcher)
+        .with_state(state)
         .layer(axum::middleware::from_fn_with_state(
             enable_cors,
             cors_middleware,
@@ -123,18 +146,23 @@ where
 }
 
 async fn handle_mock_request(
-    State(matcher): State<Arc<dyn MockMatcher>>,
+    State(state): State<MockServerState>,
     req: Request,
 ) -> Response {
+    let matcher = &state.matcher;
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
 
-    println!(
-        "{} {} {}",
-        "  [Incoming]".bold().blue(),
-        method.bold().green(),
-        path.cyan()
-    );
+    if state.log_to_stdout {
+        println!(
+            "{} {} {}",
+            "  [Incoming]".bold().blue(),
+            method.bold().green(),
+            path.cyan()
+        );
+    } else {
+        tracing::debug!(method = %method, path = %path, "mock incoming request");
+    }
 
     let query_str = req.uri().query().unwrap_or("");
     let query: HashMap<String, String> = url::form_urlencoded::parse(query_str.as_bytes())
@@ -151,11 +179,15 @@ async fn handle_mock_request(
     let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
-            println!(
-                "  {} {}",
-                "Status:".bold().white(),
-                "400 Bad Request".bold().red()
-            );
+            if state.log_to_stdout {
+                println!(
+                    "  {} {}",
+                    "Status:".bold().white(),
+                    "400 Bad Request".bold().red()
+                );
+            } else {
+                tracing::debug!("mock request 400 Bad Request");
+            }
             return (StatusCode::BAD_REQUEST, "Failed to read request body").into_response();
         }
     };
@@ -179,14 +211,18 @@ async fn handle_mock_request(
             .matched_pattern
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        println!(
-            "  {} {} | {} {} | {}",
-            "Status:".bold().white(),
-            format!("{}", status.as_u16()).bold().green(),
-            "Matched Route:".bold().white(),
-            matched_pattern.cyan(),
-            "Success".bold().green()
-        );
+        if state.log_to_stdout {
+            println!(
+                "  {} {} | {} {} | {}",
+                "Status:".bold().white(),
+                format!("{}", status.as_u16()).bold().green(),
+                "Matched Route:".bold().white(),
+                matched_pattern.cyan(),
+                "Success".bold().green()
+            );
+        } else {
+            tracing::debug!(status = status.as_u16(), matched_pattern = %matched_pattern, "mock matched");
+        }
 
         let is_sse = mock_resp.headers.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("content-type") && v.contains("text/event-stream")
@@ -237,12 +273,16 @@ async fn handle_mock_request(
 
         response
     } else {
-        println!(
-            "  {} {} | {}",
-            "Status:".bold().white(),
-            "404 Not Found".bold().red(),
-            "No Matching Mock Route Found".bold().red()
-        );
+        if state.log_to_stdout {
+            println!(
+                "  {} {} | {}",
+                "Status:".bold().white(),
+                "404 Not Found".bold().red(),
+                "No Matching Mock Route Found".bold().red()
+            );
+        } else {
+            tracing::debug!(method = %mock_req.method, path = %mock_req.path, "mock 404 not found");
+        }
 
         let error_msg = format!(
             r#"{{"error": "No matching mock route found", "request": {{"method": "{}", "path": "{}"}}}}"#,

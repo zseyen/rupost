@@ -1,3 +1,5 @@
+use crate::Result;
+use crate::error::RupostError;
 use crate::mock::matcher::MockRouteConfig;
 use crate::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
 use crate::parser::types::ParsedFile;
@@ -7,8 +9,19 @@ use std::collections::HashMap;
 pub struct MockCompiler;
 
 impl MockCompiler {
+    /// 严格编译解析后的 ParsedFile 为 MockRouteConfig 向量：
+    /// 若 `@mock-when` 条件表达式无效则返回 ParseError，避免静默退化为无条件兜底变体；
+    /// 同时稳定保证有条件的变体排在无条件兜底变体之前。
+    pub fn try_compile(parsed_file: &ParsedFile) -> Result<Vec<MockRouteConfig>> {
+        Self::compile_inner(parsed_file, true)
+    }
+
     /// 将解析后的 ParsedFile 转换为 Mock 引擎所接收的 MockRouteConfig 向量
     pub fn compile(parsed_file: &ParsedFile) -> Vec<MockRouteConfig> {
+        Self::compile_inner(parsed_file, false).unwrap_or_default()
+    }
+
+    fn compile_inner(parsed_file: &ParsedFile, strict: bool) -> Result<Vec<MockRouteConfig>> {
         let mut routes = Vec::new();
 
         // 双角色语义：是否编译进 mock 服务器由「是否声明 Mock 变体」决定，与 @test 无关。
@@ -23,10 +36,24 @@ impl MockCompiler {
 
             let mut variants = Vec::new();
             for var in &req.metadata.mock_variants {
-                let condition = var
-                    .condition_expr
-                    .as_ref()
-                    .and_then(|expr| Self::parse_condition_expression(expr));
+                let condition = match var.condition_expr.as_deref() {
+                    Some(expr) => match Self::parse_condition_expression(expr) {
+                        Some(cond) => Some(cond),
+                        None if strict => {
+                            return Err(RupostError::ParseError(format!(
+                                "Invalid @mock-when condition expression: '{expr}'"
+                            )));
+                        }
+                        None => {
+                            tracing::warn!(
+                                "Skipping invalid @mock-when condition expression: '{}'",
+                                expr
+                            );
+                            continue;
+                        }
+                    },
+                    None => None,
+                };
 
                 let mut headers = HashMap::new();
                 for (key, val) in &var.headers {
@@ -41,24 +68,24 @@ impl MockCompiler {
                 });
             }
 
+            // 保持有条件变体相对顺序，仅将无条件兜底变体 (@mock-default) 稳定沉底
+            variants.sort_by_key(|v| v.condition.is_none());
+
             routes.push(MockRouteConfig {
                 method,
                 path,
                 variants,
             });
         }
-        routes
+        Ok(routes)
     }
 
     /// 将表达式解析为 VariantCondition
     /// 例如: "query.role == admin" -> Query, key="role", Equals, expected="admin"
     pub fn parse_condition_expression(expr: &str) -> Option<VariantCondition> {
-        let parts: Vec<&str> = expr.split("==").map(|s| s.trim()).collect();
-        if parts.len() != 2 {
-            return None;
-        }
-        let lhs = parts[0];
-        let rhs_val = parts[1].trim_matches('"').trim();
+        let (lhs_raw, rhs_raw) = expr.split_once("==")?;
+        let lhs = lhs_raw.trim();
+        let rhs_val = rhs_raw.trim().trim_matches('"').trim();
 
         let (source, stripped) = lhs
             .strip_prefix("query.")
@@ -71,7 +98,10 @@ impl MockCompiler {
                 lhs.strip_prefix("body.")
                     .map(|s| (ConditionSource::Body, s))
             })?;
-        let key = stripped.to_string();
+        let key = stripped.trim().to_string();
+        if key.is_empty() {
+            return None;
+        }
 
         if rhs_val.eq_ignore_ascii_case("None") {
             Some(VariantCondition {
@@ -156,5 +186,60 @@ mod tests {
         assert_eq!(cond2.key, "Authorization");
         assert_eq!(cond2.operator, CompareOp::Exists);
         assert_eq!(cond2.expected_value, "None");
+    }
+
+    #[test]
+    fn test_parse_condition_expression_value_with_double_equals() {
+        let cond = MockCompiler::parse_condition_expression(
+            "header.Authorization == \"Bearer abc==\"",
+        )
+        .expect("should parse value containing '=='");
+        assert_eq!(cond.source, ConditionSource::Header);
+        assert_eq!(cond.key, "Authorization");
+        assert_eq!(cond.operator, CompareOp::Equals);
+        assert_eq!(cond.expected_value, "Bearer abc==");
+    }
+
+    #[test]
+    fn test_try_compile_rejects_invalid_condition_without_silent_fallback() {
+        let mut parsed_file = ParsedFile::new();
+        let mut req = ParsedRequest::new(1);
+        req.url = "/api/v1/items".to_string();
+        req.metadata.mock_variants.push(ParsedMockVariant {
+            condition_expr: Some("invalid_condition_syntax".to_string()),
+            status: 200,
+            headers: Vec::new(),
+            body: Some("ok".to_string()),
+        });
+        parsed_file.add_request(req);
+
+        let err = MockCompiler::try_compile(&parsed_file).unwrap_err();
+        assert!(err.to_string().contains("invalid_condition_syntax"));
+    }
+
+    #[test]
+    fn test_try_compile_orders_default_variant_after_conditional() {
+        let mut parsed_file = ParsedFile::new();
+        let mut req = ParsedRequest::new(1);
+        req.url = "/api/v1/items".to_string();
+        req.metadata.mock_variants.push(ParsedMockVariant {
+            condition_expr: None,
+            status: 403,
+            headers: Vec::new(),
+            body: Some("default".to_string()),
+        });
+        req.metadata.mock_variants.push(ParsedMockVariant {
+            condition_expr: Some("query.role == admin".to_string()),
+            status: 200,
+            headers: Vec::new(),
+            body: Some("admin".to_string()),
+        });
+        parsed_file.add_request(req);
+
+        let routes = MockCompiler::try_compile(&parsed_file).unwrap();
+        assert_eq!(routes[0].variants[0].status, 200);
+        assert!(routes[0].variants[0].condition.is_some());
+        assert_eq!(routes[0].variants[1].status, 403);
+        assert!(routes[0].variants[1].condition.is_none());
     }
 }

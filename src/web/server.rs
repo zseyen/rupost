@@ -132,7 +132,11 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
             post(handlers::mock::simulate_mock_handler),
         )
         .route("/import", post(handlers::import::import_handler))
-        .route("/import/curl", post(handlers::import::import_curl_handler));
+        .route("/import/curl", post(handlers::import::import_curl_handler))
+        .route(
+            "/markdown/render",
+            post(handlers::markdown::render_markdown_handler),
+        );
 
     let router = Router::new()
         .nest("/api/v1", api_router)

@@ -64,7 +64,7 @@
         <ul id="file-list" class="file-tree"></ul>
       </aside>
 
-      <!-- 2. Center: Document Editor -->
+      <!-- 2. Center: Document Editor & Markdown Preview -->
       <main class="editor-pane">
         <div class="editor-toolbar">
           <div class="toolbar-left">
@@ -72,13 +72,21 @@
             <span id="editor-file-title" class="pane-title">Untitled</span>
           </div>
           <div class="editor-actions">
+            <div id="editor-mode-switch" class="mode-switch" role="group" aria-label="Document view mode" style="display: none;">
+              <button type="button" class="mode-btn active" data-mode="preview" onclick="setEditorMode('preview')">Preview</button>
+              <button type="button" class="mode-btn" data-mode="split" onclick="setEditorMode('split')">Split</button>
+              <button type="button" class="mode-btn" data-mode="source" onclick="setEditorMode('source')">Source</button>
+            </div>
             <span id="editor-meta" class="editor-meta">0 lines | UTF-8</span>
             <span id="save-status" class="save-status"></span>
           </div>
         </div>
-        <div class="editor-wrapper">
-          <div id="editor-gutter" class="editor-gutter"></div>
-          <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="Select a document on the left or type Markdown / HTTP DSL here..."></textarea>
+        <div id="editor-wrapper" class="editor-wrapper">
+          <div id="editor-source-pane" class="editor-source-pane">
+            <div id="editor-gutter" class="editor-gutter"></div>
+            <textarea id="code-editor" class="editor-textarea" spellcheck="false" placeholder="Select a document on the left or type Markdown / HTTP DSL here..."></textarea>
+          </div>
+          <div id="markdown-preview" class="markdown-preview" style="display: none;"></div>
         </div>
       </main>
 

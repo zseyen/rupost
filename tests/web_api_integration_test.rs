@@ -1195,3 +1195,42 @@ async fn test_web_suite_incident_retention_caps_at_32() {
         .count();
     assert_eq!(named_bundles, 32, "稳态 = 上限（另含 keepme 非命名条目）");
 }
+
+#[tokio::test]
+async fn test_web_markdown_render_endpoint_and_readonly_support() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = serde_json::json!({
+        "content": "# Title\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```http\nGET https://example.com\n```\n\n<script>alert(1)</script>"
+    });
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/markdown/render")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::RenderMarkdownResponse> =
+        serde_json::from_slice(&body).unwrap();
+    assert!(api_res.success);
+    let data = api_res.data.unwrap();
+    assert!(data.html.contains("<h1>Title</h1>"));
+    assert!(data.html.contains("<table>"));
+    assert!(data.html.contains("md-run-btn"));
+    assert!(!data.html.contains("<script>"));
+    assert_eq!(data.executable_blocks.len(), 1);
+    assert!(data.executable_blocks[0].contains("GET https://example.com"));
+}

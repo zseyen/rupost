@@ -34,13 +34,28 @@ function createMockDom() {
 
   const mockDocument = {
     getElementById: (id) => getOrCreateElement(id),
-    createElement: (tag) => ({
-      tagName: tag.toUpperCase(),
-      style: {},
-      dataset: {},
-      classList: { add: () => {}, remove: () => {} },
-      appendChild: () => {},
-    }),
+    querySelectorAll: () => [],
+    createElement: (tag) => {
+      const el = {
+        tagName: tag.toUpperCase(),
+        style: {},
+        dataset: {},
+        children: [],
+        textContent: '',
+        className: '',
+        classList: {
+          add: (c) => {
+            el.className = `${el.className} ${c}`.trim();
+          },
+          remove: () => {},
+          toggle: () => {},
+        },
+        appendChild: (child) => {
+          el.children.push(child);
+        },
+      };
+      return el;
+    },
     documentElement: {
       getAttribute: () => 'dark',
       setAttribute: () => {},
@@ -207,4 +222,144 @@ test('escapeHtml sanitizes dangerous HTML characters', () => {
   );
   assert.equal(app.escapeHtml(null), '');
   assert.equal(app.escapeHtml(undefined), '');
+});
+
+test('toggleDir lazy-loads subdirectory, caches it, and renders nested items with indentation', async () => {
+  app.clearTreeState();
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const fileListEl = getOrCreateElement('file-list');
+  fileListEl.children = [];
+  Object.defineProperty(fileListEl, 'innerHTML', {
+    get: () => '',
+    set: (val) => {
+      if (val === '') fileListEl.children = [];
+    },
+  });
+  fileListEl.appendChild = (child) => { fileListEl.children.push(child); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setAllFiles([
+    { path: 'doc', name: 'doc', is_dir: true },
+    { path: 'empty_dir', name: 'empty_dir', is_dir: true },
+    { path: 'README.md', name: 'README.md', is_dir: false },
+  ]);
+
+  let fetchCount = 0;
+  global.fetch = async (url) => {
+    fetchCount += 1;
+    if (url === '/api/v1/files?path=doc') {
+      return {
+        json: async () => ({
+          success: true,
+          data: [{ path: 'doc/quickstart.md', name: 'quickstart.md', is_dir: false }],
+        }),
+      };
+    }
+    if (url === '/api/v1/files?path=empty_dir') {
+      return {
+        json: async () => ({ success: true, data: [] }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.toggleDir('doc');
+  assert.deepEqual(app.getExpandedDirs(), ['doc']);
+  assert.equal(fetchCount, 1);
+  // Expect: doc, doc/quickstart.md, empty_dir, README.md
+  assert.equal(fileListEl.children.length, 4);
+  assert.equal(fileListEl.children[0].children[0].textContent, '[-]');
+  assert.equal(fileListEl.children[1].dataset.path, 'doc/quickstart.md');
+  assert.equal(fileListEl.children[1].style.paddingLeft, '28px');
+
+  // Collapse then re-expand should hit cache (no extra fetch)
+  await app.toggleDir('doc');
+  assert.deepEqual(app.getExpandedDirs(), []);
+  assert.equal(fileListEl.children.length, 3);
+
+  await app.toggleDir('doc');
+  assert.deepEqual(app.getExpandedDirs(), ['doc']);
+  assert.equal(fetchCount, 1);
+
+  // Expanding empty dir renders (empty) placeholder
+  await app.toggleDir('empty_dir');
+  assert.equal(fileListEl.children.some((c) => c.textContent === '(empty)'), true);
+});
+
+test('filterFiles searches across cached subdirectories', async () => {
+  app.clearTreeState();
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const fileListEl = getOrCreateElement('file-list');
+  fileListEl.children = [];
+  Object.defineProperty(fileListEl, 'innerHTML', {
+    get: () => '',
+    set: (val) => {
+      if (val === '') fileListEl.children = [];
+    },
+  });
+  fileListEl.appendChild = (child) => { fileListEl.children.push(child); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setAllFiles([
+    { path: 'doc', name: 'doc', is_dir: true },
+    { path: 'README.md', name: 'README.md', is_dir: false },
+  ]);
+  global.fetch = async () => ({
+    json: async () => ({
+      success: true,
+      data: [{ path: 'doc/quickstart.md', name: 'quickstart.md', is_dir: false }],
+    }),
+  });
+  await app.toggleDir('doc');
+
+  const filterInput = getOrCreateElement('file-filter-input');
+  filterInput.value = 'quickstart';
+  app.filterFiles();
+
+  assert.equal(fileListEl.children.length, 1);
+  assert.equal(fileListEl.children[0].dataset.path, 'doc/quickstart.md');
+});
+
+test('syncEditorModeForFile defaults .md to preview and .http to source', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const editorEl = getOrCreateElement('code-editor');
+  editorEl.value = '# Hello Rupost';
+  const modeSwitch = getOrCreateElement('editor-mode-switch');
+  const sourcePane = getOrCreateElement('editor-source-pane');
+  const previewPane = getOrCreateElement('markdown-preview');
+  const wrapper = getOrCreateElement('editor-wrapper');
+  wrapper.classList = { toggle: () => {} };
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/markdown/render') {
+      return {
+        json: async () => ({
+          success: true,
+          data: { html: '<h1>Hello Rupost</h1>', executable_blocks: [] },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  app.syncEditorModeForFile('README.md');
+  assert.equal(modeSwitch.style.display, 'inline-flex');
+  assert.equal(sourcePane.style.display, 'none');
+  assert.equal(previewPane.style.display, 'block');
+
+  // Wait for async renderMarkdownPreview
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(previewPane.innerHTML, /<h1>Hello Rupost<\/h1>/);
+
+  app.syncEditorModeForFile('test.http');
+  assert.equal(modeSwitch.style.display, 'none');
+  assert.equal(sourcePane.style.display, 'flex');
+  assert.equal(previewPane.style.display, 'none');
 });

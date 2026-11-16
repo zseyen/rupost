@@ -4,6 +4,16 @@ let currentFilePath = null;
 let allFiles = [];
 let activeInspectorTab = 'overview';
 let lastDebugData = null;
+let isReadonly = false;
+
+const expandedDirs = new Set();
+const dirCache = new Map();
+const loadingDirs = new Set();
+
+let editorMode = 'source';
+let lastRenderedExecBlocks = [];
+let markdownRenderTimer = null;
+let renderSeq = 0;
 
 // Initialize theme immediately to prevent FOUC
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
@@ -13,6 +23,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     loadFiles();
     applyReadonlyState();
     initEditorEvents();
+    initMarkdownPreviewEvents();
     initKeyboardShortcuts();
     updateGutter();
     updateEditorMeta();
@@ -61,6 +72,7 @@ async function applyReadonlyState() {
     const res = await fetch('/api/v1/meta');
     const json = await res.json();
     if (json.success && json.data && json.data.readonly) {
+      isReadonly = true;
       const badge = document.getElementById('readonly-badge');
       if (badge) badge.style.display = 'inline-block';
 
@@ -73,6 +85,7 @@ async function applyReadonlyState() {
           btn.title = '只读模式下不可用';
         }
       });
+      syncMarkdownRunButtonsReadonly();
       const statusInd = document.getElementById('status-indicator');
       if (statusInd) statusInd.textContent = '[STATUS] Locked (Read-Only)';
     }
@@ -83,13 +96,38 @@ async function applyReadonlyState() {
 
 // 1. Load files from workspace
 async function loadFiles() {
-  const listEl = document.getElementById('file-list');
   try {
+    dirCache.clear();
     const res = await fetch('/api/v1/files');
     const json = await res.json();
     if (json.success && Array.isArray(json.data)) {
       allFiles = json.data;
-      renderFileList(allFiles);
+
+      // 保留已展开目录的状态并刷新其子内容
+      if (expandedDirs.size > 0) {
+        await Promise.all(
+          Array.from(expandedDirs).map(async (dirPath) => {
+            try {
+              const subRes = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
+              const subJson = await subRes.json();
+              if (subJson.success && Array.isArray(subJson.data)) {
+                dirCache.set(dirPath, subJson.data);
+              } else {
+                expandedDirs.delete(dirPath);
+              }
+            } catch (err) {
+              expandedDirs.delete(dirPath);
+            }
+          })
+        );
+      }
+
+      const queryEl = document.getElementById('file-filter-input');
+      if (queryEl && queryEl.value && queryEl.value.trim()) {
+        filterFiles();
+      } else {
+        renderFileList(allFiles);
+      }
 
       // Auto-open first document if not selected
       const firstDoc = allFiles.find(f => !f.is_dir);
@@ -102,50 +140,158 @@ async function loadFiles() {
   }
 }
 
-// Render file list with pure text tags (no emojis)
-function renderFileList(files) {
-  const listEl = document.getElementById('file-list');
-  listEl.innerHTML = '';
+// Toggle directory expand/collapse with lazy loading & concurrency guard
+async function toggleDir(dirPath) {
+  if (expandedDirs.has(dirPath)) {
+    expandedDirs.delete(dirPath);
+    renderFileList(allFiles);
+    return;
+  }
 
-  files.forEach(file => {
-    const li = document.createElement('li');
-    li.dataset.path = file.path;
+  if (dirCache.has(dirPath)) {
+    expandedDirs.add(dirPath);
+    renderFileList(allFiles);
+    return;
+  }
 
-    const tag = document.createElement('span');
-    tag.className = 'item-tag';
-    if (file.is_dir) {
-      tag.textContent = '[DIR]';
-    } else if (file.name.endsWith('.http')) {
-      tag.textContent = '[HTTP]';
-    } else {
-      tag.textContent = '[DOC]';
+  if (loadingDirs.has(dirPath)) {
+    return;
+  }
+
+  loadingDirs.add(dirPath);
+  renderFileList(allFiles);
+
+  try {
+    const res = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
+    const json = await res.json();
+    if (json.success && Array.isArray(json.data)) {
+      dirCache.set(dirPath, json.data);
+      expandedDirs.add(dirPath);
     }
-
-    const name = document.createElement('span');
-    name.textContent = file.name;
-
-    li.appendChild(tag);
-    li.appendChild(name);
-
-    if (!file.is_dir) {
-      li.onclick = () => openFile(file.path);
-    }
-    if (file.path === currentFilePath) {
-      li.classList.add('active');
-    }
-    listEl.appendChild(li);
-  });
+  } catch (e) {
+    console.error(`Failed to load directory ${dirPath}:`, e);
+  } finally {
+    loadingDirs.delete(dirPath);
+    renderFileList(allFiles);
+  }
 }
 
-// Filter file tree by query text
+// Render file tree recursively (or flat list when filtering)
+function renderFileList(files, options = {}) {
+  const listEl = document.getElementById('file-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+
+  const { flatSearch = false } = options;
+
+  const appendItems = (entries, depth) => {
+    entries.forEach(file => {
+      const li = document.createElement('li');
+      li.dataset.path = file.path;
+      li.tabIndex = 0;
+      if (depth > 0) {
+        li.style.paddingLeft = `${14 + depth * 14}px`;
+      }
+
+      if (file.is_dir) {
+        li.classList.add('is-dir');
+        const toggle = document.createElement('span');
+        toggle.className = 'dir-toggle';
+        if (loadingDirs.has(file.path)) {
+          toggle.textContent = '[..]';
+        } else if (expandedDirs.has(file.path)) {
+          toggle.textContent = '[-]';
+        } else {
+          toggle.textContent = '[+]';
+        }
+        li.appendChild(toggle);
+      }
+
+      const tag = document.createElement('span');
+      tag.className = 'item-tag';
+      if (file.is_dir) {
+        tag.textContent = '[DIR]';
+      } else if (file.name.endsWith('.http')) {
+        tag.textContent = '[HTTP]';
+      } else {
+        tag.textContent = '[DOC]';
+      }
+
+      const name = document.createElement('span');
+      name.className = 'item-name';
+      name.textContent = flatSearch ? file.path : file.name;
+      name.title = file.path;
+
+      li.appendChild(tag);
+      li.appendChild(name);
+
+      const activate = () => {
+        if (file.is_dir) {
+          toggleDir(file.path);
+        } else {
+          openFile(file.path);
+        }
+      };
+
+      li.onclick = activate;
+      li.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activate();
+        }
+      };
+
+      if (file.path === currentFilePath) {
+        li.classList.add('active');
+      }
+      listEl.appendChild(li);
+
+      if (!flatSearch && file.is_dir && expandedDirs.has(file.path)) {
+        const children = dirCache.get(file.path) || [];
+        if (children.length === 0) {
+          const emptyLi = document.createElement('li');
+          emptyLi.className = 'tree-empty';
+          emptyLi.style.paddingLeft = `${14 + (depth + 1) * 14}px`;
+          emptyLi.textContent = '(empty)';
+          listEl.appendChild(emptyLi);
+        } else {
+          appendItems(children, depth + 1);
+        }
+      }
+    });
+  };
+
+  appendItems(files, 0);
+}
+
+// Filter file tree across root and all cached subdirectories
 function filterFiles() {
-  const query = document.getElementById('file-filter-input').value.trim().toLowerCase();
+  const inputEl = document.getElementById('file-filter-input');
+  const query = inputEl ? inputEl.value.trim().toLowerCase() : '';
   if (!query) {
     renderFileList(allFiles);
     return;
   }
-  const filtered = allFiles.filter(f => f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query));
-  renderFileList(filtered);
+
+  const seen = new Set();
+  const pool = [];
+  const collect = (entries) => {
+    entries.forEach(entry => {
+      if (!seen.has(entry.path)) {
+        seen.add(entry.path);
+        pool.push(entry);
+      }
+      if (entry.is_dir && dirCache.has(entry.path)) {
+        collect(dirCache.get(entry.path));
+      }
+    });
+  };
+  collect(allFiles);
+
+  const filtered = pool.filter(
+    f => f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query)
+  );
+  renderFileList(filtered, { flatSearch: true });
 }
 
 // 2. Open active document
@@ -168,6 +314,7 @@ async function openFile(path) {
 
       updateGutter();
       updateEditorMeta();
+      syncEditorModeForFile(path);
 
       document.querySelectorAll('#file-list li').forEach(li => {
         li.classList.toggle('active', li.dataset.path === path);
@@ -211,15 +358,24 @@ async function saveActiveFile() {
   }
 }
 
-// 4. In-situ single block debug execution
+// 4. In-situ single block debug execution (shared by editor & Markdown Run buttons)
 async function runCurrentBlock() {
   const editor = document.getElementById('code-editor');
   const fullText = editor.value;
   const cursorPos = editor.selectionStart;
-
   const rawBlock = extractTargetBlock(fullText, cursorPos);
+  await executeRawBlock(rawBlock);
+}
+
+async function executeRawBlock(rawBlock, triggerBtn = null) {
   const debugEl = document.getElementById('debug-output');
   debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EXECUTING]</div><div class="empty-text">Dispatching request to runtime engine...</div></div>';
+
+  const origLabel = triggerBtn ? triggerBtn.textContent : '';
+  if (triggerBtn) {
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = '[RUNNING...]';
+  }
 
   try {
     const res = await fetch('/api/v1/run/block', {
@@ -240,6 +396,11 @@ async function runCurrentBlock() {
     }
   } catch (e) {
     debugEl.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+  } finally {
+    if (triggerBtn) {
+      triggerBtn.disabled = isReadonly;
+      triggerBtn.textContent = origLabel;
+    }
   }
 }
 
@@ -582,6 +743,9 @@ function initEditorEvents() {
   editor.addEventListener('input', () => {
     updateGutter();
     updateEditorMeta();
+    if (editorMode === 'split') {
+      scheduleMarkdownRender();
+    }
   });
 
   editor.addEventListener('scroll', () => {
@@ -710,6 +874,106 @@ function insertIntoEditor(text) {
   updateEditorMeta();
 }
 
+// 6.1 Markdown View Mode & Live Preview Renderer
+function isMarkdownFile(path) {
+  return typeof path === 'string' && path.toLowerCase().endsWith('.md');
+}
+
+function syncEditorModeForFile(path) {
+  const modeSwitch = document.getElementById('editor-mode-switch');
+  if (isMarkdownFile(path)) {
+    if (modeSwitch) modeSwitch.style.display = 'inline-flex';
+    setEditorMode('preview');
+  } else {
+    if (modeSwitch) modeSwitch.style.display = 'none';
+    setEditorMode('source');
+  }
+}
+
+function setEditorMode(mode) {
+  editorMode = mode;
+  const sourcePane = document.getElementById('editor-source-pane');
+  const previewPane = document.getElementById('markdown-preview');
+  const wrapper = document.getElementById('editor-wrapper');
+
+  if (sourcePane) {
+    sourcePane.style.display = mode === 'preview' ? 'none' : 'flex';
+  }
+  if (previewPane) {
+    previewPane.style.display = mode === 'source' ? 'none' : 'block';
+  }
+  if (wrapper && wrapper.classList) {
+    wrapper.classList.toggle('is-split', mode === 'split');
+  }
+
+  document.querySelectorAll('#editor-mode-switch .mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+
+  if (mode === 'preview' || mode === 'split') {
+    renderMarkdownPreview();
+  }
+}
+
+function scheduleMarkdownRender() {
+  if (markdownRenderTimer) clearTimeout(markdownRenderTimer);
+  markdownRenderTimer = setTimeout(() => {
+    renderMarkdownPreview();
+  }, 120);
+}
+
+async function renderMarkdownPreview() {
+  const editor = document.getElementById('code-editor');
+  const previewPane = document.getElementById('markdown-preview');
+  if (!editor || !previewPane) return;
+
+  const seq = ++renderSeq;
+  try {
+    const res = await fetch('/api/v1/markdown/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: editor.value || '' })
+    });
+    const json = await res.json();
+    if (seq !== renderSeq) return;
+    if (json.success && json.data) {
+      lastRenderedExecBlocks = Array.isArray(json.data.executable_blocks)
+        ? json.data.executable_blocks
+        : [];
+      previewPane.innerHTML = `<article class="markdown-body">${json.data.html || ''}</article>`;
+      syncMarkdownRunButtonsReadonly();
+    }
+  } catch (e) {
+    if (seq === renderSeq) {
+      previewPane.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[RENDER ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+    }
+  }
+}
+
+function syncMarkdownRunButtonsReadonly() {
+  const previewPane = document.getElementById('markdown-preview');
+  if (!previewPane || !previewPane.querySelectorAll) return;
+  previewPane.querySelectorAll('.md-run-btn').forEach(btn => {
+    btn.disabled = isReadonly;
+    if (isReadonly) {
+      btn.title = '只读模式下不可用';
+    }
+  });
+}
+
+function initMarkdownPreviewEvents() {
+  const previewPane = document.getElementById('markdown-preview');
+  if (!previewPane) return;
+  previewPane.addEventListener('click', (e) => {
+    const btn = e.target.closest ? e.target.closest('.md-run-btn') : null;
+    if (!btn || isReadonly) return;
+    const idx = Number(btn.dataset.blockIndex);
+    if (!Number.isNaN(idx) && typeof lastRenderedExecBlocks[idx] === 'string') {
+      executeRawBlock(lastRenderedExecBlocks[idx], btn);
+    }
+  });
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -724,12 +988,26 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     applyReadonlyState,
     runSuite,
+    executeRawBlock,
     escapeHtml,
     applyTheme,
     toggleTheme,
+    toggleDir,
+    renderFileList,
+    filterFiles,
+    isMarkdownFile,
+    setEditorMode,
+    syncEditorModeForFile,
+    renderMarkdownPreview,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },
     getAllFiles: () => allFiles,
+    getExpandedDirs: () => Array.from(expandedDirs),
+    clearTreeState: () => {
+      expandedDirs.clear();
+      dirCache.clear();
+      loadingDirs.clear();
+    },
   };
 }

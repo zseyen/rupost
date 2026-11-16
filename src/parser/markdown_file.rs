@@ -198,6 +198,12 @@ impl MarkdownFileParser {
         deps
     }
 
+    /// 判断围栏代码块语言标识是否为可执行 HTTP 请求块（SSOT）
+    pub fn is_executable_http_lang(lang: &str) -> bool {
+        let lang_token = lang.split_whitespace().next().unwrap_or("");
+        lang_token.eq_ignore_ascii_case("http") || lang_token.eq_ignore_ascii_case("rest")
+    }
+
     /// 提取所有 http/rest 代码块（使用 pulldown-cmark）
     fn extract_code_blocks(content: &str) -> Vec<ExtractedCodeBlock> {
         let parser = Parser::new(content);
@@ -241,8 +247,7 @@ impl MarkdownFileParser {
                 // ```http title="demo" 这类带属性的围栏此前因整串比较被忽略；
                 // 使用 pulldown-cmark 原生 byte offset 精确换算围栏开行 1-based 行号。
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
-                    let lang_token = lang.split_whitespace().next().unwrap_or("").to_lowercase();
-                    if lang_token == "http" || lang_token == "rest" {
+                    if Self::is_executable_http_lang(&lang) {
                         in_code_block = true;
                         current_code.clear();
                         current_line = 1 + content[..range.start]

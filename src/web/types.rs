@@ -174,3 +174,16 @@ pub struct MockSimulateResponse {
     pub expected_status: u16,
     pub evaluations: Vec<ConditionEvaluation>,
 }
+
+/// Markdown 渲染请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderMarkdownRequest {
+    pub content: String,
+}
+
+/// Markdown 渲染响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderMarkdownResponse {
+    pub html: String,
+    pub executable_blocks: Vec<String>,
+}

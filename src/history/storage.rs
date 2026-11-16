@@ -268,12 +268,11 @@ pub use super::snapshot_legacy::{
 };
 pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entry};
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod privacy_tests {
     use super::*;
 
     /// S-1：history.jsonl 权限必须与快照防线对齐——新建即 0600，宽松旧文件收紧。
-    #[cfg(unix)]
     #[test]
     fn test_history_file_permissions_tightened() {
         use std::os::unix::fs::PermissionsExt;

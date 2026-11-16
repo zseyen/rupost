@@ -23,7 +23,7 @@ RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一�
 - **极致效率**：支持 curl 与 httpie 风格的命令行输入，并提供极短的别名（`t`, `h`, `g`）以提升操作流转速度。
 - **交互式终端 TUI 模式**：内置基于 Model-View-Update 单向数据流与自适应布局的交互式调试终端。支持文件与请求历史双 Tab 状态解耦切换、基于内存预折行 (Pre-wrapping) 算法的长 Response/WS/SSE 日志高精度垂直滚动、路径显示配置切换、以及历史快照一键 Enter 反向还原代码并重新加载运行。
 - **底层架构**：遵循 Clean Architecture 设计模式，代码结构清晰，易于扩展与维护。
-- **插件生态**：hook（请求管线签名/认证/改写）与 command（CLI 工具扩展）双形态；命令型最小示例与作者指南见 [插件与扩展](file:///doc/architecture/features/plugin_and_extensibility.md)，社区插件索引见 [community-plugins.md](file:///doc/community-plugins.md)。
+- **插件生态**：hook（请求管线签名/认证/改写）与 command（CLI 工具扩展）双形态，支持跨平台 `#!` Shebang 透明桥接、零子进程运行时预检（含 Windows `.exe`/`.cmd`/`.bat` 与 `python3` 回退探测）及 `RuntimeMissing` 三选一自愈降级；命令型最小示例与作者指南见 [插件与扩展](file:///doc/architecture/features/plugin_and_extensibility.md)，社区插件索引见 [community-plugins.md](file:///doc/community-plugins.md)。
 
 ---
 
@@ -110,12 +110,23 @@ RuPost 提供了直观且高效的命令行接口：
   ```
 * **导出测试用例为原生命令行 (cURL / HTTPie / Wget)**:
   ```bash
-  # 查看支持的导出插件
+  # 查看支持的导出目标
   rupost export --list
   # 导出为 cURL 命令 (支持环境变量注入与凭据自动脱敏)
   rupost export curl examples/basic.http -e dev --redact
   # 导出单行紧凑格式并保存到脚本
   rupost export httpie examples/basic.http --compact -o request.sh
+  ```
+* **插件发现、静态校验与项目闸门**:
+  ```bash
+  # 列出全局已发现插件及就绪状态
+  rupost plugin list
+  # 开启项目本地插件目录 (.rupost/plugins) 并允许缺失降级
+  rupost --allow-project-plugins --allow-missing-plugins t suite.http
+  # 分发前静态体检 manifest（不执行插件、不触发 TOFU）
+  rupost plugin validate examples/plugins/rupost-plugin-cmd-hello.json
+  # 导出 IDE 补全与校验四段统一 Schema
+  rupost plugin schema
   ```
 
 ---

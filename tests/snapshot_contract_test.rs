@@ -1,13 +1,15 @@
 //! 黑匣子快照契约与领域模型守护测试（拆分自超长存储文件，保持单文件轻量可维护）。
 
+use rupost::history::mask_snapshot_entry;
 use rupost::history::model::{
     ExecutionSnapshotFile, MaskingMode, RequestSnapshot, ResponseSnapshot, RunnerFingerprint,
     SNAPSHOT_SCHEMA_VERSION, SnapshotEntry, SnapshotSuite, SocketDiagnostics, TimingWaterfallUs,
 };
-use rupost::history::storage::{
-    read_execution_snapshot, save_batch_snapshot, write_execution_snapshot,
-};
-use rupost::history::{mask_snapshot_entry, read_snapshot_suite, write_snapshot_suite};
+#[cfg(unix)]
+use rupost::history::storage::write_execution_snapshot;
+use rupost::history::storage::{read_execution_snapshot, save_batch_snapshot};
+#[cfg(unix)]
+use rupost::history::{read_snapshot_suite, write_snapshot_suite};
 use rupost::http::Response;
 use rupost::http::diagnose::{CertInfo, DiagnosticsReport};
 use rupost::http::timing::RequestTiming;

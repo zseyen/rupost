@@ -27,6 +27,9 @@ pub trait DocumentStore: Send + Sync + 'static {
 
     /// 保存指定文档的内容
     async fn save_document(&self, path: &str, content: &str) -> Result<()>;
+
+    /// 新建文档（若目标已存在则拒绝，防止静默覆盖）
+    async fn create_document(&self, path: &str, content: &str) -> Result<usize>;
 }
 
 /// 基于本地磁盘的标准实现（基于统一安全沙箱 PathSandbox）
@@ -137,6 +140,23 @@ impl DocumentStore for LocalFsDocumentStore {
             std::fs::create_dir_all(parent).map_err(RupostError::IoError)?;
         }
         std::fs::write(&safe_path, content).map_err(RupostError::IoError)
+    }
+
+    async fn create_document(&self, path: &str, content: &str) -> Result<usize> {
+        let safe_path = self.document_sandbox().resolve_safe_path(path)?;
+        if safe_path.exists() {
+            return Err(RupostError::Other(format!(
+                "File already exists: {}",
+                path
+            )));
+        }
+        if let Some(parent) = safe_path.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(RupostError::IoError)?;
+        }
+        std::fs::write(&safe_path, content).map_err(RupostError::IoError)?;
+        Ok(content.len())
     }
 }
 

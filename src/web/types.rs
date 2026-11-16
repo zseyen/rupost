@@ -187,3 +187,51 @@ pub struct RenderMarkdownResponse {
     pub html: String,
     pub executable_blocks: Vec<String>,
 }
+
+/// 新建活文档请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFileRequest {
+    pub path: String,
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
+/// 新建活文档响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFileResponse {
+    pub path: String,
+    pub bytes_written: usize,
+}
+
+/// 工作区可用环境列表响应（仅返回环境名，不暴露变量值）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvsResponse {
+    pub environments: Vec<String>,
+    pub default_env: Option<String>,
+}
+
+/// 单块导出请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportBlockRequest {
+    pub raw_block: String,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+    #[serde(default)]
+    pub env: Option<String>,
+    #[serde(default)]
+    pub compact: Option<bool>,
+    #[serde(default)]
+    pub redact_secrets: Option<bool>,
+    #[serde(default)]
+    pub extra_variables: Option<HashMap<String, String>>,
+}
+
+/// 单块导出响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportBlockResponse {
+    pub format: String,
+    pub command: String,
+    pub warnings: Vec<String>,
+}

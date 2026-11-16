@@ -123,8 +123,11 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
     let api_router = Router::new()
         .route("/files", get(handlers::files::list_files_handler))
         .route("/file", get(handlers::files::get_file_handler))
+        .route("/file/create", post(handlers::files::create_file_handler))
+        .route("/envs", get(handlers::files::list_envs_handler))
         .route("/meta", get(handlers::files::meta_handler))
         .route("/save", post(handlers::save::save_file_handler))
+        .route("/export", post(handlers::export::export_block_handler))
         .route("/run/block", post(handlers::run::run_block_handler))
         .route("/run/suite", post(handlers::run::run_suite_handler))
         .route(

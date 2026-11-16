@@ -1234,3 +1234,169 @@ async fn test_web_markdown_render_endpoint_and_readonly_support() {
     assert_eq!(data.executable_blocks.len(), 1);
     assert!(data.executable_blocks[0].contains("GET https://example.com"));
 }
+
+#[tokio::test]
+async fn test_web_create_file_api_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config.clone());
+
+    // 1. 正常创建嵌套 .http 文件 -> 201
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "path": "api/users.http",
+                "content": "GET https://httpbin.org/get\n"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert!(dir.path().join("api/users.http").is_file());
+
+    // 2. 重复创建同一文件 -> 409 Conflict（绝不静默覆盖）
+    let dup_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "path": "api/users.http" }).to_string(),
+        ))
+        .unwrap();
+    let dup_res = app.clone().oneshot(dup_req).await.unwrap();
+    assert_eq!(dup_res.status(), StatusCode::CONFLICT);
+
+    // 3. 非法扩展名 / 目录穿越 -> 403 Forbidden
+    let bad_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "path": "evil.sh" }).to_string(),
+        ))
+        .unwrap();
+    let bad_res = app.oneshot(bad_req).await.unwrap();
+    assert_eq!(bad_res.status(), StatusCode::FORBIDDEN);
+
+    // 4. 只读模式拦截 -> 403 Forbidden
+    let ro_app = create_web_router(WebServerConfig {
+        readonly: true,
+        ..config
+    });
+    let ro_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/file/create")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "path": "new.md" }).to_string(),
+        ))
+        .unwrap();
+    let ro_res = ro_app.oneshot(ro_req).await.unwrap();
+    assert_eq!(ro_res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_web_list_envs_api() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("rupost.toml"),
+        "[environments.dev]\napi_key = \"super-secret-dev-key\"\n\n[environments.prod]\napi_key = \"super-secret-prod-key\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".env.staging"), "TOKEN=secret-staging\n").unwrap();
+    std::fs::write(dir.path().join(".env.example"), "TOKEN=placeholder\n").unwrap();
+
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        default_env: Some("dev".to_string()),
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/envs")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8_lossy(&body);
+    assert!(!body_str.contains("super-secret-dev-key"), "不得泄露密钥值");
+    assert!(!body_str.contains("secret-staging"), "不得泄露 .env 密钥值");
+
+    let api_res: ApiResponse<rupost::web::types::EnvsResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert_eq!(data.default_env.as_deref(), Some("dev"));
+    assert_eq!(data.environments, vec!["dev", "prod", "staging"]);
+}
+
+#[tokio::test]
+async fn test_web_export_block_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    // 1. 导出 cURL（只读模式同样可用）
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/export")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "raw_block": "POST https://api.example.com/items\nContent-Type: application/json\n\n{\"id\":1}",
+                "format": "curl",
+                "compact": true
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::ExportBlockResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert_eq!(data.format, "curl");
+    assert!(data.command.contains("curl"));
+    assert!(data.command.contains("https://api.example.com/items"));
+
+    // 2. 不支持的导出格式 -> 400
+    let bad_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/export")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "raw_block": "GET https://api.example.com",
+                "format": "unknown_fmt"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let bad_res = app.oneshot(bad_req).await.unwrap();
+    assert_eq!(bad_res.status(), StatusCode::BAD_REQUEST);
+}

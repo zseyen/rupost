@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod handlers;
+pub mod http_parse;
 pub mod importer;
 pub mod markdown;
 pub mod server;

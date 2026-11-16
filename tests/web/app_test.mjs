@@ -344,7 +344,30 @@ test('syncEditorModeForFile defaults .md to preview and .http to source', async 
       return {
         json: async () => ({
           success: true,
-          data: { html: '<h1>Hello Rupost</h1>', executable_blocks: [] },
+          data: { html: '<h1>Hello Rupost</h1>', executable_blocks: [], executable_cards: [] },
+        }),
+      };
+    }
+    if (url === '/api/v1/http/parse') {
+      return {
+        json: async () => ({
+          success: true,
+          data: {
+            variables: {},
+            cards: [
+              {
+                title: 'Demo',
+                method: 'GET',
+                url: 'https://example.com',
+                headers: [],
+                body: null,
+                directives: [],
+                has_mock: false,
+                is_websocket: false,
+                raw_block: '### Demo\nGET https://example.com',
+              },
+            ],
+          },
         }),
       };
     }
@@ -367,6 +390,7 @@ test('syncEditorModeForFile defaults .md to preview and .http to source', async 
   assert.equal(modeSwitch.style.display, 'inline-flex');
   assert.equal(sourcePane.style.display, 'none');
   assert.equal(previewPane.style.display, 'block');
+  await new Promise((r) => setTimeout(r, 0));
   assert.match(previewPane.innerHTML, /http-cards-stack/);
 
   app.syncEditorModeForFile('notes.txt');

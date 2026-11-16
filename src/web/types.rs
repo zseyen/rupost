@@ -186,6 +186,42 @@ pub struct RenderMarkdownRequest {
 pub struct RenderMarkdownResponse {
     pub html: String,
     pub executable_blocks: Vec<String>,
+    #[serde(default)]
+    pub executable_cards: Vec<HttpCardDto>,
+}
+
+/// `.http` 文档结构化解析请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseHttpRequest {
+    pub content: String,
+}
+
+/// 标准化请求头 DTO
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HttpHeaderDto {
+    pub key: String,
+    pub value: String,
+}
+
+/// 统一 HTTP 请求卡片 DTO（`.http` 与 `.md` 活文档共用，SSOT）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HttpCardDto {
+    pub title: String,
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<HttpHeaderDto>,
+    pub body: Option<String>,
+    pub directives: Vec<String>,
+    pub has_mock: bool,
+    pub is_websocket: bool,
+    pub raw_block: String,
+}
+
+/// `.http` 文档结构化解析响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseHttpResponse {
+    pub variables: BTreeMap<String, String>,
+    pub cards: Vec<HttpCardDto>,
 }
 
 /// 新建活文档请求

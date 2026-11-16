@@ -128,6 +128,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         .route("/files", get(handlers::files::list_files_handler))
         .route("/file", get(handlers::files::get_file_handler))
         .route("/file/create", post(handlers::files::create_file_handler))
+        .route("/http/parse", post(handlers::files::parse_http_handler))
         .route("/envs", get(handlers::files::list_envs_handler))
         .route("/meta", get(handlers::files::meta_handler))
         .route("/save", post(handlers::save::save_file_handler))

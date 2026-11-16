@@ -1,5 +1,7 @@
+use crate::parser::http_file::HttpFileParser;
 use crate::parser::markdown_file::MarkdownFileParser;
-use crate::web::types::RenderMarkdownResponse;
+use crate::web::http_parse::parsed_request_to_card_dto;
+use crate::web::types::{HttpCardDto, RenderMarkdownResponse};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html};
 
 /// 转义 HTML 文本与属性中的特殊字符，防止 XSS 注入
@@ -159,9 +161,20 @@ pub fn render_markdown_to_html(content: &str) -> RenderMarkdownResponse {
     let mut html_output = String::new();
     html::push_html(&mut html_output, transformed_events.into_iter());
 
+    let executable_cards: Vec<HttpCardDto> = executable_blocks
+        .iter()
+        .filter_map(|raw| {
+            HttpFileParser::parse_request_block(raw, 1)
+                .ok()
+                .flatten()
+                .map(|req| parsed_request_to_card_dto(&req, raw.clone()))
+        })
+        .collect();
+
     RenderMarkdownResponse {
         html: html_output,
         executable_blocks,
+        executable_cards,
     }
 }
 

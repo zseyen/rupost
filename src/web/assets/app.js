@@ -21,6 +21,7 @@ const loadingDirs = new Set();
 
 let editorMode = 'source';
 let lastRenderedExecBlocks = [];
+let lastRenderedCards = [];
 let cardEditedBodies = new Map();
 let currentHttpFileVars = {};
 let markdownRenderTimer = null;
@@ -1072,10 +1073,10 @@ function upgradePreviewCodeBlocks(previewPane) {
   previewPane.querySelectorAll('.md-http-block').forEach((blockEl) => {
     const runBtn = blockEl.querySelector('.md-run-btn');
     const idx = runBtn ? Number(runBtn.dataset.blockIndex) : -1;
-    const rawBlock = lastRenderedExecBlocks[idx];
-    if (!Number.isNaN(idx) && typeof rawBlock === 'string') {
+    const cardData = lastRenderedCards[idx] || lastRenderedExecBlocks[idx];
+    if (!Number.isNaN(idx) && cardData) {
       const wrapper = document.createElement('div');
-      wrapper.innerHTML = RupostCards.renderHttpCardHtml(rawBlock, idx, {
+      wrapper.innerHTML = RupostCards.renderHttpCardHtml(cardData, idx, {
         readonly: isReadonly,
         editedBody: cardEditedBodies.get(idx),
       });
@@ -1102,29 +1103,55 @@ async function renderMarkdownPreview() {
   const previewPane = document.getElementById('markdown-preview');
   if (!editor || !previewPane) return;
 
+  const seq = ++renderSeq;
+
   if (isHttpFile(currentFilePath)) {
-    const extracted = RupostCards.extractHttpFileBlocks(editor.value || '');
-    currentHttpFileVars = extracted.fileVariables || {};
-    lastRenderedExecBlocks = extracted.blocks || [];
-    if (lastRenderedExecBlocks.length === 0) {
-      previewPane.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EMPTY HTTP FILE]</div><div class="empty-text">Switch to [Source] to add HTTP requests.</div></div>';
-      return;
+    try {
+      const res = await fetch('/api/v1/http/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editor.value || '' }),
+      });
+      const json = await res.json();
+      if (seq !== renderSeq) return;
+      if (!json.success || !json.data) {
+        previewPane.innerHTML = `
+          <div class="error-banner" style="margin: 20px;">
+            <div class="error-banner-head">
+              <span>[PARSE ERR]</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="setEditorMode('source')">[Switch to Source]</button>
+            </div>
+            <div>${escapeHtml(json.error || 'Failed to parse .http document')}</div>
+          </div>
+        `;
+        return;
+      }
+      currentHttpFileVars = json.data.variables || {};
+      lastRenderedCards = Array.isArray(json.data.cards) ? json.data.cards : [];
+      lastRenderedExecBlocks = lastRenderedCards.map((c) => c.raw_block);
+      if (lastRenderedCards.length === 0) {
+        previewPane.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EMPTY HTTP FILE]</div><div class="empty-text">Switch to [Source] to add HTTP requests.</div></div>';
+        return;
+      }
+      const cardsHtml = lastRenderedCards
+        .map((card, idx) =>
+          RupostCards.renderHttpCardHtml(card, idx, {
+            readonly: isReadonly,
+            editedBody: cardEditedBodies.get(idx),
+          })
+        )
+        .join('');
+      previewPane.innerHTML = `<div class="http-cards-stack">${cardsHtml}</div>`;
+      syncMarkdownRunButtonsReadonly();
+    } catch (e) {
+      if (seq === renderSeq) {
+        previewPane.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[PARSE ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+      }
     }
-    const cardsHtml = lastRenderedExecBlocks
-      .map((blk, idx) =>
-        RupostCards.renderHttpCardHtml(blk, idx, {
-          readonly: isReadonly,
-          editedBody: cardEditedBodies.get(idx),
-        })
-      )
-      .join('');
-    previewPane.innerHTML = `<div class="http-cards-stack">${cardsHtml}</div>`;
-    syncMarkdownRunButtonsReadonly();
     return;
   }
 
   currentHttpFileVars = {};
-  const seq = ++renderSeq;
   try {
     const res = await fetch('/api/v1/markdown/render', {
       method: 'POST',
@@ -1136,6 +1163,9 @@ async function renderMarkdownPreview() {
     if (json.success && json.data) {
       lastRenderedExecBlocks = Array.isArray(json.data.executable_blocks)
         ? json.data.executable_blocks
+        : [];
+      lastRenderedCards = Array.isArray(json.data.executable_cards)
+        ? json.data.executable_cards
         : [];
       previewPane.innerHTML = `<article class="markdown-body">${json.data.html || ''}</article>`;
       upgradePreviewCodeBlocks(previewPane);
@@ -1210,10 +1240,10 @@ function getEffectiveCardBlock(idx) {
 }
 
 function rerenderSingleCard(cardEl, idx) {
-  const rawBlock = lastRenderedExecBlocks[idx];
-  if (!cardEl || typeof rawBlock !== 'string') return;
+  const cardData = lastRenderedCards[idx] || lastRenderedExecBlocks[idx];
+  if (!cardEl || !cardData) return;
   const wrapper = document.createElement('div');
-  wrapper.innerHTML = RupostCards.renderHttpCardHtml(rawBlock, idx, {
+  wrapper.innerHTML = RupostCards.renderHttpCardHtml(cardData, idx, {
     readonly: isReadonly,
     editedBody: cardEditedBodies.get(idx),
   });

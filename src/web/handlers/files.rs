@@ -1,9 +1,11 @@
 use crate::error::RupostError;
 use crate::parser::parse_document_by_path;
 use crate::variable::config::ConfigLoader;
+use crate::web::http_parse::parse_http_document_to_cards;
 use crate::web::server::AppState;
 use crate::web::types::{
-    ApiResponse, CreateFileRequest, CreateFileResponse, EnvsResponse, WorkbenchMeta,
+    ApiResponse, CreateFileRequest, CreateFileResponse, EnvsResponse, ParseHttpRequest,
+    WorkbenchMeta,
 };
 use axum::Json;
 use axum::extract::{Query, State};
@@ -150,4 +152,12 @@ pub async fn list_envs_handler(State(state): State<AppState>) -> impl IntoRespon
             default_env: state.default_env.clone(),
         })),
     )
+}
+
+/// 使用权威 `HttpFileParser` 解析 `.http` 内容为结构化卡片（只读模式可用）
+pub async fn parse_http_handler(Json(req): Json<ParseHttpRequest>) -> impl IntoResponse {
+    match parse_http_document_to_cards(&req.content) {
+        Ok(parsed) => (StatusCode::OK, Json(ApiResponse::ok(parsed))),
+        Err(err) => (StatusCode::UNPROCESSABLE_ENTITY, Json(ApiResponse::err(err))),
+    }
 }

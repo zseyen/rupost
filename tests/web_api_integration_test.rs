@@ -1518,3 +1518,42 @@ async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn test_web_http_parse_endpoint_handles_comments_and_trailing_assert() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    let payload = serde_json::json!({
+        "content": "# 获取用户资料\n### get-profile\n# @name get-profile\nGET {{base_url}}/v1/users/1\nAccept: application/json\n\n# @assert status == 200\n"
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/http/parse")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::ParseHttpResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert_eq!(data.cards.len(), 1);
+    assert_eq!(data.cards[0].title, "get-profile");
+    assert!(data.cards[0].body.is_none());
+    assert!(
+        data.cards[0]
+            .directives
+            .iter()
+            .any(|d| d == "@assert status == 200")
+    );
+}

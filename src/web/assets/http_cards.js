@@ -322,9 +322,21 @@
     return 'method-get';
   }
 
-  function renderHttpCardHtml(rawBlock, idx, options = {}) {
+  function renderHttpCardHtml(cardOrRaw, idx, options = {}) {
     const { readonly = false, editedBody = undefined } = options;
-    const parsed = parseHttpBlock(rawBlock);
+    const isDto = cardOrRaw && typeof cardOrRaw === 'object';
+    const parsed = isDto
+      ? {
+          title: cardOrRaw.title || 'HTTP Request',
+          directives: Array.isArray(cardOrRaw.directives) ? cardOrRaw.directives : [],
+          method: cardOrRaw.method || 'GET',
+          url: cardOrRaw.url || '',
+          headers: Array.isArray(cardOrRaw.headers) ? cardOrRaw.headers : [],
+          body: cardOrRaw.body || '',
+          hasMock: Boolean(cardOrRaw.has_mock),
+          isWebsocket: Boolean(cardOrRaw.is_websocket),
+        }
+      : parseHttpBlock(cardOrRaw);
     const activeBody = editedBody !== undefined ? editedBody : parsed.body;
     const isModified = editedBody !== undefined && editedBody !== parsed.body;
     const hasInitialOrEditedBody = Boolean(activeBody);

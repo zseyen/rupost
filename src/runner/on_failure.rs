@@ -78,19 +78,24 @@ pub async fn run_hook(
             stdout: String::new(),
         };
     };
-    // wait_with_output 会消费 child，先记下 pid（= 进程组 id）供超时整组终结
-    let pgid = child.id();
+    // wait_with_output 会消费 child，先用 ProcessGroupGuard 托管 pid（超时或 Drop 自动组级强杀）
+    let mut pg_guard = crate::platform::ProcessGroupGuard::new(child.id());
 
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => HookOutcome {
-            timed_out: false,
-            exit_success: out.status.success(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        },
-        // 超时：future 被 drop（kill_on_drop 杀直接子进程），再对整组补刀清理孙进程
-        Err(_) => {
-            crate::platform::kill_process_group_pid(pgid);
+    match crate::platform::wait_with_timeout_and_cancel(child.wait_with_output(), timeout, None)
+        .await
+    {
+        crate::platform::WaitOutcome::Completed(Ok(out)) => {
+            pg_guard.disarm();
+            HookOutcome {
+                timed_out: false,
+                exit_success: out.status.success(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            }
+        }
+        // 超时或取消：组级 SIGKILL 清理子孙进程
+        crate::platform::WaitOutcome::TimedOut | crate::platform::WaitOutcome::Cancelled => {
+            pg_guard.kill_now();
             HookOutcome {
                 timed_out: true,
                 exit_success: false,
@@ -99,12 +104,15 @@ pub async fn run_hook(
             }
         }
         // 等待期 IO 错误（如管道早闭）：非超时，按失败处理
-        Ok(Err(_)) => HookOutcome {
-            timed_out: false,
-            exit_success: false,
-            stderr: String::new(),
-            stdout: String::new(),
-        },
+        crate::platform::WaitOutcome::Completed(Err(_)) => {
+            pg_guard.disarm();
+            HookOutcome {
+                timed_out: false,
+                exit_success: false,
+                stderr: String::new(),
+                stdout: String::new(),
+            }
+        }
     }
 }
 

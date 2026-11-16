@@ -33,7 +33,7 @@ pub fn discover_plugin_registry_with_sink(
     match PluginRegistry::load_or_discover(discover, &cache_path) {
         Ok(reg) => {
             for warning in &reg.warnings {
-                sink.emit(WarningSeverity::Info, "executor_factory", warning);
+                sink.emit(WarningSeverity::Alert, "executor_factory", warning);
             }
             let mut directives: Vec<String> = reg.hooks.keys().cloned().collect();
             directives.sort();
@@ -46,7 +46,7 @@ pub fn discover_plugin_registry_with_sink(
         Err(e) => {
             // 反静默：发现失败必须可见；回退空注册表确保插件管线与严格门禁不旁路
             sink.emit(
-                WarningSeverity::Info,
+                WarningSeverity::Alert,
                 "executor_factory",
                 &format!("插件注册表发现失败（插件注解将按缺失门禁/降级处理）: {e}"),
             );
@@ -81,6 +81,21 @@ pub fn build_interactive_executor_with_options(
     plugin_cfg: &crate::variable::PluginTomlConfig,
     strict_vars: bool,
 ) -> TestExecutor {
+    build_interactive_executor_with_options_and_sink(
+        discover,
+        plugin_cfg,
+        strict_vars,
+        &StderrWarningSink,
+    )
+}
+
+/// 允许注入 `WarningSink` 的交互执行器构造（Web/TUI 接入 `BufferedWarningSink` 防撕裂/丢失告警）。
+pub fn build_interactive_executor_with_options_and_sink(
+    discover: &DiscoverOptions,
+    plugin_cfg: &crate::variable::PluginTomlConfig,
+    strict_vars: bool,
+    sink: &dyn WarningSink,
+) -> TestExecutor {
     let plugin_runtime = PluginRuntimeOptions {
         allow_missing_plugins: plugin_cfg.allow_missing_plugins,
         strict_plugins: plugin_cfg.strict_plugins,
@@ -91,9 +106,10 @@ pub fn build_interactive_executor_with_options(
         ),
         plugin_env: crate::plugin::pipeline::parse_plugin_env_specs(&plugin_cfg.plugin_env),
     };
-    let registry = discover_plugin_registry(
+    let registry = discover_plugin_registry_with_sink(
         discover,
-        &crate::runner::suite_setup::extract_authorized_env_keys(&plugin_cfg.plugin_env),
+        &crate::plugin::extract_authorized_env_keys(&plugin_cfg.plugin_env),
+        sink,
     );
     TestExecutor::with_ephemeral_cookies()
         .with_strict_vars(strict_vars)
@@ -102,6 +118,7 @@ pub fn build_interactive_executor_with_options(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn test_discover_plugin_registry_with_sink_captures_warnings_without_stderr() {
@@ -190,10 +207,9 @@ mod tests {
             plugin_env: vec!["VAULT_TOKEN=abc".to_string(), "BARE_KEY".to_string()],
             ..Default::default()
         };
-        let authorized = crate::runner::suite_setup::extract_authorized_env_keys(&cfg.plugin_env);
+        let authorized = crate::plugin::extract_authorized_env_keys(&cfg.plugin_env);
         assert!(authorized.contains("VAULT_TOKEN") && authorized.contains("BARE_KEY"));
     }
-    use super::*;
 
     /// 工厂必须真实装配注册表（非空钩子索引），而非退化空注册表。
     #[test]

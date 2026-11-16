@@ -95,18 +95,7 @@ fn verify_or_prompt_tofu(
     Ok(())
 }
 
-fn extract_authorized_env_keys(specs: &[String]) -> std::collections::HashSet<String> {
-    specs
-        .iter()
-        .filter_map(|spec| {
-            let key = match spec.split_once('=') {
-                Some((k, _)) => k.trim(),
-                None => spec.trim(),
-            };
-            (!key.is_empty()).then(|| key.to_string())
-        })
-        .collect()
-}
+use rupost::plugin::extract_authorized_env_keys;
 
 /// 拉起插件命令子进程（03 §6.2）：
 /// - TTY 独占直通（inherit 三向）

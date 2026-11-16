@@ -242,7 +242,7 @@ impl WorkspaceConfig {
 }
 
 /// 校验 `[paths]` 配置的相对路径是否严格囚禁在 `project_root` 沙箱内：
-/// 拒绝绝对路径、`..` 父级回溯与指向工作区外的符号链接。
+/// 拒绝绝对路径、根路径、`..` 父级回溯，以及任何直接/父级/悬空符号链接逃逸。
 pub fn resolve_sandboxed_workspace_path(
     project_root: &Path,
     raw_rel: &str,
@@ -261,14 +261,24 @@ pub fn resolve_sandboxed_workspace_path(
             return Err("禁止根路径、父级回溯 `..` 或盘符前缀".to_string());
         }
     }
-    let joined = project_root.join(rel);
-    if joined.exists() || std::fs::symlink_metadata(&joined).is_ok() {
-        let roots = vec![project_root.to_path_buf()];
-        if !crate::utils::path_guard::is_within_roots(&joined, &roots) {
-            return Err("目标路径或符号链接指向工作区之外".to_string());
+
+    let canon_root = std::fs::canonicalize(project_root)
+        .map_err(|e| format!("无法解析工作区根目录 {}: {e}", project_root.display()))?;
+
+    let mut cur = project_root.to_path_buf();
+    for comp in rel.components() {
+        if let Component::Normal(seg) = comp {
+            cur.push(seg);
+            if std::fs::symlink_metadata(&cur).is_ok() {
+                let canon_cur = std::fs::canonicalize(&cur)
+                    .map_err(|_| "目标路径或中间路径为无效或悬空符号链接".to_string())?;
+                if !canon_cur.starts_with(&canon_root) {
+                    return Err("目标路径或符号链接指向工作区之外".to_string());
+                }
+            }
         }
     }
-    Ok(joined)
+    Ok(cur)
 }
 
 /// B3：`rupost.toml [plugins]` 段——TUI/Web 交互入口的插件运行时与门禁选项。
@@ -390,5 +400,77 @@ snapshots_dir = "/etc/evil"
         );
         let msgs = sink.messages();
         assert_eq!(msgs.len(), 2, "两处逃逸路径均应触发安全告警: {msgs:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_workspace_config_sandbox_blocks_direct_parent_and_dangling_symlink_escapes() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        use std::os::unix::fs::symlink;
+
+        let work = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_target = outside.path().join("stolen_reports");
+        std::fs::create_dir_all(&outside_target).unwrap();
+
+        // 1. 直接目录 symlink 指向工作区外
+        symlink(&outside_target, work.path().join("direct_sym")).unwrap();
+        // 2. 父目录 symlink 指向工作区外（子路径 sub/logs 尚不存在）
+        symlink(outside.path(), work.path().join("parent_sym")).unwrap();
+        // 3. 悬空文件 symlink 指向工作区外尚不存在的文件
+        symlink(
+            outside.path().join("dangling.jsonl"),
+            work.path().join("dangling_sym"),
+        )
+        .unwrap();
+
+        std::fs::write(
+            work.path().join("rupost.toml"),
+            r#"
+[paths]
+reports_dir = "direct_sym"
+logs_dir = "parent_sym/sub/logs"
+history_file = "dangling_sym"
+"#,
+        )
+        .unwrap();
+
+        let sink = BufferedWarningSink::new();
+        let cfg = WorkspaceConfig::load(work.path(), &sink);
+        assert_eq!(
+            cfg.paths.reports_dir,
+            work.path().join(".rupost").join("reports")
+        );
+        assert_eq!(cfg.paths.logs_dir, work.path().join(".rupost").join("logs"));
+        assert_eq!(
+            cfg.paths.history_file,
+            work.path().join(".rupost").join("history.jsonl")
+        );
+
+        let recs = sink.records();
+        assert_eq!(
+            recs.len(),
+            3,
+            "三类 symlink 逃逸必须全部拦截并产生 Security 告警: {recs:?}"
+        );
+        assert!(recs.iter().all(|r| r.severity == WarningSeverity::Security));
+    }
+
+    #[test]
+    fn test_workspace_config_load_warns_on_malformed_toml() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rupost.toml"), "[paths\nbroken").unwrap();
+        let sink = BufferedWarningSink::new();
+        let cfg = WorkspaceConfig::load(dir.path(), &sink);
+        assert_eq!(
+            cfg.paths.plugins_dir,
+            dir.path().join(".rupost").join("plugins")
+        );
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].severity, WarningSeverity::Warn);
+        assert_eq!(recs[0].source, "workspace_config");
+        assert!(recs[0].message.contains("解析"));
     }
 }

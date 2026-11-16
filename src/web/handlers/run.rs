@@ -246,20 +246,31 @@ pub async fn run_block_handler(
     // 4. 原位单块调试执行（无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
     // （显式值恒优先；跨客户端零共享）
-    // B3：请求覆盖 > toml [plugins] > 默认
+    // B3：请求覆盖 > toml [plugins] > 默认（通过 BufferedWarningSink 捕获装配/工作区沙箱告警）
+    let sink = crate::diagnostics::BufferedWarningSink::new();
+    let web_root = state
+        .incident_root
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf());
+    if let Some(root) = &web_root {
+        let _ws_cfg = crate::variable::WorkspaceConfig::load(root, &sink);
+    }
     let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
     for w in &plugin_warnings {
         tracing::warn!("web run: {w}");
     }
-    let executor = crate::runner::executor_factory::build_interactive_executor_with_options(
-        &crate::plugin::DiscoverOptions {
-            allow_project_plugins: plugin_cfg.allow_project_plugins
-                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-            project_root: None,
-        },
-        &plugin_cfg,
-        plugin_cfg.strict_vars,
-    );
+    let executor =
+        crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
+            &crate::plugin::DiscoverOptions {
+                allow_project_plugins: plugin_cfg.allow_project_plugins
+                    || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+                project_root: web_root,
+            },
+            &plugin_cfg,
+            plugin_cfg.strict_vars,
+            &sink,
+        );
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),
@@ -305,6 +316,9 @@ pub async fn run_block_handler(
         result.degraded,
         plugin_cfg.strict_plugins,
     );
+    let mut warnings = sink.messages();
+    warnings.extend(plugin_warnings);
+    warnings.extend(result.warnings);
     let response = RunBlockResponse {
         success: block_success,
         status: result.status,
@@ -314,7 +328,7 @@ pub async fn run_block_handler(
         response_headers,
         response_body,
         error: result.error,
-        warnings: Vec::new(),
+        warnings,
     };
 
     json_session_response(StatusCode::OK, ApiResponse::ok(response), Some(&handle))
@@ -378,21 +392,32 @@ pub async fn run_suite_handler(
 
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
-    // B3：请求覆盖 > toml [plugins] > 默认
+    // B3：请求覆盖 > toml [plugins] > 默认（接入 WorkspaceConfig 与 BufferedWarningSink）
+    let sink = crate::diagnostics::BufferedWarningSink::new();
+    let web_root = state
+        .incident_root
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf());
+    if let Some(root) = &web_root {
+        let _ws_cfg = crate::variable::WorkspaceConfig::load(root, &sink);
+    }
     let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
     for w in &plugin_warnings {
         tracing::warn!("web run: {w}");
     }
     let start_time = std::time::Instant::now();
-    let executor = crate::runner::executor_factory::build_interactive_executor_with_options(
-        &crate::plugin::DiscoverOptions {
-            allow_project_plugins: plugin_cfg.allow_project_plugins
-                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-            project_root: None,
-        },
-        &plugin_cfg,
-        plugin_cfg.strict_vars,
-    );
+    let executor =
+        crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
+            &crate::plugin::DiscoverOptions {
+                allow_project_plugins: plugin_cfg.allow_project_plugins
+                    || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+                project_root: web_root,
+            },
+            &plugin_cfg,
+            plugin_cfg.strict_vars,
+            &sink,
+        );
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),

@@ -19,3 +19,17 @@ pub use types::{
     CommandCapability, HookCapability, PLUGIN_ENV_ALLOWLIST, PluginCacheScope, PluginDirective,
     PluginManifest, PluginStage,
 };
+
+/// 从原始 `--plugin-env` 参数列表提取已放行的环境变量名集合（保留未在宿主机设值的裸 `KEY`）。
+pub fn extract_authorized_env_keys(specs: &[String]) -> std::collections::HashSet<String> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let key = match spec.split_once('=') {
+                Some((k, _)) => k.trim(),
+                None => spec.trim(),
+            };
+            (!key.is_empty()).then(|| key.to_string())
+        })
+        .collect()
+}

@@ -26,6 +26,7 @@ const WINDOWS_ERROR_BAD_EXE_FORMAT: i32 = 193;
 
 /// 取消/早退/异常路径清理守卫：确保子进程组与三个并发 IO 任务绝不泄漏
 struct PluginInvocationGuard {
+    pg_guard: crate::platform::ProcessGroupGuard,
     child: Option<tokio::process::Child>,
     stdin_task: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
     stdout_task: Option<tokio::task::JoinHandle<(Vec<u8>, bool)>>,
@@ -43,8 +44,8 @@ impl Drop for PluginInvocationGuard {
         if let Some(handle) = self.stderr_task.take() {
             handle.abort();
         }
+        self.pg_guard.kill_now();
         if let Some(mut child) = self.child.take() {
-            crate::platform::kill_process_group_pid(child.id().filter(|&id| id > 0));
             let _ = child.start_kill();
         }
     }
@@ -431,6 +432,7 @@ pub async fn invoke_plugin(
     });
 
     let mut guard = PluginInvocationGuard {
+        pg_guard: crate::platform::ProcessGroupGuard::new(child.id()),
         child: Some(child),
         stdin_task: Some(stdin_task),
         stdout_task: Some(stdout_task),
@@ -446,8 +448,8 @@ pub async fn invoke_plugin(
 
     let status = match wait_result {
         Err(_elapsed) => {
+            guard.pg_guard.kill_now();
             if let Some(mut child_owned) = guard.child.take() {
-                crate::platform::kill_process_group_pid(child_owned.id().filter(|&id| id > 0));
                 let _ = child_owned.start_kill();
                 let _ = tokio::time::timeout(Duration::from_millis(300), child_owned.wait()).await;
             }
@@ -475,6 +477,7 @@ pub async fn invoke_plugin(
             )));
         }
         Ok(Ok(status)) => {
+            guard.pg_guard.disarm();
             guard.child = None;
             status
         }

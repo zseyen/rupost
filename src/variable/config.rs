@@ -96,10 +96,11 @@ impl ConfigLoader {
         };
         let (policy, warning) = Self::load_redaction_policy_from_path(&path);
         if let Some(w) = warning {
+            let stripped = w.strip_prefix("[!] ").unwrap_or(&w);
             sink.emit(
-                crate::diagnostics::WarningSeverity::Warn,
+                crate::diagnostics::WarningSeverity::Alert,
                 "variable::config",
-                &w,
+                stripped,
             );
         }
         policy
@@ -856,5 +857,28 @@ sensitive_keys = ["x_custom_secret"]
         let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(valid.path());
         assert!(warning.is_none(), "合法配置不应产生告警: {warning:?}");
         assert!(policy.is_sensitive("x_custom_secret"));
+    }
+
+    #[test]
+    fn test_redaction_policy_sink_strips_duplicate_alert_prefix() {
+        use crate::diagnostics::WarningSink;
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("broken.toml");
+        std::fs::write(&broken, "[export.redaction\nbad").unwrap();
+        let (_policy, warning) = ConfigLoader::load_redaction_policy_from_path(&broken);
+        let raw = warning.unwrap();
+        let stripped = raw.strip_prefix("[!] ").unwrap_or(&raw);
+        let sink = crate::diagnostics::BufferedWarningSink::new();
+        sink.emit(
+            crate::diagnostics::WarningSeverity::Alert,
+            "variable::config",
+            stripped,
+        );
+        let formatted = crate::diagnostics::warning_sink::format_stderr_line(
+            crate::diagnostics::WarningSeverity::Alert,
+            &sink.messages()[0],
+        );
+        assert!(formatted.starts_with("[!] "));
+        assert!(!formatted.contains("[WARN] [!]"));
     }
 }

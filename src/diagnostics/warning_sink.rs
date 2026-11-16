@@ -7,8 +7,19 @@ use std::sync::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WarningSeverity {
     Info,
+    Alert,
     Warn,
     Security,
+}
+
+/// CLI 终端前缀格式化纯函数（锁定 `[i]` / `[!]` / `[WARN]` / `[warn]` 契约）。
+pub fn format_stderr_line(severity: WarningSeverity, message: &str) -> String {
+    match severity {
+        WarningSeverity::Info => format!("[i] {message}"),
+        WarningSeverity::Alert => format!("[!] {message}"),
+        WarningSeverity::Warn => format!("[WARN] {message}"),
+        WarningSeverity::Security => format!("[warn] {message}"),
+    }
 }
 
 /// 单条结构化告警记录。
@@ -30,11 +41,7 @@ pub struct StderrWarningSink;
 
 impl WarningSink for StderrWarningSink {
     fn emit(&self, severity: WarningSeverity, _source: &'static str, message: &str) {
-        match severity {
-            WarningSeverity::Info => eprintln!("[i] {message}"),
-            WarningSeverity::Warn => eprintln!("[WARN] {message}"),
-            WarningSeverity::Security => eprintln!("[warn] {message}"),
-        }
+        eprintln!("{}", format_stderr_line(severity, message));
     }
 }
 
@@ -97,22 +104,64 @@ mod tests {
         assert!(sink.is_empty());
 
         sink.emit(WarningSeverity::Info, "suite_setup", "backfilled 2 vars");
+        sink.emit(WarningSeverity::Alert, "executor_factory", "alert msg");
         sink.emit(WarningSeverity::Warn, "executor_factory", "missing plugin");
         sink.emit(WarningSeverity::Security, "redact", "hard key blocked");
 
         let recs = sink.records();
-        assert_eq!(recs.len(), 3);
+        assert_eq!(recs.len(), 4);
         assert_eq!(recs[0].severity, WarningSeverity::Info);
         assert_eq!(recs[0].source, "suite_setup");
-        assert_eq!(recs[1].severity, WarningSeverity::Warn);
-        assert_eq!(recs[2].severity, WarningSeverity::Security);
+        assert_eq!(recs[1].severity, WarningSeverity::Alert);
+        assert_eq!(recs[2].severity, WarningSeverity::Warn);
+        assert_eq!(recs[3].severity, WarningSeverity::Security);
         assert_eq!(
             sink.messages(),
-            vec!["backfilled 2 vars", "missing plugin", "hard key blocked"]
+            vec![
+                "backfilled 2 vars",
+                "alert msg",
+                "missing plugin",
+                "hard key blocked"
+            ]
         );
 
         let taken = sink.take_records();
-        assert_eq!(taken.len(), 3);
+        assert_eq!(taken.len(), 4);
+        assert!(sink.is_empty());
+    }
+
+    #[test]
+    fn test_format_stderr_line_prefixes() {
+        assert_eq!(format_stderr_line(WarningSeverity::Info, "ok"), "[i] ok");
+        assert_eq!(format_stderr_line(WarningSeverity::Alert, "bad"), "[!] bad");
+        assert_eq!(
+            format_stderr_line(WarningSeverity::Warn, "warn"),
+            "[WARN] warn"
+        );
+        assert_eq!(
+            format_stderr_line(WarningSeverity::Security, "sec"),
+            "[warn] sec"
+        );
+    }
+
+    #[test]
+    fn test_buffered_warning_sink_concurrent_emit_and_take() {
+        use std::sync::Arc;
+        let sink = Arc::new(BufferedWarningSink::new());
+        let mut handles = Vec::new();
+        for t in 0..8 {
+            let s = Arc::clone(&sink);
+            handles.push(std::thread::spawn(move || {
+                for i in 0..25 {
+                    s.emit(WarningSeverity::Warn, "concurrent", &format!("t{t}-{i}"));
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let records = sink.take_records();
+        assert_eq!(records.len(), 200);
         assert!(sink.is_empty());
     }
 }

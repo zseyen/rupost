@@ -138,15 +138,21 @@ async fn trigger_file_execution(
     for w in &plugin_warnings {
         tracing::warn!("tui plugins config: {w}");
     }
-    let mut executor = crate::runner::executor_factory::build_interactive_executor_with_options(
-        &crate::plugin::DiscoverOptions {
-            allow_project_plugins: plugin_cfg.allow_project_plugins
-                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-            project_root: None,
-        },
-        &plugin_cfg,
-        plugin_cfg.strict_vars,
-    );
+    let sink = crate::diagnostics::BufferedWarningSink::new();
+    let mut executor =
+        crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
+            &crate::plugin::DiscoverOptions {
+                allow_project_plugins: plugin_cfg.allow_project_plugins
+                    || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+                project_root: None,
+            },
+            &plugin_cfg,
+            plugin_cfg.strict_vars,
+            &sink,
+        );
+    for w in sink.messages() {
+        tracing::warn!("tui executor warning: {w}");
+    }
     executor.debug_on_failure = true; // R7：失败自动诊断（对齐 CLI --debug-on-failure）
     if let Some(state_json) = state
         .cookie_bridge

@@ -1321,4 +1321,22 @@ mod mask_tests {
             );
         }
     }
+
+    #[test]
+    fn test_redaction_policy_hard_key_guard_emits_to_buffered_sink() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        let sink = BufferedWarningSink::new();
+        let policy =
+            RedactionPolicy::new_with_sink(std::iter::empty::<&str>(), ["authorization"], &sink);
+        assert!(policy.is_sensitive("Authorization"));
+
+        let mut meta = crate::parser::types::RequestMetadata::default();
+        meta.no_redact_keys.push("x-api-key".to_string());
+        let derived = policy.with_request_metadata_with_sink(&meta, &sink);
+        assert!(derived.is_sensitive("x-api-key"));
+
+        let recs = sink.records();
+        assert_eq!(recs.len(), 2);
+        assert!(recs.iter().all(|r| r.severity == WarningSeverity::Security));
+    }
 }

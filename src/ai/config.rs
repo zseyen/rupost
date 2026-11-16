@@ -128,6 +128,51 @@ fn non_empty(v: Option<String>) -> Option<String> {
     v.filter(|s| !s.trim().is_empty())
 }
 
+/// 包装 `AiClient`，自动掩码输出文本与错误消息中的解析密钥，防止向上层日志/终端泄露。
+struct RedactingAiClient {
+    inner: Arc<dyn AiClient>,
+    secret: String,
+}
+
+#[async_trait::async_trait]
+impl AiClient for RedactingAiClient {
+    async fn generate_text(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> rupost_ai::Result<String> {
+        let mask = |s: &str| {
+            crate::security::redact::redact_explicit_secrets(s, std::slice::from_ref(&self.secret))
+        };
+        match self.inner.generate_text(system_prompt, user_prompt).await {
+            Ok(text) => Ok(mask(&text)),
+            Err(rupost_ai::AiError::ApiError { status, message }) => {
+                Err(rupost_ai::AiError::ApiError {
+                    status,
+                    message: mask(&message),
+                })
+            }
+            Err(rupost_ai::AiError::TranslationFailed(msg)) => {
+                Err(rupost_ai::AiError::TranslationFailed(mask(&msg)))
+            }
+            Err(other) => Err(rupost_ai::AiError::TranslationFailed(mask(
+                &other.to_string(),
+            ))),
+        }
+    }
+}
+
+fn wrap_client_with_secret(client: Arc<dyn AiClient>, secret: Option<&str>) -> Arc<dyn AiClient> {
+    // 仅对长度 >= 8 的真实密钥启用子串掩码，避免测试中使用的短占位 Key（如 "k"）误伤正常单词
+    match secret.filter(|s| s.trim().len() >= 8) {
+        Some(s) => Arc::new(RedactingAiClient {
+            inner: client,
+            secret: s.to_string(),
+        }),
+        None => client,
+    }
+}
+
 #[derive(Debug, Default)]
 struct ParsedUserAiConfig {
     base_url: Option<String>,
@@ -136,18 +181,13 @@ struct ParsedUserAiConfig {
     active_profile: Option<String>,
 }
 
-/// 解析用户级 `ai.toml`（TC-C04/C05/C06 + 多 profile 支持）：
-/// - 含明文 api_key（顶层或任一 profile）→ Err 提示（安全边界，整文件拒绝）
-/// - 畸形 TOML → Err 提示（调用方降级下一级）
-fn parse_user_file(path: &std::path::Path) -> Result<ParsedUserAiConfig, String> {
-    let raw =
-        std::fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
-    let parsed: UserAiFile =
-        toml::from_str(&raw).map_err(|e| format!("解析 {} 失败: {e}", path.display()))?;
+fn build_parsed_ai_config(
+    parsed: UserAiFile,
+    source_disp: &str,
+) -> Result<ParsedUserAiConfig, String> {
     if parsed.api_key.is_some() || parsed.profiles.values().any(|p| p.api_key.is_some()) {
         return Err(format!(
-            "{} 含 api_key 字段——密钥只允许通过环境变量（`RUPOST_AI_API_KEY` / `api_key_env`）或 `~/.rupost/credentials.toml` 提供，文件已拒绝加载",
-            path.display()
+            "{source_disp} 含 api_key 字段——密钥只允许通过环境变量（`RUPOST_AI_API_KEY` / `api_key_env`）或 `~/.rupost/credentials.toml` 提供，文件已拒绝加载"
         ));
     }
     let active = non_empty(parsed.profile);
@@ -164,6 +204,35 @@ fn parse_user_file(path: &std::path::Path) -> Result<ParsedUserAiConfig, String>
             .or_else(|| non_empty(parsed.api_key_env)),
         active_profile: active,
     })
+}
+
+/// 解析用户级 `ai.toml`（TC-C04/C05/C06 + 多 profile 支持）
+fn parse_user_file(path: &std::path::Path) -> Result<ParsedUserAiConfig, String> {
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+    let parsed: UserAiFile =
+        toml::from_str(&raw).map_err(|e| format!("解析 {} 失败: {e}", path.display()))?;
+    build_parsed_ai_config(parsed, &path.display().to_string())
+}
+
+/// 解析项目级 `./rupost.toml` 的 `[ai]` 段（同样受 TC-C05 禁明文 `api_key` 门禁约束）
+fn parse_project_rupost_ai_section(
+    path: &std::path::Path,
+) -> Option<Result<ParsedUserAiConfig, String>> {
+    #[derive(serde::Deserialize)]
+    struct RupostAiWrapper {
+        ai: Option<UserAiFile>,
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    let wrapper: RupostAiWrapper = match toml::from_str(&raw) {
+        Ok(w) => w,
+        Err(_) => return None,
+    };
+    let ai = wrapper.ai?;
+    Some(build_parsed_ai_config(
+        ai,
+        &format!("{} [ai]", path.display()),
+    ))
 }
 
 /// 安全加载本机私有凭据 `$HOME/.rupost/credentials.toml`（5 层安全门禁）：
@@ -283,17 +352,24 @@ pub const NOT_CONFIGURED_GUIDANCE: &str = "未配置 AI：请任选其一——�
      ③ 安装并启动本地 Ollama（默认探测 http://localhost:11434/v1）";
 
 /// B4 配置链（TC-C01–C11）：环境变量 > `~/.rupost/ai.toml` > 本地探测。
-/// `probe_override`：测试钩子（`RUPOST_AI_PROBE_URL`），替换默认探测候选以保测试确定性。
+/// 纯函数隔离：仅使用传入 `env`，绝不读取宿主机全局环境变量。
 pub async fn resolve_with(
     env: &AiRuntimeConfig,
     file_path: Option<&std::path::Path>,
     probe_override: Option<&str>,
 ) -> std::result::Result<ResolvedAiConfig, String> {
-    resolve_with_options(env, file_path, None, probe_override, &StderrWarningSink).await
+    resolve_with_env_lookup(
+        env,
+        file_path,
+        None,
+        probe_override,
+        &|_| None,
+        &StderrWarningSink,
+    )
+    .await
 }
 
-/// 完整解析优先级：
-/// `RUPOST_AI_API_KEY` > `[ai].api_key_env` > `OPENAI_API_KEY` > `~/.rupost/credentials.toml` > 本地 `"local"` 占位。
+/// 纯函数可注入版配置解析（完全隔离宿主机环境变量，供单元测试与确定性调用使用）。
 pub async fn resolve_with_options(
     env: &AiRuntimeConfig,
     file_path: Option<&std::path::Path>,
@@ -301,58 +377,66 @@ pub async fn resolve_with_options(
     probe_override: Option<&str>,
     sink: &dyn WarningSink,
 ) -> std::result::Result<ResolvedAiConfig, String> {
-    let rupost_env_key = non_empty(std::env::var("RUPOST_AI_API_KEY").ok());
-    let openai_env_key = non_empty(std::env::var("OPENAI_API_KEY").ok());
+    resolve_with_env_lookup(
+        env,
+        file_path,
+        credentials_path,
+        probe_override,
+        &|_| None,
+        sink,
+    )
+    .await
+}
 
-    // 先尝试读取 ai.toml（即使命中 env，若不存在文件则无开销；若有配置则可获取 custom api_key_env 与 profile）
-    let parsed_file = match file_path {
-        Some(path) if path.exists() => match parse_user_file(path) {
-            Ok(cfg) => Some(cfg),
-            Err(msg) => {
-                sink.emit(WarningSeverity::Warn, "ai::config", &msg);
+/// 完整解析优先级（支持显式注入 `env_lookup`）：
+/// `RUPOST_AI_API_KEY` > `[ai].api_key_env` > `OPENAI_API_KEY` > `~/.rupost/credentials.toml` > 本地 `"local"` 占位。
+pub async fn resolve_with_env_lookup(
+    env: &AiRuntimeConfig,
+    file_path: Option<&std::path::Path>,
+    credentials_path: Option<&std::path::Path>,
+    probe_override: Option<&str>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    sink: &dyn WarningSink,
+) -> std::result::Result<ResolvedAiConfig, String> {
+    resolve_with_parsed_and_env(
+        env,
+        file_path.and_then(|path| {
+            if path.exists() {
+                match parse_user_file(path) {
+                    Ok(cfg) => Some((path.display().to_string(), cfg)),
+                    Err(msg) => {
+                        sink.emit(WarningSeverity::Warn, "ai::config", &msg);
+                        None
+                    }
+                }
+            } else {
                 None
             }
-        },
-        _ => None,
-    };
+        }),
+        credentials_path,
+        probe_override,
+        env_lookup,
+        sink,
+    )
+    .await
+}
 
-    // ── 一级：显式传入的 env（含 RUPOST_AI_API_KEY / OPENAI_API_KEY） ──
-    if let Some(key) = &env.api_key {
-        let custom_key = rupost_env_key
-            .is_none()
-            .then(|| {
-                parsed_file
-                    .as_ref()
-                    .and_then(|c| c.api_key_env.as_deref())
-                    .and_then(|name| non_empty(std::env::var(name).ok()))
-            })
-            .flatten();
-        let chosen = custom_key.unwrap_or_else(|| key.clone());
-        return Ok(ResolvedAiConfig {
-            client: Arc::new(OpenAiClient::new(
-                chosen.clone(),
-                env.base_url.clone(),
-                env.model.clone(),
-            )),
-            source: AiSource::Env,
-            notice: None,
-            resolved_secret: Some(chosen),
-        });
-    }
+async fn resolve_with_parsed_and_env(
+    env: &AiRuntimeConfig,
+    parsed_entry: Option<(String, ParsedUserAiConfig)>,
+    credentials_path: Option<&std::path::Path>,
+    probe_override: Option<&str>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    sink: &dyn WarningSink,
+) -> std::result::Result<ResolvedAiConfig, String> {
+    let rupost_env_key = non_empty(env_lookup("RUPOST_AI_API_KEY"));
+    let openai_env_key = non_empty(env_lookup("OPENAI_API_KEY"));
 
-    // ── 二级：用户级配置文件（支持 api_key_env 与 credentials.toml 门禁回退） ──
-    if let Some(cfg) = parsed_file {
-        let path_disp = file_path
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        let base = cfg
-            .base_url
-            .ok_or_else(|| format!("{path_disp} 缺少 base_url 字段"))?;
-
+    if let Some((path_disp, cfg)) = parsed_entry {
         let custom_env_key = cfg
             .api_key_env
             .as_deref()
-            .and_then(|name| non_empty(std::env::var(name).ok()));
+            .and_then(|name| non_empty(env_lookup(name)));
 
         let creds_key = || {
             credentials_path
@@ -360,25 +444,55 @@ pub async fn resolve_with_options(
                 .and_then(|creds| creds.resolve_key(cfg.active_profile.as_deref()))
         };
 
-        let (key, resolved_secret) = if let Some(k) = rupost_env_key {
-            (k.clone(), Some(k))
+        let merged_base = env.base_url.clone().or(cfg.base_url);
+        let merged_model = env.model.clone().or(cfg.model);
+
+        // 若未配置 base_url 但 env.api_key 存在，允许走默认 OpenAiClient 端点（与 env-only 语义兼容）
+        let (key, resolved_secret, source) = if let Some(k) = rupost_env_key {
+            (k.clone(), Some(k), AiSource::Env)
         } else if let Some(k) = custom_env_key {
-            (k.clone(), Some(k))
+            (k.clone(), Some(k), AiSource::UserFile)
         } else if let Some(k) = openai_env_key {
-            (k.clone(), Some(k))
+            (k.clone(), Some(k), AiSource::Env)
+        } else if let Some(k) = &env.api_key {
+            (k.clone(), Some(k.clone()), AiSource::Env)
         } else if let Some(k) = creds_key() {
-            (k.clone(), Some(k))
-        } else if is_local_base(&base) {
-            ("local".to_string(), None)
+            (k.clone(), Some(k), AiSource::UserFile)
+        } else if let Some(base) = &merged_base
+            && is_local_base(base)
+        {
+            ("local".to_string(), None, AiSource::UserFile)
+        } else if merged_base.is_none() {
+            return Err(format!("{path_disp} 缺少 base_url 字段"));
         } else {
             return Err(NOT_CONFIGURED_GUIDANCE.to_string());
         };
 
+        let raw_client: Arc<dyn AiClient> =
+            Arc::new(OpenAiClient::new(key, merged_base, merged_model));
         return Ok(ResolvedAiConfig {
-            client: Arc::new(OpenAiClient::new(key, Some(base), cfg.model)),
-            source: AiSource::UserFile,
+            client: wrap_client_with_secret(raw_client, resolved_secret.as_deref()),
+            source,
             notice: None,
             resolved_secret,
+        });
+    }
+
+    // ── 无有效配置文件：纯 env 一级 ──
+    if let Some(key) = rupost_env_key
+        .or(openai_env_key)
+        .or_else(|| env.api_key.clone())
+    {
+        let raw_client: Arc<dyn AiClient> = Arc::new(OpenAiClient::new(
+            key.clone(),
+            env.base_url.clone(),
+            env.model.clone(),
+        ));
+        return Ok(ResolvedAiConfig {
+            client: wrap_client_with_secret(raw_client, Some(&key)),
+            source: AiSource::Env,
+            notice: None,
+            resolved_secret: Some(key),
         });
     }
 
@@ -403,17 +517,40 @@ pub async fn resolve_with_options(
     Err(NOT_CONFIGURED_GUIDANCE.to_string())
 }
 
-/// 生产入口：env + 默认文件路径 + `~/.rupost/credentials.toml` + `RUPOST_AI_PROBE_URL` 覆盖
+/// 生产入口：env + `~/.rupost/ai.toml`（或 `./rupost.toml [ai]`）+ `~/.rupost/credentials.toml` + `RUPOST_AI_PROBE_URL` 覆盖
 pub async fn resolve() -> std::result::Result<ResolvedAiConfig, String> {
-    let file = user_config_path();
+    let sink = StderrWarningSink;
+    let user_file = user_config_path();
+    let parsed_entry = if let Some(path) = user_file.as_deref().filter(|p| p.exists()) {
+        match parse_user_file(path) {
+            Ok(cfg) => Some((path.display().to_string(), cfg)),
+            Err(msg) => {
+                sink.emit(WarningSeverity::Warn, "ai::config", &msg);
+                None
+            }
+        }
+    } else if let Some(proj_toml) = crate::variable::ConfigLoader::find_config_path() {
+        match parse_project_rupost_ai_section(&proj_toml) {
+            Some(Ok(cfg)) => Some((format!("{} [ai]", proj_toml.display()), cfg)),
+            Some(Err(msg)) => {
+                sink.emit(WarningSeverity::Warn, "ai::config", &msg);
+                None
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
     let creds = platform::rupost_path("credentials.toml");
     let probe = std::env::var("RUPOST_AI_PROBE_URL").ok();
-    resolve_with_options(
+    resolve_with_parsed_and_env(
         &AiRuntimeConfig::from_env(),
-        file.as_deref(),
+        parsed_entry,
         creds.as_deref(),
         probe.as_deref(),
-        &StderrWarningSink,
+        &|k| std::env::var(k).ok(),
+        &sink,
     )
     .await
 }
@@ -711,5 +848,175 @@ model = "gpt-4o-mini"
         );
         assert!(!masked.contains(secret));
         assert!(masked.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn test_key_resolution_priority_chain_isolated_from_host_env() {
+        use crate::diagnostics::BufferedWarningSink;
+        let dir = tempfile::tempdir().unwrap();
+        let ai_toml = dir.path().join("ai.toml");
+        let creds_toml = dir.path().join("credentials.toml");
+        std::fs::write(
+            &ai_toml,
+            r#"
+profile = "deepseek"
+
+[profiles.deepseek]
+base_url = "https://api.deepseek.example/v1"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+"#,
+        )
+        .unwrap();
+        std::fs::write(&creds_toml, "[profiles.deepseek]\napi_key = \"sk-creds\"\n").unwrap();
+        crate::platform::set_unix_mode(&creds_toml, 0o600).unwrap();
+
+        let sink = BufferedWarningSink::new();
+        let env_none = env_cfg(None, None, None);
+
+        // 1. RUPOST_AI_API_KEY > api_key_env > OPENAI_API_KEY > credentials.toml
+        let m1: HashMap<&str, &str> = [
+            ("RUPOST_AI_API_KEY", "sk-rupost"),
+            ("DEEPSEEK_API_KEY", "sk-deepseek"),
+            ("OPENAI_API_KEY", "sk-openai"),
+        ]
+        .into_iter()
+        .collect();
+        let r1 = resolve_with_env_lookup(
+            &env_none,
+            Some(&ai_toml),
+            Some(&creds_toml),
+            None,
+            &|k| m1.get(k).map(|v| (*v).to_string()),
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r1.resolved_secret.as_deref(), Some("sk-rupost"));
+
+        // 2. api_key_env 胜过 OPENAI_API_KEY（且保留 ai.toml base_url/model）
+        let m2: HashMap<&str, &str> = [
+            ("DEEPSEEK_API_KEY", "sk-deepseek"),
+            ("OPENAI_API_KEY", "sk-openai"),
+        ]
+        .into_iter()
+        .collect();
+        let r2 = resolve_with_env_lookup(
+            &env_none,
+            Some(&ai_toml),
+            Some(&creds_toml),
+            None,
+            &|k| m2.get(k).map(|v| (*v).to_string()),
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r2.resolved_secret.as_deref(), Some("sk-deepseek"));
+        assert_eq!(r2.source, AiSource::UserFile);
+
+        // 3. OPENAI_API_KEY 胜过 credentials.toml
+        let m3: HashMap<&str, &str> = [("OPENAI_API_KEY", "sk-openai")].into_iter().collect();
+        let r3 = resolve_with_env_lookup(
+            &env_none,
+            Some(&ai_toml),
+            Some(&creds_toml),
+            None,
+            &|k| m3.get(k).map(|v| (*v).to_string()),
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r3.resolved_secret.as_deref(), Some("sk-openai"));
+
+        // 4. 无环境变量 → 回退 credentials.toml
+        let r4 = resolve_with_env_lookup(
+            &env_none,
+            Some(&ai_toml),
+            Some(&creds_toml),
+            None,
+            &|_| None,
+            &sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r4.resolved_secret.as_deref(), Some("sk-creds"));
+    }
+
+    #[tokio::test]
+    async fn test_profile_rejects_plaintext_api_key_and_project_rupost_toml_ai_section() {
+        use crate::diagnostics::BufferedWarningSink;
+        let dir = tempfile::tempdir().unwrap();
+        let ai_toml = dir.path().join("ai.toml");
+        std::fs::write(
+            &ai_toml,
+            "[profiles.work]\nbase_url = \"https://x/v1\"\napi_key = \"sk-leak\"\n",
+        )
+        .unwrap();
+
+        let sink = BufferedWarningSink::new();
+        let res = resolve_with_options(
+            &env_cfg(None, None, None),
+            Some(&ai_toml),
+            None,
+            Some("http://127.0.0.1:1"),
+            &sink,
+        )
+        .await;
+        assert!(res.is_err());
+        assert!(
+            sink.messages().iter().any(|m| m.contains("api_key")),
+            "profile 明文 api_key 必须触发告警拒载"
+        );
+
+        // rupost.toml [ai] 段解析同样遵守 TC-C05
+        let rupost_toml = dir.path().join("rupost.toml");
+        std::fs::write(
+            &rupost_toml,
+            "[ai]\nbase_url = \"https://x/v1\"\napi_key = \"sk-leak\"\n",
+        )
+        .unwrap();
+        let proj_err = parse_project_rupost_ai_section(&rupost_toml).unwrap();
+        assert!(proj_err.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_credentials_toml_rejects_symlink_even_if_target_is_0600() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.toml");
+        std::fs::write(&target, "api_key = \"sk-real\"\n").unwrap();
+        crate::platform::set_unix_mode(&target, 0o600).unwrap();
+
+        let link = dir.path().join("credentials.toml");
+        symlink(&target, &link).unwrap();
+
+        let sink = BufferedWarningSink::new();
+        assert!(load_credentials_file_with_sink(&link, &sink).is_none());
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].severity, WarningSeverity::Security);
+    }
+
+    #[tokio::test]
+    async fn test_redacting_ai_client_masks_secret_in_output_and_errors() {
+        struct EchoSecretClient(String);
+        #[async_trait::async_trait]
+        impl AiClient for EchoSecretClient {
+            async fn generate_text(&self, _s: &str, _u: &str) -> rupost_ai::Result<String> {
+                Err(rupost_ai::AiError::ApiError {
+                    status: 401,
+                    message: format!("invalid token {}", self.0),
+                })
+            }
+        }
+        let secret = "sk-top-secret-42";
+        let wrapped =
+            wrap_client_with_secret(Arc::new(EchoSecretClient(secret.to_string())), Some(secret));
+        let err = wrapped.generate_text("sys", "usr").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(!msg.contains(secret), "错误消息必须掩码 secret: {msg}");
+        assert!(msg.contains("[REDACTED]"));
     }
 }

@@ -18,12 +18,12 @@ pub fn configure_process_group(cmd: &mut std::process::Command) {
     }
 }
 
-/// 杀死指定进程组（Unix `killpg(pgid, SIGKILL)`；非 Unix 平台安全忽略）。
+/// 杀死指定进程组（Unix 强制校验 `pgid > 1 && (pgid as pid_t) > 0`，防止 `pgid == 0` 误杀当前进程组）。
 pub fn kill_process_group_pid(pgid: Option<u32>) {
     #[cfg(unix)]
-    if let Some(pgid) = pgid {
-        // SAFETY: killpg 对任意 pgid 调用都是内存安全的纯系统调用；
-        // 进程组由本进程 spawn 时通过 process_group(0) 创建，不会误伤无关进程组。
+    if let Some(pgid) = pgid.filter(|&id| id > 1 && (id as libc::pid_t) > 0) {
+        // SAFETY: killpg 对任意正 pgid 调用都是内存安全的纯系统调用；
+        // 已过滤 <= 1 与符号位溢出值，进程组由本进程 spawn 时通过 process_group(0) 创建。
         unsafe {
             libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
         }
@@ -94,12 +94,12 @@ where
                     Ok(v) => WaitOutcome::Completed(v),
                     Err(_) => WaitOutcome::TimedOut,
                 },
-                changed = rx.changed() => {
-                    match changed {
-                        Ok(()) if *rx.borrow() => WaitOutcome::Cancelled,
-                        _ => WaitOutcome::Cancelled,
+                _ = async {
+                    match rx.wait_for(|&cancelled| cancelled).await {
+                        Ok(_) => {}
+                        Err(_) => std::future::pending::<()>().await,
                     }
-                }
+                } => WaitOutcome::Cancelled,
             }
         }
         None => match tokio::time::timeout(timeout, fut).await {
@@ -141,5 +141,56 @@ mod tests {
         )
         .await;
         assert!(matches!(res_timeout, WaitOutcome::TimedOut));
+    }
+
+    #[test]
+    fn test_kill_process_group_pid_zero_is_safe_noop() {
+        // 若未拦截 pgid == 0，当前测试进程组会收到 SIGKILL
+        kill_process_group_pid(Some(0));
+        kill_process_group_pid(Some(1));
+        let mut guard = ProcessGroupGuard::new(Some(0));
+        guard.kill_now();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_process_group_guard_drop_kills_real_spawned_process_group() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        configure_process_group(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let pgid = child.id();
+
+        {
+            let _guard = ProcessGroupGuard::new(Some(pgid));
+        }
+
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "Drop 必须真实杀死子进程组");
+    }
+
+    #[tokio::test]
+    async fn test_wait_with_timeout_and_cancel_in_flight_branches() {
+        // 1. 运行中收到 true 取消信号 -> Cancelled
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = tx.send(true);
+        });
+        let res = wait_with_timeout_and_cancel(
+            tokio::time::sleep(Duration::from_secs(5)),
+            Duration::from_secs(5),
+            Some(&mut rx),
+        )
+        .await;
+        assert!(matches!(res, WaitOutcome::Cancelled));
+
+        // 2. Sender 被 drop 且任务正常完成 -> Completed(42)（绝不能误判 Cancelled）
+        let (tx2, mut rx2) = tokio::sync::watch::channel(false);
+        drop(tx2);
+        let res2 =
+            wait_with_timeout_and_cancel(async { 42 }, Duration::from_secs(1), Some(&mut rx2))
+                .await;
+        assert!(matches!(res2, WaitOutcome::Completed(42)));
     }
 }

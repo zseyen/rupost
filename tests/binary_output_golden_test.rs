@@ -22,7 +22,11 @@ fn test_ast_output_matches_golden_contract() {
         .arg("tests/cmd/fixture.http")
         .output()
         .expect("run rupost ast");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let actual: serde_json::Value = serde_json::from_slice(&out.stdout).expect("纯 JSON");
     let expected = serde_json::json!({
@@ -42,20 +46,26 @@ fn test_ast_output_matches_golden_contract() {
             "source_line": 4
         }]
     });
-    assert_eq!(actual, expected, "AstDocument 契约黄金比对（源路径为相对 cwd 的展示路径）");
+    assert_eq!(
+        actual, expected,
+        "AstDocument 契约黄金比对（源路径为相对 cwd 的展示路径）"
+    );
 }
 
 /// validate 黄金：合法 fixture → ready 行精确匹配
 #[test]
 fn test_validate_output_matches_golden() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manifest = manifest_dir.join("tests/cmd/fixtures/rupost-plugin-golden.json");
     let out = cmd(manifest_dir)
         .args(["plugin", "validate"])
         .arg("tests/cmd/fixtures/rupost-plugin-golden.json")
         .output()
         .expect("run rupost plugin validate");
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(
         stdout.trim(),

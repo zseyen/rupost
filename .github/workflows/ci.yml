@@ -119,6 +119,23 @@ jobs:
         env:
           RUPOST_TEST_PORT_BASE: 19000
 
+  # Job: WP-T5 nextest 试点（optional——与主 test job 并行跑，红不算门禁失败）
+  # 转正判据见 .config/nextest.toml 头注
+  nextest-pilot:
+    name: nextest pilot (optional)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
+      - name: nextest run (pilot)
+        run: cargo nextest run --workspace --profile default
+
   # Job: WP-T4 异构黑盒验收（Python 独立实现交叉验证 + 手动指南参数化）
   e2e-pytest:
     name: E2E Blackbox (pytest)

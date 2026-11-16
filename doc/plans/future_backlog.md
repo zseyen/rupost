@@ -114,10 +114,10 @@
 ### A. 流程与 CI 待确认项
 *   **CI 三新 Job 首跑确认**（`feature/contract-drift-and-hygiene` @ `ce633224` 已推送，`CHANGELOG.md` 已于同提交去重补齐）：因 [ci.yml](file:///Users/zsyzzx/project/rust/rupost/.github/workflows/ci.yml#L3-L8) 仅对 `main` 的 `push`/`pull_request` 及管理员 `workflow_dispatch` 触发，需建 PR（`feature/contract-drift-and-hygiene -> main`）后确认 `smoke-bash`（须绿）、`e2e-pytest`（须绿）、`nextest-pilot`（`continue-on-error` 试点，若红需归因）首跑结果。
 
-### B. 已定稿待实施：统一基础服务与配置体系（Wave 0–2 ✅ 已完成，仅余 Wave 3）
+### B. 已定稿待实施：统一基础服务与配置体系（Wave 0–3 ✅ 已全量完成）
 详见 [`2026-11-16-unified-services-and-config-plan.md`](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-11-16-unified-services-and-config-plan.md)：
 *   ~~Wave 0 / Wave 1 / Wave 2~~：✅ 已于 2026-11-16 完成交付（编译卫生、`WarningSink`、`ProcessGroupGuard`、`WorkspaceConfig` 沙箱、移除 `get_storage()`、`AtomicFileWriter`、AI `api_key_env` / 多 Profile / `credentials.toml` `0o600` 门禁）。
-*   **Wave 3（P2 交互会话同构）**：抽取共享 `InteractiveSession`（Web/TUI 语义同构）与 `PrescriptionFormatter` 处方文案收口。
+*   ~~Wave 3（P2 交互会话同构，WP-S1~S3）~~：✅ 已于 2026-11-16 完成交付（`history_file`/`logs_dir`/`snapshots_dir` 全链路配置化、`ai/resolve` 收口 `AtomicFileWriter`、`TestExecutor` 挂载 `Arc<dyn WarningSink>`、`PrescriptionFormatter` 处方文案收口、抽取 `runner::interactive_session` Web/TUI 共享原语）。
 
 ### C. 既有功能链路小项与生态延伸
 *   **流式 Runner 行号回填**：`sse_runner` 与 `ws_runner` 的 `TestResult.source_line` 回填（当前仅 `http_runner` 已回填）。

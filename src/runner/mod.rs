@@ -1,6 +1,7 @@
 pub mod app;
 pub mod executor;
 mod executor_plugin;
+pub mod interactive_session;
 pub mod observer;
 pub mod on_failure;
 pub mod selector;

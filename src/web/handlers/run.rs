@@ -4,6 +4,9 @@ use crate::plugin::DiscoverOptions;
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use crate::runner::TestExecutor;
 use crate::runner::executor_factory::build_interactive_executor_with_options_and_arc_sink;
+use crate::runner::interactive_session::{
+    backfill_session_vars, export_session_cookies, harvest_session_deltas, import_session_cookies,
+};
 use crate::security::fs::env_flag_enabled;
 use crate::utils::path_guard::is_http_doc;
 use crate::variable::{ConfigLoader, PluginTomlConfig, VariableContext, WorkspaceConfig};
@@ -113,14 +116,8 @@ fn session_begin(
     executor: &TestExecutor,
 ) -> SessionHandle {
     let handle = state.sessions.load_or_create(cookie_header);
-    if let Some(state_json) = handle.snapshot.cookie_state.clone() {
-        let _ = executor.import_cookie_state(state_json);
-    }
-    for (k, v) in &handle.snapshot.captured_variables {
-        if var_context.get(k).is_none() {
-            var_context.insert(k.clone(), v.clone());
-        }
-    }
+    import_session_cookies(executor, handle.snapshot.cookie_state.clone());
+    backfill_session_vars(var_context, &handle.snapshot.captured_variables);
     handle
 }
 
@@ -133,16 +130,8 @@ fn session_finish(
     var_context: &VariableContext,
     pre_run_keys: &HashMap<String, String>,
 ) {
-    let exported = executor.export_cookie_state().ok().flatten();
-    let mut deltas = Vec::new();
-    for (k, v) in var_context.variables() {
-        if k.starts_with("__") {
-            continue;
-        }
-        if pre_run_keys.get(k) != Some(v) {
-            deltas.push((k.clone(), v.clone()));
-        }
-    }
+    let exported = export_session_cookies(executor);
+    let deltas = harvest_session_deltas(var_context, pre_run_keys);
     state
         .sessions
         .persist_execution(&handle.id, exported, deltas);

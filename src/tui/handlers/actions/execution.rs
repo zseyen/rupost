@@ -3,6 +3,7 @@
 use crate::diagnostics::{BufferedWarningSink, WarningSink};
 use crate::plugin::DiscoverOptions;
 use crate::runner::executor_factory::build_interactive_executor_with_options_and_arc_sink;
+use crate::runner::interactive_session::{export_session_cookies, import_session_cookies};
 use crate::security::fs::env_flag_enabled;
 use crate::tui::event::{Action, TuiEvent};
 use crate::tui::state::{AppState, SidebarTab};
@@ -158,15 +159,12 @@ async fn trigger_file_execution(
         tracing::warn!("tui executor warning: {w}");
     }
     executor.debug_on_failure = true; // R7：失败自动诊断（对齐 CLI --debug-on-failure）
-    if let Some(state_json) = state
+    let cached_cookies = state
         .cookie_bridge
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .clone()
-        && let Err(e) = executor.import_cookie_state(state_json)
-    {
-        tracing::warn!("cookie bridge import failed: {}", e);
-    }
+        .clone();
+    import_session_cookies(&executor, cached_cookies);
 
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
     let executor = executor.with_stream_sender(stream_tx);
@@ -243,30 +241,18 @@ async fn trigger_file_execution(
         drop(res_tx);
         let _ = relay.await;
         // R5：cookie 状态导出到桥（供下次触发 import——executor 为 &self 调用后仍存活）
-        // 审查 P1：导出/落盘失败不得静默（备用屏内禁 eprintln，走 tracing，
-        // 与 integrations.rs 落盘告警同口径；TUI 上屏管线为后续项）
-        match executor.export_cookie_state() {
-            Ok(Some(state_json)) => {
-                *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json.clone());
-                // R13：--cookie-file 提供时同步落盘
-                if let Some(path) = &cookie_file_path
-                    && let Err(e) = std::fs::write(path, state_json.to_string())
-                {
-                    tracing::warn!(
-                        "{}: {}: {}",
-                        crate::middleware::ERR_COOKIE_PERSIST,
-                        std::path::Path::new(path).display(),
-                        e
-                    );
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
+        if let Some(state_json) = export_session_cookies(&executor) {
+            *cookie_bridge.lock().unwrap_or_else(|e| e.into_inner()) = Some(state_json.clone());
+            // R13：--cookie-file 提供时同步落盘
+            if let Some(path) = &cookie_file_path
+                && let Err(e) = std::fs::write(path, state_json.to_string())
+            {
                 tracing::warn!(
-                    "{}: 状态导出失败: {}",
+                    "{}: {}: {}",
                     crate::middleware::ERR_COOKIE_PERSIST,
+                    std::path::Path::new(path).display(),
                     e
-                )
+                );
             }
         }
     });

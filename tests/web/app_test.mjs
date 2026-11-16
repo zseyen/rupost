@@ -723,3 +723,24 @@ test('renderMarkdownPreview falls back gracefully when /api/v1/http/parse return
   assert.match(previewPane.innerHTML, /http-cards-stack/);
   assert.match(previewPane.innerHTML, /https:\/\/example\.com/);
 });
+
+test('switchGlobalPage toggles #workspace-body and #global-page-view cleanly', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const wsBody = getOrCreateElement('workspace-body');
+  const pageView = getOrCreateElement('global-page-view');
+
+  app.switchGlobalPage('mock');
+  assert.equal(app.getActiveGlobalPage(), 'mock');
+  assert.equal(wsBody.style.display, 'none');
+  assert.equal(pageView.style.display, 'flex');
+  assert.match(pageView.innerHTML, /\[MOCK SIMULATOR\]/);
+  assert.match(pageView.innerHTML, /Back to Workbench/);
+
+  app.switchGlobalPage('workbench');
+  assert.equal(app.getActiveGlobalPage(), 'workbench');
+  assert.equal(wsBody.style.display, 'grid');
+  assert.equal(pageView.style.display, 'none');
+});

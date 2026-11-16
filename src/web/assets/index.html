@@ -29,6 +29,13 @@
         <span class="logo">rupost</span>
         <span class="sub">workbench</span>
         <span id="readonly-badge" class="readonly-badge" style="display: none;">[LOCKED: READ-ONLY]</span>
+        <nav id="global-nav" class="global-nav" aria-label="Primary Views">
+          <button type="button" class="global-nav-btn active" data-page="workbench" onclick="switchGlobalPage('workbench')">[Workbench]</button>
+          <button type="button" class="global-nav-btn" data-page="mock" onclick="switchGlobalPage('mock')">[Mock]</button>
+          <button type="button" class="global-nav-btn" data-page="session" onclick="switchGlobalPage('session')">[Session]</button>
+          <button type="button" class="global-nav-btn" data-page="history" onclick="switchGlobalPage('history')">[History]</button>
+          <button type="button" class="global-nav-btn" data-page="ws" onclick="switchGlobalPage('ws')">[WS]</button>
+        </nav>
       </div>
       <div class="nav-controls">
         <span id="active-file-label" class="file-label">[NO FILE SELECTED]</span>
@@ -54,7 +61,7 @@
     </header>
 
     <!-- Workspace Main Body -->
-    <div class="workspace-body">
+    <div id="workspace-body" class="workspace-body">
       <!-- 1. Left Sidebar: Workspace Files -->
       <aside class="sidebar" id="sidebar-pane">
         <div class="sidebar-header">
@@ -106,17 +113,13 @@
           </div>
         </div>
 
-        <!-- Inspector Tabs -->
+        <!-- Inspector Tabs (Per-Request Runtime Only) -->
         <nav class="inspector-tabs">
           <button class="tab-btn active" data-tab="overview" onclick="switchInspectorTab('overview')">[Overview]</button>
           <button class="tab-btn" data-tab="body" onclick="switchInspectorTab('body')">[Body]</button>
           <button class="tab-btn" data-tab="headers" onclick="switchInspectorTab('headers')">[Headers]</button>
           <button class="tab-btn" data-tab="assertions" onclick="switchInspectorTab('assertions')">[Assertions]</button>
           <button class="tab-btn" data-tab="waterfall" onclick="switchInspectorTab('waterfall')">[Waterfall]</button>
-          <button class="tab-btn" data-tab="mock" onclick="switchInspectorTab('mock')">[Mock]</button>
-          <button class="tab-btn" data-tab="session" onclick="switchInspectorTab('session')">[Session]</button>
-          <button class="tab-btn" data-tab="history" onclick="switchInspectorTab('history')">[History]</button>
-          <button class="tab-btn" data-tab="ws" onclick="switchInspectorTab('ws')">[WS]</button>
           <button class="tab-btn" data-tab="raw" onclick="switchInspectorTab('raw')">[Raw]</button>
         </nav>
 
@@ -128,6 +131,9 @@
         </div>
       </aside>
     </div>
+
+    <!-- Global Dedicated Page View (Mock / Session / History / WS) -->
+    <main id="global-page-view" class="global-page-view" style="display: none;"></main>
 
     <!-- Bottom Status Bar -->
     <footer class="statusbar">

@@ -9,6 +9,7 @@ const RupostCards =
 
 let currentFilePath = null;
 let allFiles = [];
+let activeGlobalPage = 'workbench';
 let activeInspectorTab = 'overview';
 let lastDebugData = null;
 let lastExecutedUrl = '';
@@ -584,7 +585,59 @@ function updateSummaryPill(data) {
   durEl.textContent = `${data.duration_ms} ms`;
 }
 
-// 5. Inspector Tabs Switcher & Renderer
+// 5. Global Page Switcher & Per-Request Inspector Tabs
+function switchGlobalPage(page) {
+  activeGlobalPage = page || 'workbench';
+  const wsBody = document.getElementById('workspace-body');
+  const pageView = document.getElementById('global-page-view');
+
+  document.querySelectorAll('.global-nav-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.page === activeGlobalPage);
+  });
+
+  if (activeGlobalPage === 'workbench') {
+    if (wsBody) wsBody.style.display = 'grid';
+    if (pageView) pageView.style.display = 'none';
+    return;
+  }
+
+  if (wsBody) wsBody.style.display = 'none';
+  if (pageView) pageView.style.display = 'flex';
+
+  switch (activeGlobalPage) {
+    case 'mock':
+      renderMockTab(pageView);
+      break;
+    case 'session':
+      renderSessionTab(pageView);
+      break;
+    case 'history':
+      renderHistoryTab(pageView);
+      break;
+    case 'ws':
+      renderWsTab(pageView);
+      break;
+  }
+}
+
+function buildGlobalPageHeader(badge, title, refreshFnName = null) {
+  const refreshBtn = refreshFnName
+    ? `<button type="button" class="btn btn-secondary btn-sm" onclick="${refreshFnName}">[Refresh]</button>`
+    : '';
+  return `
+    <div class="global-page-header">
+      <div class="global-page-title-wrap">
+        <span class="pane-tag">${escapeHtml(badge)}</span>
+        <span class="pane-title">${escapeHtml(title)}</span>
+      </div>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        ${refreshBtn}
+        <button type="button" class="btn btn-secondary btn-sm" onclick="switchGlobalPage('workbench')">&lt;- Back to Workbench</button>
+      </div>
+    </div>
+  `;
+}
+
 function switchInspectorTab(tab) {
   activeInspectorTab = tab;
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -595,22 +648,6 @@ function switchInspectorTab(tab) {
 
 function renderInspectorTab(tab) {
   const debugEl = document.getElementById('debug-output');
-  if (tab === 'mock') {
-    renderMockTab(debugEl);
-    return;
-  }
-  if (tab === 'session') {
-    renderSessionTab(debugEl);
-    return;
-  }
-  if (tab === 'history') {
-    renderHistoryTab(debugEl);
-    return;
-  }
-  if (tab === 'ws') {
-    renderWsTab(debugEl);
-    return;
-  }
   if (!lastDebugData) {
     debugEl.innerHTML = `
       <div class="empty-hint">
@@ -1539,12 +1576,13 @@ function openMockSimulatorForBlock(rawBlock) {
   mockDraft.body = parsed.body || '';
   mockDraft.raw_block = rawBlock;
   mockDraft.lastResult = null;
-  switchInspectorTab('mock');
+  switchGlobalPage('mock');
 }
 
 function renderMockTab(container) {
+  if (!container) return;
   const simResult = mockDraft.lastResult;
-  let resultHtml = '';
+  let resultHtml = '<div class="empty-hint"><div class="empty-text">Configure the incoming probe request on the left and click [Simulate Mock Match].</div></div>';
   if (simResult) {
     if (simResult.error) {
       resultHtml = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(simResult.error)}</span></div>`;
@@ -1572,19 +1610,30 @@ function renderMockTab(container) {
   }
 
   container.innerHTML = `
-    <div class="mock-probe-form">
-      <div class="mock-probe-row">
-        <select id="mock-method" class="env-select" style="width: 96px;">
-          ${['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => `<option value="${m}" ${mockDraft.method === m ? 'selected' : ''}>${m}</option>`).join('')}
-        </select>
-        <input id="mock-path" class="mock-input" type="text" value="${escapeHtml(mockDraft.path)}" placeholder="/api/resource" />
+    ${buildGlobalPageHeader('[MOCK SIMULATOR]', 'Mock Rule Probe & Variant Matcher')}
+    <div class="global-page-body">
+      <div class="global-page-grid">
+        <section class="global-panel-card">
+          <div class="global-panel-title">1. Incoming Probe Request</div>
+          <div class="mock-probe-form">
+            <div class="mock-probe-row">
+              <select id="mock-method" class="env-select" style="width: 100px;">
+                ${['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => `<option value="${m}" ${mockDraft.method === m ? 'selected' : ''}>${m}</option>`).join('')}
+              </select>
+              <input id="mock-path" class="mock-input" type="text" value="${escapeHtml(mockDraft.path)}" placeholder="/api/resource" />
+            </div>
+            <textarea id="mock-headers" class="mock-textarea" placeholder="Headers (JSON or Key: Value per line)">${escapeHtml(mockDraft.headers)}</textarea>
+            <textarea id="mock-query" class="mock-textarea" placeholder="Query (JSON or key=value per line)">${escapeHtml(mockDraft.query)}</textarea>
+            <textarea id="mock-body" class="mock-textarea" placeholder="Request Body (optional)">${escapeHtml(mockDraft.body)}</textarea>
+            <button type="button" id="btn-mock-simulate" class="btn btn-primary" onclick="runMockSimulate()">&gt; Simulate Mock Match</button>
+          </div>
+        </section>
+        <section class="global-panel-card">
+          <div class="global-panel-title">2. Variant Evaluation Result</div>
+          <div id="mock-sim-result">${resultHtml}</div>
+        </section>
       </div>
-      <textarea id="mock-headers" class="mock-textarea" placeholder="Headers (JSON or Key: Value per line)">${escapeHtml(mockDraft.headers)}</textarea>
-      <textarea id="mock-query" class="mock-textarea" placeholder="Query (JSON or key=value per line)">${escapeHtml(mockDraft.query)}</textarea>
-      <textarea id="mock-body" class="mock-textarea" placeholder="Request Body (optional)">${escapeHtml(mockDraft.body)}</textarea>
-      <button type="button" id="btn-mock-simulate" class="btn btn-primary" onclick="runMockSimulate()">&gt; Simulate Mock Match</button>
     </div>
-    <div id="mock-sim-result">${resultHtml}</div>
   `;
   enhanceSelect(document.getElementById('mock-method'));
 }
@@ -1605,7 +1654,7 @@ async function runMockSimulate() {
   const rawBlock = mockDraft.raw_block || (lastRenderedExecBlocks[0] || '');
   if (!rawBlock) {
     mockDraft.lastResult = { error: 'Select a document or click [Mock] on a request card first.' };
-    renderMockTab(document.getElementById('debug-output'));
+    if (activeGlobalPage === 'mock') renderMockTab(document.getElementById('global-page-view'));
     return;
   }
 
@@ -1632,8 +1681,8 @@ async function runMockSimulate() {
     mockDraft.lastResult = { error: e.message };
   }
 
-  if (activeInspectorTab === 'mock') {
-    renderMockTab(document.getElementById('debug-output'));
+  if (activeGlobalPage === 'mock') {
+    renderMockTab(document.getElementById('global-page-view'));
   }
 }
 
@@ -1642,12 +1691,13 @@ let activeWsBridge = null;
 let wsLogEntries = [];
 
 async function renderSessionTab(container) {
-  container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading session state...</div></div>';
+  if (!container) return;
+  container.innerHTML = `${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading session state...</div></div></div>`;
   try {
     const res = await fetch('/api/v1/session');
     const json = await safeReadJson(res);
     if (!json || !json.success || !json.data) {
-      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load session`)}</span></div>`;
+      container.innerHTML = `${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load session`)}</span></div></div>`;
       return;
     }
     const { captured_variables: vars = {}, has_cookie_state } = json.data;
@@ -1659,37 +1709,42 @@ async function renderSessionTab(container) {
       : '<div class="empty-hint"><div class="empty-text">No @capture variables recorded in current browser session yet.</div></div>';
 
     container.innerHTML = `
-      <div class="timing-panel">
-        <div class="timing-header">
-          <span>[SESSION STATE]</span>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="switchInspectorTab('session')">[Refresh]</button>
+      ${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}
+      <div class="global-page-body">
+        <div class="timing-panel">
+          <div class="timing-header">
+            <span>[ACTIVE BROWSER SESSION]</span>
+            <span>Variables: ${keys.length}</span>
+          </div>
+          <div style="font-family: var(--font-mono); font-size: 11px; margin-top: 6px; color: var(--text-secondary);">
+            Upstream Cookie Bridge: <strong>${has_cookie_state ? 'Active' : 'Empty'}</strong>
+          </div>
         </div>
-        <div style="font-family: var(--font-mono); font-size: 11px; margin-top: 6px; color: var(--text-secondary);">
-          Upstream Cookie Bridge: <strong>${has_cookie_state ? 'Active' : 'Empty'}</strong> | Variables: <strong>${keys.length}</strong>
-        </div>
+        <div class="global-panel-card">${rowsHtml}</div>
       </div>
-      ${rowsHtml}
     `;
   } catch (e) {
-    container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+    container.innerHTML = `${buildGlobalPageHeader('[SESSION STATE]', 'Browser Session Variables & Cookie Bridge', "switchGlobalPage('session')")}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div></div>`;
   }
 }
 
 async function renderHistoryTab(container) {
+  if (!container) return;
+  const header = buildGlobalPageHeader('[HISTORY]', 'Workspace Request History', "switchGlobalPage('history')");
   if (isReadonly) {
-    container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">History access is disabled in read-only mode.</div></div>';
+    container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">History access is disabled in read-only mode.</div></div></div>`;
     return;
   }
-  container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading workspace history...</div></div>';
+  container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOADING]</div><div class="empty-text">Loading workspace history...</div></div></div>`;
   try {
     const res = await fetch('/api/v1/history?limit=25');
     const json = await safeReadJson(res);
     if (!json || !json.success || !Array.isArray(json.data)) {
-      container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load history`)}</span></div>`;
+      container.innerHTML = `${header}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to load history`)}</span></div></div>`;
       return;
     }
     if (json.data.length === 0) {
-      container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EMPTY HISTORY]</div><div class="empty-text">No workspace-scoped history entries found.</div></div>';
+      container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[EMPTY HISTORY]</div><div class="empty-text">No workspace-scoped history entries found.</div></div></div>`;
       return;
     }
     const itemsHtml = json.data
@@ -1702,17 +1757,9 @@ async function renderHistoryTab(container) {
         </li>`
       )
       .join('');
-    container.innerHTML = `
-      <div class="timing-panel">
-        <div class="timing-header">
-          <span>[WORKSPACE HISTORY]</span>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="switchInspectorTab('history')">[Refresh]</button>
-        </div>
-      </div>
-      <ul class="assertions-list">${itemsHtml}</ul>
-    `;
+    container.innerHTML = `${header}<div class="global-page-body"><ul class="assertions-list">${itemsHtml}</ul></div>`;
   } catch (e) {
-    container.innerHTML = `<div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+    container.innerHTML = `${header}<div class="global-page-body"><div class="assertion-item"><span class="assert-tag fail">[NETWORK ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div></div>`;
   }
 }
 
@@ -1767,8 +1814,10 @@ async function runDiagnoseForUrl(targetUrl) {
 }
 
 function renderWsTab(container) {
+  if (!container) return;
+  const header = buildGlobalPageHeader('[WS BRIDGE]', 'WebSocket Live Frame Debugger');
   if (isReadonly) {
-    container.innerHTML = '<div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">WebSocket bridge is disabled in read-only mode.</div></div>';
+    container.innerHTML = `${header}<div class="global-page-body"><div class="empty-hint"><div class="empty-icon">[LOCKED]</div><div class="empty-text">WebSocket bridge is disabled in read-only mode.</div></div></div>`;
     return;
   }
   const connected = activeWsBridge && activeWsBridge.readyState === 1;
@@ -1783,25 +1832,30 @@ function renderWsTab(container) {
     .join('');
 
   container.innerHTML = `
-    <div class="mock-probe-form">
-      <div class="mock-probe-row">
-        <input id="ws-bridge-url" class="mock-input" type="text" placeholder="wss://echo.websocket.events" value="wss://echo.websocket.events" />
-        <button type="button" class="btn ${connected ? 'btn-secondary' : 'btn-primary'}" onclick="${connected ? 'disconnectWsBridge()' : 'connectWsBridge()'}">${connected ? 'Disconnect' : 'Connect'}</button>
+    ${header}
+    <div class="global-page-body">
+      <div class="global-panel-card" style="margin-bottom: 16px;">
+        <div class="mock-probe-form" style="margin-bottom: 0;">
+          <div class="mock-probe-row">
+            <input id="ws-bridge-url" class="mock-input" type="text" placeholder="wss://echo.websocket.events" value="wss://echo.websocket.events" />
+            <button type="button" class="btn ${connected ? 'btn-secondary' : 'btn-primary'}" onclick="${connected ? 'disconnectWsBridge()' : 'connectWsBridge()'}">${connected ? 'Disconnect' : 'Connect'}</button>
+          </div>
+          <div class="mock-probe-row">
+            <input id="ws-bridge-msg" class="mock-input" type="text" placeholder="Message frame to send..." ${connected ? '' : 'disabled'} />
+            <button type="button" class="btn btn-accent" onclick="sendWsBridgeFrame()" ${connected ? '' : 'disabled'}>Send</button>
+          </div>
+        </div>
       </div>
-      <div class="mock-probe-row">
-        <input id="ws-bridge-msg" class="mock-input" type="text" placeholder="Message frame to send..." ${connected ? '' : 'disabled'} />
-        <button type="button" class="btn btn-accent" onclick="sendWsBridgeFrame()" ${connected ? '' : 'disabled'}>Send</button>
-      </div>
+      <ul class="assertions-list">${logsHtml}</ul>
     </div>
-    <ul class="assertions-list">${logsHtml}</ul>
   `;
 }
 
 function appendWsLog(dir, text) {
   wsLogEntries.push({ dir, text });
   if (wsLogEntries.length > 100) wsLogEntries.shift();
-  if (activeInspectorTab === 'ws') {
-    renderWsTab(document.getElementById('debug-output'));
+  if (activeGlobalPage === 'ws') {
+    renderWsTab(document.getElementById('global-page-view'));
   }
 }
 
@@ -1822,7 +1876,7 @@ function connectWsBridge() {
   ws.onclose = () => {
     appendWsLog('SYS', 'Bridge closed');
     activeWsBridge = null;
-    if (activeInspectorTab === 'ws') renderWsTab(document.getElementById('debug-output'));
+    if (activeGlobalPage === 'ws') renderWsTab(document.getElementById('global-page-view'));
   };
 }
 
@@ -1967,6 +2021,8 @@ if (typeof module !== 'undefined' && module.exports) {
     renderHistoryTab,
     runDiagnoseForUrl,
     renderOverviewTab,
+    switchGlobalPage,
+    getActiveGlobalPage: () => activeGlobalPage,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },

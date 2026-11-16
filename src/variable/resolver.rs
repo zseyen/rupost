@@ -17,6 +17,10 @@ impl VariableResolver {
     pub fn substitute(text: &str, context: &VariableContext) -> String {
         static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
 
+        if !text.contains("{{") {
+            return text.to_string();
+        }
+
         // 通道 1：函数宏（带参数，引号感知 + 括号平衡扫描）
         let with_fns = Self::substitute_fn_macros(text, context);
 

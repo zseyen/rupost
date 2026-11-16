@@ -7,7 +7,8 @@
 //! 契约纪律：**不做解析器类型直接 derive**（内部命名不得泄漏为公共契约）——
 //! 本模块是内部类型与外部 JSON 之间的隔离层；内部 `ParsedFile` 重构不得破坏字段。
 
-use crate::parser::ParsedFile;
+use crate::parser::{ParsedFile, parse_document_by_path};
+use crate::utils::path_guard::normalize_posix_path;
 use serde::Serialize;
 
 /// AstDocument 契约版本（只增不改；主版本升级 = 破坏性变更）
@@ -49,7 +50,7 @@ pub struct AstRequest {
 pub fn to_ast_document(parsed: &ParsedFile, source_path: &str) -> AstDocument {
     AstDocument {
         schema_version: AST_SCHEMA_VERSION.to_string(),
-        source_path: crate::utils::path_guard::normalize_posix_path(source_path),
+        source_path: normalize_posix_path(source_path),
         dependencies: parsed.dependencies.clone(),
         requests: parsed
             .requests
@@ -84,7 +85,7 @@ mod tests {
     #[test]
     fn test_ast_schema_exact_keys() {
         let content = "### ok\n# @assert status == 200\nGET {{base_url}}/ok\n\n# @capture t from body.token\n";
-        let parsed = crate::parser::parse_document_by_path("s.http", content).expect("parse");
+        let parsed = parse_document_by_path("s.http", content).expect("parse");
         let doc = to_ast_document(&parsed, "s.http");
 
         let v = serde_json::to_value(&doc).unwrap();
@@ -125,7 +126,7 @@ mod tests {
     #[test]
     fn test_ast_headers_order_preserved() {
         let content = "### h\nGET http://x/\nAuthorization: Bearer t\nX-First: 1\nX-Second: 2\n";
-        let parsed = crate::parser::parse_document_by_path("h.http", content).expect("parse");
+        let parsed = parse_document_by_path("h.http", content).expect("parse");
         let doc = to_ast_document(&parsed, "h.http");
         let v = serde_json::to_value(&doc).unwrap();
         let headers = v["requests"][0]["headers"].as_array().unwrap();

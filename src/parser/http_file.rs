@@ -1,5 +1,8 @@
+use crate::http::Method;
 use crate::parser::metadata;
+use crate::parser::mock_variant::MockVariantParser;
 use crate::parser::types::{ParseError, ParseResult, ParsedFile, ParsedRequest};
+use std::fs;
 use std::path::Path;
 
 /// HTTP 文件解析器
@@ -20,7 +23,7 @@ impl HttpFileParser {
 
     /// 从文件路径解析
     pub fn parse_file<P: AsRef<Path>>(path: P) -> ParseResult<ParsedFile> {
-        let content = std::fs::read_to_string(path.as_ref())?;
+        let content = fs::read_to_string(path.as_ref())?;
         let mut parsed = Self::parse_content(&content)?;
         parsed.source_path = Some(path.as_ref().to_path_buf());
         Ok(parsed)
@@ -114,7 +117,7 @@ impl HttpFileParser {
         if parts.len() < 2 {
             return false;
         }
-        crate::http::Method::is_standard(parts[0])
+        Method::is_standard(parts[0])
     }
 
     /// 启发式自适应请求块拆分
@@ -208,15 +211,13 @@ impl HttpFileParser {
         start_line: usize,
     ) -> ParseResult<Option<ParsedRequest>> {
         // 接入统一组件 MockVariantParser：提取切分出的 Mock 变体（打通 .http 双角色能力）
-        let (request_part, mock_variants) = if let Some((req_part, var_part)) =
-            crate::parser::mock_variant::MockVariantParser::split_mock_variants(block)
-        {
-            let vars =
-                crate::parser::mock_variant::MockVariantParser::parse_mock_variants_part(&var_part);
-            (req_part, vars)
-        } else {
-            (block.to_string(), Vec::new())
-        };
+        let (request_part, mock_variants) =
+            if let Some((req_part, var_part)) = MockVariantParser::split_mock_variants(block) {
+                let vars = MockVariantParser::parse_mock_variants_part(&var_part);
+                (req_part, vars)
+            } else {
+                (block.to_string(), Vec::new())
+            };
 
         let mut request = ParsedRequest::new(start_line);
         request.metadata.mock_variants = mock_variants;
@@ -357,7 +358,7 @@ impl HttpFileParser {
             2 => {
                 // 方法 + URL
                 let method = parts[0].to_uppercase();
-                if !crate::http::Method::is_standard(&method) {
+                if !Method::is_standard(&method) {
                     return Err(ParseError::InvalidMethod {
                         method,
                         line: line_number,

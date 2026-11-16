@@ -1,9 +1,12 @@
 use crate::Result;
+use crate::error::RupostError;
+use crate::utils::path_guard::is_live_doc;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 判断路径是否为受支持的活文档（`.http` / `.md` 等），SSOT 委托给 `path_guard::is_live_doc`。
 pub fn is_supported_doc(path: &Path) -> bool {
-    crate::utils::path_guard::is_live_doc(path)
+    is_live_doc(path)
 }
 
 pub struct DirectoryScanner;
@@ -14,10 +17,7 @@ impl DirectoryScanner {
         for path_str in paths {
             let path = Path::new(path_str);
             if !path.exists() {
-                return Err(crate::error::RupostError::Other(format!(
-                    "路径不存在: {}",
-                    path_str
-                )));
+                return Err(RupostError::Other(format!("路径不存在: {}", path_str)));
             }
             let canonical = path.canonicalize()?;
             if canonical.is_file() {
@@ -37,7 +37,7 @@ impl DirectoryScanner {
     }
 
     fn scan_dir(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-        let read_dir = std::fs::read_dir(dir)?;
+        let read_dir = fs::read_dir(dir)?;
         for entry in read_dir {
             let entry = entry?;
             let path = entry.path();

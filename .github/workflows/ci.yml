@@ -119,6 +119,29 @@ jobs:
         env:
           RUPOST_TEST_PORT_BASE: 19000
 
+  # Job: WP-T4 异构黑盒验收（Python 独立实现交叉验证 + 手动指南参数化）
+  e2e-pytest:
+    name: E2E Blackbox (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release binary
+        run: cargo build --release --bin rupost
+      - name: Install pytest
+        run: pip install pytest
+      - name: Run heterogeneous blackbox suite
+        env:
+          RUPOST_BIN: ${{ github.workspace }}/target/release/rupost
+        run: pytest tests_e2e -q
+
   musl-static:
     name: musl Static Build & Size Budget
     runs-on: ubuntu-latest

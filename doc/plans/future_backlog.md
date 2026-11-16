@@ -104,3 +104,30 @@
 *   **同类 `to_str()` 丢值点盘点**（2026-11-09 非 ASCII header 修复批次遗留，按需顺手修）：`src/generator/trace.rs:51,172`（T2 溯源对非 ASCII 值失效，组合新发射语义将以明文落盘）、`src/runner/engine/replayer.rs:389`（快照 replay 还原请求整行静默丢弃）、`src/mock/server.rs:131` 与 `src/mock/server/axum_adapter.rs:66`（mock 匹配跳过非 ASCII）、TUI 展示层 `src/tui/state/history.rs:70`、`src/tui/handlers/actions/ws_session.rs:339`（~~`src/tui/ui/response.rs:694`~~ 已随 Phase 3 组件化修复：headers.rs lossy 读回）。
 
 *   **header_map 序列化同名多值覆盖**（2026-11-09 审查登记，既有行为）：`src/history/serialization.rs` 以 `HashMap<String,_>` 收集，`HeaderMap` 同名多值（如多条 Set-Cookie）仅存末值；deserialize 侧 `HeaderMap::insert` 亦为替换语义。修复方向：`append` + `Vec<(String,String)>` 中间表示（需同步 JSON schema 消费方 ai triage/history show）。
+
+---
+
+## 📌 2026-11-16 盘点汇总：未执行内容全量归档
+
+> 本节汇总截至 2026-11-16 全部规划文档中的未执行项，区分「流程收尾」「已定稿基础架构」「功能链路小项」「生态/边缘尾项」与「显式裁决不做」，作为后续排期唯一入口。
+
+### A. 流程与 CI 待确认项
+*   **CI 三新 Job 首跑确认**（`feature/contract-drift-and-hygiene` @ `ce633224` 已推送，`CHANGELOG.md` 已于同提交去重补齐）：因 [ci.yml](file:///Users/zsyzzx/project/rust/rupost/.github/workflows/ci.yml#L3-L8) 仅对 `main` 的 `push`/`pull_request` 及管理员 `workflow_dispatch` 触发，需建 PR（`feature/contract-drift-and-hygiene -> main`）后确认 `smoke-bash`（须绿）、`e2e-pytest`（须绿）、`nextest-pilot`（`continue-on-error` 试点，若红需归因）首跑结果。
+
+### B. 已定稿待实施：统一基础服务与配置体系（P0–P2）
+详见 [`2026-11-16-unified-services-and-config-plan.md`](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-11-16-unified-services-and-config-plan.md)：
+*   **Wave 0（编译卫生与文档）**：移除 `Cargo.toml` 闲置 `semver = "1.0"`；为 `storage.rs`、`on_failure_test.rs`、`snapshot_contract_test.rs` 补 `#[cfg(unix)]` 门控消除 Windows 警告；更新 `README.md` 跨平台插件与命令说明。
+*   **Wave 1（P0 基础原语）**：`WarningSink` 诊断告警总线（收口全库 30+ 处裸 `eprintln!`，修复 TUI 撕裂与 Web 不可见）；`ProcessGroupGuard` 进程组强剿原语合并（`plugin/driver.rs` + `runner/on_failure.rs`）；`src/http/client.rs` 共享构建函数收口。
+*   **Wave 2（P1 统一配置与 AI 凭据安全）**：`WorkspaceConfig` / `WorkspacePathsConfig`（锚定 `project_root`、`[paths]` 沙箱防逃逸、移除 `HistoryStorage::get_storage()` 全局单例与硬编码 `.rupost`）；AI 自定义 `api_key_env`、多 `[ai.profiles.<name>]` 与 `$HOME/.rupost/credentials.toml`（`0o600` + 属主校验 + 动态脱敏）；`AtomicFileWriter` 原子安全落盘收口。
+*   **Wave 3（P2 交互会话同构）**：抽取共享 `InteractiveSession`（Web/TUI 语义同构）与 `PrescriptionFormatter` 处方文案收口。
+
+### C. 既有功能链路小项与生态延伸
+*   **流式 Runner 行号回填**：`sse_runner` 与 `ws_runner` 的 `TestResult.source_line` 回填（当前仅 `http_runner` 已回填）。
+*   **Web 前端 `incident` 开关（`WP-R8`）**：后端 `RunSuiteRequest.incident` / `incident_dir` 契约已就绪，前端 `src/web/assets/app.js` 复选框暂缓（2026-11-14 裁决交用户按需补齐）。
+*   **社区插件承载项（`WP-P3a` / `WP-P3b`）**：OpenAPI (JSON) 导入（`openapi2md`）与 k6 场景草稿导出（`k6gen`），2026-11-13 裁决核心不实施，基于 `rupost ast` 桥交由社区以命令插件形态承载。
+*   **生态与低优尾项**：VSCode 扩展本体（`C7`，独立立项）；Windows 原生 exe 插件实机冒烟（`D10`）；缓存一致性子项（`C2` 遗留）；`captured_keys`（`A2/E-6`，deferred）；Web `--var-state` 落盘（`B5`，维持内存态）；`@skip-if` / `@loop` / `history export` 桩转实及上述 6 处非 ASCII `to_str()` 丢值点。
+
+### D. 显式裁决不做（Scope Out，防范围蔓延）
+*   **安全/校验**：manifest `artifact_digests` 密钥级签名防篡改；`replay`/`ai triage` 强制校验 `--verify-digests`；CLI `--incident-out` 保留上限裁剪。
+*   **定位/契约**：Markdown `heading-slug` 锚点定位；快照 Schema v1.0 新增 `source_line`；扩充第四个退出码。
+*   **扩展缝/交互**：`import`/`export` 管线插件化扩展点、`stdin` AST 注入协议、Rust 库 SDK 承诺、TUI 复现包/契约漂移入口。

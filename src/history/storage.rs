@@ -191,7 +191,8 @@ impl HistoryStorage {
     ) -> Result<Vec<HistoryEntry>> {
         let mut pos = file.seek(SeekFrom::End(0)).map_err(RupostError::IoError)?;
         let mut collected = Vec::with_capacity(n);
-        let mut trailing_bytes: Vec<u8> = Vec::new();
+        // 逆向暂存未遇到 '\n' 的尾部块（由后向前存放），避免单条大行反复 O(K^2) 拷贝
+        let mut pending_tail_chunks: Vec<Vec<u8>> = Vec::new();
         let chunk_size = chunk_size.max(1);
         let mut buf = vec![0u8; chunk_size];
 
@@ -202,28 +203,45 @@ impl HistoryStorage {
             file.read_exact(&mut buf[..read_len])
                 .map_err(RupostError::IoError)?;
 
-            let mut combined = Vec::with_capacity(read_len + trailing_bytes.len());
-            combined.extend_from_slice(&buf[..read_len]);
-            combined.extend_from_slice(&trailing_bytes);
-
-            let mut end = combined.len();
-            while let Some(nl_idx) = combined[..end].iter().rposition(|&b| b == b'\n') {
-                Self::try_push_json_line(&combined[nl_idx + 1..end], &mut collected);
+            let chunk = &buf[..read_len];
+            let mut end = chunk.len();
+            while let Some(nl_idx) = chunk[..end].iter().rposition(|&b| b == b'\n') {
+                let head = &chunk[nl_idx + 1..end];
+                if pending_tail_chunks.is_empty() {
+                    Self::try_push_json_line(head, &mut collected);
+                } else {
+                    let assembled = Self::assemble_line(head, &mut pending_tail_chunks);
+                    Self::try_push_json_line(&assembled, &mut collected);
+                }
                 end = nl_idx;
                 if collected.len() >= n {
                     break;
                 }
             }
 
-            trailing_bytes = combined[..end].to_vec();
+            if collected.len() < n && end > 0 {
+                pending_tail_chunks.push(chunk[..end].to_vec());
+            }
         }
 
-        if collected.len() < n && !trailing_bytes.is_empty() {
-            Self::try_push_json_line(&trailing_bytes, &mut collected);
+        if collected.len() < n && !pending_tail_chunks.is_empty() {
+            let assembled = Self::assemble_line(&[], &mut pending_tail_chunks);
+            Self::try_push_json_line(&assembled, &mut collected);
         }
 
         collected.reverse();
         Ok(collected)
+    }
+
+    fn assemble_line(head: &[u8], reversed_tail_chunks: &mut Vec<Vec<u8>>) -> Vec<u8> {
+        let total = head.len() + reversed_tail_chunks.iter().map(Vec::len).sum::<usize>();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(head);
+        for chunk in reversed_tail_chunks.iter().rev() {
+            out.extend_from_slice(chunk);
+        }
+        reversed_tail_chunks.clear();
+        out
     }
 
     fn try_push_json_line(line: &[u8], out: &mut Vec<HistoryEntry>) {

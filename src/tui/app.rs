@@ -19,19 +19,19 @@ fn collect_top_level_dirs(raw_files: &[String], root_canon: &Path) -> HashSet<St
     let mut candidates = HashSet::new();
     for f in raw_files {
         let p = Path::new(f);
-        let rel = p.strip_prefix(root_canon).ok().or_else(|| None);
-        let fallback_canon;
-        let rel = if let Some(r) = rel {
-            r
-        } else {
-            let Ok(c) = fs::canonicalize(p) else {
-                continue;
-            };
-            fallback_canon = c;
-            let Ok(r) = fallback_canon.strip_prefix(root_canon) else {
-                continue;
-            };
-            r
+        let mut fallback_canon = None;
+        let rel = match p.strip_prefix(root_canon) {
+            Ok(r) if !r.components().any(|c| matches!(c, Component::ParentDir)) => r,
+            _ => {
+                let Ok(c) = fs::canonicalize(p) else {
+                    continue;
+                };
+                let stored = fallback_canon.insert(c);
+                let Ok(r) = stored.strip_prefix(root_canon) else {
+                    continue;
+                };
+                r
+            }
         };
         if let Some(Component::Normal(name)) = rel.components().next() {
             candidates.insert(name.to_string_lossy().into_owned());
@@ -596,7 +596,11 @@ mod tests {
             root_canon.join("root.http").to_string_lossy().into_owned(),
             root_canon.join("api/a.http").to_string_lossy().into_owned(),
             root_canon.join("api/b.http").to_string_lossy().into_owned(),
-            root_canon.join("auth/login.http").to_string_lossy().into_owned(),
+            // 包含未规范化 '..' 段，验证 canonicalize 回退分支
+            root_canon
+                .join("api/../auth/login.http")
+                .to_string_lossy()
+                .into_owned(),
         ];
 
         let dirs = collect_top_level_dirs(&files, &root_canon);

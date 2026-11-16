@@ -1294,6 +1294,71 @@ fn test_replay_executor_rejects_invalid_target_at_construction() {
     assert!(ReplayExecutor::new(None, false).is_ok());
 }
 
+/// 审查 P1（接手成本审查副产品）：`--verbose` 的 Replayed Response Body
+/// 打印此前未脱敏——失败条目 snippet 走 redact_and_truncate_body，而 verbose
+/// 打印面直出明文，同一凭据两个出口两种待遇。
+#[tokio::test]
+async fn test_replay_verbose_body_print_is_redacted() {
+    let dir = TempDir::new().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/whoami"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"access_token": "verbose-leak-probe-42"})),
+        )
+        .mount(&server)
+        .await;
+
+    // 快照：录制时目标不可达（传输错误条目）
+    let suite = SnapshotSuite {
+        version: 2,
+        timestamp: chrono::Utc::now(),
+        source_file: Some("verbose.http".to_string()),
+        entries: vec![SnapshotEntry {
+            id: "v1".to_string(),
+            request: RequestSnapshot {
+                timeout: None,
+                method: "GET".to_string(),
+                url: "http://127.0.0.1:1/whoami".to_string(),
+                headers: reqwest::header::HeaderMap::new(),
+                body: None,
+            },
+            response: Some(ResponseSnapshot {
+                status: 200,
+                headers: reqwest::header::HeaderMap::new(),
+                body: "recorded-body".to_string(),
+                body_truncated: None,
+            }),
+            error: None,
+        }],
+        masking: None,
+    };
+    let snap = dir.path().join("verbose.json");
+    write_snapshot_suite(&suite, &snap).unwrap();
+
+    // 重放打到活服务器（headers 采样语义无关；body 携带凭据）
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args([
+            "replay",
+            snap.to_str().unwrap(),
+            "--target",
+            server.uri().as_str(),
+            "--verbose",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("verbose-leak-probe-42"),
+        "--verbose 重放响应体不得明文打印凭据: {stdout}"
+    );
+    assert!(
+        stdout.contains("[REDACTED]"),
+        "verbose body 打印应同源脱敏: {stdout}"
+    );
+}
+
 /// P0-B CLI 时序守护：target 校验先于快照加载——即使快照文件不存在，
 /// 报错也必须是 target 非法（证明没有任何 I/O 发生在校验之前）。
 #[test]

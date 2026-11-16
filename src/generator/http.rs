@@ -454,6 +454,22 @@ impl HttpGenerator {
                 } else {
                     ah.to_string()
                 }
+            } else if ah.contains('=') {
+                // OAuth implicit 形态：#access_token=SECRET（无 '?'）——与 redact 侧
+                // 双形态对齐（审查 P1-4），否则同一凭据 export 掩码、generate 明文
+                let (rebuilt, frag_changed) = Self::variabilize_query_pairs(
+                    ah,
+                    variables,
+                    traced,
+                    policy,
+                    keep_credentials,
+                );
+                if frag_changed {
+                    changed = true;
+                    rebuilt
+                } else {
+                    ah.to_string()
+                }
             } else {
                 ah.to_string()
             }
@@ -638,6 +654,19 @@ mod tests {
         );
         assert!(vars.contains("token"));
         assert!(vars.contains("access_token"));
+
+        // 场景 G（审查 P1-4）：OAuth implicit 形态 —— fragment 无 '?' 但含
+        // `key=value` 参数（#access_token=SECRET）。redact 侧已覆盖该形态
+        // （security/redact.rs `frag.contains('=')` 臂），生成器必须对齐，
+        // 否则同一凭据 export 侧掩码、generate 侧明文落盘。
+        let url_g = "https://api.com/callback#access_token=sec-implicit-999&state=xyz";
+        let out_g = HttpGenerator::variabilize_url(url_g, &mut vars, None, None, false);
+        assert_eq!(
+            out_g,
+            "https://api.com/callback#access_token={{access_token}}&state=xyz"
+        );
+        assert!(vars.contains("access_token"));
+        assert!(!out_g.contains("sec-implicit-999"));
         assert!(!out_f.contains("sec1"));
         assert!(!out_f.contains("sec2"));
     }

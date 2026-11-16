@@ -378,8 +378,16 @@ impl ReplayExecutor {
         }
 
         if self.verbose {
+            // 与失败条目 snippet 同源脱敏（接手成本审查 P1：verbose 打印面
+            // 曾直出明文响应体——同一函数内一个出口掩码、一个出口泄露）
             println!("  ┌─ Replayed Response Body ──────────────────────────");
-            println!("  │ {}", res.body);
+            println!(
+                "  │ {}",
+                crate::security::redact::redact_and_truncate_body(
+                    &res.body,
+                    crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
+                )
+            );
             println!("  └──────────────────────────────────────────────────");
         }
 

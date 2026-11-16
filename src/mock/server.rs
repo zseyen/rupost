@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::error::RupostError;
 use crate::mock::matcher::MockMatcher;
 use std::sync::Arc;
 
@@ -92,13 +93,9 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
         }
         MockFileConfig::Routes(all_routes)
     } else {
-        let content = fs::read_to_string(file_path).map_err(crate::error::RupostError::IoError)?;
-        serde_json::from_str(&content).map_err(|e| {
-            crate::error::RupostError::ParseError(format!(
-                "Failed to parse JSON configuration: {}",
-                e
-            ))
-        })?
+        let content = fs::read_to_string(file_path).map_err(RupostError::IoError)?;
+        serde_json::from_str(&content)
+            .map_err(|e| RupostError::ParseError(format!("Failed to parse JSON configuration: {}", e)))?
     };
 
     let mut matcher = TrieRouteMatcher::new();
@@ -199,7 +196,7 @@ mod tests {
         let res = run_server_from_file("nonexistent_file.json", 9999, true).await;
         assert!(res.is_err());
         match res.unwrap_err() {
-            crate::error::RupostError::IoError(_) => {}
+            RupostError::IoError(_) => {}
             other => panic!("Expected IoError, got: {:?}", other),
         }
     }

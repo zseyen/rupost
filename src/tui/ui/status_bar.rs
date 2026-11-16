@@ -172,6 +172,7 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 mod tests {
     use super::*;
     use ratatui::Terminal;
+    use crate::tui::integrations::MockSessionState;
     use ratatui::backend::TestBackend;
 
     #[test]
@@ -193,7 +194,7 @@ mod tests {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
-        state.mock_session = Some(crate::tui::integrations::MockSessionState::new(
+        state.mock_session = Some(MockSessionState::new(
             tokio::spawn(async {}).abort_handle(),
             8080,
             "test.http".to_string(),

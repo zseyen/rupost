@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const app = require('../../src/web/assets/app.js');
+const cards = require('../../src/web/assets/http_cards.js');
 
 // 极简 Micro-DOM 打桩器
 function createMockDom() {
@@ -34,6 +35,7 @@ function createMockDom() {
 
   const mockDocument = {
     getElementById: (id) => getOrCreateElement(id),
+    querySelector: () => null,
     querySelectorAll: () => [],
     createElement: (tag) => {
       const el = {
@@ -349,6 +351,7 @@ test('syncEditorModeForFile defaults .md to preview and .http to source', async 
     throw new Error(`Unexpected URL: ${url}`);
   };
 
+  app.setCurrentFilePath('README.md');
   app.syncEditorModeForFile('README.md');
   assert.equal(modeSwitch.style.display, 'inline-flex');
   assert.equal(sourcePane.style.display, 'none');
@@ -358,7 +361,15 @@ test('syncEditorModeForFile defaults .md to preview and .http to source', async 
   await new Promise((r) => setTimeout(r, 0));
   assert.match(previewPane.innerHTML, /<h1>Hello Rupost<\/h1>/);
 
+  app.setCurrentFilePath('test.http');
+  editorEl.value = '### Demo\nGET https://example.com\n';
   app.syncEditorModeForFile('test.http');
+  assert.equal(modeSwitch.style.display, 'inline-flex');
+  assert.equal(sourcePane.style.display, 'none');
+  assert.equal(previewPane.style.display, 'block');
+  assert.match(previewPane.innerHTML, /http-cards-stack/);
+
+  app.syncEditorModeForFile('notes.txt');
   assert.equal(modeSwitch.style.display, 'none');
   assert.equal(sourcePane.style.display, 'flex');
   assert.equal(previewPane.style.display, 'none');
@@ -447,6 +458,7 @@ test('insertIntoEditor refreshes markdown preview when not in source mode', asyn
     throw new Error(`Unexpected URL: ${url}`);
   };
 
+  app.setCurrentFilePath('README.md');
   app.setEditorMode('preview');
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(renderCalled, 1);
@@ -455,4 +467,47 @@ test('insertIntoEditor refreshes markdown preview when not in source mode', asyn
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(renderCalled, 2);
   assert.match(previewPane.innerHTML, /imported/);
+});
+
+test('highlightJson highlights tokens, escapes XSS, and falls back for >100KB', () => {
+  const html = cards.highlightJson('{"ok": true, "n": 42, "xss": "<script>"}');
+  assert.match(html, /class="tok-json-key"/);
+  assert.match(html, /class="tok-json-bool">true/);
+  assert.match(html, /class="tok-json-num">42/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+
+  const big = JSON.stringify({ data: 'a'.repeat(110 * 1024) });
+  const bigHtml = cards.highlightJson(big);
+  assert.doesNotMatch(bigHtml, /tok-json-key/);
+});
+
+test('extractHttpFileBlocks extracts top-level @vars and splits ### blocks', () => {
+  const src = `@tenant = east_01\n@base_url = https://httpbingo.org\n\n### One\nGET {{base_url}}/get?t={{tenant}}\n\n### Two\nPOST {{base_url}}/post\n\n{"a":1}\n`;
+  const { fileVariables, blocks } = cards.extractHttpFileBlocks(src);
+  assert.deepEqual(fileVariables, { tenant: 'east_01', base_url: 'https://httpbingo.org' });
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /### One/);
+  assert.match(blocks[1], /POST/);
+});
+
+test('parseHttpBlock & rebuildBlockWithBody preserve @mock-when variants and handle empty body', () => {
+  const blockWithMock = `### Login\nPOST https://api.example.com/login\nContent-Type: application/json\n\n{"user":"alice"}\n\n# @mock-when body.$.user == "alice"\n200\n{"ok":true}`;
+  const parsed = cards.parseHttpBlock(blockWithMock);
+  assert.equal(parsed.method, 'POST');
+  assert.equal(parsed.hasMock, true);
+  assert.equal(parsed.body, '{"user":"alice"}');
+
+  const rebuilt = cards.rebuildBlockWithBody(blockWithMock, '{"user":"bob"}');
+  assert.match(rebuilt, /\{"user":"bob"\}/);
+  assert.match(rebuilt, /\n\n# @mock-when body\.\$\.user == "alice"/);
+
+  const getBlock = 'GET https://example.com/ping\nAccept: application/json';
+  const rebuiltGet = cards.rebuildBlockWithBody(getBlock, '{"ping":1}');
+  assert.equal(rebuiltGet, 'GET https://example.com/ping\nAccept: application/json\n\n{"ping":1}');
+});
+
+test('formatDurationObj converts Rust Duration {secs, nanos} to ms', () => {
+  assert.equal(cards.formatDurationObj({ secs: 1, nanos: 250000000 }), '1250.0 ms');
+  assert.equal(cards.formatDurationObj(null), '-');
 });

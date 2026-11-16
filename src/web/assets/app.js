@@ -1,10 +1,18 @@
 // Rupost Living Workbench - Client Controller (Vanilla ESM, No Emoji)
 
+const RupostCards =
+  typeof window !== 'undefined' && window.RupostCards
+    ? window.RupostCards
+    : typeof require === 'function'
+      ? require('./http_cards.js')
+      : null;
+
 let currentFilePath = null;
 let allFiles = [];
 let activeInspectorTab = 'overview';
 let lastDebugData = null;
 let isReadonly = false;
+let currentResponseBodyText = '';
 
 const expandedDirs = new Set();
 const dirCache = new Map();
@@ -12,6 +20,8 @@ const loadingDirs = new Set();
 
 let editorMode = 'source';
 let lastRenderedExecBlocks = [];
+let cardEditedBodies = new Map();
+let currentHttpFileVars = {};
 let markdownRenderTimer = null;
 let renderSeq = 0;
 
@@ -315,6 +325,7 @@ async function openFile(path) {
       const fileContent = typeof json.data === 'string' ? json.data : (json.data && json.data.content ? json.data.content : '');
       const editor = document.getElementById('code-editor');
       editor.value = fileContent;
+      cardEditedBodies.clear();
 
       updateGutter();
       updateEditorMeta();
@@ -371,7 +382,7 @@ async function runCurrentBlock() {
   await executeRawBlock(rawBlock);
 }
 
-async function executeRawBlock(rawBlock, triggerBtn = null) {
+async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
   const debugEl = document.getElementById('debug-output');
   debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EXECUTING]</div><div class="empty-text">Dispatching request to runtime engine...</div></div>';
 
@@ -382,13 +393,18 @@ async function executeRawBlock(rawBlock, triggerBtn = null) {
   }
 
   try {
+    const payload = {
+      file_path: currentFilePath || 'inline.http',
+      raw_block: rawBlock,
+    };
+    if (extraVars && Object.keys(extraVars).length > 0) {
+      payload.extra_variables = extraVars;
+    }
+
     const res = await fetch('/api/v1/run/block', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        file_path: currentFilePath || 'inline.http',
-        raw_block: rawBlock
-      })
+      body: JSON.stringify(payload),
     });
     const json = await res.json();
     if (json.success && json.data) {
@@ -604,17 +620,20 @@ function renderOverviewTab(d, container) {
 }
 
 function renderBodyTab(d, container) {
-  const bodyText = d.response_body || '[EMPTY BODY]';
+  currentResponseBodyText = d.response_body || '';
+  const displayHtml = currentResponseBodyText
+    ? RupostCards.highlightJson(currentResponseBodyText)
+    : '<span class="tok-null">[EMPTY BODY]</span>';
   container.innerHTML = `
     <div class="code-container">
       <div class="code-toolbar">
         <span class="code-title">Response Body</span>
         <div style="display: flex; gap: 6px;">
-          <button class="btn btn-secondary" onclick="formatBodyJson()" style="padding: 2px 8px; font-size: 11px;">[Format JSON]</button>
-          <button id="btn-copy-body" class="btn btn-secondary" onclick="copyResponseBody()" style="padding: 2px 8px; font-size: 11px;">[Copy Body]</button>
+          <button class="btn btn-secondary btn-sm" onclick="formatBodyJson()">[Format JSON]</button>
+          <button id="btn-copy-body" class="btn btn-secondary btn-sm" onclick="copyResponseBody()">[Copy Body]</button>
         </div>
       </div>
-      <pre class="code-pre"><code id="response-body-code">${escapeHtml(bodyText)}</code></pre>
+      <pre class="code-pre"><code id="response-body-code">${displayHtml}</code></pre>
     </div>
   `;
 }
@@ -716,9 +735,12 @@ function renderRawTab(d, container) {
 function formatBodyJson() {
   const codeEl = document.getElementById('response-body-code');
   if (!codeEl) return;
+  const raw = currentResponseBodyText || codeEl.textContent || '';
   try {
-    const obj = JSON.parse(codeEl.textContent);
-    codeEl.textContent = JSON.stringify(obj, null, 2);
+    const obj = JSON.parse(raw);
+    const formatted = JSON.stringify(obj, null, 2);
+    currentResponseBodyText = formatted;
+    codeEl.innerHTML = RupostCards.highlightJson(formatted);
   } catch (e) {
     // not valid JSON, ignore
   }
@@ -727,7 +749,8 @@ function formatBodyJson() {
 function copyResponseBody() {
   const codeEl = document.getElementById('response-body-code');
   if (!codeEl) return;
-  navigator.clipboard.writeText(codeEl.textContent).then(() => {
+  const raw = currentResponseBodyText || codeEl.textContent || '';
+  navigator.clipboard.writeText(raw).then(() => {
     const btn = document.getElementById('btn-copy-body');
     if (btn) {
       const orig = btn.textContent;
@@ -881,15 +904,25 @@ function insertIntoEditor(text) {
   }
 }
 
-// 6.1 Markdown View Mode & Live Preview Renderer
+// 6.1 Markdown & HTTP Card View Mode + Live Preview Renderer
 function isMarkdownFile(path) {
   return typeof path === 'string' && path.toLowerCase().endsWith('.md');
 }
 
+function isHttpFile(path) {
+  return typeof path === 'string' && path.toLowerCase().endsWith('.http');
+}
+
 function syncEditorModeForFile(path) {
   const modeSwitch = document.getElementById('editor-mode-switch');
+  const splitBtn = document.querySelector('#editor-mode-switch .mode-btn[data-mode="split"]');
   if (isMarkdownFile(path)) {
     if (modeSwitch) modeSwitch.style.display = 'inline-flex';
+    if (splitBtn && splitBtn.style) splitBtn.style.display = '';
+    setEditorMode('preview');
+  } else if (isHttpFile(path)) {
+    if (modeSwitch) modeSwitch.style.display = 'inline-flex';
+    if (splitBtn && splitBtn.style) splitBtn.style.display = 'none';
     setEditorMode('preview');
   } else {
     if (modeSwitch) modeSwitch.style.display = 'none';
@@ -929,11 +962,65 @@ function scheduleMarkdownRender() {
   }, 120);
 }
 
+function upgradePreviewCodeBlocks(previewPane) {
+  if (!previewPane || !previewPane.querySelectorAll) return;
+
+  // 1. Upgrade Markdown ```http / ```rest blocks into unified HTTP Request Cards
+  previewPane.querySelectorAll('.md-http-block').forEach((blockEl) => {
+    const runBtn = blockEl.querySelector('.md-run-btn');
+    const idx = runBtn ? Number(runBtn.dataset.blockIndex) : -1;
+    const rawBlock = lastRenderedExecBlocks[idx];
+    if (!Number.isNaN(idx) && typeof rawBlock === 'string') {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = RupostCards.renderHttpCardHtml(rawBlock, idx, {
+        readonly: isReadonly,
+        editedBody: cardEditedBodies.get(idx),
+      });
+      if (wrapper.firstElementChild) {
+        blockEl.replaceWith(wrapper.firstElementChild);
+      }
+    }
+  });
+
+  // 2. Highlight ```json fenced blocks
+  previewPane.querySelectorAll('.md-code-block').forEach((blockEl) => {
+    const langEl = blockEl.querySelector('.md-code-lang');
+    if (langEl && langEl.textContent === 'JSON') {
+      const codeEl = blockEl.querySelector('pre code');
+      if (codeEl) {
+        codeEl.innerHTML = RupostCards.highlightJson(codeEl.textContent || '');
+      }
+    }
+  });
+}
+
 async function renderMarkdownPreview() {
   const editor = document.getElementById('code-editor');
   const previewPane = document.getElementById('markdown-preview');
   if (!editor || !previewPane) return;
 
+  if (isHttpFile(currentFilePath)) {
+    const extracted = RupostCards.extractHttpFileBlocks(editor.value || '');
+    currentHttpFileVars = extracted.fileVariables || {};
+    lastRenderedExecBlocks = extracted.blocks || [];
+    if (lastRenderedExecBlocks.length === 0) {
+      previewPane.innerHTML = '<div class="empty-hint"><div class="empty-icon">[EMPTY HTTP FILE]</div><div class="empty-text">Switch to [Source] to add HTTP requests.</div></div>';
+      return;
+    }
+    const cardsHtml = lastRenderedExecBlocks
+      .map((blk, idx) =>
+        RupostCards.renderHttpCardHtml(blk, idx, {
+          readonly: isReadonly,
+          editedBody: cardEditedBodies.get(idx),
+        })
+      )
+      .join('');
+    previewPane.innerHTML = `<div class="http-cards-stack">${cardsHtml}</div>`;
+    syncMarkdownRunButtonsReadonly();
+    return;
+  }
+
+  currentHttpFileVars = {};
   const seq = ++renderSeq;
   try {
     const res = await fetch('/api/v1/markdown/render', {
@@ -948,6 +1035,7 @@ async function renderMarkdownPreview() {
         ? json.data.executable_blocks
         : [];
       previewPane.innerHTML = `<article class="markdown-body">${json.data.html || ''}</article>`;
+      upgradePreviewCodeBlocks(previewPane);
       syncMarkdownRunButtonsReadonly();
     }
   } catch (e) {
@@ -960,11 +1048,16 @@ async function renderMarkdownPreview() {
 function syncMarkdownRunButtonsReadonly() {
   const previewPane = document.getElementById('markdown-preview');
   if (!previewPane || !previewPane.querySelectorAll) return;
-  previewPane.querySelectorAll('.md-run-btn').forEach(btn => {
-    btn.disabled = isReadonly;
-    if (isReadonly) {
-      btn.title = '只读模式下不可用';
-    }
+  previewPane
+    .querySelectorAll('.md-run-btn, .http-card-run-btn, .http-card-add-body-btn, .http-card-fmt-btn, .http-card-reset-btn')
+    .forEach(btn => {
+      btn.disabled = isReadonly;
+      if (isReadonly) {
+        btn.title = '只读模式下不可用';
+      }
+    });
+  previewPane.querySelectorAll('.http-card-body-editor').forEach(ta => {
+    ta.readOnly = isReadonly;
   });
 }
 
@@ -1004,17 +1097,108 @@ function resolveRelativeDocPath(baseFilePath, href) {
   return resolved.length > 0 ? resolved.join('/') : null;
 }
 
+function getEffectiveCardBlock(idx) {
+  const rawBlock = lastRenderedExecBlocks[idx];
+  if (typeof rawBlock !== 'string') return null;
+  if (cardEditedBodies.has(idx)) {
+    return RupostCards.rebuildBlockWithBody(rawBlock, cardEditedBodies.get(idx));
+  }
+  return rawBlock;
+}
+
+function rerenderSingleCard(cardEl, idx) {
+  const rawBlock = lastRenderedExecBlocks[idx];
+  if (!cardEl || typeof rawBlock !== 'string') return;
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = RupostCards.renderHttpCardHtml(rawBlock, idx, {
+    readonly: isReadonly,
+    editedBody: cardEditedBodies.get(idx),
+  });
+  if (wrapper.firstElementChild) {
+    cardEl.replaceWith(wrapper.firstElementChild);
+  }
+}
+
 function initMarkdownPreviewEvents() {
   const previewPane = document.getElementById('markdown-preview');
   if (!previewPane) return;
+
+  previewPane.addEventListener('input', (e) => {
+    const editorEl = e.target.closest ? e.target.closest('.http-card-body-editor') : null;
+    if (!editorEl) return;
+    const idx = Number(editorEl.dataset.cardIndex);
+    if (Number.isNaN(idx)) return;
+    const rawBlock = lastRenderedExecBlocks[idx];
+    const origBody = typeof rawBlock === 'string' ? RupostCards.parseHttpBlock(rawBlock).body : '';
+    const nextVal = editorEl.value;
+    if (nextVal === origBody) {
+      cardEditedBodies.delete(idx);
+    } else {
+      cardEditedBodies.set(idx, nextVal);
+    }
+    const card = editorEl.closest('.http-card');
+    if (card) {
+      const resetBtn = card.querySelector('.http-card-reset-btn');
+      if (resetBtn) resetBtn.style.display = cardEditedBodies.has(idx) ? '' : 'none';
+      const label = card.querySelector('.http-card-section-label');
+      if (label) {
+        label.innerHTML = `Request Body ${cardEditedBodies.has(idx) ? '<span class="modified-pill">[Modified]</span>' : ''}`;
+      }
+    }
+  });
+
   previewPane.addEventListener('click', (e) => {
-    const runBtn = e.target.closest ? e.target.closest('.md-run-btn') : null;
+    const runBtn = e.target.closest ? e.target.closest('.http-card-run-btn, .md-run-btn') : null;
     if (runBtn) {
       if (isReadonly) return;
-      const idx = Number(runBtn.dataset.blockIndex);
-      if (!Number.isNaN(idx) && typeof lastRenderedExecBlocks[idx] === 'string') {
-        executeRawBlock(lastRenderedExecBlocks[idx], runBtn);
+      const idx = Number(runBtn.dataset.cardIndex ?? runBtn.dataset.blockIndex);
+      const effectiveBlock = getEffectiveCardBlock(idx);
+      if (effectiveBlock) {
+        executeRawBlock(effectiveBlock, runBtn, currentHttpFileVars);
       }
+      return;
+    }
+
+    const addBodyBtn = e.target.closest ? e.target.closest('.http-card-add-body-btn') : null;
+    if (addBodyBtn) {
+      if (isReadonly) return;
+      const card = addBodyBtn.closest('.http-card');
+      const ta = card && card.querySelector('.http-card-body-editor');
+      const fmtBtn = card && card.querySelector('.http-card-fmt-btn');
+      if (ta) {
+        ta.style.display = 'block';
+        ta.focus();
+      }
+      if (fmtBtn) fmtBtn.style.display = '';
+      addBodyBtn.style.display = 'none';
+      return;
+    }
+
+    const fmtBtn = e.target.closest ? e.target.closest('.http-card-fmt-btn') : null;
+    if (fmtBtn) {
+      if (isReadonly) return;
+      const idx = Number(fmtBtn.dataset.cardIndex);
+      const card = fmtBtn.closest('.http-card');
+      const ta = card && card.querySelector('.http-card-body-editor');
+      if (ta) {
+        try {
+          const formatted = JSON.stringify(JSON.parse(ta.value), null, 2);
+          ta.value = formatted;
+          cardEditedBodies.set(idx, formatted);
+          rerenderSingleCard(card, idx);
+        } catch (err) {
+          // Non-JSON body: ignore
+        }
+      }
+      return;
+    }
+
+    const resetBtn = e.target.closest ? e.target.closest('.http-card-reset-btn') : null;
+    if (resetBtn) {
+      if (isReadonly) return;
+      const idx = Number(resetBtn.dataset.cardIndex);
+      cardEditedBodies.delete(idx);
+      rerenderSingleCard(resetBtn.closest('.http-card'), idx);
       return;
     }
 

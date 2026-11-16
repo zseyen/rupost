@@ -1815,6 +1815,29 @@ jj split doc/guides examples/incident_bundle/README.md README.md CHANGELOG.md do
 | C-R9 | 目录文档覆盖 src/web 等缺失模块 | 缺 src/web 条目 |
 | C-R4 | 文档与登记完成 | 有代码行为未文档化 / 本批未入 CHANGELOG 与 progress_summary |
 
+## 待办与推送状态（2026-11-16 更新）
+
+**已完成待登记（下次 CHANGELOG 编辑时追加——注意双线共写，追加不改动他线）：**
+
+```markdown
+### Added
+- **`--contract-baseline` 契约漂移基线（Phase 2 补齐）**：首跑建基线（`{id, assertion, passed}` 确定性字段，id 为 `path#L<行号>` 相对可移植、无响应值），复跑报三态+removed 漂移并更新基线；漂移不改退出码；teardown 排除；空基线覆写守卫（`feat(report,cli)` e0b29834）。
+- **解析器选择边界修复**：`GET url --verbose` 等旗标混入形态此前误切 curl 解析器（方法 token 被当 URL 吞掉）——现按"方法前置"判定（首 token 为标准 HTTP 方法 → httpie 解析器，未知旗标容忍），旗标前置仍走根路由裁决 exit 2（`fix(parser,cli)` WP-P2c）。
+- **测试基建**：`tests/binary_contract_test.rs`（assert_cmd 形态二进制契约 9 例）、`tests/binary_output_golden_test.rs`（ast/validate 黄金精确断言）、`.config/nextest.toml`（optional 试点）、ci.yml 新增 smoke-bash / e2e-pytest / nextest-pilot 三个 job（7c1d5cb7）。
+```
+
+**推送状态：**
+- bookmark `feature/contract-drift-and-hygiene` @ `d758b5ed`（T5 nextest 配置+pytest e2e 骨架）**领先 main 10 个实提交，未推送**；
+- 推送后：origin 分支链即含 P2b 契约漂移 + P2c 解析器修复 + 二进制测试基建全部内容；
+- CI 三个新 job（smoke-bash / e2e-pytest / nextest-pilot）**首跑确认在下一次推送后自然完成**——nextest-pilot 为 continue-on-error 试点，红不算门禁失败但需归因。
+
+**待办清单（按序）：**
+1. 推送 bookmark（确认后执行）；
+2. 更新/新建 PR（上次链接模板：`https://github.com/zseyen/rupost/pull/new/feature/contract-drift-and-hygiene`）；
+3. CI 三新 job 首跑确认（smoke-bash 须绿 / e2e-pytest 须绿 / nextest-pilot 红则归因）；
+4. CHANGELOG 按上方草稿追加（与并行线条目去重）；
+5. progress_summary 已含批一行——核对是否需补插件基座行（已有，无需重复）。
+
 最终门禁（全部执行并报告结果，外网 examples 失败要记录命令与错误、不得标绿）：
 
 ```bash

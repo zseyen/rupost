@@ -384,7 +384,11 @@ async fn test_pipeline_never_forwards_secret_env_to_plugin() {
     reg.register_manifest(exe, m);
 
     let out = PluginPipeline::execute_for_request(
-        &[PluginDirective::new("sign", "secret-probe", PluginStage::Sign)],
+        &[PluginDirective::new(
+            "sign",
+            "secret-probe",
+            PluginStage::Sign,
+        )],
         &reg,
         &PluginRuntimeOptions {
             plugin_timeout: Duration::from_secs(30),

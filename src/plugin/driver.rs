@@ -219,8 +219,7 @@ pub fn apply_plugin_env(cmd: &mut tokio::process::Command, env_overrides: &[(Str
         }
     }
     for (key, value) in std::env::vars().filter(|(k, _)| {
-        k.starts_with("RUPOST_")
-            && !PLUGIN_ENV_SECRET_DENYLIST.contains(&k.as_str())
+        k.starts_with("RUPOST_") && !PLUGIN_ENV_SECRET_DENYLIST.contains(&k.as_str())
     }) {
         cmd.env(key, value);
     }

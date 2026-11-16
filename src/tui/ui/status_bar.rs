@@ -176,8 +176,8 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
     use crate::tui::integrations::MockSessionState;
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     #[test]

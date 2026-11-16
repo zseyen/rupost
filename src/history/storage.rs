@@ -202,7 +202,8 @@ impl HistoryStorage {
         while pos > 0 && collected.len() < n {
             let read_len = usize::try_from(pos).unwrap_or(chunk_size).min(chunk_size);
             pos -= read_len as u64;
-            file.seek(SeekFrom::Start(pos)).map_err(RupostError::IoError)?;
+            file.seek(SeekFrom::Start(pos))
+                .map_err(RupostError::IoError)?;
             file.read_exact(&mut buf[..read_len])
                 .map_err(RupostError::IoError)?;
 

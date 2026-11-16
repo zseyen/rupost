@@ -174,7 +174,8 @@ pub struct AppState {
     pub cookie_bridge: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
     pub cookie_file_path: Option<String>,
     pub mock_session: Option<super::integrations::MockSessionState>,
-    pub mock_traffic: std::collections::VecDeque<crate::mock::server::axum_adapter::MockTrafficEvent>,
+    pub mock_traffic:
+        std::collections::VecDeque<crate::mock::server::axum_adapter::MockTrafficEvent>,
     pub last_replay: Option<crate::runner::ReplayReport>,
     pub pending_ai_text: Option<String>,
     pub last_timing: Option<crate::http::timing::RequestTiming>,
@@ -310,7 +311,10 @@ impl AppState {
     }
 
     /// 记录单条 Mock 流量事件（有界环形缓冲，保留最近 200 条）
-    pub fn push_mock_traffic(&mut self, event: crate::mock::server::axum_adapter::MockTrafficEvent) {
+    pub fn push_mock_traffic(
+        &mut self,
+        event: crate::mock::server::axum_adapter::MockTrafficEvent,
+    ) {
         const MAX_MOCK_TRAFFIC: usize = 200;
         if self.mock_traffic.len() >= MAX_MOCK_TRAFFIC {
             self.mock_traffic.pop_front();

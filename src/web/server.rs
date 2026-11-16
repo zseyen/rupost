@@ -151,10 +151,7 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
             "/mock/servers",
             get(handlers::mock::list_mock_servers_handler),
         )
-        .route(
-            "/mock/traffic",
-            get(handlers::mock::mock_traffic_handler),
-        )
+        .route("/mock/traffic", get(handlers::mock::mock_traffic_handler))
         .route(
             "/mock/start",
             post(handlers::mock::start_mock_server_handler),

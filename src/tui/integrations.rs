@@ -68,8 +68,8 @@ pub async fn replay_latest_snapshot(state: &mut AppState, event_tx: &Sender<TuiE
     let tx = event_tx.clone();
     tokio::spawn(async move {
         // target 恒为 None，构造不可能失败；expect 兼容 async block 无 Result 返回
-        let executor = ReplayExecutor::new(None, true)
-            .expect("ReplayExecutor::new(None) 不可能失败");
+        let executor =
+            ReplayExecutor::new(None, true).expect("ReplayExecutor::new(None) 不可能失败");
         match executor.replay_file(&path).await {
             Ok(report) => {
                 let _ = tx
@@ -252,8 +252,16 @@ mod tests {
         state.editor_file_path = Some(doc_path.to_string_lossy().into_owned());
 
         toggle_mock_server(&mut state, &tx).await;
-        assert!(state.last_error.is_none(), "unexpected error: {:?}", state.last_error);
-        let port = state.mock_session.as_ref().expect("mock session should start").port;
+        assert!(
+            state.last_error.is_none(),
+            "unexpected error: {:?}",
+            state.last_error
+        );
+        let port = state
+            .mock_session
+            .as_ref()
+            .expect("mock session should start")
+            .port;
         assert!(port > 0);
 
         let resp = Client::new()

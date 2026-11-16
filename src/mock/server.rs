@@ -75,8 +75,9 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
         MockFileConfig::Routes(all_routes)
     } else {
         let content = fs::read_to_string(file_path).map_err(RupostError::IoError)?;
-        serde_json::from_str(&content)
-            .map_err(|e| RupostError::ParseError(format!("Failed to parse JSON configuration: {}", e)))?
+        serde_json::from_str(&content).map_err(|e| {
+            RupostError::ParseError(format!("Failed to parse JSON configuration: {}", e))
+        })?
     };
 
     let mut matcher = TrieRouteMatcher::new();

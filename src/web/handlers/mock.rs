@@ -41,7 +41,10 @@ pub async fn simulate_mock_handler(
         Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::err(format!("Failed to parse mock block: {}", e))),
+                Json(ApiResponse::err(format!(
+                    "Failed to parse mock block: {}",
+                    e
+                ))),
             );
         }
     };
@@ -307,9 +310,15 @@ mod tests {
         .await;
 
         assert_eq!(res.matched_pattern.as_deref(), Some("/api/users/:id"));
-        assert_eq!(res.captured_params.get("id").map(String::as_str), Some("42"));
+        assert_eq!(
+            res.captured_params.get("id").map(String::as_str),
+            Some("42")
+        );
         assert_eq!(res.expected_status, 200);
-        assert_eq!(res.response_headers.get("X-User").map(String::as_str), Some("42"));
+        assert_eq!(
+            res.response_headers.get("X-User").map(String::as_str),
+            Some("42")
+        );
         assert_eq!(res.response_body.as_deref(), Some("{\"id\":\"42\"}"));
     }
 
@@ -336,7 +345,9 @@ mod tests {
             method: "GET".to_string(),
             path: "/api/orders".to_string(),
             headers: HashMap::new(),
-            raw_block: "GET /api/orders\n\n@mock-when header.X-Role == admin\nHTTP/1.1 200 OK\n\nok\n".to_string(),
+            raw_block:
+                "GET /api/orders\n\n@mock-when header.X-Role == admin\nHTTP/1.1 200 OK\n\nok\n"
+                    .to_string(),
             ..Default::default()
         })
         .await;

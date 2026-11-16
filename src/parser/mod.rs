@@ -35,10 +35,7 @@ pub fn parse_http_header(line: &str) -> Option<(&str, &str)> {
 }
 
 /// 依据文件扩展名统一解析活文档（.md, .markdown 或 .http）
-pub fn parse_document_by_path<P: AsRef<Path>>(
-    path: P,
-    content: &str,
-) -> ParseResult<ParsedFile> {
+pub fn parse_document_by_path<P: AsRef<Path>>(path: P, content: &str) -> ParseResult<ParsedFile> {
     if is_markdown_doc(path.as_ref()) {
         MarkdownFileParser::parse_content(content)
     } else {

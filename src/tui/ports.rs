@@ -40,10 +40,7 @@ impl FileRepository for FsRepository {
     }
 
     fn append(&self, path: &Path, data: &str) -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         file.write_all(data.as_bytes())
     }
 }

@@ -231,10 +231,7 @@ fn emit_traffic_event(
     }
 }
 
-async fn handle_mock_request(
-    State(state): State<MockServerState>,
-    req: Request,
-) -> Response {
+async fn handle_mock_request(State(state): State<MockServerState>, req: Request) -> Response {
     let started = Instant::now();
     let matcher = &state.matcher;
     let method = req.method().to_string();

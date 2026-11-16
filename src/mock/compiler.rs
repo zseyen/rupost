@@ -85,7 +85,11 @@ impl MockCompiler {
     pub fn extract_route_path(raw_url: &str) -> String {
         let trimmed = raw_url.trim();
         let without_frag = trimmed.split('#').next().unwrap_or(trimmed);
-        let without_query = without_frag.split('?').next().unwrap_or(without_frag).trim();
+        let without_query = without_frag
+            .split('?')
+            .next()
+            .unwrap_or(without_frag)
+            .trim();
 
         // 剥离前导模板变量（例如 "{{base_url}}/api/users/:id"）
         let after_var = if let Some(rest) = without_query.strip_prefix("{{")
@@ -226,10 +230,9 @@ mod tests {
 
     #[test]
     fn test_parse_condition_expression_value_with_double_equals() {
-        let cond = MockCompiler::parse_condition_expression(
-            "header.Authorization == \"Bearer abc==\"",
-        )
-        .expect("should parse value containing '=='");
+        let cond =
+            MockCompiler::parse_condition_expression("header.Authorization == \"Bearer abc==\"")
+                .expect("should parse value containing '=='");
         assert_eq!(cond.source, ConditionSource::Header);
         assert_eq!(cond.key, "Authorization");
         assert_eq!(cond.operator, CompareOp::Equals);
@@ -289,10 +292,7 @@ mod tests {
             MockCompiler::extract_route_path("http://localhost:9000/api/orders/{id}?a=1"),
             "/api/orders/{id}"
         );
-        assert_eq!(
-            MockCompiler::extract_route_path("https://example.com"),
-            "/"
-        );
+        assert_eq!(MockCompiler::extract_route_path("https://example.com"), "/");
         assert_eq!(
             MockCompiler::extract_route_path("api/v1/ping?x=1"),
             "/api/v1/ping"

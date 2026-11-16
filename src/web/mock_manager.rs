@@ -272,7 +272,11 @@ impl WebMockManager {
             let guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
             let key = Self::find_server_key(&guard, id, port, "reload")?;
             let entry = &guard[&key];
-            (key, entry.info.file_path.clone(), Arc::clone(&entry.swappable))
+            (
+                key,
+                entry.info.file_path.clone(),
+                Arc::clone(&entry.swappable),
+            )
         };
 
         // 锁外校验沙箱并重新编译；编译失败保留旧 Matcher 不中断原端口服务
@@ -503,7 +507,10 @@ not found
         assert_eq!(routes[0].variant_count, 2);
 
         let mgr = WebMockManager::default();
-        let info = mgr.start_server(dir.path(), "reload.md", Some(0), true).await.unwrap();
+        let info = mgr
+            .start_server(dir.path(), "reload.md", Some(0), true)
+            .await
+            .unwrap();
         let resp1 = reqwest::get(format!("{}/api/ver", info.url)).await.unwrap();
         assert_eq!(resp1.text().await.unwrap(), "v1");
 
@@ -542,10 +549,17 @@ not found
         .unwrap();
 
         let mgr = WebMockManager::default();
-        let info = mgr.start_server(dir.path(), "traffic.md", Some(0), true).await.unwrap();
+        let info = mgr
+            .start_server(dir.path(), "traffic.md", Some(0), true)
+            .await
+            .unwrap();
 
-        let _ = reqwest::get(format!("{}/api/ping", info.url)).await.unwrap();
-        let _ = reqwest::get(format!("{}/api/missing", info.url)).await.unwrap();
+        let _ = reqwest::get(format!("{}/api/ping", info.url))
+            .await
+            .unwrap();
+        let _ = reqwest::get(format!("{}/api/missing", info.url))
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let servers = mgr.list_servers();

@@ -51,9 +51,9 @@ impl WsClient {
 
         // 建立网络连接
         let (ws_stream, response) = timeout(config.handshake_timeout, connect_async(request))
-        .await
-        .map_err(|_| "WebSocket handshake timed out".to_string())?
-        .map_err(|e| format!("WebSocket connection failed: {}", e))?;
+            .await
+            .map_err(|_| "WebSocket handshake timed out".to_string())?
+            .map_err(|e| format!("WebSocket connection failed: {}", e))?;
 
         info!(
             "WebSocket connected. Handshake HTTP Status: {}",

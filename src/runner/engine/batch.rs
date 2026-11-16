@@ -60,8 +60,7 @@ impl BatchExecutor {
         // scheduler，Finally 阶段拿不到数据——评审 P0 修订）。
         // teardowns: 每文件 (原始序号, 请求) 列表，按执行序排列；
         // 已被 skip 标记（@skip / --only 未选中）的 teardown 豁免抽取。
-        let mut teardowns_map: HashMap<PathBuf, Vec<(usize, ParsedRequest)>> =
-            HashMap::new();
+        let mut teardowns_map: HashMap<PathBuf, Vec<(usize, ParsedRequest)>> = HashMap::new();
         // 只记录不抽取：teardown 请求保留在 files_map 中，常规阶段由 executor 产出
         // 原序号占位 skipped（execute_all_streaming 的 is_teardown 跳过），
         // Finally 阶段原位替换——编号契约零破坏（P0-2）

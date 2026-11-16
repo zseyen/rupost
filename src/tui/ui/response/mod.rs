@@ -178,14 +178,13 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 .take(visible_height.max(1))
                 .map(|ev| {
                     let status_color = if ev.status < 400 { t.ok } else { t.err };
-                    let route_desc = ev
-                        .matched_pattern
-                        .as_deref()
-                        .unwrap_or("<unmatched>");
+                    let route_desc = ev.matched_pattern.as_deref().unwrap_or("<unmatched>");
                     Line::from(vec![
                         Span::styled(
                             format!("[{}] ", ev.status),
-                            Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(status_color)
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::styled(
                             format!("{} {} ", ev.method, ev.path),
@@ -237,11 +236,7 @@ mod tests {
             .unwrap();
 
         let buf = terminal.backend().buffer();
-        let text: String = buf
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         assert!(text.contains("[200] GET /api/users/42 -> /api/users/:id"));
     }
 }

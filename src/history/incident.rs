@@ -437,10 +437,7 @@ mod tests {
         )];
         let err = create_incident_bundle(&batch, &["a.http".to_string()], None, &[], 4096, &target)
             .unwrap_err();
-        assert!(
-            matches!(err, RupostError::SecurityViolation(_)),
-            "{err:?}"
-        );
+        assert!(matches!(err, RupostError::SecurityViolation(_)), "{err:?}");
         assert_eq!(fs::read(&sentinel).unwrap(), b"keep-me");
         for name in IncidentArtifactNames::ALL {
             assert!(!target.join(name).exists(), "no artifact may be written");

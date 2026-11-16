@@ -127,8 +127,8 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
     if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
         // 默认展开所有顶层目录（先去重顶层候选名再 stat is_dir，并跳过冗余 canonicalize）
-        let root_canon =
-            fs::canonicalize(&state.workspace_root).unwrap_or_else(|_| state.workspace_root.clone());
+        let root_canon = fs::canonicalize(&state.workspace_root)
+            .unwrap_or_else(|_| state.workspace_root.clone());
         state.expanded_dirs = collect_top_level_dirs(&state.raw_file_list, &root_canon);
         state.rebuild_visible_tree_nodes();
     }

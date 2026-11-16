@@ -381,7 +381,12 @@ pub async fn run_suite_handler(
         );
     }
 
-    if let Some(sel) = req.selector.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(sel) = req
+        .selector
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         let selector = crate::runner::selector::RequestSelector::Name(sel.to_string());
         if let Err(e) = crate::runner::selector::apply_selector(&mut parsed_file, &selector) {
             return json_err_session_response(

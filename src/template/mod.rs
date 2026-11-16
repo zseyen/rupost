@@ -17,12 +17,7 @@ pub fn get_templates() -> Vec<Box<dyn TemplateStrategy>> {
 }
 
 /// 执行模板生成命令的机制层主逻辑
-pub fn run_template(
-    r#type: &str,
-    output: Option<&str>,
-    force: bool,
-    list: bool,
-) -> Result<()> {
+pub fn run_template(r#type: &str, output: Option<&str>, force: bool, list: bool) -> Result<()> {
     let templates = get_templates();
 
     // 1. 处理 --list 选项

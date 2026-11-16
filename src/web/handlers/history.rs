@@ -236,7 +236,9 @@ mod tests {
         let foreign = make_entry("foreign-1", Some("cli"));
         let entries = vec![own, foreign];
 
-        assert!(find_history_detail_for_workspace(entries.clone(), ws.path(), "foreign-1").is_none());
+        assert!(
+            find_history_detail_for_workspace(entries.clone(), ws.path(), "foreign-1").is_none()
+        );
         let detail =
             find_history_detail_for_workspace(entries, ws.path(), "own-1").expect("detail");
         let auth = detail

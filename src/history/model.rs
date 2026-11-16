@@ -378,10 +378,7 @@ pub struct SocketDiagnostics {
 impl TimingWaterfallUs {
     /// 从 runner 采集的细粒度时序 + 深度诊断报告合成微秒级瀑布。
     /// TLS 阶段仅在 diagnose 报告可得时填充（reqwest 公开 API 不暴露握手时序）。
-    pub fn from_probes(
-        timing: &RequestTiming,
-        diagnose: Option<&DiagnosticsReport>,
-    ) -> Self {
+    pub fn from_probes(timing: &RequestTiming, diagnose: Option<&DiagnosticsReport>) -> Self {
         let dns_us = timing.dns_lookup.as_micros() as u64;
         let tcp_us = timing.tcp_connect.as_micros() as u64;
         let tls = diagnose.and_then(|d| d.tls_handshake_duration.map(|t| t.as_micros() as u64));

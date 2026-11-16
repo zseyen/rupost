@@ -4,7 +4,9 @@ use colored::Colorize;
 use rupost::ai::triage::run_inline_triage;
 use rupost::history::model::DEFAULT_MAX_SNAPSHOT_BODY_BYTES;
 use rupost::history::{create_incident_bundle, save_batch_snapshot};
-use rupost::report::contract::{build_contract_summary, diff_contracts, load_baseline, save_baseline};
+use rupost::report::contract::{
+    build_contract_summary, diff_contracts, load_baseline, save_baseline,
+};
 use rupost::report::{ReportFileFormat, write_report_files};
 use rupost::runner::app::SuiteNotice;
 use rupost::runner::{TestReporter, TestSuiteOptions, TestSuiteOutcome};
@@ -191,14 +193,16 @@ pub async fn present_suite_outcome(
                     );
                 } else {
                     if let Err(e) = save_baseline(Path::new(baseline_path), &summary) {
-                        contract_err =
-                            Some(RupostError::ContractBaselineError(e.to_user_friendly_string()));
+                        contract_err = Some(RupostError::ContractBaselineError(
+                            e.to_user_friendly_string(),
+                        ));
                     }
                 }
             }
             Err(e) => {
-                contract_err =
-                    Some(RupostError::ContractBaselineError(e.to_user_friendly_string()));
+                contract_err = Some(RupostError::ContractBaselineError(
+                    e.to_user_friendly_string(),
+                ));
             }
         }
     }

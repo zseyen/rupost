@@ -47,6 +47,7 @@ pub struct AppState {
     pub store: Arc<dyn DocumentStore>,
     pub assets: Arc<dyn AssetProvider>,
     pub readonly: bool,
+    pub working_dir: std::path::PathBuf,
     pub default_env: Option<String>,
     pub allowed_hosts: Vec<String>,
     /// R-4（免重填）+ WP-1（P0 隔离）：按浏览器会话隔离的执行态资产
@@ -107,14 +108,16 @@ async fn host_guard_middleware(
 /// 构造统一的 Web Router
 pub fn create_web_router(config: WebServerConfig) -> Router {
     let cors = config.dev.then(tower_http::cors::CorsLayer::permissive);
+    let incident_root = config.working_dir.join(".rupost").join("incidents");
     let state = AppState {
         store: config.store,
         assets: config.assets,
         readonly: config.readonly,
+        working_dir: config.working_dir,
         default_env: config.default_env,
         allowed_hosts: config.allowed_hosts,
         sessions: Arc::new(crate::web::session::WebSessionStore::default()),
-        incident_root: config.working_dir.join(".rupost").join("incidents"),
+        incident_root,
     };
 
     let api_router = Router::new()

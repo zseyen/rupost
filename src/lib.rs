@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod assertion;
+pub mod diagnostics;
 pub mod error;
 pub mod exporter;
 pub mod generator;

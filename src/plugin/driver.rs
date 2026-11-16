@@ -24,33 +24,9 @@ use crate::Result;
 const MAX_STDERR_TAIL_BYTES: usize = 64 * 1024;
 const WINDOWS_ERROR_BAD_EXE_FORMAT: i32 = 193;
 
-/// 以独立进程组启动插件子进程（03 §10.2 进程树清剿）
-#[cfg(unix)]
-fn configure_process_group(std_cmd: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-    std_cmd.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_std_cmd: &mut std::process::Command) {}
-
-/// 杀死整个进程组（Unix PGID 组级 SIGKILL；Windows 由 kill_on_drop 兜底）
-#[cfg(unix)]
-fn kill_process_group(child: &mut tokio::process::Child) {
-    if let Some(id) = child.id().filter(|&id| id > 0) {
-        unsafe {
-            libc::kill(-(id as i32), libc::SIGKILL);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(child: &mut tokio::process::Child) {
-    let _ = child.start_kill();
-}
-
 /// 取消/早退/异常路径清理守卫：确保子进程组与三个并发 IO 任务绝不泄漏
 struct PluginInvocationGuard {
+    pg_guard: crate::platform::ProcessGroupGuard,
     child: Option<tokio::process::Child>,
     stdin_task: Option<tokio::task::JoinHandle<std::io::Result<()>>>,
     stdout_task: Option<tokio::task::JoinHandle<(Vec<u8>, bool)>>,
@@ -68,8 +44,8 @@ impl Drop for PluginInvocationGuard {
         if let Some(handle) = self.stderr_task.take() {
             handle.abort();
         }
+        self.pg_guard.kill_now();
         if let Some(mut child) = self.child.take() {
-            kill_process_group(&mut child);
             let _ = child.start_kill();
         }
     }
@@ -359,7 +335,7 @@ pub async fn invoke_plugin(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        configure_process_group(cmd.as_std_mut());
+        crate::platform::configure_process_group(cmd.as_std_mut());
         apply_plugin_env(cmd, env_overrides);
     })
     .await
@@ -456,6 +432,7 @@ pub async fn invoke_plugin(
     });
 
     let mut guard = PluginInvocationGuard {
+        pg_guard: crate::platform::ProcessGroupGuard::new(child.id()),
         child: Some(child),
         stdin_task: Some(stdin_task),
         stdout_task: Some(stdout_task),
@@ -471,8 +448,9 @@ pub async fn invoke_plugin(
 
     let status = match wait_result {
         Err(_elapsed) => {
+            guard.pg_guard.kill_now();
             if let Some(mut child_owned) = guard.child.take() {
-                kill_process_group(&mut child_owned);
+                let _ = child_owned.start_kill();
                 let _ = tokio::time::timeout(Duration::from_millis(300), child_owned.wait()).await;
             }
             let grace = Duration::from_millis(200);
@@ -499,6 +477,7 @@ pub async fn invoke_plugin(
             )));
         }
         Ok(Ok(status)) => {
+            guard.pg_guard.disarm();
             guard.child = None;
             status
         }

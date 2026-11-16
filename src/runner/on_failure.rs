@@ -64,8 +64,7 @@ pub async fn run_hook(
     command.env("RUPOST_FAILED_TRACE_ID", trace_id.unwrap_or_default());
     command.kill_on_drop(true);
     command.stdin(Stdio::null());
-    #[cfg(unix)]
-    command.process_group(0);
+    crate::platform::configure_process_group(command.as_std_mut());
 
     let spawned = command
         .stdout(Stdio::piped())
@@ -79,19 +78,24 @@ pub async fn run_hook(
             stdout: String::new(),
         };
     };
-    // wait_with_output 会消费 child，先记下 pid（= 进程组 id）供超时整组终结
-    let pgid = child.id();
+    // wait_with_output 会消费 child，先用 ProcessGroupGuard 托管 pid（超时或 Drop 自动组级强杀）
+    let mut pg_guard = crate::platform::ProcessGroupGuard::new(child.id());
 
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => HookOutcome {
-            timed_out: false,
-            exit_success: out.status.success(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        },
-        // 超时：future 被 drop（kill_on_drop 杀直接子进程），再对整组补刀清理孙进程
-        Err(_) => {
-            kill_process_group(pgid);
+    match crate::platform::wait_with_timeout_and_cancel(child.wait_with_output(), timeout, None)
+        .await
+    {
+        crate::platform::WaitOutcome::Completed(Ok(out)) => {
+            pg_guard.disarm();
+            HookOutcome {
+                timed_out: false,
+                exit_success: out.status.success(),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            }
+        }
+        // 超时或取消：组级 SIGKILL 清理子孙进程
+        crate::platform::WaitOutcome::TimedOut | crate::platform::WaitOutcome::Cancelled => {
+            pg_guard.kill_now();
             HookOutcome {
                 timed_out: true,
                 exit_success: false,
@@ -100,30 +104,17 @@ pub async fn run_hook(
             }
         }
         // 等待期 IO 错误（如管道早闭）：非超时，按失败处理
-        Ok(Err(_)) => HookOutcome {
-            timed_out: false,
-            exit_success: false,
-            stderr: String::new(),
-            stdout: String::new(),
-        },
-    }
-}
-
-/// unix：对钩子独占的进程组发 SIGKILL（pgid == 钩子 sh 的 pid，由 process_group(0) 保证）。
-/// windows：无进程组语义，退化为仅直接子进程（kill_on_drop 已覆盖）。
-#[cfg(unix)]
-fn kill_process_group(pgid: Option<u32>) {
-    if let Some(pgid) = pgid {
-        // SAFETY: killpg 对任意 pgid 调用都是内存安全的纯系统调用；
-        // 进程组由我们自己 spawn 创建，不会误伤无关进程组。
-        unsafe {
-            libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+        crate::platform::WaitOutcome::Completed(Err(_)) => {
+            pg_guard.disarm();
+            HookOutcome {
+                timed_out: false,
+                exit_success: false,
+                stderr: String::new(),
+                stdout: String::new(),
+            }
         }
     }
 }
-
-#[cfg(not(unix))]
-fn kill_process_group(_pgid: Option<u32>) {}
 
 /// 对整个批次执行失败钩子环节（渲染前调用，使"无 trace 头"警告进入报告与 explain 上下文）。
 /// 逐条串行触发保证输出确定性；钩子的任何失败只产生 stderr 提示，绝不改变退出码。

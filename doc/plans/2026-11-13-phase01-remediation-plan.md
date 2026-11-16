@@ -1,7 +1,7 @@
 # RuPost Phase 0/1 缺口修复 + Phase 2/3 MVP 执行计划（接手文档）
 
 **日期：** 2026-11-13
-**状态：** Completed（批一 + 插件基座 + 批三 A/R6/R5/R9/R4 全过；R7/R8 按 2026-11-14 裁决暂缓）
+**状态：** Completed（批一 + 插件基座 + 批三 A/R6/R5/R9/R4 全过；R7/R8 按 2026-11-14 裁决暂缓）。**勘误 2026-11-15**：①PR #15 正文曾误称 `--contract-baseline` 已落地（实际未实现）——现已在 feature/contract-drift-and-hygiene 线补齐（e0b29834），声称成真；②测试隔离三件套与 R7/redactor 归位同批落地（ed546526/d2565596）。
 **前置基线：** 差异化 Phase 0+1 已交付（提交链：`docs(plans)` → `fix(web)` → `test` → `feat(history)` → `feat(cli)` → `docs`；`@` 工作副本为空，lib 683 测试全绿，7/7 门禁通过）
 **前置文档：** [竞品与差异化开发报告](2026-11-13-competitive-differentiation-report.md)、[差异化路线执行计划](2026-11-13-differentiation-execution-plan.md)
 
@@ -1814,6 +1814,29 @@ jj split doc/guides examples/incident_bundle/README.md README.md CHANGELOG.md do
 | C-R8 | 前端开关绿（可裁剪，跳过则记录） | 提示未走 escapeHtml |
 | C-R9 | 目录文档覆盖 src/web 等缺失模块 | 缺 src/web 条目 |
 | C-R4 | 文档与登记完成 | 有代码行为未文档化 / 本批未入 CHANGELOG 与 progress_summary |
+
+## 待办与推送状态（2026-11-16 更新）
+
+**已完成待登记（下次 CHANGELOG 编辑时追加——注意双线共写，追加不改动他线）：**
+
+```markdown
+### Added
+- **`--contract-baseline` 契约漂移基线（Phase 2 补齐）**：首跑建基线（`{id, assertion, passed}` 确定性字段，id 为 `path#L<行号>` 相对可移植、无响应值），复跑报三态+removed 漂移并更新基线；漂移不改退出码；teardown 排除；空基线覆写守卫（`feat(report,cli)` e0b29834）。
+- **解析器选择边界修复**：`GET url --verbose` 等旗标混入形态此前误切 curl 解析器（方法 token 被当 URL 吞掉）——现按"方法前置"判定（首 token 为标准 HTTP 方法 → httpie 解析器，未知旗标容忍），旗标前置仍走根路由裁决 exit 2（`fix(parser,cli)` WP-P2c）。
+- **测试基建**：`tests/binary_contract_test.rs`（assert_cmd 形态二进制契约 9 例）、`tests/binary_output_golden_test.rs`（ast/validate 黄金精确断言）、`.config/nextest.toml`（optional 试点）、ci.yml 新增 smoke-bash / e2e-pytest / nextest-pilot 三个 job（7c1d5cb7）。
+```
+
+**推送与归档状态（2026-11-16 最终更新）：**
+- `CHANGELOG.md` 已于 `ce633224` 去重补齐（`--contract-baseline` 已在 `[0.4.0]` 登记，本次在 `[Unreleased]` 补充 `WP-P2c` 与测试基建/CI 扩展）；
+- bookmark `feature/contract-drift-and-hygiene` @ `ce633224` **已推送至 `origin`**；
+- 剩余全部未执行内容（含 CI 三新 job 待建 PR 触发首跑、`WP-R8`/`WP-P3a`/`WP-P3b` 暂缓项、统一基础服务计划及 Scope Out 清单）已统一汇总归档至 [future_backlog.md](future_backlog.md) 与 [progress_summary.md](progress_summary.md)。
+
+**待办清单：**
+1. ~~推送 bookmark~~ ✅ 已完成（`ce633224`）；
+2. 更新/新建 PR（`https://github.com/zseyen/rupost/pull/new/feature/contract-drift-and-hygiene`）；
+3. CI 三新 job 首跑确认（`smoke-bash` 须绿 / `e2e-pytest` 须绿 / `nextest-pilot` 红则归因——需建 PR 或由仓库管理员触发）；
+4. ~~CHANGELOG 按草稿追加~~ ✅ 已完成（去重后入 `[Unreleased]`）；
+5. ~~progress_summary 核对与未执行项归档~~ ✅ 已完成。
 
 最终门禁（全部执行并报告结果，外网 examples 失败要记录命令与错误、不得标绿）：
 

@@ -6,7 +6,6 @@ use crate::platform;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
@@ -29,8 +28,25 @@ impl HistoryStorage {
 
 impl Default for HistoryStorage {
     fn default() -> Self {
-        let path = platform::history_dir().join(HISTORY_FILE);
-        Self { file_path: path }
+        if let Some(env_dir) = std::env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
+            return Self {
+                file_path: PathBuf::from(env_dir).join(HISTORY_FILE),
+            };
+        }
+        if let Ok(cwd) = std::env::current_dir()
+            && cwd.join("rupost.toml").exists()
+        {
+            let ws = crate::variable::WorkspaceConfig::load(
+                &cwd,
+                &crate::diagnostics::BufferedWarningSink::new(),
+            );
+            return Self {
+                file_path: ws.paths.history_file,
+            };
+        }
+        Self {
+            file_path: platform::history_dir().join(HISTORY_FILE),
+        }
     }
 }
 
@@ -253,12 +269,6 @@ impl HistoryStorage {
     }
 }
 
-// Global instance helper if needed
-pub fn get_storage() -> &'static HistoryStorage {
-    static STORAGE: OnceLock<HistoryStorage> = OnceLock::new();
-    STORAGE.get_or_init(HistoryStorage::new)
-}
-
 // 兼容重导出：黑匣子/重放快照 I/O 与脱敏已按职责拆至 snapshot_io / snapshot_legacy / snapshot_mask
 pub use super::snapshot_io::{
     read_execution_snapshot, save_batch_snapshot, write_execution_snapshot,
@@ -268,12 +278,11 @@ pub use super::snapshot_legacy::{
 };
 pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entry};
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod privacy_tests {
     use super::*;
 
     /// S-1：history.jsonl 权限必须与快照防线对齐——新建即 0600，宽松旧文件收紧。
-    #[cfg(unix)]
     #[test]
     fn test_history_file_permissions_tightened() {
         use std::os::unix::fs::PermissionsExt;

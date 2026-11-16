@@ -1,6 +1,6 @@
-use crate::ai::redactor;
 use crate::report::json::JsonFileReport;
 use crate::runner::types::TestResult;
+use crate::security::redact as redactor;
 use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;

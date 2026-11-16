@@ -175,31 +175,61 @@ fn main() {
 }
 "#;
 
-static MOCK_BIN: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+static MOCK_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 fn template_mock_bin() -> &'static Path {
-    let (_, bin_path) = MOCK_BIN.get_or_init(|| {
-        let dir = tempfile::tempdir().expect("create mock compiler tempdir");
-        let src = dir.path().join("mock_plugin.rs");
-        let bin = dir
-            .path()
-            .join(format!("mock_plugin{}", std::env::consts::EXE_SUFFIX));
-        std::fs::write(&src, MOCK_PLUGIN_SRC).expect("write mock_plugin.rs");
-        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-        let out = Command::new(rustc)
-            .arg(&src)
-            .arg("-o")
-            .arg(&bin)
-            .output()
-            .expect("invoke rustc for mock plugin");
-        assert!(
-            out.status.success(),
-            "compile mock_plugin failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        (dir, bin)
-    });
-    bin_path.as_path()
+    MOCK_BIN
+        .get_or_init(|| {
+            // 测试隔离件①（审查批二）：编译产物共享缓存——此前 9 个集成测试二进制
+            // 各自 rustc 现编一份 mock 插件，全量并行时与测试抢 CPU，推高插件 IPC
+            // 延迟逼近 5s 熔断（plugin_pipeline 随机 flake 根因）。缓存于
+            // CARGO_TARGET_TMPDIR（同包全部测试二进制共享），键含源码哈希防陈旧；
+            // 临时文件 + rename 原子落位，防并发半成品。
+            let cache_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+            let _ = std::fs::create_dir_all(&cache_dir);
+            let digest: String = {
+                use sha2::{Digest, Sha256};
+                Sha256::digest(MOCK_PLUGIN_SRC)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect()
+            };
+            let bin = cache_dir.join(format!(
+                "mock_plugin_{:.8}{}",
+                digest,
+                std::env::consts::EXE_SUFFIX
+            ));
+            if bin.exists() {
+                return bin;
+            }
+            let src = cache_dir.join(format!("mock_plugin_{:.8}.rs", digest));
+            let tmp_bin = cache_dir.join(format!(
+                ".mock_plugin_{}.tmp{}",
+                std::process::id(),
+                std::env::consts::EXE_SUFFIX
+            ));
+            std::fs::write(&src, MOCK_PLUGIN_SRC).expect("write mock_plugin.rs");
+            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+            let out = Command::new(rustc)
+                .arg(&src)
+                .arg("-o")
+                .arg(&tmp_bin)
+                .output()
+                .expect("invoke rustc for mock plugin");
+            assert!(
+                out.status.success(),
+                "compile mock_plugin failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            // Windows 冷缓存竞态兜底：他进程已发布同名产物时 rename 会因映像运行中失败
+            if std::fs::rename(&tmp_bin, &bin).is_err() && !bin.exists() {
+                panic!("publish mock plugin binary failed and no cache present");
+            }
+            let _ = std::fs::remove_file(&tmp_bin);
+            let _ = std::fs::remove_file(&src);
+            bin
+        })
+        .as_path()
 }
 
 /// 在 `dir` 下安装名为 `base_name` 的跨平台原生 Mock 可执行体（Windows 自动附加 `.exe`）及 `.mock` 指令文件。

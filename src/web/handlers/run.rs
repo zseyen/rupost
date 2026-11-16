@@ -1,13 +1,20 @@
+use crate::diagnostics::{BufferedWarningSink, WarningSink};
 use crate::parser::parse_document_by_path;
+use crate::plugin::DiscoverOptions;
 use crate::report::types::{ReportAssertionItem, TimingWaterfall};
 use crate::runner::TestExecutor;
+use crate::runner::executor_factory::build_interactive_executor_with_options_and_arc_sink;
+use crate::runner::interactive_session::{
+    backfill_session_vars, export_session_cookies, harvest_session_deltas, import_session_cookies,
+};
+use crate::security::fs::env_flag_enabled;
 use crate::utils::path_guard::is_http_doc;
-use crate::variable::{ConfigLoader, VariableContext};
+use crate::variable::{ConfigLoader, PluginTomlConfig, VariableContext, WorkspaceConfig};
 use crate::web::server::AppState;
 use crate::web::session::{SessionHandle, session_set_cookie_value};
 use crate::web::types::{
-    ApiResponse, RunBlockRequest, RunBlockResponse, RunSuiteRequest, RunSuiteResponse,
-    SuiteItemResult,
+    ApiResponse, PluginOverrides, RunBlockRequest, RunBlockResponse, RunSuiteRequest,
+    RunSuiteResponse, SuiteItemResult,
 };
 use axum::Json;
 use axum::extract::State;
@@ -15,6 +22,48 @@ use axum::http::StatusCode;
 use axum::http::header::{COOKIE, HeaderMap, HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+/// WP-R7：Web 复现包保留上限——创建前裁剪最旧（安全分析残余收口；CLI 通道
+/// 是用户显式路径，不做保留策略）。并发双跑可轻微超上限：无锁容差，
+/// uuid 后缀防命名冲突，超限有界。
+const MAX_INCIDENT_BUNDLES: usize = 32;
+
+/// 服务端命名判别：`YYYYMMDDTHHMMSS-8hex`（len==24）。只删匹配命名的目录，
+/// 绝不触碰非服务端命名格式的条目（用户手工内容/symlink/文件一律跳过）。
+fn is_server_named_incident(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() == 24
+        && b[8] == b'T'
+        && b[..8].iter().all(u8::is_ascii_digit)
+        && b[9..15].iter().all(u8::is_ascii_digit)
+        && b[15] == b'-'
+        && b[16..24].iter().all(u8::is_ascii_hexdigit)
+}
+
+/// 匹配目录数 >= max 时按名称升序（即时间序）删除最旧
+fn prune_incident_dirs(root: &std::path::Path, max: usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    let mut named: Vec<std::ffi::OsString> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.metadata().map(|m| m.is_dir()).unwrap_or(false)
+                && is_server_named_incident(&e.file_name().to_string_lossy())
+        })
+        .map(|e| e.file_name())
+        .collect();
+    named.sort();
+    while named.len() >= max {
+        let Some(oldest) = named.first().cloned() else {
+            break;
+        };
+        let _ = std::fs::remove_dir_all(root.join(&oldest));
+        named.remove(0);
+    }
+}
 
 /// 从请求头提取 Cookie 值（无 Cookie / 非法编码一律等价新会话，不泄露原因）
 fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
@@ -24,12 +73,12 @@ fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
 /// 会话装载（WP-1 共享 helper 1/2）：解析会话 → 回灌捕获变量（显式
 /// extra_variables 恒优先，已存在的键不覆盖）→ 导入上游 cookie 桥态。
 /// 返回执行租约，供执行完成后 `session_finish` 持久化增量。
-/// B3（WP-2026-11-14-01）：请求覆盖 > toml [plugins] > 默认 的合并（单点 SSOT，
-/// run_block/run_suite 共用）；返回 (plugin_cfg, 警告)。
-fn resolve_plugin_options(
+/// B3（WP-2026-11-14-01）：请求覆盖 > 工作区 toml [plugins] > 默认 的合并（单点 SSOT，
+/// run_block/run_suite 共用，直接基于 `WorkspaceConfig.plugins` 叠加，避免二次读盘与 `current_dir` 漂移）。
+fn apply_plugin_overrides(
+    mut cfg: crate::variable::PluginTomlConfig,
     overrides: Option<&crate::web::types::PluginOverrides>,
-) -> (crate::variable::PluginTomlConfig, Vec<String>) {
-    let (mut cfg, warnings) = crate::variable::ConfigLoader::find_and_load_plugin_config();
+) -> crate::variable::PluginTomlConfig {
     if let Some(ov) = overrides {
         if let Some(v) = ov.allow_missing_plugins {
             cfg.allow_missing_plugins = v;
@@ -50,7 +99,7 @@ fn resolve_plugin_options(
             cfg.allow_project_plugins = v;
         }
     }
-    (cfg, warnings)
+    cfg
 }
 
 /// B3 strict 门禁：严格模式下降级形态的成功 → 判失败（与 CLI --strict-plugins 语义一致）
@@ -67,14 +116,8 @@ fn session_begin(
     executor: &TestExecutor,
 ) -> SessionHandle {
     let handle = state.sessions.load_or_create(cookie_header);
-    if let Some(state_json) = handle.snapshot.cookie_state.clone() {
-        let _ = executor.import_cookie_state(state_json);
-    }
-    for (k, v) in &handle.snapshot.captured_variables {
-        if var_context.get(k).is_none() {
-            var_context.insert(k.clone(), v.clone());
-        }
-    }
+    import_session_cookies(executor, handle.snapshot.cookie_state.clone());
+    backfill_session_vars(var_context, &handle.snapshot.captured_variables);
     handle
 }
 
@@ -87,16 +130,8 @@ fn session_finish(
     var_context: &VariableContext,
     pre_run_keys: &HashMap<String, String>,
 ) {
-    let exported = executor.export_cookie_state().ok().flatten();
-    let mut deltas = Vec::new();
-    for (k, v) in var_context.variables() {
-        if k.starts_with("__") {
-            continue;
-        }
-        if pre_run_keys.get(k) != Some(v) {
-            deltas.push((k.clone(), v.clone()));
-        }
-    }
+    let exported = export_session_cookies(executor);
+    let deltas = harvest_session_deltas(var_context, pre_run_keys);
     state
         .sessions
         .persist_execution(&handle.id, exported, deltas);
@@ -133,6 +168,27 @@ fn json_err_session_response(
         ApiResponse::<serde_json::Value>::err(message),
         handle,
     )
+}
+
+/// 装配 Web 交互执行器（请求覆盖 > toml [plugins] > 默认，挂载 BufferedWarningSink）。
+fn build_web_executor(
+    working_dir: &Path,
+    overrides: Option<&PluginOverrides>,
+) -> (TestExecutor, PluginTomlConfig, Arc<BufferedWarningSink>) {
+    let sink = Arc::new(BufferedWarningSink::new());
+    let ws_cfg = WorkspaceConfig::load(working_dir, sink.as_ref());
+    let plugin_cfg = apply_plugin_overrides(ws_cfg.plugins, overrides);
+    let executor = build_interactive_executor_with_options_and_arc_sink(
+        &DiscoverOptions {
+            allow_project_plugins: plugin_cfg.allow_project_plugins
+                || env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
+            project_root: Some(working_dir.to_path_buf()),
+        },
+        &plugin_cfg,
+        plugin_cfg.strict_vars,
+        Arc::clone(&sink) as Arc<dyn WarningSink>,
+    );
+    (executor, plugin_cfg, sink)
 }
 
 pub async fn run_block_handler(
@@ -206,20 +262,9 @@ pub async fn run_block_handler(
     // 4. 原位单块调试执行（无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
     // （显式值恒优先；跨客户端零共享）
-    // B3：请求覆盖 > toml [plugins] > 默认
-    let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
-    for w in &plugin_warnings {
-        tracing::warn!("web run: {w}");
-    }
-    let executor = crate::runner::executor_factory::build_interactive_executor_with_options(
-        &crate::plugin::DiscoverOptions {
-            allow_project_plugins: plugin_cfg.allow_project_plugins
-                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-            project_root: None,
-        },
-        &plugin_cfg,
-        plugin_cfg.strict_vars,
-    );
+    // B3：请求覆盖 > toml [plugins] > 默认（通过 WorkspaceConfig + BufferedWarningSink 单点加载）
+    let (executor, plugin_cfg, sink) =
+        build_web_executor(&state.working_dir, req.plugin_overrides.as_ref());
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),
@@ -265,6 +310,12 @@ pub async fn run_block_handler(
         result.degraded,
         plugin_cfg.strict_plugins,
     );
+    let mut warnings = sink.messages();
+    for w in result.warnings {
+        if !warnings.contains(&w) {
+            warnings.push(w);
+        }
+    }
     let response = RunBlockResponse {
         success: block_success,
         status: result.status,
@@ -274,7 +325,7 @@ pub async fn run_block_handler(
         response_headers,
         response_body,
         error: result.error,
-        warnings: Vec::new(),
+        warnings,
     };
 
     json_session_response(StatusCode::OK, ApiResponse::ok(response), Some(&handle))
@@ -338,21 +389,13 @@ pub async fn run_suite_handler(
 
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
-    // B3：请求覆盖 > toml [plugins] > 默认
-    let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
-    for w in &plugin_warnings {
-        tracing::warn!("web run: {w}");
-    }
+    // B3：请求覆盖 > toml [plugins] > 默认（接入 WorkspaceConfig 与 BufferedWarningSink）
     let start_time = std::time::Instant::now();
-    let executor = crate::runner::executor_factory::build_interactive_executor_with_options(
-        &crate::plugin::DiscoverOptions {
-            allow_project_plugins: plugin_cfg.allow_project_plugins
-                || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-            project_root: None,
-        },
-        &plugin_cfg,
-        plugin_cfg.strict_vars,
-    );
+    let (executor, plugin_cfg, sink) =
+        build_web_executor(&state.working_dir, req.plugin_overrides.as_ref());
+    for w in sink.messages() {
+        tracing::warn!("web suite warning: {w}");
+    }
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),
@@ -419,8 +462,11 @@ pub async fn run_suite_handler(
         let batch = vec![(std::path::PathBuf::from(&req.path), results)];
         let resolved_paths = vec![req.path.clone()];
         let env_owned = target_env.map(str::to_string);
+        let incident_root_for_prune = state.incident_root.clone();
 
         let bundle_res = tokio::task::spawn_blocking(move || {
+            // WP-R7：创建前裁剪最旧（32 上限；并发容差见常量注释）
+            prune_incident_dirs(&incident_root_for_prune, MAX_INCIDENT_BUNDLES);
             crate::history::create_incident_bundle(
                 &batch,
                 &resolved_paths,
@@ -469,4 +515,61 @@ pub async fn run_suite_handler(
     };
 
     json_session_response(StatusCode::OK, ApiResponse::ok(response), Some(&handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 命名判别表驱动：长度/字段字符类/分隔符（审查 E2 修正：尾段只认 hex）
+    #[test]
+    fn test_is_server_named_incident_table() {
+        let cases = [
+            ("20260101T000000-00000000", true),
+            ("20260101T000000-0a1b2c3d", true),
+            ("20260101T000000-0000000", false),  // len 23
+            ("20260101t000000-00000000", false), // 小写 t
+            ("20260101T000000-0000000g", false), // g 非 hex
+            ("20260101000000-00000000", false),  // 缺 T
+            ("20260101T0000", false),            // 过短
+        ];
+        for (input, expected) in cases {
+            assert_eq!(is_server_named_incident(input), expected, "{input}");
+        }
+    }
+
+    /// 裁剪：名称升序删最旧至 max-1（新 bundle 落位后稳态 = max）；
+    /// 非命名目录与文件/symlink 不触碰
+    #[test]
+    fn test_prune_incident_dirs_keeps_non_named() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for i in 0..3u32 {
+            let d = dir.path().join(format!("20260101T000000-{i:08x}"));
+            std::fs::create_dir(&d).unwrap();
+            std::fs::write(d.join("s.txt"), "old").unwrap();
+        }
+        let keepme = dir.path().join("keepme");
+        std::fs::create_dir(&keepme).unwrap();
+        let plain_file = dir.path().join("20260101T000000-000000ff");
+        std::fs::write(&plain_file, b"file not dir").unwrap();
+
+        prune_incident_dirs(dir.path(), 2);
+
+        assert!(
+            !dir.path().join("20260101T000000-00000000").exists(),
+            "最旧被删"
+        );
+        assert!(
+            !dir.path().join("20260101T000000-00000001").exists(),
+            "次旧被删"
+        );
+        assert!(
+            dir.path()
+                .join("20260101T000000-00000002")
+                .join("s.txt")
+                .is_file()
+        );
+        assert!(keepme.is_dir(), "非命名目录不触碰");
+        assert!(plain_file.is_file(), "同名文件不触碰");
+    }
 }

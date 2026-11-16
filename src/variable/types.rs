@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 /// 变量上下文，存储所有可用变量
@@ -99,6 +100,206 @@ pub struct VariableConfig {
     /// 旧 toml 无该段 → None（追加式演进，零破坏）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<PluginTomlConfig>,
+    /// Wave 2.1：`rupost.toml [paths]` 自定义路径段（仅允许工作区沙箱内相对路径）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<WorkspacePathsToml>,
+}
+
+/// `rupost.toml [paths]` 原始配置段（全部字段可选，向后兼容）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspacePathsToml {
+    #[serde(default)]
+    pub plugins_dir: Option<String>,
+    #[serde(default)]
+    pub history_file: Option<String>,
+    #[serde(default)]
+    pub logs_dir: Option<String>,
+    #[serde(default)]
+    pub cookie_dir: Option<String>,
+    #[serde(default)]
+    pub reports_dir: Option<String>,
+    #[serde(default)]
+    pub snapshots_dir: Option<String>,
+}
+
+/// 解析与沙箱校验后的强类型工作区路径集合（全部锚定显式 `project_root`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspacePathsConfig {
+    pub plugins_dir: PathBuf,
+    pub history_file: PathBuf,
+    pub logs_dir: PathBuf,
+    pub cookie_dir: PathBuf,
+    pub reports_dir: PathBuf,
+    pub snapshots_dir: PathBuf,
+}
+
+impl WorkspacePathsConfig {
+    /// 基于显式 `project_root` 构建默认路径（兼容 `RUPOST_HISTORY_DIR` 覆盖）。
+    pub fn default_for_root(project_root: &Path) -> Self {
+        let rupost_root = project_root.join(crate::platform::DEFAULT_RUPOST_DIR);
+        let history_root = std::env::var_os("RUPOST_HISTORY_DIR")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| rupost_root.clone());
+        Self {
+            plugins_dir: rupost_root.join("plugins"),
+            history_file: history_root.join("history.jsonl"),
+            logs_dir: history_root.join("logs"),
+            cookie_dir: rupost_root.join("cookies"),
+            reports_dir: rupost_root.join("reports"),
+            snapshots_dir: rupost_root.join("snapshots"),
+        }
+    }
+}
+
+/// 统一工作区配置快照（CLI / TUI / Web 三端同源只读消费）。
+#[derive(Debug, Clone)]
+pub struct WorkspaceConfig {
+    pub project_root: PathBuf,
+    pub paths: WorkspacePathsConfig,
+    pub plugins: PluginTomlConfig,
+    /// 当 `rupost.toml [paths].snapshots_dir` 显式配置时为 `Some(...)`（供 TUI 保留默认 `snapshots/` 向后兼容）
+    pub explicit_snapshots_dir: Option<PathBuf>,
+}
+
+impl WorkspaceConfig {
+    /// 纯无状态加载：严格锚定传入的 `project_root`，绝不隐式读取 `current_dir()`。
+    pub fn load(project_root: &Path, sink: &dyn crate::diagnostics::WarningSink) -> Self {
+        let mut paths = WorkspacePathsConfig::default_for_root(project_root);
+        let toml_path = project_root.join("rupost.toml");
+        if !toml_path.exists() {
+            return Self {
+                project_root: project_root.to_path_buf(),
+                paths,
+                plugins: PluginTomlConfig::default(),
+                explicit_snapshots_dir: None,
+            };
+        }
+
+        let content = match std::fs::read_to_string(&toml_path) {
+            Ok(c) => c,
+            Err(e) => {
+                sink.emit(
+                    crate::diagnostics::WarningSeverity::Warn,
+                    "workspace_config",
+                    &format!("读取 {} 失败，回退默认配置: {e}", toml_path.display()),
+                );
+                return Self {
+                    project_root: project_root.to_path_buf(),
+                    paths,
+                    plugins: PluginTomlConfig::default(),
+                    explicit_snapshots_dir: None,
+                };
+            }
+        };
+
+        let parsed: VariableConfig = match toml::from_str(&content) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                sink.emit(
+                    crate::diagnostics::WarningSeverity::Warn,
+                    "workspace_config",
+                    &format!("解析 {} 失败，回退默认配置: {e}", toml_path.display()),
+                );
+                return Self {
+                    project_root: project_root.to_path_buf(),
+                    paths,
+                    plugins: PluginTomlConfig::default(),
+                    explicit_snapshots_dir: None,
+                };
+            }
+        };
+
+        let mut explicit_snapshots_dir = None;
+        if let Some(p) = parsed.paths {
+            let resolve = |field: &str,
+                           raw: Option<String>,
+                           fallback: PathBuf|
+             -> (PathBuf, bool) {
+                let Some(val) = raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
+                    return (fallback, false);
+                };
+                match resolve_sandboxed_workspace_path(project_root, &val) {
+                    Ok(safe) => (safe, true),
+                    Err(reason) => {
+                        sink.emit(
+                            crate::diagnostics::WarningSeverity::Security,
+                            "workspace_config",
+                            &format!(
+                                "[paths].{field} = {:?} 被工作区沙箱拒绝（{reason}），已回退默认路径",
+                                val
+                            ),
+                        );
+                        (fallback, false)
+                    }
+                }
+            };
+            paths.plugins_dir = resolve("plugins_dir", p.plugins_dir, paths.plugins_dir).0;
+            paths.history_file = resolve("history_file", p.history_file, paths.history_file).0;
+            paths.logs_dir = resolve("logs_dir", p.logs_dir, paths.logs_dir).0;
+            paths.cookie_dir = resolve("cookie_dir", p.cookie_dir, paths.cookie_dir).0;
+            paths.reports_dir = resolve("reports_dir", p.reports_dir, paths.reports_dir).0;
+            let (snap, customized) = resolve("snapshots_dir", p.snapshots_dir, paths.snapshots_dir);
+            paths.snapshots_dir = snap.clone();
+            if customized {
+                explicit_snapshots_dir = Some(snap);
+            }
+        }
+
+        Self {
+            project_root: project_root.to_path_buf(),
+            paths,
+            plugins: parsed.plugins.unwrap_or_default(),
+            explicit_snapshots_dir,
+        }
+    }
+}
+
+/// 校验 `[paths]` 配置的相对路径是否严格囚禁在 `project_root` 沙箱内：
+/// 拒绝绝对路径、根路径、`..` 父级回溯，以及任何直接/父级/悬空符号链接逃逸。
+pub fn resolve_sandboxed_workspace_path(
+    project_root: &Path,
+    raw_rel: &str,
+) -> std::result::Result<PathBuf, String> {
+    let rel = Path::new(raw_rel);
+    // Windows 下 `/etc/evil` 的 is_absolute() 为 false（属 RootDir 驱动器相对路径），
+    // 且跨平台配置统一使用 POSIX `/` 分隔符，因此显式拦截前导 `/`、任意 `\` 以及 RootDir/Prefix/CurDir。
+    if rel.is_absolute() || raw_rel.starts_with('/') || raw_rel.contains('\\') {
+        return Err("禁止绝对路径、根路径或反斜杠分隔符".to_string());
+    }
+    let mut has_normal = false;
+    for comp in rel.components() {
+        match comp {
+            Component::Normal(_) => has_normal = true,
+            Component::CurDir
+            | Component::RootDir
+            | Component::ParentDir
+            | Component::Prefix(_) => {
+                return Err("禁止 `.`、根路径、父级回溯 `..` 或盘符前缀".to_string());
+            }
+        }
+    }
+    if !has_normal {
+        return Err("路径必须包含有效的子目录或文件名".to_string());
+    }
+
+    let canon_root = std::fs::canonicalize(project_root)
+        .map_err(|e| format!("无法解析工作区根目录 {}: {e}", project_root.display()))?;
+
+    let mut cur = project_root.to_path_buf();
+    for comp in rel.components() {
+        if let Component::Normal(seg) = comp {
+            cur.push(seg);
+            if std::fs::symlink_metadata(&cur).is_ok() {
+                let canon_cur = std::fs::canonicalize(&cur)
+                    .map_err(|_| "目标路径或中间路径为无效或悬空符号链接".to_string())?;
+                if !canon_cur.starts_with(&canon_root) {
+                    return Err("目标路径或符号链接指向工作区之外".to_string());
+                }
+            }
+        }
+    }
+    Ok(cur)
 }
 
 /// B3：`rupost.toml [plugins]` 段——TUI/Web 交互入口的插件运行时与门禁选项。
@@ -181,5 +382,121 @@ api_key = "${PROD_KEY}"
             dev.variables.get("base_url"),
             Some(&"http://localhost:8080".to_string())
         );
+    }
+
+    #[test]
+    fn test_workspace_config_load_compatibility_and_sandbox_guards() {
+        use crate::diagnostics::BufferedWarningSink;
+        let dir = tempfile::tempdir().unwrap();
+        let sink = BufferedWarningSink::new();
+
+        // 1. 无 rupost.toml 时 100% 兼容默认路径
+        let cfg_default = WorkspaceConfig::load(dir.path(), &sink);
+        assert_eq!(
+            cfg_default.paths.plugins_dir,
+            dir.path().join(".rupost").join("plugins")
+        );
+        assert!(sink.is_empty());
+
+        // 2. 合法相对路径放行，越界绝对路径与 `..` 被沙箱拒绝并经 WarningSink 告警
+        std::fs::write(
+            dir.path().join("rupost.toml"),
+            r#"
+[paths]
+plugins_dir = "custom/plugins"
+reports_dir = "../outside"
+snapshots_dir = "/etc/evil"
+"#,
+        )
+        .unwrap();
+        let cfg = WorkspaceConfig::load(dir.path(), &sink);
+        assert_eq!(cfg.paths.plugins_dir, dir.path().join("custom/plugins"));
+        assert_eq!(
+            cfg.paths.reports_dir,
+            dir.path().join(".rupost").join("reports")
+        );
+        assert_eq!(
+            cfg.paths.snapshots_dir,
+            dir.path().join(".rupost").join("snapshots")
+        );
+        let msgs = sink.messages();
+        assert_eq!(msgs.len(), 2, "两处逃逸路径均应触发安全告警: {msgs:?}");
+
+        // 3. `.` 与含 `\` 的路径同样必须被拒绝
+        assert!(resolve_sandboxed_workspace_path(dir.path(), ".").is_err());
+        assert!(resolve_sandboxed_workspace_path(dir.path(), "./sub").is_err());
+        assert!(resolve_sandboxed_workspace_path(dir.path(), "a\\b").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_workspace_config_sandbox_blocks_direct_parent_and_dangling_symlink_escapes() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        use std::os::unix::fs::symlink;
+
+        let work = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_target = outside.path().join("stolen_reports");
+        std::fs::create_dir_all(&outside_target).unwrap();
+
+        // 1. 直接目录 symlink 指向工作区外
+        symlink(&outside_target, work.path().join("direct_sym")).unwrap();
+        // 2. 父目录 symlink 指向工作区外（子路径 sub/logs 尚不存在）
+        symlink(outside.path(), work.path().join("parent_sym")).unwrap();
+        // 3. 悬空文件 symlink 指向工作区外尚不存在的文件
+        symlink(
+            outside.path().join("dangling.jsonl"),
+            work.path().join("dangling_sym"),
+        )
+        .unwrap();
+
+        std::fs::write(
+            work.path().join("rupost.toml"),
+            r#"
+[paths]
+reports_dir = "direct_sym"
+logs_dir = "parent_sym/sub/logs"
+history_file = "dangling_sym"
+"#,
+        )
+        .unwrap();
+
+        let sink = BufferedWarningSink::new();
+        let cfg = WorkspaceConfig::load(work.path(), &sink);
+        assert_eq!(
+            cfg.paths.reports_dir,
+            work.path().join(".rupost").join("reports")
+        );
+        assert_eq!(cfg.paths.logs_dir, work.path().join(".rupost").join("logs"));
+        assert_eq!(
+            cfg.paths.history_file,
+            work.path().join(".rupost").join("history.jsonl")
+        );
+
+        let recs = sink.records();
+        assert_eq!(
+            recs.len(),
+            3,
+            "三类 symlink 逃逸必须全部拦截并产生 Security 告警: {recs:?}"
+        );
+        assert!(recs.iter().all(|r| r.severity == WarningSeverity::Security));
+    }
+
+    #[test]
+    fn test_workspace_config_load_warns_on_malformed_toml() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rupost.toml"), "[paths\nbroken").unwrap();
+        let sink = BufferedWarningSink::new();
+        let cfg = WorkspaceConfig::load(dir.path(), &sink);
+        assert_eq!(
+            cfg.paths.plugins_dir,
+            dir.path().join(".rupost").join("plugins")
+        );
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].severity, WarningSeverity::Warn);
+        assert_eq!(recs[0].source, "workspace_config");
+        assert!(recs[0].message.contains("解析"));
     }
 }

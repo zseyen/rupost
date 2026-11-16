@@ -97,7 +97,11 @@ fn collect_plugin_roots(
             .project_root
             .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        roots.push(base.join(".rupost").join("plugins"));
+        let ws_cfg = crate::variable::WorkspaceConfig::load(
+            &base,
+            &crate::diagnostics::BufferedWarningSink::new(),
+        );
+        roots.push(ws_cfg.paths.plugins_dir);
     }
     roots
 }
@@ -871,6 +875,42 @@ mod tests {
                 true,
             ),
             Err(1)
+        );
+    }
+
+    #[test]
+    fn test_discover_honors_workspace_config_custom_plugins_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let custom_dir = dir.path().join("custom_plugins");
+        std::fs::create_dir_all(&custom_dir).unwrap();
+        std::fs::write(
+            dir.path().join("rupost.toml"),
+            "[paths]\nplugins_dir = \"custom_plugins\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            custom_dir.join("rupost-plugin-custom-dir"),
+            "#!/bin/sh\nexit 0\n",
+        )
+        .unwrap();
+        let _ = crate::platform::set_unix_mode(&custom_dir.join("rupost-plugin-custom-dir"), 0o755);
+        std::fs::write(
+            custom_dir.join("rupost-plugin-custom-dir.json"),
+            r#"{"manifest_version":"1.0","name":"custom-dir","version":"0.1.0","description":"probe","commands":[],"hooks":[{"directive":"auth","alias":"custom-dir","stage":"prepare","cache_scope":"none","requires_env":[],"parameters_schema":{}}]}"#,
+        )
+        .unwrap();
+
+        let reg = PluginRegistry::discover_with_roots(
+            &DiscoverOptions {
+                allow_project_plugins: true,
+                project_root: Some(dir.path().to_path_buf()),
+            },
+            Some(&[]),
+        )
+        .unwrap();
+        assert!(
+            reg.find_hook("custom-dir").is_some(),
+            "PluginRegistry 必须消费 WorkspaceConfig.paths.plugins_dir"
         );
     }
 }

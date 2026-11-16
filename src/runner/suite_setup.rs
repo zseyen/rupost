@@ -1,37 +1,33 @@
 use crate::Result;
+use crate::diagnostics::{StderrWarningSink, WarningSeverity, WarningSink};
 use crate::middleware::resolve_cookie_path;
 use crate::plugin::pipeline::PluginRuntimeOptions;
-use crate::plugin::{DiscoverOptions, PluginRegistry, parse_plugin_env_specs};
+use crate::plugin::{
+    DiscoverOptions, PluginRegistry, extract_authorized_env_keys, parse_plugin_env_specs,
+};
 use crate::runner::{TestExecutor, TestSuiteOptions};
 use crate::variable::{ConfigLoader, VariableContext};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 从原始 `--plugin-env` 参数列表提取已放行的环境变量名集合（保留未在宿主机设值的裸 `KEY`）。
-pub(crate) fn extract_authorized_env_keys(specs: &[String]) -> HashSet<String> {
-    specs
-        .iter()
-        .filter_map(|spec| {
-            let key = match spec.split_once('=') {
-                Some((k, _)) => k.trim(),
-                None => spec.trim(),
-            };
-            (!key.is_empty()).then(|| key.to_string())
-        })
-        .collect()
-}
-
 /// 加载工作区配置、环境变量文件与 `--var` 覆盖，构造套件变量上下文。
 pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext {
+    load_suite_context_with_sink(options, &StderrWarningSink)
+}
+
+/// 允许注入 `WarningSink` 的套件变量上下文加载（确定性捕获 `--var-state` 损坏等告警）。
+pub(crate) fn load_suite_context_with_sink(
+    options: &TestSuiteOptions,
+    sink: &dyn WarningSink,
+) -> VariableContext {
     let (mut var_context, warnings) = ConfigLoader::load_context_with_var_specs(
         options.env.as_deref(),
         &options.var,
         options.env_file.as_deref(),
     );
     for warning in &warnings {
-        eprintln!("[!] {warning}");
+        sink.emit(WarningSeverity::Alert, "suite_setup", warning);
     }
     var_context.insert("__default_scheme", &options.default_scheme);
     // R-2 免重填：--var-state 回灌为最低优先级层（只补缺；缺失静默、损坏指名告警）
@@ -41,13 +37,21 @@ pub(crate) fn load_suite_context(options: &TestSuiteOptions) -> VariableContext 
             Some(Ok(vars)) => {
                 let filled = crate::variable::var_state::backfill_missing(&mut var_context, &vars);
                 if filled > 0 {
-                    eprintln!(
-                        "[i] 已从 {state_path} 回灌 {filled} 个捕获变量（仅补缺，显式值优先）"
+                    sink.emit(
+                        WarningSeverity::Info,
+                        "suite_setup",
+                        &format!(
+                            "已从 {state_path} 回灌 {filled} 个捕获变量（仅补缺，显式值优先）"
+                        ),
                     );
                 }
             }
             Some(Err(e)) => {
-                eprintln!("[!] --var-state 文件损坏，已忽略回灌: {state_path} ({e})");
+                sink.emit(
+                    WarningSeverity::Alert,
+                    "suite_setup",
+                    &format!("--var-state 文件损坏，已忽略回灌: {state_path} ({e})"),
+                );
             }
         }
     }
@@ -106,7 +110,28 @@ pub(crate) fn build_suite_executor(options: &TestSuiteOptions) -> Result<TestExe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostics::BufferedWarningSink;
     use crate::plugin::types::{HookCapability, PluginManifest, PluginStage};
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_load_suite_context_with_sink_captures_corrupted_var_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_file = dir.path().join("vars.json");
+        std::fs::write(&state_file, "{broken-json").unwrap();
+
+        let opts = TestSuiteOptions {
+            var_state: Some(state_file.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let sink = BufferedWarningSink::new();
+        let _ctx = load_suite_context_with_sink(&opts, &sink);
+        let msgs = sink.messages();
+        assert!(
+            msgs.iter().any(|m| m.contains("--var-state 文件损坏")),
+            "损坏的 --var-state 必须通过 WarningSink 捕获: {msgs:?}"
+        );
+    }
 
     #[test]
     fn test_extract_authorized_env_keys_preserves_bare_and_kv_specs() {
@@ -153,5 +178,33 @@ mod tests {
         let authorized = extract_authorized_env_keys(&["VAULT_TOKEN".to_string()]);
         let warnings_allowed = reg.collect_missing_env_warnings(&directives, &authorized);
         assert!(warnings_allowed.is_empty());
+    }
+
+    #[test]
+    fn test_load_suite_context_with_sink_captures_var_state_backfill_and_bad_var_spec() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_file = dir.path().join("vars.json");
+        std::fs::write(&state_file, r#"{"token":"tok-123"}"#).unwrap();
+
+        let opts = TestSuiteOptions {
+            var: vec!["bad_spec_without_eq".to_string()],
+            var_state: Some(state_file.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let sink = BufferedWarningSink::new();
+        let ctx = load_suite_context_with_sink(&opts, &sink);
+        assert_eq!(ctx.get("token").as_deref(), Some("tok-123"));
+        let recs = sink.records();
+        assert!(
+            recs.iter().any(|r| r.severity == WarningSeverity::Alert
+                && r.message.contains("bad_spec_without_eq")),
+            "非法 --var 必须通过 Alert 捕获: {recs:?}"
+        );
+        assert!(
+            recs.iter()
+                .any(|r| r.severity == WarningSeverity::Info
+                    && r.message.contains("回灌 1 个捕获变量")),
+            "--var-state 成功回灌必须通过 Info 捕获: {recs:?}"
+        );
     }
 }

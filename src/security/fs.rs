@@ -252,6 +252,70 @@ where
     result
 }
 
+/// 统一安全落盘写手：收口私有目录创建、Unix `0o600` / `O_NOFOLLOW` 校验与原子替换/安全追加。
+pub struct AtomicFileWriter;
+
+impl AtomicFileWriter {
+    /// 原子覆写私有文件（先写同目录 `0o600` 临时文件再 `rename` 覆盖）。
+    pub fn write_atomic(target: &Path, bytes: &[u8]) -> Result<()> {
+        if let Some(parent) = target.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            ensure_private_dir(parent)?;
+        }
+        write_private_file_atomic(target, bytes)
+    }
+
+    /// 向私有普通文件安全追加一行（Unix 强制 `O_NOFOLLOW` + `0o600` + 属主校验；拒绝换行符与过宽权限文件）。
+    pub fn append_private_line(target: &Path, line: &str) -> Result<()> {
+        use std::io::Write;
+        if line.contains('\n') || line.contains('\r') {
+            return Err(RupostError::SecurityViolation(
+                "私有文件单行追加拒绝包含换行控制符".to_string(),
+            ));
+        }
+        if let Some(parent) = target.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            ensure_private_dir(parent)?;
+        }
+        #[cfg(unix)]
+        let mut file = {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(target)?;
+            let meta = file.metadata()?;
+            if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } {
+                return Err(RupostError::SecurityViolation(format!(
+                    "私有文件属主或类型校验失败: {}",
+                    target.display()
+                )));
+            }
+            if meta.permissions().mode() & 0o077 != 0 {
+                return Err(RupostError::SecurityViolation(format!(
+                    "拒绝写入权限过宽的私有文件（非 0600）: {}",
+                    target.display()
+                )));
+            }
+            file
+        };
+        #[cfg(not(unix))]
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(target)?;
+        let mut buf = Vec::with_capacity(line.len() + 1);
+        buf.extend_from_slice(line.as_bytes());
+        buf.push(b'\n');
+        file.write_all(&buf)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +628,45 @@ mod tests {
             !dir.path().join("orphan_parent").exists(),
             "无效目标路径不得提前创建父目录"
         );
+    }
+
+    #[test]
+    fn test_atomic_file_writer_append_private_line_guards_and_atomicity() {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("private").join("tofu.txt");
+
+        // 1. 拒绝换行符注入
+        assert!(matches!(
+            AtomicFileWriter::append_private_line(&log, "a\nb"),
+            Err(RupostError::SecurityViolation(_))
+        ));
+
+        // 2. 首次创建 0600 并逐行追加
+        AtomicFileWriter::append_private_line(&log, "line1").unwrap();
+        AtomicFileWriter::append_private_line(&log, "line2").unwrap();
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "line1\nline2\n");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+            assert_eq!(
+                std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+
+            // 3. 拒绝 0644 既有宽松文件
+            let loose = dir.path().join("loose.txt");
+            std::fs::write(&loose, "old\n").unwrap();
+            std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(matches!(
+                AtomicFileWriter::append_private_line(&loose, "line3"),
+                Err(RupostError::SecurityViolation(_))
+            ));
+
+            // 4. 拒绝符号链接
+            let link = dir.path().join("link.txt");
+            symlink(&log, &link).unwrap();
+            assert!(AtomicFileWriter::append_private_line(&link, "evil").is_err());
+        }
     }
 }

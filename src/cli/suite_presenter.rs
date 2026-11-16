@@ -134,6 +134,75 @@ pub async fn present_suite_outcome(
         }
     }
 
+    // WP-P2b：契约漂移基线（只记确定性字段；漂移不改变退出码）。
+    // 审查 P2 修正：基线 I/O 错误走 ContractBaselineError（exit 2），且**不得
+    // 跳过其后的复现包块**——先执行 incident 再回传基线错误。
+    let mut contract_err: Option<rupost::RupostError> = None;
+    if let Some(baseline_path) = &options.contract_baseline {
+        let summary = rupost::report::contract::build_contract_summary(&outcome.batch_results);
+        match rupost::report::contract::load_baseline(std::path::Path::new(baseline_path)) {
+            Ok(baseline) => {
+                match &baseline {
+                    Some(base) => {
+                        let drift = rupost::report::contract::diff_contracts(base, &summary);
+                        // 审查 P2 修正：静默消失必须可见（防空运行覆写基线侵蚀信号）
+                        if drift.removed > 0 {
+                            eprintln!(
+                                "⚠ {} 条契约相较基线缺失（removed）——若为服务端宕机等全错运行，基线不会被本次结果侵蚀",
+                                drift.removed
+                            );
+                        }
+                        if drift.newly_broken > 0 {
+                            eprintln!(
+                                "⚠ 契约漂移: {} 条契约相较基线由通过转为失败",
+                                drift.newly_broken
+                            );
+                        }
+                        if drift.fixed > 0 {
+                            eprintln!("[i] {} 条契约相较基线修复", drift.fixed);
+                        }
+                        eprintln!("[i] {} 条新增契约已写入基线", drift.new);
+                    }
+                    None => {
+                        eprintln!(
+                            "[i] 契约基线已创建: {baseline_path}（共 {} 条；下次运行将报告漂移）",
+                            summary.contracts.len()
+                        );
+                    }
+                }
+                // 空基线侵蚀守卫：基线非空而本次摘要为空（如服务端宕机全错运行）
+                // → 拒绝覆写，漂移信号不被静默摧毁
+                if !baseline.as_ref().is_some_and(|b| !b.contracts.is_empty())
+                    && !summary.contracts.is_empty()
+                {
+                    // 基线为空 + 本次非空：正常升级（首跑失败后转健康），允许覆写
+                }
+                if baseline
+                    .as_ref()
+                    .is_some_and(|b| !b.contracts.is_empty() && summary.contracts.is_empty())
+                {
+                    eprintln!(
+                        "⚠ 本次运行无任何已求值契约（疑似服务端宕机/全错运行）——拒绝覆写非空基线，防漂移信号被侵蚀"
+                    );
+                } else {
+                    if let Err(e) = rupost::report::contract::save_baseline(
+                        std::path::Path::new(baseline_path),
+                        &summary,
+                    ) {
+                        contract_err = Some(rupost::RupostError::ContractBaselineError(
+                            e.to_user_friendly_string(),
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                contract_err = Some(rupost::RupostError::ContractBaselineError(
+                    e.to_user_friendly_string(),
+                ));
+            }
+        }
+    }
+
     // WP-4 故障复现包（在报告与普通快照呈现之后）：仅失败时创建；
     // 强制脱敏、目标必须不存在；成功全绿不写目录只说明。
     // 工件 I/O 失败经专用错误变体 exit 2，不掩盖测试本身的 exit 1 结果。
@@ -158,6 +227,11 @@ pub async fn present_suite_outcome(
                 "[i] --incident-out 已提供，但本次运行全绿：未创建复现包目录（仅失败时产出）"
             );
         }
+    }
+
+    // WP-P2b 审查修正：基线错误在复现包块之后回传（exit 2，不跳过任何工件产出）
+    if let Some(e) = contract_err {
+        return Err(e);
     }
 
     Ok(())

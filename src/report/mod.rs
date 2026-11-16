@@ -1,9 +1,14 @@
+pub mod contract;
 pub mod generator;
 pub mod html;
 pub mod json;
 pub mod junit;
 pub mod types;
 
+pub use contract::{
+    CONTRACT_SCHEMA_VERSION, ContractDrift, ContractEntry, ContractSummary, build_contract_summary,
+    diff_contracts, load_baseline, save_baseline,
+};
 pub use generator::ReportGenerator;
 pub use html::HtmlReportGenerator;
 pub use json::{JsonAssertionReport, JsonFileReport, JsonTestReport};

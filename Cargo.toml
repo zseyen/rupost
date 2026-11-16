@@ -63,7 +63,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5.8"
 uuid = { version = "1.19.0", features = ["v4"] }
-semver = "1.0"
 reqwest_cookie_store = "0.10.0"
 cookie_store = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
@@ -89,6 +88,8 @@ strip-ansi-escapes = "0.2"
 libc = "0.2"
 
 [dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
 cookie = "0.18"
 socket2 = "0.6"
 dirs = "6.0.0"

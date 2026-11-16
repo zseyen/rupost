@@ -159,6 +159,35 @@ fn build_install_prescription_hint(
     }
 }
 
+/// 插件不可用/缺失三选一处方统一格式化器（pipeline 运行期与 `plugin list` 诊断共用 SSOT）。
+pub struct PrescriptionFormatter;
+
+impl PrescriptionFormatter {
+    /// 单行三选一处方（用于 `rupost plugin list` 离线诊断）。
+    pub fn format_inline_steps(install_step: &str) -> String {
+        format!(
+            "① {install_step}  ② 或改用内置宏（如 {{{{$hmac_sha256}}}}）  ③ 或传入 --allow-missing-plugins 显式降级"
+        )
+    }
+
+    /// 多行三选一处方块（用于执行期阻断与降级现场）。
+    pub fn format_multiline_steps(install_hint: &str, auto_degraded: bool) -> String {
+        let step3 = if auto_degraded {
+            "③ --allow-missing-plugins 显式降级（本次已自动生效）"
+        } else {
+            "③ --allow-missing-plugins 显式降级"
+        };
+        format!(
+            "处方（三选一）:\n    ① {install_hint}\n    ② 改用内置宏等价能力（如 {{{{$hmac_sha256}}}}，离线闭环）\n    {step3}"
+        )
+    }
+
+    /// 紧凑三选一处方（用于未安装阻断单行提示）。
+    pub fn format_compact_steps() -> &'static str {
+        "处方（三选一）：① 安装该插件；② 改用内置宏等价能力；③ --allow-missing-plugins 显式降级"
+    }
+}
+
 fn format_failure_messages(
     plugin_name: &str,
     failure: &PluginFailureKind,
@@ -169,11 +198,13 @@ fn format_failure_messages(
             let reason = failure.describe();
             let install_hint = build_install_prescription_hint(failure, manifest_runtime);
             let degraded = format!(
-                "插件 '{plugin_name}' 运行环境不满足，已降级跳过（现场数据已记录至快照）\n  原因: {reason}\n  处方（三选一）:\n    ① {install_hint}\n    ② 改用内置宏等价能力（如 {{{{$hmac_sha256}}}}，离线闭环）\n    ③ --allow-missing-plugins 显式降级（本次已自动生效）"
+                "插件 '{plugin_name}' 运行环境不满足，已降级跳过（现场数据已记录至快照）\n  原因: {reason}\n  {}",
+                PrescriptionFormatter::format_multiline_steps(&install_hint, true)
             );
             let blocking = format!(
-                "插件 '{plugin_name}' 运行环境不满足（{}）\n  原因: {reason}\n  处方（三选一）:\n    ① {install_hint}\n    ② 改用内置宏等价能力（如 {{{{$hmac_sha256}}}}，离线闭环）\n    ③ --allow-missing-plugins 显式降级",
-                failure.kind_label()
+                "插件 '{plugin_name}' 运行环境不满足（{}）\n  原因: {reason}\n  {}",
+                failure.kind_label(),
+                PrescriptionFormatter::format_multiline_steps(&install_hint, false)
             );
             (degraded, blocking)
         }
@@ -267,8 +298,9 @@ impl PluginPipeline {
                     directive.name
                 );
                 let block_msg = format!(
-                    "插件 '{}' 未安装。搜索路径: $PATH 各目录、~/.rupost/plugins、./.rupost/plugins（需 --allow-project-plugins）。处方（三选一）：① 安装该插件；② 改用内置宏等价能力；③ --allow-missing-plugins 显式降级",
-                    directive.name
+                    "插件 '{}' 未安装。搜索路径: $PATH 各目录、~/.rupost/plugins、./.rupost/plugins（需 --allow-project-plugins）。{}",
+                    directive.name,
+                    PrescriptionFormatter::format_compact_steps()
                 );
                 if Self::gate_degradation(
                     &mut outcome,
@@ -596,5 +628,26 @@ mod tests {
         assert_eq!(p1.mutated_body.as_deref(), Some(r#"{"encrypted": true}"#));
         assert_eq!(p1.set_variables.get("TOKEN").unwrap(), "token123");
         assert_eq!(p1.warnings, vec!["Warn 1", "Warn 2"]);
+    }
+
+    #[test]
+    fn test_prescription_formatter_variants() {
+        let inline = PrescriptionFormatter::format_inline_steps("pip install foo");
+        assert!(inline.contains("① pip install foo"));
+        assert!(inline.contains("②"));
+        assert!(inline.contains("③"));
+        assert!(inline.contains("--allow-missing-plugins"));
+
+        let multi_default = PrescriptionFormatter::format_multiline_steps("安装插件", false);
+        assert!(multi_default.contains("① 安装插件"));
+        assert!(multi_default.contains("③ --allow-missing-plugins 显式降级"));
+        assert!(!multi_default.contains("本次已自动生效"));
+
+        let multi_auto = PrescriptionFormatter::format_multiline_steps("安装插件", true);
+        assert!(multi_auto.contains("本次已自动生效"));
+
+        let compact = PrescriptionFormatter::format_compact_steps();
+        assert!(compact.contains("处方（三选一）"));
+        assert!(compact.contains("--allow-missing-plugins"));
     }
 }

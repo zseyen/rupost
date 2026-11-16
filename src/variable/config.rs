@@ -84,12 +84,32 @@ impl ConfigLoader {
 
     /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
     pub fn find_and_load_redaction_policy() -> crate::security::redact::RedactionPolicy {
+        Self::find_and_load_redaction_policy_with_sink(&crate::diagnostics::StderrWarningSink)
+    }
+
+    /// 查找并加载脱敏策略配置 [export.redaction]（通过 `WarningSink` 输出异常告警）
+    pub fn find_and_load_redaction_policy_with_sink(
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> crate::security::redact::RedactionPolicy {
         let Some(path) = Self::find_config_path() else {
             return crate::security::redact::RedactionPolicy::builtin();
         };
-        let (policy, warning) = Self::load_redaction_policy_from_path(&path);
+        Self::load_redaction_policy_from_path_with_sink(&path, sink)
+    }
+
+    /// 从指定路径加载脱敏策略配置并通过 `WarningSink` 输出异常告警（消除重复 `[!]` 前缀）。
+    pub fn load_redaction_policy_from_path_with_sink(
+        path: &Path,
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> crate::security::redact::RedactionPolicy {
+        let (policy, warning) = Self::load_redaction_policy_from_path(path);
         if let Some(w) = warning {
-            eprintln!("{w}");
+            let stripped = w.strip_prefix("[!] ").unwrap_or(&w);
+            sink.emit(
+                crate::diagnostics::WarningSeverity::Alert,
+                "variable::config",
+                stripped,
+            );
         }
         policy
     }
@@ -845,5 +865,23 @@ sensitive_keys = ["x_custom_secret"]
         let (policy, warning) = ConfigLoader::load_redaction_policy_from_path(valid.path());
         assert!(warning.is_none(), "合法配置不应产生告警: {warning:?}");
         assert!(policy.is_sensitive("x_custom_secret"));
+    }
+
+    #[test]
+    fn test_redaction_policy_sink_strips_duplicate_alert_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = dir.path().join("broken.toml");
+        std::fs::write(&broken, "[export.redaction\nbad").unwrap();
+        let sink = crate::diagnostics::BufferedWarningSink::new();
+        let _policy = ConfigLoader::load_redaction_policy_from_path_with_sink(&broken, &sink);
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].severity, crate::diagnostics::WarningSeverity::Alert);
+        let formatted = crate::diagnostics::warning_sink::format_stderr_line(
+            recs[0].severity,
+            &recs[0].message,
+        );
+        assert!(formatted.starts_with("[!] "));
+        assert!(!formatted.contains("[!] [!]") && !formatted.contains("[WARN] [!]"));
     }
 }

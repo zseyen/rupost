@@ -4,6 +4,8 @@
 //! 无 trace 头时空串 + warnings 可见、钩子超时/非零退出不影响测试退出码、
 //! 成功请求零触发；JSON 报告模式下钩子仍触发且警告进入报告。
 
+#![cfg(unix)]
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;

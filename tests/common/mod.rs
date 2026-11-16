@@ -7,9 +7,10 @@
 #[allow(dead_code)]
 pub mod mock_plugin;
 
-/// 静音历史落盘：`http_runner` 对每次请求记历史，不静音则测试流量会追加进
-/// 开发者真实 `.rupost/history.jsonl`（见 `history::recorder` 模块注释）。
-/// 历史功能的专项测试（history_integration_test）自带 env 隔离，不引用本模块。
+// 测试隔离注记（审查批二）：进程级环境突变（set_var/set_current_dir）在并行
+// harness 下与同进程测试竞争——现有高危点均为"单测试独占二进制"或已持本地锁
+//（template_test CWD_MUTATION_LOCK）。新增突变型测试时必须就近持锁或单列二进制。
+
 #[ctor::ctor]
 fn isolate_history_recording() {
     rupost::history::recorder::disable_history_recording();

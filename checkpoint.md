@@ -9,8 +9,9 @@
 
 * **项目定位**: 基于文档（`.http` 与 `.md`）驱动的极简高性能 API 测试、回归与排障引擎。
 * **分支与代码基线**:
-  * **主干分支**: `main`（加固战役分支 `feature/decoupling-and-workbench-hardening` 已通过 **PR #13** 完整合流）。
-  * **当前活跃开发工作区**: `.workspace/cross-scenario-plugins`（全场景自适应与微内核插件生态专项工作区）。
+  * **主干分支**: `main`（PR #15 已合流，包含差异化 Phase 0+1、插件体系 M1–M7、免重填主线与测试隔离三件套）。
+  * **当前活跃推送分支**: `feature/contract-drift-and-hygiene`（已推送至 `origin`，含 `--contract-baseline` 契约漂移门禁、`WP-P2c` 方法前置解析修复、二进制契约/黄金测试与 CI 三新 job 扩展，待建 PR 触发 CI 首跑）。
+  * **下一步待办与未执行归档**: 全部未执行内容已统一归档至 [`doc/plans/future_backlog.md`](doc/plans/future_backlog.md)（重点包括 `2026-11-16-unified-services-and-config-plan.md` Wave 0–3 基础服务与统一配置收口、流式 runner `source_line` 回填及暂缓生态项）。
 * **质量保障金字塔**:
   * **单元测试**: 590+ 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。
   * **集成冒烟测试**: `tests/verify_features.sh` 涵盖 14 个核心特性（脱敏扩展性、Mock 变体、网络诊断瀑布条、DAG 拓扑、AI 机械降级、cURL 导入等）全部通过。

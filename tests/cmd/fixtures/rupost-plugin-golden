@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "golden fixture executable (never executed by validate)"

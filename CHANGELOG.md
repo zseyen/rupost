@@ -6,6 +6,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ## [Unreleased]
 
+### Fixed
+
+- **解析器选择边界修复（WP-P2c）**：`GET url --verbose` 等旗标混入形态此前误切 curl 解析器（方法 token 被当 URL 吞掉）——现按"方法前置"判定（首 token 为标准 HTTP 方法 → httpie 解析器，未知旗标容忍），旗标前置仍走根路由裁决 exit 2（`fix(parser,cli)` 5a290e05）。
+
+### Added
+
+- **统一基础服务、配置体系与凭据安全（Wave 0–3）**：
+  - `WarningSink` 诊断告警总线（`StderrWarningSink` / `BufferedWarningSink`），收敛 `executor_factory`、`suite_setup`、`variable/config`、`security/redact`、`executor_plugin` 裸 `eprintln!`，`TestExecutor` 正式挂载 `Arc<dyn WarningSink>`（Web/TUI 通过 `build_interactive_executor_with_options_and_arc_sink` 接入缓冲告警）；
+  - `ProcessGroupGuard` 跨平台进程组强杀与取消原语（合并 `plugin/driver.rs` 与 `runner/on_failure.rs`）；
+  - `WorkspaceConfig::load` 与 `WorkspacePathsConfig`（严格锚定 `project_root`、`[paths]` 沙箱防逃逸，`history_file`/`logs_dir`/`snapshots_dir` 全链路生效），移除 `HistoryStorage::get_storage()` 全局单例，统一 `AtomicFileWriter`（含 `ai/resolve`）；
+  - `PrescriptionFormatter` 统一插件三选一处方文案（`plugin/pipeline.rs` 与 `cli/plugin_route.rs` 共享 SSOT），并抽离 `runner::interactive_session` 公共会话原语（Web/TUI 共享变量回灌、增量收割与 Cookie 桥导入/导出）；
+  - AI 多 Profile 与自定义 `api_key_env` 支持，新增 `$HOME/.rupost/credentials.toml`（`0o600` + `O_NOFOLLOW` + 属主门禁 + 脱敏 `Debug` + 动态密钥掩码）；移除 `Cargo.toml` 闲置 `semver`/`trycmd` 依赖并补齐 Windows `#[cfg(unix)]` 编译门控。
+- **测试基建与 CI 扩展**：`tests/binary_contract_test.rs`（assert_cmd 形态二进制契约 9 例）、`tests/binary_output_golden_test.rs`（ast/validate 黄金精确断言）、`.config/nextest.toml`（optional 试点）、`ci.yml` 新增 `smoke-bash` / `e2e-pytest` / `nextest-pilot` 三个 job（`--contract-baseline` 契约漂移基线已于 `[0.4.0]` 登记，此处去重）。
+
 ## [0.4.0] - 2026-11-15
 
 ### Added
@@ -96,6 +110,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - **`rupost ast` AST 桥（插件生态使能）**：AstDocument JSON v1.0 只读命令（顶层 4 键精确契约，`.http`/`.md` 双路径方法行号）+ 插件环境注入 `RUPOST_BIN`——命令插件复用核心解析器，解析语义零分叉；OpenAPI 导入 / k6 导出移交社区以命令插件承载，样板 `cmd-hello` 与作者指南（双形态矩阵/AST 桥/版本协调）就绪（`feat(parser,cli)` a757fec7、`docs(plugins)` 83736008）。
 - **`rupost plugin validate`**：作者分发前静态体检——复用发现期校验（保留字/超长/可执行缺失/路径囚禁）+ 警告级（命名契约/内置名冲突/空清单）；不执行插件、不触发 TOFU、不写缓存（`feat(plugin)` 6f13d55c）。
 - **复现包完整性摘要**：manifest 新增 `artifact_digests`（report/snapshot 的 sha256+bytes；digest 只防损坏，密钥签名登记不做）（`feat(history)` 280abb5b）。
+- **`--contract-baseline` 契约漂移基线（Phase 2 核心）**：首跑建基线（`{id, assertion, passed}` 确定性字段——id 为 `path#L<行号>` 相对可移植、无响应值），复跑报三态漂移（newly_broken/fixed/new）并更新基线；漂移不改退出码；teardown 排除；断言原文改变视同新增（`feat(report,cli)` e0b29834）。
+- **Web 复现包保留上限**：`.rupost/incidents/` 服务端命名目录（`YYYYMMDDTHHMMSS-8hex`）创建前裁最旧至 32，非命名目录/symlink 不触碰（磁盘 DoS 残余收口）；CLI 显式路径不适用（`refactor(security)` d2565596）。
+- **测试隔离三件套（CI flake 根因修复）**：mock 插件编译产物共享缓存（原 9 个集成测试二进制各自 rustc 现编抢 CPU）、template_test cwd 突变互斥锁+RAII 恢复、插件 IPC 测试超时对负载倍增 5s→30s（`test(isolation)` ed546526）。
+- **脱敏原语归位**：ai/redactor 四个通用原语（mask_urls/redact_assertion_value/truncate_chars/redact_json_value）下沉 `security::redact`，report 层切换直连——消除 report→ai 层级错位（`refactor(security)` d2565596）。
+- **集成冒烟扩展**：verify_features.sh 增 Web 会话隔离+延续步（双 Cookie 划界，A 延续/B 诚实 401）+ web 就绪探针 `-m 2` 超时（mock 探针的 `-m 2` 已在 PR #15 probe hardening 落地）；插件指南补 schema 挂接编辑器示例（C8）；musl CI 首跑确认全绿（D9 闭环）（`test(verify)` e102f69f）。
 - **测试与文档收尾**：exit 2 三来源鉴别表（debug_guide §7.3 + 示例 README）；`--env`→manifest/snapshot 贯通 e2e；directory_structure 补 generator/history/plugin/security/web 五模块条目（`docs` 81fc20e3、`fix(exporter)` c52db271）。
 
 ### Changed

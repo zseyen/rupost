@@ -112,10 +112,23 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
         }
         state.rebuild_visible_tree_nodes();
     }
-    // 载入历史记录
-    state.history_list = crate::history::storage::get_storage()
-        .tail(100)
-        .unwrap_or_default();
+    // 载入工作区配置与历史记录（通过 BufferedWarningSink 防止 Raw Mode 撕裂，并将告警合入状态栏）
+    let tui_sink = crate::diagnostics::BufferedWarningSink::new();
+    let history_storage = if let Ok(cwd) = std::env::current_dir() {
+        let ws_cfg = crate::variable::WorkspaceConfig::load(&cwd, &tui_sink);
+        crate::history::storage::HistoryStorage::new_with_path(ws_cfg.paths.history_file)
+    } else {
+        crate::history::storage::HistoryStorage::new()
+    };
+    let sink_warnings = tui_sink.messages();
+    if !sink_warnings.is_empty() {
+        let joined = sink_warnings.join("；");
+        state.last_error = Some(match state.last_error.take() {
+            Some(prev) => format!("{prev}；{joined}"),
+            None => joined,
+        });
+    }
+    state.history_list = history_storage.tail(100).unwrap_or_default();
     state.history_list.reverse();
 
     // 默认加载首个文件或指定的 initial_file
@@ -180,10 +193,8 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                     state.response_visual_lines.clear(); // 清空缓存以强迫重新计算预折行
                     state.response_scroll = 0; // 请求结束重置滚动
 
-                    // 从存储重新载入最新 100 条请求历史并倒序
-                    state.history_list = crate::history::storage::get_storage()
-                        .tail(100)
-                        .unwrap_or_default();
+                    // 从同一工作区存储重新载入最新 100 条请求历史并倒序
+                    state.history_list = history_storage.tail(100).unwrap_or_default();
                     state.history_list.reverse();
                     state.history_state.selected_index = 0;
                     state.history_state.scroll_offset = 0;

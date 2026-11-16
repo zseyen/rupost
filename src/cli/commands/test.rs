@@ -69,6 +69,11 @@ pub struct TestArgs {
     #[arg(long, value_name = "DIR")]
     pub incident_out: Option<String>,
 
+    /// WP-P2b 契约漂移基线：首跑创建基线；后续运行对比漂移（stderr 摘要）并更新。
+    /// 只记录确定性字段：断言原文与通过与否，不记录响应值；漂移不改变退出码。
+    #[arg(long, value_name = "FILE")]
+    pub contract_baseline: Option<String>,
+
     /// Mask headers/body secrets in the saved snapshot (opt-in; keep off for replay body-diff fidelity)
     #[arg(long)]
     pub mask_secrets: bool,

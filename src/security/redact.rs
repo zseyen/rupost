@@ -40,6 +40,8 @@ pub const DEFAULT_IGNORE_KEYS: &[&str] = &[
     "primary_key",
 ];
 
+use regex::Regex;
+use serde_json::Value;
 use std::collections::HashSet;
 
 #[inline]
@@ -241,6 +243,19 @@ impl RedactionPolicy {
         extra_keys: impl IntoIterator<Item = impl AsRef<str>>,
         ignore_keys: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Self {
+        Self::new_with_sink(
+            extra_keys,
+            ignore_keys,
+            &crate::diagnostics::StderrWarningSink,
+        )
+    }
+
+    /// 构建包含外部配置与活文档标注的定制策略（通过 `WarningSink` 传递护栏阻断告警）
+    pub fn new_with_sink(
+        extra_keys: impl IntoIterator<Item = impl AsRef<str>>,
+        ignore_keys: impl IntoIterator<Item = impl AsRef<str>>,
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> Self {
         let mut policy = Self::builtin();
 
         for key in extra_keys {
@@ -257,8 +272,12 @@ impl RedactionPolicy {
             }
             // R3 安全护栏：严禁豁免硬键！
             if is_hard_sensitive_key(normalized.as_str()) {
-                eprintln!(
-                    "[warn] 安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！"
+                sink.emit(
+                    crate::diagnostics::WarningSeverity::Security,
+                    "security::redact",
+                    &format!(
+                        "安全护栏阻断：硬键 '{normalized}' 属于核心凭据，不可被 ignore 豁免！"
+                    ),
                 );
                 continue;
             }
@@ -270,6 +289,15 @@ impl RedactionPolicy {
 
     /// 结合请求级元数据 (@sensitive / @no-redact) 派生新策略（活文档就地标注优先于全局配置）
     pub fn with_request_metadata(&self, meta: &crate::parser::types::RequestMetadata) -> Self {
+        self.with_request_metadata_with_sink(meta, &crate::diagnostics::StderrWarningSink)
+    }
+
+    /// 结合请求级元数据派生新策略（通过 `WarningSink` 传递护栏阻断告警）
+    pub fn with_request_metadata_with_sink(
+        &self,
+        meta: &crate::parser::types::RequestMetadata,
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> Self {
         if meta.sensitive_keys.is_empty() && meta.no_redact_keys.is_empty() {
             return self.clone();
         }
@@ -286,8 +314,10 @@ impl RedactionPolicy {
                 continue;
             }
             if is_hard_sensitive_key(normalized.as_str()) {
-                eprintln!(
-                    "[warn] 安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！"
+                sink.emit(
+                    crate::diagnostics::WarningSeverity::Security,
+                    "security::redact",
+                    &format!("安全护栏阻断：文件内标注 @no-redact 无法豁免硬键 '{normalized}'！"),
                 );
                 continue;
             }
@@ -583,6 +613,38 @@ pub fn redact_explicit_secrets_ordered(text: &str, ordered_secrets: &[&str]) -> 
 pub fn redact_explicit_secrets(text: &str, secret_values: &[String]) -> String {
     let ordered = order_secret_values(secret_values);
     redact_explicit_secrets_ordered(text, &ordered)
+}
+
+/// URL 整体替换为 `<url>` 占位符（用于 AI 去重签名：同端点不同实例同签名；
+/// 原住 ai/redactor，WP 审查批四下沉归位——脱敏原语 SSOT 收口）
+pub fn mask_urls(text: &str) -> String {
+    static URL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    URL_RE
+        .get_or_init(|| Regex::new(r#"https?://[^\s"'<>`)]+"#).expect("valid url regex"))
+        .replace_all(text, "<url>")
+        .to_string()
+}
+
+/// 断言期望/实际/消息值的脱敏（Gap Review P1-2）：
+/// - raw 命中敏感键 → 值整体 `[REDACTED]`（值可能源自响应体敏感字段，无法从值本身判断敏感性）；
+/// - 否则仅做自由文本 URL 掩码 + 200 字符截断。
+pub fn redact_assertion_value(raw: &str, value: Option<&str>) -> Option<String> {
+    if assertion_targets_sensitive_key(raw) {
+        value.map(|_| "[REDACTED]".to_string())
+    } else {
+        value.map(|s| truncate_utf8_safe(&redact_free_text(s), 200))
+    }
+}
+
+/// 按字符数截断错误消息，防止 AI 后端返回的超长错误体刷屏
+pub fn truncate_chars(msg: &str, max_chars: usize) -> String {
+    crate::utils::text::truncate_chars(msg, max_chars, "...[truncated]")
+}
+
+/// 递归遍历 JSON Value，将命中 `is_sensitive_key` 的对象字段值替换为 `"[REDACTED]"`，
+/// 对 `phone`/`mobile`/`id_card` 数值叶子及普通字符串叶子中的 PII 统一打码 `***`（结构保留）
+pub fn redact_json_value(val: &mut Value) {
+    mask_json_pii_value_in_place(val);
 }
 
 #[cfg(test)]
@@ -1258,5 +1320,23 @@ mod mask_tests {
                 "mask_inline_secrets({input:?}) mismatch"
             );
         }
+    }
+
+    #[test]
+    fn test_redaction_policy_hard_key_guard_emits_to_buffered_sink() {
+        use crate::diagnostics::{BufferedWarningSink, WarningSeverity};
+        let sink = BufferedWarningSink::new();
+        let policy =
+            RedactionPolicy::new_with_sink(std::iter::empty::<&str>(), ["authorization"], &sink);
+        assert!(policy.is_sensitive("Authorization"));
+
+        let mut meta = crate::parser::types::RequestMetadata::default();
+        meta.no_redact_keys.push("x-api-key".to_string());
+        let derived = policy.with_request_metadata_with_sink(&meta, &sink);
+        assert!(derived.is_sensitive("x-api-key"));
+
+        let recs = sink.records();
+        assert_eq!(recs.len(), 2);
+        assert!(recs.iter().all(|r| r.severity == WarningSeverity::Security));
     }
 }

@@ -1,10 +1,17 @@
-//! 跨平台差异统一适配层（Home 目录、POSIX 文件权限、进程信号退出码）。
+//! 跨平台差异统一适配层（Home 目录、POSIX 文件权限、进程信号退出码、进程组守卫）。
 //!
 //! 全仓业务与测试代码应通过本模块访问平台相关能力，避免散落 `#[cfg(unix)]`
 //! 或在 Windows 下因 `dirs::home_dir()` 忽略 `HOME` 环境变量而导致隔离失效。
 
+pub mod process;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
+
+pub use process::{
+    ProcessGroupGuard, WaitOutcome, configure_process_group, kill_process_group_pid,
+    wait_with_timeout_and_cancel,
+};
 
 /// 工作区与用户目录下的默认状态目录名（`.rupost`）。
 pub const DEFAULT_RUPOST_DIR: &str = ".rupost";
@@ -39,8 +46,20 @@ pub fn history_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_RUPOST_DIR))
 }
 
-/// 返回项目级流式日志目录（`<history_dir>/logs`）。
+/// 返回项目级流式日志目录（`RUPOST_HISTORY_DIR/logs` > `rupost.toml [paths].logs_dir` > `.rupost/logs`）。
 pub fn history_logs_dir() -> PathBuf {
+    if let Some(env_dir) = std::env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
+        return PathBuf::from(env_dir).join("logs");
+    }
+    if let Ok(cwd) = std::env::current_dir()
+        && cwd.join("rupost.toml").exists()
+    {
+        let ws = crate::variable::WorkspaceConfig::load(
+            &cwd,
+            &crate::diagnostics::BufferedWarningSink::new(),
+        );
+        return ws.paths.logs_dir;
+    }
     history_dir().join("logs")
 }
 

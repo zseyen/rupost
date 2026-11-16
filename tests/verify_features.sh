@@ -55,6 +55,7 @@ TRIAGE_PORT=$((PORT_BASE + 2))
 HOOK_PORT=$((PORT_BASE + 3))
 REPLAY_PORT=$((PORT_BASE + 4))
 PLUGIN_PORT=$((PORT_BASE + 5))
+WEB_PORT=$((PORT_BASE + 6))
 
 # 健康探针：有限重试替代固定 sleep；进程启动即退出（端口被占用/配置非法）立刻报错
 wait_mock_ready() {
@@ -304,6 +305,40 @@ else
     echo -e "${RED}[ERROR] DAG 并行执行校验失败（exit=$DAG_EXIT）！${NC}"
     exit 1
 fi
+
+# 5.5 验证 Web 会话隔离与延续（B6/WP-1 冒烟：复用步骤 3 mock 的 login/profile 路由）
+echo -e "${BLUE}[*] 验证 Web 会话隔离与延续（rupost web + Cookie 划界）...${NC}"
+WEB_PORT=$((PORT_BASE + 6))
+$RUPOST_BIN web --host 127.0.0.1 --port "$WEB_PORT" --dir "$WORKSPACE" > "$WORKSPACE/web.log" 2>&1 &
+WEB_PID=$!
+PIDS+=("$WEB_PID")
+# 复用探针形态：/api/v1/meta 就绪探测
+WEB_RETRIES=50
+while [ "$WEB_RETRIES" -gt 0 ]; do
+    if ! kill -0 "$WEB_PID" 2>/dev/null; then
+        echo -e "${RED}[ERROR] web 启动即退出，日志：${NC}"; cat "$WORKSPACE/web.log"; exit 1
+    fi
+    if curl -s -m 2 -o /dev/null "http://127.0.0.1:${WEB_PORT}/api/v1/meta"; then break; fi
+    sleep 0.2; WEB_RETRIES=$((WEB_RETRIES - 1))
+done
+[ "$WEB_RETRIES" -gt 0 ] || { echo -e "${RED}[ERROR] web 未就绪${NC}"; exit 1; }
+
+# 客户端 A：登录块（@capture 落入 A 的服务端会话，下发 Set-Cookie）
+printf '{"file_path":"login.http","raw_block":"### login\\nPOST http://127.0.0.1:%s/api/auth/login\\nContent-Type: application/json\\n\\n{ \\"username\\": \\"admin\\" }\\n\\n@capture auth_token from body.token\\n"}' "$MOCK_PORT" > "$WORKSPACE/login_payload.json"
+curl -s -c "$WORKSPACE/jarA" -X POST "http://127.0.0.1:${WEB_PORT}/api/v1/run/block" -H "Content-Type: application/json" --data @"$WORKSPACE/login_payload.json" > "$WORKSPACE/loginA.json"
+grep -q '"success":true' "$WORKSPACE/loginA.json" || { echo -e "${RED}[ERROR] A 登录块失败${NC}"; cat "$WORKSPACE/loginA.json"; exit 1; }
+
+# A 凭会话 Cookie 跑 profile：token 由 A 会话回灌 → 命中精确 Bearer 变体 200
+printf '{"file_path":"profile.http","raw_block":"### profile\\nGET http://127.0.0.1:%s/api/user/profile\\nAuthorization: Bearer {{auth_token}}\\n"}' "$MOCK_PORT" > "$WORKSPACE/profile_payload.json"
+curl -s -b "$WORKSPACE/jarA" -X POST "http://127.0.0.1:${WEB_PORT}/api/v1/run/block" -H "Content-Type: application/json" --data @"$WORKSPACE/profile_payload.json" > "$WORKSPACE/profileA.json"
+grep -q '"success":true' "$WORKSPACE/profileA.json" || { echo -e "${RED}[ERROR] A 的会话延续失败（token 未回灌）${NC}"; cat "$WORKSPACE/profileA.json"; exit 1; }
+
+# 客户端 B：全新 Cookie 罐跑同一 profile——隔离语义下无 A 的 token → 兜底 401 诚实失败
+curl -s -c "$WORKSPACE/jarB" -X POST "http://127.0.0.1:${WEB_PORT}/api/v1/run/block" -H "Content-Type: application/json" --data @"$WORKSPACE/profile_payload.json" > "$WORKSPACE/profileB.json"
+grep -q '"success":false' "$WORKSPACE/profileB.json" || { echo -e "${RED}[ERROR] 会话隔离失效：B 读到了 A 的捕获变量${NC}"; cat "$WORKSPACE/profileB.json"; exit 1; }
+
+echo -e "${GREEN}[✓] Web 会话隔离与延续验证成功（A 延续成功 / B 诚实 401）！${NC}"
+kill "$WEB_PID" 2>/dev/null || true
 
 # 关闭 Mock 后台服务 (完成所有网络请求后关闭；trap 兜底清理其余进程)
 echo -e "${BLUE}[*] 关闭 Mock 服务后台进程 (PID: $MOCK_PID)...${NC}"

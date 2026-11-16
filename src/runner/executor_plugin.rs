@@ -25,6 +25,7 @@ pub(crate) struct PluginContext<'a> {
     pub registry: Option<&'a Arc<PluginRegistry>>,
     pub options: &'a PluginRuntimeOptions,
     pub suite_hook_cache: &'a SuiteHookCache,
+    pub warning_sink: &'a dyn crate::diagnostics::WarningSink,
 }
 
 pub(crate) enum PluginDispatchOutcome {
@@ -128,8 +129,11 @@ pub(crate) async fn run_plugin_stage(
     }
 
     if stage.degraded {
+        use crate::diagnostics::WarningSeverity;
         for warning in &stage.warnings {
-            eprintln!("[WARN] {warning}");
+            plugin_ctx
+                .warning_sink
+                .emit(WarningSeverity::Warn, "executor_plugin", warning);
         }
     }
 

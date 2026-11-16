@@ -5,7 +5,7 @@ pub mod trace;
 use crate::Result;
 pub use crate::generator::http::HttpGenerator;
 use crate::history::selector::{self, SelectionStrategy};
-use crate::history::storage::get_storage;
+use crate::history::storage::HistoryStorage;
 use std::fs;
 
 #[derive(Debug, Clone)]
@@ -21,14 +21,14 @@ pub struct GenerateOptions {
 
 /// 执行从历史生成测试文件的机制层函数
 pub fn run_generate(opts: GenerateOptions) -> Result<()> {
-    let storage = get_storage();
+    let storage = HistoryStorage::new();
     let strategy = if opts.interactive {
         SelectionStrategy::Interactive
     } else {
         SelectionStrategy::Last(opts.last)
     };
 
-    let entries = selector::select_entries(storage, strategy)?;
+    let entries = selector::select_entries(&storage, strategy)?;
     if entries.is_empty() {
         tracing::warn!("No history found or selected to generate.");
         return Ok(());

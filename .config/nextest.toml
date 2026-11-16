@@ -1,0 +1,16 @@
+# WP-T5（可选试点）：nextest 运行器配置——每用例独立进程（隔离提升）+ flaky 治理。
+# 转正判据：连续一周 CI 无 nextest 特有失败；未转正前为 optional 试点。
+# 注意：每用例独立进程对"进程派生型测试"（mock 插件子进程）是执行拓扑变化——
+# 首跑对照 cargo test 的通过集合，不一致的用例逐个归因。
+
+[profile.default]
+# 失败即归档（retries=0 保留原始信号；flaky 统计由 nextest 自己记录）
+retries = 0
+# 慢用例可见性（>60s 标记 slow，>120s 标记 max）
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+# 插件 IPC 族（rustc 现编 + Stdio 子进程）：限并发 + 放宽慢阈值
+filter = "test(plugin)"
+threads-required = 1
+slow-timeout = { period = "120s", terminate-after = 2 }

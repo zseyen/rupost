@@ -1,0 +1,14 @@
+{
+  "manifest_version": "1.0",
+  "name": "golden",
+  "version": "0.1.0",
+  "description": "trycmd golden fixture for validate (static)",
+  "commands": [
+    {
+      "name": "golden",
+      "usage": "rupost golden",
+      "description": "golden demo",
+      "requires_env": []
+    }
+  ]
+}

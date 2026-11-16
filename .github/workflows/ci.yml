@@ -102,6 +102,63 @@ jobs:
         run: node --test tests/web/app_test.mjs
 
   # Job 5: C-1 容器叙事守护——musl 静态链接 + 体积预算断言（scratch/Alpine 可用的工程事实化）
+  # Job: WP-T1 全特性 bash 冒烟（ubuntu 先行；macos 视首跑时长再定）
+  # 跨平台语义子集（Windows）由 binary_contract_test 覆盖
+  smoke-bash:
+    name: Feature Verification Smoke (bash)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Feature verification smoke
+        run: bash tests/verify_features.sh
+        env:
+          RUPOST_TEST_PORT_BASE: 19000
+
+  # Job: WP-T5 nextest 试点（optional——与主 test job 并行跑，红不算门禁失败）
+  # 转正判据见 .config/nextest.toml 头注
+  nextest-pilot:
+    name: nextest pilot (optional)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: taiki-e/install-action@nextest
+      - name: nextest run (pilot)
+        run: cargo nextest run --workspace --profile default
+
+  # Job: WP-T4 异构黑盒验收（Python 独立实现交叉验证 + 手动指南参数化）
+  e2e-pytest:
+    name: E2E Blackbox (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release binary
+        run: cargo build --release --bin rupost
+      - name: Install pytest
+        run: pip install pytest
+      - name: Run heterogeneous blackbox suite
+        env:
+          RUPOST_BIN: ${{ github.workspace }}/target/release/rupost
+        run: pytest tests_e2e -q
+
   musl-static:
     name: musl Static Build & Size Budget
     runs-on: ubuntu-latest

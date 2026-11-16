@@ -9,4 +9,7 @@ pub use capture::{CaptureOutcome, CaptureSource, VariableCapture, capture_from_r
 pub use config::ConfigLoader;
 pub use env_file::EnvFileParser;
 pub use resolver::VariableResolver;
-pub use types::{Environment, PluginTomlConfig, VariableConfig, VariableContext};
+pub use types::{
+    Environment, PluginTomlConfig, VariableConfig, VariableContext, WorkspaceConfig,
+    WorkspacePathsConfig, WorkspacePathsToml,
+};

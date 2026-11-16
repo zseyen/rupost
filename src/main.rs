@@ -17,7 +17,9 @@ async fn main() -> Result<()> {
     if let Err(e) = cli::dispatch(cli::parse_cli()).await {
         let code = if matches!(
             e,
-            rupost::RupostError::ParseError(_) | rupost::RupostError::IncidentBundleError(_)
+            rupost::RupostError::ParseError(_)
+                | rupost::RupostError::IncidentBundleError(_)
+                | rupost::RupostError::ContractBaselineError(_)
         ) {
             2
         } else {

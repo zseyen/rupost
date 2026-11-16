@@ -1,0 +1,4 @@
+### ok
+# @name ok
+# @assert status == 200
+GET {{base_url}}/ok

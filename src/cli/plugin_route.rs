@@ -231,7 +231,10 @@ pub fn handle_plugin_command(
                                 " 及所需模块"
                             };
                             println!(
-                                "    处方: ① 安装 {safe_interp}{ver_hint}{mod_hint}  ② 或改用内置宏（如 {{{{$hmac_sha256}}}}）  ③ 或传入 --allow-missing-plugins 显式降级"
+                                "    处方: {}",
+                                rupost::plugin::PrescriptionFormatter::format_inline_steps(
+                                    &format!("安装 {safe_interp}{ver_hint}{mod_hint}")
+                                )
                             );
                         }
                         PluginHealthStatus::Failed { reason } => {

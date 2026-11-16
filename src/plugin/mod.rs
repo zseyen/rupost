@@ -12,10 +12,26 @@ pub mod types;
 
 pub use driver::invoke_plugin;
 pub use patch::PluginPatch;
-pub use pipeline::{PluginPipeline, parse_plugin_env_spec, parse_plugin_env_specs};
+pub use pipeline::{
+    PluginPipeline, PrescriptionFormatter, parse_plugin_env_spec, parse_plugin_env_specs,
+};
 pub use protocol::{PluginFailureKind, PluginInvocationOutcome};
 pub use registry::{DiscoverOptions, PluginRegistry, RegistryCacheFile};
 pub use types::{
     CommandCapability, HookCapability, PLUGIN_ENV_ALLOWLIST, PluginCacheScope, PluginDirective,
     PluginManifest, PluginStage,
 };
+
+/// 从原始 `--plugin-env` 参数列表提取已放行的环境变量名集合（保留未在宿主机设值的裸 `KEY`）。
+pub fn extract_authorized_env_keys(specs: &[String]) -> std::collections::HashSet<String> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let key = match spec.split_once('=') {
+                Some((k, _)) => k.trim(),
+                None => spec.trim(),
+            };
+            (!key.is_empty()).then(|| key.to_string())
+        })
+        .collect()
+}

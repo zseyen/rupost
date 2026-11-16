@@ -5,7 +5,7 @@ use crate::error::RupostError;
 use crate::history::model::{ExecutionSnapshotFile, SnapshotEntry, SnapshotSuite};
 use crate::history::selector::{SelectionStrategy, select_entries};
 use crate::history::snapshot_mask::mask_snapshot_entry;
-use crate::history::storage::get_storage;
+use crate::history::storage::HistoryStorage;
 use std::fs;
 use std::path::Path;
 
@@ -64,8 +64,8 @@ pub fn read_snapshot_suite_compat<P: AsRef<Path>>(path: P) -> Result<SnapshotSui
 
 /// 将最近 N 条历史条目导出为可重放快照套件文件。
 pub fn export_history_snapshot(last: usize, output: &str, mask_secrets: bool) -> Result<()> {
-    let storage = get_storage();
-    let entries = select_entries(storage, SelectionStrategy::Last(last))?;
+    let storage = HistoryStorage::new();
+    let entries = select_entries(&storage, SelectionStrategy::Last(last))?;
     if entries.is_empty() {
         tracing::warn!("No history entries to export.");
         return Ok(());

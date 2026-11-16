@@ -10,6 +10,13 @@ use crate::http::timing_connector::{
 use crate::http::types::Method;
 use reqwest_cookie_store::CookieStoreMutex;
 
+/// 构造轻量基础 `reqwest::Client`（统一 Rustls TLS 与超时策略，供探测与辅助模块复用）。
+pub fn build_plain_http_client(
+    timeout: Duration,
+) -> std::result::Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder().timeout(timeout).build()
+}
+
 #[derive(Clone)]
 pub struct Client {
     inner: reqwest::Client,

@@ -1,5 +1,5 @@
 use crate::history::model::{HistoryEntry, RequestSnapshot, ResponseMeta};
-use crate::history::storage::get_storage;
+use crate::history::storage::HistoryStorage;
 use crate::http::Response;
 use chrono::Utc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,7 +48,8 @@ pub fn record_history(request: RequestSnapshot, response: &Response, source: Opt
     };
 
     let append_history = || {
-        if let Err(e) = get_storage().append(&history_entry) {
+        let storage = HistoryStorage::new();
+        if let Err(e) = storage.append(&history_entry) {
             warn!("Failed to save request history: {}", e);
         }
     };

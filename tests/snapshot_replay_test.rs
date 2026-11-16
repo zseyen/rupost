@@ -1228,10 +1228,14 @@ async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
     write_snapshot_suite(&suite, &snapshot_file).unwrap();
 
     // 场景 1：回放对端意外恢复为 200 OK -> 行为不匹配，必须判为 matched: false
+    // 响应体携带凭据：该分支的 snippet 必须与正常失败路径同源脱敏（审查 P1-3）
     let mock_server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/test"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("hello"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"access_token": "replay-secret-token-777"})),
+        )
         .mount(&mock_server)
         .await;
 
@@ -1248,6 +1252,20 @@ async fn test_replay_snapshot_error_entry_semantic_mismatch_and_match() {
             .as_deref()
             .unwrap()
             .contains("Snapshot recorded transport error")
+    );
+    // 审查 P1-3：mismatch 分支的 snippet 不得把重放响应的凭据明文带出
+    // （replay --explain 会把该字段送进 FailureContext / LLM）
+    let snippet = report.entries[0]
+        .response_body_snippet
+        .as_deref()
+        .expect("mismatch 分支应携带响应片段");
+    assert!(
+        snippet.contains("[REDACTED]"),
+        "snippet 必须同源脱敏: {snippet}"
+    );
+    assert!(
+        !snippet.contains("replay-secret-token-777"),
+        "凭据不得原样进入 snippet: {snippet}"
     );
 
     // 场景 2：回放对端依然无法连接 -> 行为完全吻合，判定为 matched: true

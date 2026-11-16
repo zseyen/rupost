@@ -314,7 +314,12 @@ impl ReplayExecutor {
                 error: Some(mismatch_msg),
                 body_matched: Some(false),
                 body_diff: None,
-                response_body_snippet: Some(res.body.chars().take(200).collect()),
+                // 与正常失败路径同源脱敏（审查 P1-3：replay --explain 会把
+                // 该字段送进 FailureContext/LLM，明文凭据不得出站）
+                response_body_snippet: Some(crate::ai::redactor::redact_and_truncate_body(
+                    &res.body,
+                    crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                )),
             };
         };
 

@@ -3,15 +3,22 @@ use crate::error::RupostError;
 use crate::mock::matcher::{MockMatcher, MockRequest};
 use crate::mock::server::MockServer;
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{Request, State};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::header::VARY;
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
+use futures_util::stream;
 use std::collections::HashMap;
+use std::convert::Infallible;
+use std::future::{Future, pending};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::sleep;
 
 use colored::Colorize;
 
@@ -25,19 +32,11 @@ impl MockServer for AxumMockServer {
         enable_cors: bool,
     ) -> Result<()> {
         let addr = format!("127.0.0.1:{}", port);
-        let listener = tokio::net::TcpListener::bind(&addr)
+        let listener = TcpListener::bind(&addr)
             .await
             .map_err(RupostError::IoError)?;
 
-        serve_matcher_inner(
-            listener,
-            matcher,
-            enable_cors,
-            true,
-            None,
-            std::future::pending(),
-        )
-        .await
+        serve_matcher_inner(listener, matcher, enable_cors, true, None, pending()).await
     }
 }
 
@@ -62,9 +61,9 @@ struct MockServerState {
 /// Allow-Headers 回显预检请求头（评审 P1-12：`*` 在 credentialed 请求下不展开）；
 /// Credentials: true 仅在有 Origin 时携带（否则 `*` 与 credentials 组合违规）。
 pub async fn cors_middleware(
-    axum::extract::State(enable_cors): axum::extract::State<bool>,
+    State(enable_cors): State<bool>,
     req: Request,
-    next: axum::middleware::Next,
+    next: Next,
 ) -> Response {
     if !enable_cors {
         return next.run(req).await;
@@ -72,7 +71,7 @@ pub async fn cors_middleware(
     let origin = req.headers().get("origin").cloned();
     // 预检的 Access-Control-Request-Headers 在【请求头】上（评审 P1-12 回显来源）
     let request_headers = req.headers().get("access-control-request-headers").cloned();
-    let is_options = req.method() == axum::http::Method::OPTIONS;
+    let is_options = req.method() == Method::OPTIONS;
 
     let mut resp = if is_options {
         StatusCode::NO_CONTENT.into_response()
@@ -86,12 +85,12 @@ pub async fn cors_middleware(
         request_headers.as_ref(),
     );
     resp.headers_mut()
-        .insert(axum::http::header::VARY, HeaderValue::from_static("Origin"));
+        .insert(VARY, HeaderValue::from_static("Origin"));
     resp
 }
 
 fn inject_cors_headers(
-    headers: &mut axum::http::HeaderMap,
+    headers: &mut HeaderMap,
     origin: Option<&HeaderValue>,
     request_headers: Option<&HeaderValue>,
 ) {
@@ -116,42 +115,42 @@ fn inject_cors_headers(
 
 /// 以已绑定的 listener 服务 mock 路由（TUI/编程接入：调用方持有端口信息）
 pub async fn serve_matcher(
-    listener: tokio::net::TcpListener,
-    matcher: std::sync::Arc<dyn MockMatcher>,
+    listener: TcpListener,
+    matcher: Arc<dyn MockMatcher>,
     enable_cors: bool,
 ) -> Result<()> {
-    serve_matcher_with_shutdown(listener, matcher, enable_cors, std::future::pending()).await
+    serve_matcher_with_shutdown(listener, matcher, enable_cors, pending()).await
 }
 
 /// 以已绑定的 listener 服务 mock 路由，支持优雅关闭信号（Web 工作台托管用）
 pub async fn serve_matcher_with_shutdown<F>(
-    listener: tokio::net::TcpListener,
+    listener: TcpListener,
     matcher: Arc<dyn MockMatcher>,
     enable_cors: bool,
     shutdown: F,
 ) -> Result<()>
 where
-    F: std::future::Future<Output = ()> + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
 {
     serve_matcher_inner(listener, matcher, enable_cors, false, None, shutdown).await
 }
 
 /// 以已绑定的 listener 服务 mock 路由，支持优雅关闭与流量观测事件流
 pub async fn serve_matcher_with_events<F>(
-    listener: tokio::net::TcpListener,
+    listener: TcpListener,
     matcher: Arc<dyn MockMatcher>,
     enable_cors: bool,
     shutdown: F,
     event_tx: Option<UnboundedSender<MockTrafficEvent>>,
 ) -> Result<()>
 where
-    F: std::future::Future<Output = ()> + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
 {
     serve_matcher_inner(listener, matcher, enable_cors, false, event_tx, shutdown).await
 }
 
 async fn serve_matcher_inner<F>(
-    listener: tokio::net::TcpListener,
+    listener: TcpListener,
     matcher: Arc<dyn MockMatcher>,
     enable_cors: bool,
     log_to_stdout: bool,
@@ -159,7 +158,7 @@ async fn serve_matcher_inner<F>(
     shutdown: F,
 ) -> Result<()>
 where
-    F: std::future::Future<Output = ()> + Send + 'static,
+    F: Future<Output = ()> + Send + 'static,
 {
     let state = MockServerState {
         matcher,
@@ -169,10 +168,7 @@ where
     let app = Router::new()
         .fallback(any(handle_mock_request))
         .with_state(state)
-        .layer(axum::middleware::from_fn_with_state(
-            enable_cors,
-            cors_middleware,
-        ));
+        .layer(middleware::from_fn_with_state(enable_cors, cors_middleware));
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
@@ -265,7 +261,7 @@ async fn handle_mock_request(
         }
     }
 
-    let body_bytes = match axum::body::to_bytes(req.into_body(), 10 * 1024 * 1024).await {
+    let body_bytes = match to_bytes(req.into_body(), 10 * 1024 * 1024).await {
         Ok(b) => b,
         Err(_) => {
             emit_traffic_event(&state, &method, &path, 400, None, started);
@@ -314,10 +310,6 @@ async fn handle_mock_request(
         }
 
         if is_sse {
-            use futures_util::stream;
-            use std::convert::Infallible;
-            use std::time::Duration;
-
             let chunks = split_sse_frames(&mock_resp.body);
 
             let stream = stream::unfold((chunks, 0), |(chunks, index)| async move {
@@ -325,13 +317,10 @@ async fn handle_mock_request(
                     None
                 } else {
                     if index > 0 {
-                        tokio::time::sleep(Duration::from_millis(40)).await;
+                        sleep(Duration::from_millis(40)).await;
                     }
                     let chunk = chunks[index].clone();
-                    Some((
-                        Ok::<_, Infallible>(axum::body::Bytes::from(chunk)),
-                        (chunks, index + 1),
-                    ))
+                    Some((Ok::<_, Infallible>(Bytes::from(chunk)), (chunks, index + 1)))
                 }
             });
 
@@ -372,7 +361,10 @@ fn not_found_response(method: &str, path: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::to_bytes;
+    use crate::mock::matcher::TrieRouteMatcher;
+    use crate::mock::variant::MockVariant;
+    use reqwest::Client;
+    use tokio::sync::{mpsc, oneshot};
 
     #[test]
     fn test_split_sse_frames_preserves_multiline_events() {
@@ -394,9 +386,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_serve_matcher_with_events_emits_traffic_events() {
-        use crate::mock::matcher::TrieRouteMatcher;
-        use crate::mock::variant::MockVariant;
-
         let mut matcher = TrieRouteMatcher::new();
         matcher.add_route(
             "GET",
@@ -409,10 +398,10 @@ mod tests {
             }],
         );
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let handle = tokio::spawn(async move {
             let _ = serve_matcher_with_events(
@@ -427,7 +416,7 @@ mod tests {
             .await;
         });
 
-        let client = reqwest::Client::new();
+        let client = Client::new();
         let _ = client
             .get(format!("http://127.0.0.1:{port}/api/hello"))
             .send()

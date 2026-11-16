@@ -11,10 +11,13 @@
 use crate::Result;
 use crate::history::model::MaskingMode;
 use crate::history::snapshot_io::save_batch_snapshot;
+use crate::report::json::report_json_with_secrets;
 use crate::runner::types::TestResult;
 use crate::security::fs::{publish_private_dir_atomically, write_private_file_atomic};
 use crate::utils::path_guard::normalize_posix_path;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 工件完整性摘要（WP-R6）：只防传输损坏/无意篡改；防恶意篡改需密钥签名（登记不做）。
@@ -138,11 +141,7 @@ pub fn create_incident_bundle(
 
         // 2. report.json：复用 JSON 报告契约并应用显式 secret_values 脱敏（writer 注入式 → 缓冲 → 私有原子写入）
         let mut report_buf = Vec::new();
-        crate::report::json::report_json_with_secrets(
-            batch_results,
-            secret_values,
-            &mut report_buf,
-        )?;
+        report_json_with_secrets(batch_results, secret_values, &mut report_buf)?;
         write_private_file_atomic(&staging.join(IncidentArtifactNames::REPORT), &report_buf)?;
 
         // WP-R6：digests 先于 manifest 序列化计算（staging 字节 = 发布字节，rename 不改内容）
@@ -151,7 +150,7 @@ pub fn create_incident_bundle(
             IncidentArtifactNames::REPORT,
             IncidentArtifactNames::SNAPSHOT,
         ] {
-            let bytes = std::fs::read(staging.join(name))?;
+            let bytes = fs::read(staging.join(name))?;
             digests.push(ArtifactDigest {
                 file: name.to_string(),
                 sha256: sha256_hex(&bytes),
@@ -162,7 +161,7 @@ pub fn create_incident_bundle(
         // 3. manifest.json 最后写（完整性声明以全部工件已落盘为前提）
         let manifest = IncidentManifest {
             schema_version: INCIDENT_SCHEMA_VERSION.to_string(),
-            created_at: chrono::Utc::now(),
+            created_at: Utc::now(),
             source_paths: resolved_paths.iter().map(normalize_posix_path).collect(),
             environment: environment.map(str::to_string),
             total,
@@ -188,8 +187,12 @@ pub fn create_incident_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::RupostError;
     use crate::history::model::ExecutionSnapshotFile;
     use crate::history::snapshot_io::read_execution_snapshot;
+    use crate::http::Response as HttpResponse;
+    use reqwest::header::HeaderMap;
+    use std::slice;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -213,9 +216,9 @@ mod tests {
                 None,
                 "GET".into(),
                 "http://x/y".into(),
-                crate::http::Response::new(
+                HttpResponse::new(
                     200,
-                    reqwest::header::HeaderMap::new(),
+                    HeaderMap::new(),
                     String::new(),
                     Duration::from_millis(1),
                     Duration::ZERO,
@@ -360,7 +363,7 @@ mod tests {
             &batch,
             &["payments.http".to_string()],
             Some("staging"),
-            std::slice::from_ref(&secret.to_string()),
+            slice::from_ref(&secret.to_string()),
             4096,
             &target,
         )
@@ -373,9 +376,9 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let dir_mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+            let dir_mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
             assert_eq!(dir_mode, 0o700);
-            let file_mode = std::fs::metadata(target.join("manifest.json"))
+            let file_mode = fs::metadata(target.join("manifest.json"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -384,7 +387,7 @@ mod tests {
         }
 
         // manifest 契约
-        let manifest_bytes = std::fs::read(target.join("manifest.json")).unwrap();
+        let manifest_bytes = fs::read(target.join("manifest.json")).unwrap();
         let manifest: IncidentManifest = serde_json::from_slice(&manifest_bytes).unwrap();
         assert_eq!(manifest.schema_version, "1.0");
         assert_eq!(manifest.masking, MaskingMode::Secrets);
@@ -403,7 +406,7 @@ mod tests {
 
         // 显式 secret 值绝不落盘（三文件逐一验证）
         for name in IncidentArtifactNames::ALL {
-            let content = std::fs::read(target.join(name)).unwrap();
+            let content = fs::read(target.join(name)).unwrap();
             let content = String::from_utf8_lossy(&content);
             assert!(
                 !content.contains(secret),
@@ -417,9 +420,9 @@ mod tests {
     fn test_create_incident_bundle_refuses_existing_target() {
         let dir = TempDir::new().unwrap();
         let target = dir.path().join("incident");
-        std::fs::create_dir(&target).unwrap();
+        fs::create_dir(&target).unwrap();
         let sentinel = target.join("sentinel.txt");
-        std::fs::write(&sentinel, b"keep-me").unwrap();
+        fs::write(&sentinel, b"keep-me").unwrap();
 
         let batch: Vec<(PathBuf, Vec<TestResult>)> = vec![(
             PathBuf::from("a.http"),
@@ -435,10 +438,10 @@ mod tests {
         let err = create_incident_bundle(&batch, &["a.http".to_string()], None, &[], 4096, &target)
             .unwrap_err();
         assert!(
-            matches!(err, crate::error::RupostError::SecurityViolation(_)),
+            matches!(err, RupostError::SecurityViolation(_)),
             "{err:?}"
         );
-        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep-me");
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep-me");
         for name in IncidentArtifactNames::ALL {
             assert!(!target.join(name).exists(), "no artifact may be written");
         }

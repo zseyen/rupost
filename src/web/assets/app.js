@@ -24,6 +24,16 @@ let cardEditedBodies = new Map();
 let currentHttpFileVars = {};
 let markdownRenderTimer = null;
 let renderSeq = 0;
+let exportTargetBlock = '';
+let mockDraft = {
+  method: 'GET',
+  path: '/',
+  headers: '',
+  query: '',
+  body: '',
+  raw_block: '',
+  lastResult: null,
+};
 
 // Initialize theme immediately to prevent FOUC
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
@@ -31,6 +41,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   document.addEventListener('DOMContentLoaded', () => {
     loadFiles();
+    loadEnvs();
     applyReadonlyState();
     initEditorEvents();
     initMarkdownPreviewEvents();
@@ -102,6 +113,42 @@ async function applyReadonlyState() {
   } catch (e) {
     console.error('Failed to query workbench meta:', e);
   }
+}
+
+// 0.1 Environment Selector
+async function loadEnvs() {
+  const selectEl = document.getElementById('env-select');
+  if (!selectEl) return;
+  try {
+    const res = await fetch('/api/v1/envs');
+    const json = await res.json();
+    if (json.success && json.data) {
+      const envs = Array.isArray(json.data.environments) ? json.data.environments : [];
+      const def = json.data.default_env || '';
+      selectEl.innerHTML = '';
+      const defOpt = document.createElement('option');
+      defOpt.value = '';
+      defOpt.textContent = '[ENV: default]';
+      selectEl.appendChild(defOpt);
+      envs.forEach((name) => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = `[ENV: ${name}]`;
+        selectEl.appendChild(opt);
+      });
+      if (def && envs.includes(def)) {
+        selectEl.value = def;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load environments:', e);
+  }
+}
+
+function getSelectedEnv() {
+  const selectEl = document.getElementById('env-select');
+  if (!selectEl || !selectEl.value) return null;
+  return selectEl.value;
 }
 
 // 1. Load files from workspace
@@ -397,6 +444,8 @@ async function executeRawBlock(rawBlock, triggerBtn = null, extraVars = null) {
       file_path: currentFilePath || 'inline.http',
       raw_block: rawBlock,
     };
+    const envName = getSelectedEnv();
+    if (envName) payload.env = envName;
     if (extraVars && Object.keys(extraVars).length > 0) {
       payload.extra_variables = extraVars;
     }
@@ -434,12 +483,14 @@ async function runSuite() {
   debugEl.innerHTML = '<div class="empty-hint"><div class="empty-icon">[RUNNING SUITE]</div><div class="empty-text">Executing all requests in active document...</div></div>';
 
   try {
+    const suitePayload = { path: currentFilePath };
+    const envName = getSelectedEnv();
+    if (envName) suitePayload.env = envName;
+
     const res = await fetch('/api/v1/run/suite', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path: currentFilePath
-      })
+      body: JSON.stringify(suitePayload)
     });
     const json = await res.json();
     if (json.success && json.data) {
@@ -528,6 +579,10 @@ function switchInspectorTab(tab) {
 
 function renderInspectorTab(tab) {
   const debugEl = document.getElementById('debug-output');
+  if (tab === 'mock') {
+    renderMockTab(debugEl);
+    return;
+  }
   if (!lastDebugData) {
     debugEl.innerHTML = `
       <div class="empty-hint">
@@ -841,6 +896,7 @@ function initKeyboardShortcuts() {
     // Escape -> Close modal
     if (e.key === 'Escape') {
       closeImportModal();
+      closeExportModal();
     }
   });
 }
@@ -1159,6 +1215,26 @@ function initMarkdownPreviewEvents() {
       return;
     }
 
+    const exportBtn = e.target.closest ? e.target.closest('.http-card-export-btn') : null;
+    if (exportBtn) {
+      const idx = Number(exportBtn.dataset.cardIndex);
+      const effectiveBlock = getEffectiveCardBlock(idx);
+      if (effectiveBlock) {
+        openExportModal(effectiveBlock);
+      }
+      return;
+    }
+
+    const mockBtn = e.target.closest ? e.target.closest('.http-card-mock-btn') : null;
+    if (mockBtn) {
+      const idx = Number(mockBtn.dataset.cardIndex);
+      const effectiveBlock = getEffectiveCardBlock(idx);
+      if (effectiveBlock) {
+        openMockSimulatorForBlock(effectiveBlock);
+      }
+      return;
+    }
+
     const addBodyBtn = e.target.closest ? e.target.closest('.http-card-add-body-btn') : null;
     if (addBodyBtn) {
       if (isReadonly) return;
@@ -1226,6 +1302,226 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+// 9. Block Export Modal (POST /api/v1/export)
+function stripMarkdownFence(raw) {
+  const lines = String(raw || '').trim().split('\n');
+  if (lines.length >= 2 && lines[0].trim().startsWith('```') && lines[lines.length - 1].trim() === '```') {
+    return lines.slice(1, -1).join('\n');
+  }
+  return String(raw || '');
+}
+
+async function openExportModal(rawBlock) {
+  exportTargetBlock = stripMarkdownFence(rawBlock);
+  const modal = document.getElementById('export-modal');
+  if (modal) modal.style.display = 'flex';
+  await refreshExportCommand();
+}
+
+function closeExportModal() {
+  const modal = document.getElementById('export-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function refreshExportCommand() {
+  const preEl = document.getElementById('export-command-pre');
+  const warnEl = document.getElementById('export-warnings');
+  const fmtEl = document.getElementById('export-format-select');
+  if (!preEl) return;
+
+  const format = fmtEl ? fmtEl.value : 'curl';
+  preEl.textContent = 'Generating...';
+  if (warnEl) warnEl.textContent = '';
+
+  const payload = {
+    raw_block: exportTargetBlock,
+    format,
+    file_path: currentFilePath || undefined,
+  };
+  const envName = getSelectedEnv();
+  if (envName) payload.env = envName;
+  if (currentHttpFileVars && Object.keys(currentHttpFileVars).length > 0) {
+    payload.extra_variables = currentHttpFileVars;
+  }
+
+  try {
+    const res = await fetch('/api/v1/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json();
+    if (json.success && json.data) {
+      preEl.textContent = json.data.command || '';
+      if (warnEl && Array.isArray(json.data.warnings) && json.data.warnings.length > 0) {
+        warnEl.textContent = json.data.warnings.join(' | ');
+      }
+    } else {
+      preEl.textContent = `[ERR] ${json.error || 'Export failed'}`;
+    }
+  } catch (e) {
+    preEl.textContent = `[NETWORK ERR] ${e.message}`;
+  }
+}
+
+function copyExportCommand() {
+  const preEl = document.getElementById('export-command-pre');
+  if (!preEl || !navigator.clipboard) return;
+  navigator.clipboard.writeText(preEl.textContent || '').then(() => {
+    const btn = document.getElementById('btn-copy-export');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '[Copied!]';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }
+  });
+}
+
+// 10. Mock Rule Simulator Tab (POST /api/v1/mock/simulate)
+function parseKvInput(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const out = {};
+        Object.entries(parsed).forEach(([k, v]) => {
+          out[k] = String(v);
+        });
+        return out;
+      }
+    } catch (e) {
+      // fall through to line parser
+    }
+  }
+  const map = {};
+  trimmed.split('\n').forEach((line) => {
+    const sepIdx = line.includes(':') ? line.indexOf(':') : line.indexOf('=');
+    if (sepIdx > 0) {
+      const k = line.slice(0, sepIdx).trim();
+      const v = line.slice(sepIdx + 1).trim();
+      if (k) map[k] = v;
+    }
+  });
+  return map;
+}
+
+function extractPathFromUrl(rawUrl) {
+  if (!rawUrl) return '/';
+  try {
+    const u = new URL(rawUrl.replace(/\{\{[^}]+\}\}/g, 'placeholder'));
+    return u.pathname || '/';
+  } catch (e) {
+    const clean = rawUrl.split('?')[0];
+    return clean.startsWith('/') ? clean : '/';
+  }
+}
+
+function openMockSimulatorForBlock(rawBlock) {
+  const parsed = RupostCards.parseHttpBlock(rawBlock);
+  mockDraft.method = parsed.method || 'GET';
+  mockDraft.path = extractPathFromUrl(parsed.url);
+  mockDraft.body = parsed.body || '';
+  mockDraft.raw_block = rawBlock;
+  mockDraft.lastResult = null;
+  switchInspectorTab('mock');
+}
+
+function renderMockTab(container) {
+  const simResult = mockDraft.lastResult;
+  let resultHtml = '';
+  if (simResult) {
+    if (simResult.error) {
+      resultHtml = `<div class="assertion-item"><span class="assert-tag fail">[ERR]</span><span class="assert-expr">${escapeHtml(simResult.error)}</span></div>`;
+    } else {
+      const evalsHtml = (simResult.evaluations || [])
+        .map(
+          (ev) => `
+          <li class="assertion-item">
+            <span class="assert-tag ${ev.passed ? 'pass' : 'fail'}">${ev.passed ? '[PASS]' : '[FAIL]'}</span>
+            <span class="assert-expr">${escapeHtml(ev.condition_str)}</span>
+            <span class="assert-detail">Expected: ${escapeHtml(ev.expected)} | Actual: ${escapeHtml(ev.actual ?? '<none>')}</span>
+          </li>`
+        )
+        .join('');
+      resultHtml = `
+        <div class="timing-panel">
+          <div class="timing-header">
+            <span>[MATCHED] ${escapeHtml(simResult.matched_variant_name)}</span>
+            <span>HTTP ${simResult.expected_status}</span>
+          </div>
+        </div>
+        ${evalsHtml ? `<ul class="assertions-list">${evalsHtml}</ul>` : '<div class="empty-hint"><div class="empty-text">Matched default fallback variant (no conditions).</div></div>'}
+      `;
+    }
+  }
+
+  container.innerHTML = `
+    <div class="mock-probe-form">
+      <div class="mock-probe-row">
+        <select id="mock-method" class="env-select" style="width: 96px;">
+          ${['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map((m) => `<option value="${m}" ${mockDraft.method === m ? 'selected' : ''}>${m}</option>`).join('')}
+        </select>
+        <input id="mock-path" class="mock-input" type="text" value="${escapeHtml(mockDraft.path)}" placeholder="/api/resource" />
+      </div>
+      <textarea id="mock-headers" class="mock-textarea" placeholder="Headers (JSON or Key: Value per line)">${escapeHtml(mockDraft.headers)}</textarea>
+      <textarea id="mock-query" class="mock-textarea" placeholder="Query (JSON or key=value per line)">${escapeHtml(mockDraft.query)}</textarea>
+      <textarea id="mock-body" class="mock-textarea" placeholder="Request Body (optional)">${escapeHtml(mockDraft.body)}</textarea>
+      <button type="button" id="btn-mock-simulate" class="btn btn-primary" onclick="runMockSimulate()">&gt; Simulate Mock Match</button>
+    </div>
+    <div id="mock-sim-result">${resultHtml}</div>
+  `;
+}
+
+async function runMockSimulate() {
+  const methodEl = document.getElementById('mock-method');
+  const pathEl = document.getElementById('mock-path');
+  const headersEl = document.getElementById('mock-headers');
+  const queryEl = document.getElementById('mock-query');
+  const bodyEl = document.getElementById('mock-body');
+
+  if (methodEl) mockDraft.method = methodEl.value;
+  if (pathEl) mockDraft.path = pathEl.value;
+  if (headersEl) mockDraft.headers = headersEl.value;
+  if (queryEl) mockDraft.query = queryEl.value;
+  if (bodyEl) mockDraft.body = bodyEl.value;
+
+  const rawBlock = mockDraft.raw_block || (lastRenderedExecBlocks[0] || '');
+  if (!rawBlock) {
+    mockDraft.lastResult = { error: 'Select a document or click [Mock] on a request card first.' };
+    renderMockTab(document.getElementById('debug-output'));
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/v1/mock/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: mockDraft.method,
+        path: mockDraft.path,
+        headers: parseKvInput(mockDraft.headers),
+        query: parseKvInput(mockDraft.query),
+        body: mockDraft.body || null,
+        raw_block: rawBlock,
+      }),
+    });
+    const json = await res.json();
+    if (json.success && json.data) {
+      mockDraft.lastResult = json.data;
+    } else {
+      mockDraft.lastResult = { error: json.error || 'Simulation failed' };
+    }
+  } catch (e) {
+    mockDraft.lastResult = { error: e.message };
+  }
+
+  if (activeInspectorTab === 'mock') {
+    renderMockTab(document.getElementById('debug-output'));
+  }
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     applyReadonlyState,
@@ -1243,6 +1539,12 @@ if (typeof module !== 'undefined' && module.exports) {
     renderMarkdownPreview,
     resolveRelativeDocPath,
     insertIntoEditor,
+    loadEnvs,
+    getSelectedEnv,
+    openExportModal,
+    refreshExportCommand,
+    runMockSimulate,
+    parseKvInput,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },

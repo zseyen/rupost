@@ -511,3 +511,73 @@ test('formatDurationObj converts Rust Duration {secs, nanos} to ms', () => {
   assert.equal(cards.formatDurationObj({ secs: 1, nanos: 250000000 }), '1250.0 ms');
   assert.equal(cards.formatDurationObj(null), '-');
 });
+
+test('loadEnvs populates #env-select and selects default_env', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const envSelect = getOrCreateElement('env-select');
+  envSelect.children = [];
+  Object.defineProperty(envSelect, 'innerHTML', {
+    get: () => '',
+    set: (v) => { if (v === '') envSelect.children = []; },
+  });
+  envSelect.appendChild = (c) => { envSelect.children.push(c); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+  global.fetch = async (url) => {
+    if (url === '/api/v1/envs') {
+      return {
+        json: async () => ({
+          success: true,
+          data: { environments: ['dev', 'prod'], default_env: 'prod' },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.loadEnvs();
+  assert.equal(envSelect.children.length, 3);
+  assert.equal(envSelect.value, 'prod');
+  assert.equal(app.getSelectedEnv(), 'prod');
+});
+
+test('openExportModal strips markdown fences and sends selected env', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const envSelect = getOrCreateElement('env-select');
+  envSelect.value = 'staging';
+  const fmtSelect = getOrCreateElement('export-format-select');
+  fmtSelect.value = 'curl';
+  const preEl = getOrCreateElement('export-command-pre');
+
+  let capturedBody = null;
+  global.fetch = async (url, opts) => {
+    if (url === '/api/v1/export') {
+      capturedBody = JSON.parse(opts.body);
+      return {
+        json: async () => ({
+          success: true,
+          data: { format: 'curl', command: 'curl https://example.com', warnings: [] },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  await app.openExportModal('```http\nGET https://example.com\n```');
+  assert.equal(capturedBody.raw_block, 'GET https://example.com');
+  assert.equal(capturedBody.env, 'staging');
+  assert.equal(preEl.textContent, 'curl https://example.com');
+});
+
+test('parseKvInput parses JSON and line-based key:value / key=value', () => {
+  assert.deepEqual(app.parseKvInput('{"a": 1, "b": "x"}'), { a: '1', b: 'x' });
+  assert.deepEqual(app.parseKvInput('Authorization: Bearer tok\nX-Id: 42'), {
+    Authorization: 'Bearer tok',
+    'X-Id': '42',
+  });
+  assert.deepEqual(app.parseKvInput('role=admin\npage=2'), { role: 'admin', page: '2' });
+});

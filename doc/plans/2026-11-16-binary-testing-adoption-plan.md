@@ -13,7 +13,7 @@
 |---|---|---|---|---|
 | **T1** | 方案 4：bash 冒烟进 CI | verify_features.sh 全特性语义断言（ubuntu+macos；Windows 走方案 1 补位） | 零 | S |
 | **T2** | 方案 1：assert_cmd 契约测试（首批 10 例：退出码三值表 + incident 闭环 + validate 形态） | M18/M7/M13/M1 的可断言表面 | assert_cmd + predicates（dev） | M |
-| **T3** | 方案 2：trycmd 黄金文件（`ast`×3 / `plugin schema` / `--help` 面） | 输出形态快照（确定性表面） | trycmd（dev） | S |
+| **T3** | 确定性表面黄金测试（**assert_cmd 精确输出断言形态**——原 trycmd 方案因 1.2 沙箱不自动携带 fixture 文件改为现形态，决策记录见 WP-T3 节） | ast 契约黄金比对 + validate ready 行 | 零新增（复用 assert_cmd） | S |
 | **T4** | 方案 5：pytest 异构黑盒（手动指南参数化）**——按裁决直接进 CI**（2026-11-16） | hashlib 交叉验证/第三方视角 | actions/setup-python（CI 标准件） | S-M |
 | **T5（可选）** | cargo-nextest + 分桶 | flake 治理（plugin 系限并发） | nextest（可选 CI 层） | S |
 | 暂缓 | 方案 3 cucumber（三闭环叙事） | 验收叙事 | cucumber-rs | L（有人力再立项） |
@@ -182,59 +182,12 @@ fn test_inline_post_with_raw_body() {
 
 ## 5. WP-T3：trycmd 黄金文件（确定性表面铺面）
 
-**文件：** `tests/trycmd_runner.rs` + `tests/cmd/*.trycmd`
+> **决策记录（2026-11-16 执行期）**：trycmd 1.2 沙箱不自动携带测试目录的 fixture 文件（`$ rupost ast fixture.http` → ENOENT；把 fixture 纳入沙箱需深挖 trycmd/snapbox 内部 API，性价比低）——**改为 assert_cmd 精确输出断言形态**（`tests/binary_output_golden_test.rs`）：同等覆盖（ast 全字段黄金比对 + validate ready 行）、零沙箱斗争、跨平台不变。下文 trycmd 配方保留为决策记录。
 
-```rust
-#[test]
-fn cli_golden_files() {
-    trycmd::Test::new()
-        .case("tests/cmd/*.trycmd")
-        .default_bin("rupost")
-        .env("NO_COLOR", "1")                       // 颜色确定性(黄金文件禁 ANSI)
-        .env("RUPOST_HISTORY_DIR", env!("CARGO_TARGET_TMPDIR"))  // 历史落 target/tmp,零仓库污染
-        .run();
-}
-```
 
-**场景文件示例 1**（`tests/cmd/ast_contract.trycmd`——ast 输出完全确定，黄金文件最佳表面）：
+**原 trycmd 配方**（作废归档，保留供未来参考）：`tests/trycmd_runner.rs`（`trycmd::TestCases::new().case("tests/cmd/*.trycmd").default_bin_name("rupost").env(NO_COLOR/CLICOLOR/RUPOST_HISTORY_DIR→CARGO_TARGET_TMPDIR).run()`）+ 两个 `.trycmd` 场景（ast 契约 / plugin validate）+ `tests/cmd/fixtures/rupost-plugin-golden{,.json}` 静态清单（validate 侧无沙箱问题，可复用）。
 
-```markdown
-```rust
-```
-
-```text
-$ rupost ast fixture.http
-{
-  "schema_version": "1.0",
-  "source_path": "fixture.http",
-  "dependencies": [],
-  "requests": [
-    {
-      "number": 1,
-      "method": "GET",
-      "url": "{{base_url}}/ok",
-      "headers": [],
-      "body": null,
-      "name": "ok",
-      "skip": false,
-      "assertions": ["status == 200"],
-      "captures": [],
-      "source_line": 3
-    }
-  ]
-}
-```
-```
-
-**同目录放 `fixture.http`**（静态三行：`### ok` / `# @assert status == 200` / `GET {{base_url}}/ok`——无网络依赖，ast 不执行请求）。
-
-**场景文件示例 2**（`tests/cmd/plugin_validate.trycmd`）：
-
-```markdown
-$ rupost plugin validate rupost-plugin-cmd-hello.json
-✓ ready: cmd-hello v0.1.0（commands: 1, hooks: 0）
-```
-
+**要点：**
 **要点：**
 - **trycmd 1.x API 核实项（审查新增）**：runner 的 `.env(KEY, VALUE)` 与 `.default_bin("rupost")` 需在实现时对 trycmd 1.2 文档核实（若 `.env` 缺位，用场景内 `[!env]` 指令或 conftest 化的 `std::env::set_var` 兜底）；
 - **确定性甄别**：进黄金文件的表面必须满足"同一输入 → 逐字节同一输出"。当前确定过的：`ast`（纯投影）、`plugin validate`（固定清单）、`--help`；**禁入**：含 mock 端口/时间戳/tempdir 绝对路径的输出；
@@ -345,7 +298,7 @@ def test_incident_digest_independent_of_rust_impl(run, tmp_path):
 **T0 → T1 → T2 → T3 → T4（均进 CI）→ T5（可选）**；每批独立提交：
 - T1 `ci: run feature verification smoke on linux/macos`
 - T2 `test(binary): assert_cmd contract tests — exit-code table, inline client, artifact errors`
-- T3 `test(binary): trycmd golden files for deterministic surfaces (ast/validate/help)`
+- T3 `test(binary): golden output contracts for ast & plugin validate (assert_cmd precise form)`
 - T4 `test(e2e): pytest heterogeneous blackbox suite (guide parametrized)`
 
 **最终门禁**（累计）：既有 7/7 + `cargo test --test binary_contract_test` + `cargo test --test trycmd_runner` + **CI e2e-pytest job 绿**（T4 按裁决进 CI，不再本地手动）。

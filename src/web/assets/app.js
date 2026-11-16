@@ -1098,6 +1098,26 @@ function upgradePreviewCodeBlocks(previewPane) {
   });
 }
 
+async function safeReadJson(res) {
+  if (typeof res.text === 'function') {
+    const text = await res.text();
+    if (!text || !text.trim()) return null;
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      return null;
+    }
+  }
+  if (typeof res.json === 'function') {
+    try {
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function renderMarkdownPreview() {
   const editor = document.getElementById('code-editor');
   const previewPane = document.getElementById('markdown-preview');
@@ -1112,16 +1132,38 @@ async function renderMarkdownPreview() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: editor.value || '' }),
       });
-      const json = await res.json();
+      const json = await safeReadJson(res);
       if (seq !== renderSeq) return;
-      if (!json.success || !json.data) {
+
+      // 兼容旧版二进制 + --static-dir 场景：404/405 或空响应时回退客户端解析
+      if (res.status === 404 || res.status === 405 || (!json && !res.ok)) {
+        const extracted = RupostCards.extractHttpFileBlocks(editor.value || '');
+        currentHttpFileVars = extracted.fileVariables || {};
+        lastRenderedExecBlocks = extracted.blocks || [];
+        lastRenderedCards = [];
+        const cardsHtml = lastRenderedExecBlocks
+          .map((blk, idx) =>
+            RupostCards.renderHttpCardHtml(blk, idx, {
+              readonly: isReadonly,
+              editedBody: cardEditedBodies.get(idx),
+            })
+          )
+          .join('');
+        previewPane.innerHTML = lastRenderedExecBlocks.length
+          ? `<div class="http-cards-stack">${cardsHtml}</div>`
+          : '<div class="empty-hint"><div class="empty-icon">[EMPTY HTTP FILE]</div><div class="empty-text">Switch to [Source] to add HTTP requests.</div></div>';
+        syncMarkdownRunButtonsReadonly();
+        return;
+      }
+
+      if (!json || !json.success || !json.data) {
         previewPane.innerHTML = `
           <div class="error-banner" style="margin: 20px;">
             <div class="error-banner-head">
               <span>[PARSE ERR]</span>
               <button type="button" class="btn btn-secondary btn-sm" onclick="setEditorMode('source')">[Switch to Source]</button>
             </div>
-            <div>${escapeHtml(json.error || 'Failed to parse .http document')}</div>
+            <div>${escapeHtml((json && json.error) || `HTTP ${res.status}: Failed to parse .http document`)}</div>
           </div>
         `;
         return;
@@ -1145,7 +1187,7 @@ async function renderMarkdownPreview() {
       syncMarkdownRunButtonsReadonly();
     } catch (e) {
       if (seq === renderSeq) {
-        previewPane.innerHTML = `<div class="assertion-item" style="border-color: var(--accent-fail);"><span class="assert-tag fail">[PARSE ERR]</span><span class="assert-expr">${escapeHtml(e.message)}</span></div>`;
+        previewPane.innerHTML = `<div class="error-banner" style="margin: 20px;"><div class="error-banner-head"><span>[PARSE ERR]</span><button type="button" class="btn btn-secondary btn-sm" onclick="setEditorMode('source')">[Switch to Source]</button></div><div>${escapeHtml(e.message)}</div></div>`;
       }
     }
     return;

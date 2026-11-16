@@ -695,3 +695,31 @@ test('renderOverviewTab displays error and warning banners when request fails', 
   assert.match(debugEl.innerHTML, /\[WARNINGS\]/);
   assert.match(debugEl.innerHTML, /base_url is not defined/);
 });
+
+test('renderMarkdownPreview falls back gracefully when /api/v1/http/parse returns 405 empty body', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const editorEl = getOrCreateElement('code-editor');
+  editorEl.value = '### Fallback\nGET https://example.com\n';
+  const previewPane = getOrCreateElement('markdown-preview');
+  const wrapper = getOrCreateElement('editor-wrapper');
+  wrapper.classList = { toggle: () => {} };
+
+  global.fetch = async (url) => {
+    if (url === '/api/v1/http/parse') {
+      return {
+        status: 405,
+        ok: false,
+        text: async () => '',
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  app.setCurrentFilePath('test.http');
+  await app.renderMarkdownPreview();
+  assert.match(previewPane.innerHTML, /http-cards-stack/);
+  assert.match(previewPane.innerHTML, /https:\/\/example\.com/);
+});

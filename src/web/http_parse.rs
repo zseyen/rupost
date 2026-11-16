@@ -108,24 +108,30 @@ fn slice_raw_blocks(content: &str, requests: &[ParsedRequest]) -> Vec<String> {
     out
 }
 
-/// 提取 `.http` 文件顶部（首个 `###` 或请求行之前）的 `@key = value` 变量声明
+/// 提取 `.http` 文件中各 `###` 块请求行之前的 `@ident = value` 变量声明（复用 HttpFileParser SSOT）
 fn extract_file_variables(content: &str) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
+    let mut seen_request_line = false;
+
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("###") {
-            break;
-        }
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            seen_request_line = false;
             continue;
         }
-        if let Some(rest) = trimmed.strip_prefix('@')
-            && let Some((k, v)) = rest.split_once('=')
+        if seen_request_line
+            || trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("//")
         {
-            let key = k.trim();
-            if !key.is_empty() && !key.contains(' ') {
-                vars.insert(key.to_string(), v.trim().to_string());
-            }
+            continue;
+        }
+        if let Some((k, v)) = HttpFileParser::parse_var_assignment(trimmed) {
+            vars.insert(k, v);
+            continue;
+        }
+        if !trimmed.starts_with('@') {
+            seen_request_line = true;
         }
     }
     vars
@@ -197,5 +203,42 @@ Content-Type: application/json
         assert_eq!(res.cards.len(), 2);
         assert_eq!(res.cards[1].method, "POST");
         assert_eq!(res.cards[1].body.as_deref(), Some("{\"ok\": true}"));
+    }
+
+    #[test]
+    fn test_extract_file_variables_contract_table() {
+        type VarCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a [&'a str]);
+        let cases: &[VarCase<'_>] = &[
+            (
+                "### Config\n@token = sec_123\nGET https://example.com\n",
+                &[("token", "sec_123")],
+                &[],
+            ),
+            (
+                "POST https://example.com\n\n@not_a_var = 1\n",
+                &[],
+                &["not_a_var"],
+            ),
+            (
+                "@bad-key = 1\n@good_key_2 = ok\nGET https://example.com\n",
+                &[("good_key_2", "ok")],
+                &["bad-key"],
+            ),
+            (
+                "@env_host = a\n\n### Second\n@env_host = b\nGET https://example.com\n",
+                &[("env_host", "b")],
+                &[],
+            ),
+        ];
+
+        for (src, expected_present, expected_absent) in cases {
+            let vars = extract_file_variables(src);
+            for (k, v) in *expected_present {
+                assert_eq!(vars.get(*k).map(String::as_str), Some(*v), "src: {src}");
+            }
+            for k in *expected_absent {
+                assert!(!vars.contains_key(*k), "unexpected key {k} in src: {src}");
+            }
+        }
     }
 }

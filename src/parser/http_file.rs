@@ -6,6 +6,18 @@ use std::path::Path;
 pub struct HttpFileParser;
 
 impl HttpFileParser {
+    /// 解析并校验变量赋值行（@ident = value），全库唯一权威实现（SSOT）
+    pub fn parse_var_assignment(candidate: &str) -> Option<(String, String)> {
+        let stripped = candidate.trim().strip_prefix('@')?;
+        let (ident, value) = stripped.split_once('=')?;
+        let ident = ident.trim();
+        if !ident.is_empty() && ident.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            Some((ident.to_string(), value.trim().to_string()))
+        } else {
+            None
+        }
+    }
+
     /// 从文件路径解析
     pub fn parse_file<P: AsRef<Path>>(path: P) -> ParseResult<ParsedFile> {
         let content = std::fs::read_to_string(path.as_ref())?;
@@ -247,17 +259,9 @@ impl HttpFileParser {
             }
 
             // 识别并跳过内联/文件级变量赋值定义（形如 @var = value 或 @var=value），避免被误判为 HTTP 请求行
-            if let Some(stripped) = directive_candidate.strip_prefix('@')
-                && let Some((ident, _)) = stripped.split_once('=')
-            {
-                let ident = ident.trim();
-                if !ident.is_empty()
-                    && !ident.contains(char::is_whitespace)
-                    && ident.chars().all(|c| c.is_alphanumeric() || c == '_')
-                {
-                    current_line += 1;
-                    continue;
-                }
+            if Self::parse_var_assignment(directive_candidate).is_some() {
+                current_line += 1;
+                continue;
             }
             http_lines.push((line, current_line));
             current_line += 1;

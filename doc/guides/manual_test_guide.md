@@ -25,9 +25,10 @@ $RUPOST --version       # 预期:版本号
 ### M1.1 HTTPie 风格 GET
 ```bash
 python3 -m http.server 18800 --bind 127.0.0.1 &   # 任意本地 HTTP 服务即可
-$RUPOST GET http://127.0.0.1:18800/ -v
+$RUPOST GET http://127.0.0.1:18800/
 ```
 **预期**：高亮输出含 `HTTP/1.0 200`、响应头表、响应体、耗时瀑布（DNS/TCP/TTFB/传输分段）。
+**⚠ 实测边界**：内联模式**不要混入 `-v/--verbose` 等旗标**——旗标存在会切换到 curl 解析器（方法 token 被当 URL,见 M1.3）。
 
 ### M1.2 curl 风格 POST + Header
 ```bash
@@ -36,11 +37,13 @@ $RUPOST POST http://127.0.0.1:18800/up -H 'X-Tag: manual' --raw 'hello'
 ```
 **预期**：200；服务端（http.server 日志）可见 POST 与 `X-Tag` 头。
 
-### M1.3 内联模式全局参数位置契约（重要）
+### M1.3 内联双风格边界（实测锁定）
 ```bash
-$RUPOST --verbose GET http://127.0.0.1:18800/      # ✅ 正确:全局旗标在 URL 之前
-$RUPOST GET http://127.0.0.1:18800/ --verbose      # ⚠ --verbose 会被吸入 URL 参数数组(AGENTS §5)
+$RUPOST GET http://127.0.0.1:18800/                # ✅ httpie 纯形式（无旗标）→ 200
+$RUPOST --verbose GET http://127.0.0.1:18800/      # exit 2:"未知命令 '--verbose'"(根路由裁决序)
+$RUPOST GET http://127.0.0.1:18800/ --verbose      # exit 1:切换 curl 解析器,方法 token 被当 URL(登记的边界)
 ```
+**讲解**：旗标存在会切换 curl 解析器（curl 语义：首个位置参数即 URL）——httpie 方法前置形式**不可与旗标混用**；需要 verbose 的场景请走 `t` 子命令（`rupost t suite.http -v`）。AGENTS §5 的"全局参数位置契约"约束的是**子命令模式**的全局旗标（如 `--no-history`，见 M18）。
 
 ---
 

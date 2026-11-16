@@ -13,15 +13,10 @@ impl MockCompiler {
     /// 若 `@mock-when` 条件表达式无效则返回 ParseError，避免静默退化为无条件兜底变体；
     /// 同时稳定保证有条件的变体排在无条件兜底变体之前。
     pub fn try_compile(parsed_file: &ParsedFile) -> Result<Vec<MockRouteConfig>> {
-        Self::compile_inner(parsed_file, true)
+        Self::compile_inner(parsed_file)
     }
 
-    /// 将解析后的 ParsedFile 转换为 Mock 引擎所接收的 MockRouteConfig 向量
-    pub fn compile(parsed_file: &ParsedFile) -> Vec<MockRouteConfig> {
-        Self::compile_inner(parsed_file, false).unwrap_or_default()
-    }
-
-    fn compile_inner(parsed_file: &ParsedFile, strict: bool) -> Result<Vec<MockRouteConfig>> {
+    fn compile_inner(parsed_file: &ParsedFile) -> Result<Vec<MockRouteConfig>> {
         let mut routes = Vec::new();
 
         // 双角色语义：是否编译进 mock 服务器由「是否声明 Mock 变体」决定，与 @test 无关。
@@ -39,17 +34,10 @@ impl MockCompiler {
                 let condition = match var.condition_expr.as_deref() {
                     Some(expr) => match Self::parse_condition_expression(expr) {
                         Some(cond) => Some(cond),
-                        None if strict => {
+                        None => {
                             return Err(RupostError::ParseError(format!(
                                 "Invalid @mock-when condition expression: '{expr}'"
                             )));
-                        }
-                        None => {
-                            tracing::warn!(
-                                "Skipping invalid @mock-when condition expression: '{}'",
-                                expr
-                            );
-                            continue;
                         }
                     },
                     None => None,
@@ -199,7 +187,7 @@ mod tests {
 
         parsed_file.add_request(req_mock);
 
-        let routes = MockCompiler::compile(&parsed_file);
+        let routes = MockCompiler::try_compile(&parsed_file).unwrap();
 
         // 期望只剩 1 个路由 (过滤了 test 请求)
         assert_eq!(routes.len(), 1);

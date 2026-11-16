@@ -155,7 +155,7 @@ async fn test_scenario_order_fulfillment_mock_server_flow() {
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
     // 编译纯契约路由
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);
@@ -206,7 +206,7 @@ async fn test_scenario_iam_tenant_mock_server_flow() {
     let spec_path = PathBuf::from("examples/scenario_iam_tenant/iam_spec.md");
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);
@@ -282,7 +282,7 @@ async fn test_scenario_order_fulfillment_dual_role_mock_dispatch() {
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
     // 编译 Mock 路由（由于 Stage 1 修复，双角色块 POST /api/v1/orders 也会被编译进 Mock 树）
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);
@@ -364,7 +364,7 @@ async fn test_scenario_order_spec_as_executable_test() {
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
     // 先启动订单 Mock 服务提供后端依赖
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);
@@ -417,7 +417,7 @@ async fn test_scenario_order_suite_runs_against_mock_server() {
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
     // 启动订单 Mock 服务
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);
@@ -573,7 +573,7 @@ fn test_scenario_c_spec_structure_and_mock_compilation() {
     );
 
     // 编译 Mock 路由
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     // 注意：目前 Mock 编译器仅编译具有 mock_variants 的请求（即 SSE 聊天块）
     assert_eq!(routes.len(), 1, "SSE 聊天块必须成功编译为 Mock 路由");
     let route = &routes[0];
@@ -587,7 +587,7 @@ async fn test_scenario_c_suite_full_execution_against_mock_servers() {
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
     // 1. 启动本地 SSE Mock 服务（基于 ai_spec.md 编译出的路由）
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);

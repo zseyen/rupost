@@ -1,5 +1,4 @@
 pub mod contract;
-pub mod generator;
 pub mod html;
 pub mod json;
 pub mod junit;
@@ -9,7 +8,6 @@ pub use contract::{
     CONTRACT_SCHEMA_VERSION, ContractDrift, ContractEntry, ContractSummary, build_contract_summary,
     diff_contracts, load_baseline, save_baseline,
 };
-pub use generator::ReportGenerator;
 pub use html::HtmlReportGenerator;
 pub use json::{JsonAssertionReport, JsonFileReport, JsonTestReport};
 pub use junit::JUnitTestSuites;
@@ -25,8 +23,7 @@ pub fn generate_html_report(
     environment: Option<&str>,
 ) -> crate::Result<String> {
     let context = ReportContext::from_file_results(file_results, title, environment);
-    let generator = HtmlReportGenerator;
-    generator.generate(&context)
+    HtmlReportGenerator.generate(&context)
 }
 
 /// 门面函数：从已反序列化的 JsonFileReport 列表离线生成静态自包含 HTML 报告
@@ -36,8 +33,7 @@ pub fn generate_html_report_from_json(
     environment: Option<&str>,
 ) -> crate::Result<String> {
     let context = ReportContext::from_json_file_reports(reports, title, environment);
-    let generator = HtmlReportGenerator;
-    generator.generate(&context)
+    HtmlReportGenerator.generate(&context)
 }
 
 /// 报告文件格式

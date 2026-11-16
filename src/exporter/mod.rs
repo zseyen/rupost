@@ -1,7 +1,6 @@
 pub mod plugin;
 pub mod plugins;
 pub mod preparer;
-pub mod redact;
 pub mod shell;
 pub mod types;
 
@@ -107,7 +106,7 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
         None
     };
     let mut audit_log = if opts.redact {
-        Some(crate::exporter::redact::RedactionAuditLog::new())
+        Some(crate::security::redact::RedactionAuditLog::new())
     } else {
         None
     };

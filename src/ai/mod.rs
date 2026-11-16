@@ -2,15 +2,14 @@ pub mod bootstrap;
 pub mod config;
 pub mod context;
 pub mod explain;
-pub mod redactor;
 pub mod resolve;
 pub mod rules;
 pub mod snapshot_adapter;
 pub mod triage;
 
+use crate::security::redact::truncate_chars;
 use crate::{Result, RupostError};
 use colored::Colorize;
-use redactor::truncate_chars;
 pub use rupost_ai::AssertionTranslator;
 
 /// `ai assert` 运行参数（P0 收尾：上下文感知 + 脱敏开关 + 零配置链）

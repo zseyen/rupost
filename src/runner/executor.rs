@@ -173,12 +173,6 @@ impl TestExecutor {
         self
     }
 
-    /// Inject a custom [`ExecutionObserver`] (e.g., `NoopExecutionObserver` in tests).
-    pub fn with_observer(mut self, observer: Arc<dyn ExecutionObserver>) -> Self {
-        self.observer = observer;
-        self
-    }
-
     pub fn with_middleware(
         mut self,
         middleware: Arc<crate::middleware::routing::RoutingMiddleware>,

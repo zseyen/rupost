@@ -5,9 +5,9 @@
 //! → E 原子落盘（防覆盖）。AI 缺失/故障时降级为机械基线 + 黄色警告，exit 0。
 
 use crate::ai::config;
-use crate::ai::redactor::{redact_and_truncate_body, redact_url};
 use crate::assertion::parse_assertion;
 use crate::history::storage::HistoryStorage;
+use crate::security::redact::{redact_and_truncate_body, redact_url};
 use crate::{Result, RupostError};
 use chrono::Utc;
 use colored::Colorize;

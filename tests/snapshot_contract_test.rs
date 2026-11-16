@@ -509,10 +509,10 @@ fn test_snapshot_writes_protect_symlinks_and_enforce_0600_permissions() {
 
 #[test]
 fn test_redaction_contract_headers_query_body_and_ai_parity() {
-    use rupost::ai::redactor::redact_and_truncate_body;
     use rupost::history::mask_execution_snapshot_entry;
     use rupost::history::model::{ExecutionOutcome, ExecutionSnapshotEntry, SnapshotResponse};
     use rupost::security::redact::mask_body_secrets;
+    use rupost::security::redact::redact_and_truncate_body;
 
     let req_body = r#"{
         "password": "pw1",

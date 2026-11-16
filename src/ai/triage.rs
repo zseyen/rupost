@@ -1,12 +1,12 @@
 use crate::Result;
 use crate::ai::config as ai_config;
-use crate::ai::redactor::truncate_utf8_safe;
 use crate::ai::rules::build_signature_buckets;
 use crate::ai::snapshot_adapter::{snapshot_masking_notice, snapshot_to_json_reports};
 use crate::error::RupostError;
 use crate::history::read_execution_snapshot;
 use crate::report::json::{JsonFileReport, build_json_reports};
 use crate::runner::TestResult;
+use crate::security::redact::truncate_utf8_safe;
 use colored::Colorize;
 use rupost_ai::{AiClient, FailureClassifier, TriageReport, bucket_to_deterministic_cluster};
 use std::io::{Error as IoError, ErrorKind};

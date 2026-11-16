@@ -1,10 +1,10 @@
-use crate::ai::redactor::{
-    DEFAULT_SNIPPET_MAX_BYTES, redact_and_truncate_body, redact_assertion_value, redact_free_text,
-    redact_url, truncate_utf8_safe,
-};
 use crate::ai::rules::{failure_signature, infer_possible_causes};
 use crate::runner::TestResult;
 use crate::runner::on_failure::extract_trace_id;
+use crate::security::redact::{
+    DEFAULT_SNIPPET_MAX_BYTES, redact_and_truncate_body, redact_assertion_value, redact_free_text,
+    redact_url, truncate_utf8_safe,
+};
 use colored::Colorize;
 use rupost_ai::{AiClient, FailedAssertionInfo, FailureAttributor, FailureContext};
 use std::collections::HashSet;

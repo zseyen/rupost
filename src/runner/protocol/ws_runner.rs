@@ -17,8 +17,8 @@ use crate::runner::utils::file_sync::write_log_with_limit;
 use crate::variable::capture::VariableCapture;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::ws::{
-    FrameDirection, MsgPackDecoder, PayloadDecoder, WsAction, WsActionParser, WsClientConfig,
-    WsFrame, WsFrameType, WsSession,
+    FrameDirection, MsgPackDecoder, WsAction, WsActionParser, WsClientConfig, WsFrame, WsFrameType,
+    WsSession,
 };
 
 pub struct WsRunner;
@@ -168,8 +168,8 @@ impl WsRunner {
         let mut final_error = None;
 
         // 获取解码器适配器
-        let decoder: Option<Box<dyn PayloadDecoder>> = match decoder_name.as_deref() {
-            Some("messagepack") => Some(Box::new(MsgPackDecoder)),
+        let decoder: Option<MsgPackDecoder> = match decoder_name.as_deref() {
+            Some("messagepack") => Some(MsgPackDecoder),
             Some(other) => {
                 warn!("Unsupported decoder: {}, falling back to None", other);
                 None
@@ -296,7 +296,7 @@ impl WsRunner {
                     &client,
                     &mut rx,
                     context,
-                    decoder.as_deref(),
+                    decoder.as_ref(),
                     &assertions_to_eval,
                     &captures_to_eval,
                     &mut assertion_results,
@@ -387,7 +387,7 @@ impl WsRunner {
         client: &WsSession,
         rx: &mut tokio::sync::broadcast::Receiver<WsFrame>,
         context: &mut VariableContext,
-        decoder: Option<&dyn PayloadDecoder>,
+        decoder: Option<&MsgPackDecoder>,
         assertions_to_eval: &[String],
         captures_to_eval: &[VariableCapture],
         assertion_results: &mut Vec<crate::assertion::AssertionResult>,

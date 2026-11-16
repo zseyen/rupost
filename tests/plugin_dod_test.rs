@@ -507,7 +507,12 @@ async fn test_plugin_params_resolved_by_kernel_before_ipc() {
     ctx.insert("params_var", "resolved-via-context");
 
     let result = executor
-        .execute_one(parsed.requests.into_iter().next().unwrap(), 1, &mut ctx, None)
+        .execute_one(
+            parsed.requests.into_iter().next().unwrap(),
+            1,
+            &mut ctx,
+            None,
+        )
         .await;
     assert!(result.success, "插件调用必须成功: {:?}", result.error);
 

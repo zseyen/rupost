@@ -8,8 +8,8 @@ use rupost::report::contract::{
     build_contract_summary, diff_contracts, load_baseline, save_baseline,
 };
 use rupost::report::{ReportFileFormat, write_report_files};
-use rupost::runner::app::SuiteNotice;
 use rupost::reporter::TestReporter;
+use rupost::runner::app::SuiteNotice;
 use rupost::runner::{TestSuiteOptions, TestSuiteOutcome};
 use rupost::utils::path_guard::normalize_posix_path;
 use rupost::{Result, RupostError};

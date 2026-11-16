@@ -113,7 +113,7 @@ async fn test_e2e_html_report_with_mock_and_waterfall() {
     let parsed_spec = MarkdownFileParser::parse_file(&spec_path).unwrap();
 
     // 启动本地 SSE Mock 实例
-    let routes = MockCompiler::compile(&parsed_spec);
+    let routes = MockCompiler::try_compile(&parsed_spec).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);

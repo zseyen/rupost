@@ -252,7 +252,7 @@ Content-Type: application/json
     assert_eq!(parsed.requests[0].metadata.mock_variants.len(), 1);
 
     // 编译 Mock 路由：双角色请求绝不能因为带有 @test 就被跳过
-    let routes = rupost::mock::compiler::MockCompiler::compile(&parsed);
+    let routes = rupost::mock::compiler::MockCompiler::try_compile(&parsed).unwrap();
     assert_eq!(
         routes.len(),
         1,

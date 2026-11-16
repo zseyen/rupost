@@ -316,9 +316,9 @@ impl ReplayExecutor {
                 body_diff: None,
                 // 与正常失败路径同源脱敏（审查 P1-3：replay --explain 会把
                 // 该字段送进 FailureContext/LLM，明文凭据不得出站）
-                response_body_snippet: Some(crate::ai::redactor::redact_and_truncate_body(
+                response_body_snippet: Some(crate::security::redact::redact_and_truncate_body(
                     &res.body,
-                    crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                    crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
                 )),
             };
         };

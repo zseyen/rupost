@@ -72,7 +72,9 @@ fn resolve_plugin_param(raw: &str, context: &mut VariableContext) -> (String, Op
             Some(value) => (value, None),
             None => (
                 raw.to_string(),
-                Some(format!("插件参数引用的 env.{env_name} 未设置，已按字面量传给插件")),
+                Some(format!(
+                    "插件参数引用的 env.{env_name} 未设置，已按字面量传给插件"
+                )),
             ),
         };
     }

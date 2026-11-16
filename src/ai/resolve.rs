@@ -114,7 +114,7 @@ pub async fn resolve_file(path: &Path, dry_run: bool) -> Result<ResolveReport> {
                 // AI 错误文本自带完整原始 URL（密钥外泄主通道，见 redactor.rs），
                 // 落盘与行内警告前必须脱敏——与其余 ai 出站路径同口径
                 let safe_err = crate::utils::text::truncate_chars(
-                    &crate::ai::redactor::redact_free_text(&e.to_string()),
+                    &crate::security::redact::redact_free_text(&e.to_string()),
                     120,
                     "…",
                 );

@@ -1,11 +1,11 @@
 //! E2 上下文采集（P0 收尾）：把 `--last N` 历史 / `--response` 文件转化为
 //! 脱敏后的 LLM user-prompt 附加段。采集与拼装全部确定性——AI 只看到最终文本。
 
-use crate::ai::redactor::{
-    redact_and_truncate_body, redact_free_text, redact_header_value, truncate_utf8_safe,
-};
 use crate::history::model::HistoryEntry;
 use crate::history::storage::HistoryStorage;
+use crate::security::redact::{
+    redact_and_truncate_body, redact_free_text, redact_header_value, truncate_utf8_safe,
+};
 use crate::{Result, RupostError};
 
 /// 单条上下文条目的响应体字节上限（PRD US6：4KB/条）
@@ -26,7 +26,7 @@ pub fn collect_last(n: usize) -> Result<Vec<HistoryEntry>> {
 /// 单条历史 → 脱敏文本段（Gap Review P1 通道全覆盖：URL/Header/Body/错误文本）
 fn entry_to_context(idx: usize, e: &HistoryEntry, mask: bool) -> String {
     let url = if mask {
-        crate::ai::redactor::redact_url(&e.request.url)
+        crate::security::redact::redact_url(&e.request.url)
     } else {
         e.request.url.clone()
     };

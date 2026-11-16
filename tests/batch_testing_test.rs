@@ -7,8 +7,8 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use rupost::parser::HttpFileParser;
-use rupost::runner::executor::TestExecutor;
 use rupost::parser::scanner::DirectoryScanner;
+use rupost::runner::executor::TestExecutor;
 use rupost::runner::{BatchExecutor, BatchMode, BatchRunRequest, WorkflowGraph};
 use rupost::variable::VariableContext;
 

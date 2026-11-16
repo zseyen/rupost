@@ -35,7 +35,7 @@ runner      -> assertion  history  http  middleware  parser  reporter ✗  varia
 |---|---|---|
 | parser → runner | `scanner.rs` 引 `runner::path::is_supported_file` | ✅ **已解决**：scanner 改委托 `crate::utils::path_guard::is_live_doc`（parser/scanner.rs:4），字面量数组收敛至 `path_guard.rs:17` 的 `LIVE_DOC_EXTENSIONS` 单一定义点，SSOT 达成（符合 AGENTS.md §9）。`runner/utils/path.rs:15` 留有纯委托包装 `is_supported_file`，无平行字面量，无害 |
 | history → runner | `storage.rs` 的 `save_batch_snapshot` 吃 `TestResult` | ❌ **仍在且耦合面扩大**：函数迁至 `history/snapshot_io.rs:40`，签名仍为 `&[(PathBuf, Vec<crate::runner::types::TestResult>)]`；新增 `history/incident.rs:13` 也建立引用 |
-| runner → reporter | `runner/mod.rs` 重导出 shim | ❌ 仍在（`runner/mod.rs:36`），但**全仓零消费者**——已成孤儿 shim，一行可删 |
+| runner → reporter | `runner/mod.rs` 重导出 shim | ✅ **已销案**（2026-11-17 第二审查）：`runner/mod.rs` 四条跨模块桶装行（history::gc / http::url / parser::scanner::DirectoryScanner / reporter::TestReporter）整批删除，5 个调用点直呼其名（commit `2c46af77`） |
 | assertion → http | `extractor.rs:2` 生产代码引 `Response`（`impl AssertTarget for Response` 写在 Core 侧） | 未复核（初评 🟡 低-中：trait 抽象本身真实，建议 impl 移到 http 侧） |
 | variable → parser | `resolver.rs:53,80` 操作 `&ParsedRequest` | 未复核（初评 ⚪ 可接受：变量渲染器认识请求 AST 有内在合理性） |
 | utils → http | formatter 等引 http 类型 | 未复核（初评 🟡 低） |
@@ -47,7 +47,7 @@ runner      -> assertion  history  http  middleware  parser  reporter ✗  varia
 - **`AssertTarget` trait**：断言求值器全程 `&dyn AssertTarget`，HTTP `Response` 与 `WsFrameTarget` 双实现使同一断言引擎服务双协议——Phase 2 运算符修复一次落地两个协议即其直接红利
 - **`FrameMatcher` 组合**（ws/matcher.rs）：`JsonPathMatcher` / `TextContainsMatcher` / `CompositeMatcher` 组合模式，新增匹配策略零侵入
 - **并行调度 watch 通道**：依赖等待发生在信号量获取之前（等待者不占并发槽位）、`TaskOutput` 单向广播、级联失败传播
-- **`PayloadDecoder` trait**：MsgPack/JSON 自适应解码对扩展开放
+- **`PayloadDecoder` trait** → ⚠️ **2026-11-17 已塌缩**：唯一实现（MsgPackDecoder），按 YAGNI 收敛为固有方法（commit 同上批）；第二个解码器（如 protobuf）出现时从 git 历史重建 trait。§2.1 其余三条（AssertTarget 双协议、FrameMatcher 组合、并行 watch 通道）经第二审查确认均为真实活抽象，保持
 
 ### 2.2 半成品 / 空转抽象（复核更新）
 
@@ -110,13 +110,14 @@ runner      -> assertion  history  http  middleware  parser  reporter ✗  varia
 3. **中间件 dyn 化**：`MiddlewarePipeline` 替代闭枚举（见 §2.2）
 4. **路径 SSOT 收敛**：`path_guard` 成为文档后缀与路径规范的唯一权威定义点（见 §1）
 5. **高价值安全修复**：插件子进程的 `RUPOST_*` 秘密透传豁免、重放 body 掩码、history `tail()` 预分配上限（P1 系列）
-6. **事件级联基建**：`incident.rs`（事件包）、`snapshot_io.rs`（快照 IO 独立）、`suite_presenter.rs`（表现层从 cli 主分支拆出）
+6. **事件级级联基建**：`incident.rs`（事件包）、`snapshot_io.rs`（快照 IO 独立）、`suite_presenter.rs`（表现层从 cli 主分支拆出）
+7. **机械清理批（2026-11-17 第二审查）**：跨模块桶装 re-export 删除（§1 runner→reporter 销案）、redact 双路径垫片删除（`exporter/redact.rs` + `ai/redactor.rs` → 12 文件 import 收敛至 `security/redact.rs`，15 项独有测试随迁）、死抽象删除（`with_observer` 空转 builder、MockCompiler lenient 生产不可达分支、`ReportGenerator`/`PayloadDecoder` 单实现 trait 塌缩）、replay `--verbose` 响应体补脱敏
 
 ## 10. 行动清单（复核后修正版，按投入产出排序）
 
 | # | 行动 | 状态 | 修正后工作量 |
 |---|---|---|---|
-| 1 | 删 runner→reporter 孤儿 shim（runner/mod.rs:36，零消费者） | ❌ 待办 | **~1 分钟** |
+| 1 | 删 runner→reporter 孤儿 shim（runner/mod.rs:36，零消费者） | ✅ 销案（随桶装行整批删除，commit `2c46af77`） | — |
 | 2 | 删 `after_response` 空钩子 + sse_runner 假 Response 仪式 | ❌ 待办（新抽象下更干净） | ~1 小时 |
 | 3 | `save_batch_snapshot` DTO 化 | ❌ 待办，**优先级上调**（incident.rs 正在扩大耦合面） | ~半天 |
 | 4 | feature flags（tui/mock/ws/web，默认全开） | ❌ 待办 | ~半天 |
@@ -128,5 +129,9 @@ runner      -> assertion  history  http  middleware  parser  reporter ✗  varia
 | 10 | TUI state.rs 拆分 | ✅ 销案 | — |
 | 11 | is_supported_file 归位 / SSOT | ✅ 销案 | — |
 | 12 | 中间件闭枚举 OCP | ✅ 销案 | — |
+| 13 | warning 四通道收敛（`TestResult.warnings` 唯一事实 / WarningSink 仅实时渲染 / 业务路径 66 处裸 `eprintln!` 清零——与 warning_sink.rs 自我声明矛盾） | ❌ 待办（2026-11-17 第二审查新增，证据：runner/executor_plugin.rs 双写、diagnostics/warning_sink.rs:1-3） | ~1 天 |
+| 14 | report 双管线合并（`from_file_results` 在线直渲与 `from_json_file_reports` 离线逐字段平行——JUnit 已走 JsonFileReport 单路径，照抄即可） | ❌ 待办（第二审查新增，证据：report/types.rs:191 vs 316-428） | ~半天 |
+| 15 | mock 生命周期三写归口（web/mock_manager.rs 576 行 × tui/integrations.rs 325 行各自实现启停/端口/流量环 → 抽宿主无关 `mock/session.rs`） | ❌ 待办（第二审查新增） | ~1 天 |
 
 > **维护约定**：每完成一项，在本表更新状态并保留销案证据（file:line）；新发现按 §1–§8 归类后入表，禁止口头跟踪。
+> **交叉引用**：2026-11-17 第二次接手成本审查（命名/上手路径/性能三路）的完整报告在会话交付中；其架构级发现已按本约定并入 §10（#13–#15），性能类（TUI 合帧/插件 spawn 串行/CI 平台期望表）与文档治理类不在本表范围，见各自台账。

@@ -1,7 +1,7 @@
-use crate::exporter::redact::{RedactionAuditLog, RedactionPolicy};
 use crate::exporter::types::{ExportableRequest, SkippedItem};
 use crate::http::url::resolve_final_url;
 use crate::parser::{ParsedFile, ParsedRequest};
+use crate::security::redact::{RedactionAuditLog, RedactionPolicy};
 use crate::utils::path_guard::normalize_posix_path;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_prepare_file_with_policy_and_audit_log() {
-        use crate::exporter::redact::{RedactionAuditLog, RedactionPolicy, RedactionSource};
+        use crate::security::redact::{RedactionAuditLog, RedactionPolicy, RedactionSource};
 
         let mut file = ParsedFile::new();
         let mut req = ParsedRequest::new(1);

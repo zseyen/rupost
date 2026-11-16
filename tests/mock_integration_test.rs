@@ -114,7 +114,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     // 1. 测试用例 1-3: 加载 v2_api_evolution.md，验证 V1 兼容、V2 正常、V2 拦截
     let evol_file = "examples/iteration_scenarios/v2_api_evolution.md";
     let parsed_evol = MarkdownFileParser::parse_file(evol_file).unwrap();
-    let routes_evol = MockCompiler::compile(&parsed_evol);
+    let routes_evol = MockCompiler::try_compile(&parsed_evol).unwrap();
 
     let mut matcher = TrieRouteMatcher::new();
     for r in routes_evol {
@@ -182,7 +182,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     // 2. 测试用例 4: 网关安全与限流 Header-None 判定冒烟
     let sec_file = "examples/design_scenarios/security_and_ratelimit.md";
     let parsed_sec = MarkdownFileParser::parse_file(sec_file).unwrap();
-    let routes_sec = MockCompiler::compile(&parsed_sec);
+    let routes_sec = MockCompiler::try_compile(&parsed_sec).unwrap();
 
     let mut matcher_sec = TrieRouteMatcher::new();
     for r in routes_sec {
@@ -283,7 +283,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     let mut all_routes = Vec::new();
     for p in execution_order {
         if let Some(parsed) = files_map.get(&p) {
-            let routes = MockCompiler::compile(parsed);
+            let routes = MockCompiler::try_compile(parsed).unwrap();
             all_routes.extend(routes);
         }
     }
@@ -341,7 +341,7 @@ async fn test_markdown_api_lifecycle_smoke_tests() {
     // 4. 测试用例 6: 订单支付幂等性场景校验
     let idemp_file = "examples/design_scenarios/idempotency_api.md";
     let parsed_idemp = MarkdownFileParser::parse_file(idemp_file).unwrap();
-    let routes_idemp = MockCompiler::compile(&parsed_idemp);
+    let routes_idemp = MockCompiler::try_compile(&parsed_idemp).unwrap();
 
     let mut matcher_idemp = TrieRouteMatcher::new();
     for r in routes_idemp {
@@ -413,7 +413,7 @@ async fn test_abstract_base_url_scenario() {
     let parsed_file = MarkdownFileParser::parse_file(file_path).unwrap();
 
     // 2. 编译 Mock 路由树
-    let routes = MockCompiler::compile(&parsed_file);
+    let routes = MockCompiler::try_compile(&parsed_file).unwrap();
     let mut matcher = TrieRouteMatcher::new();
     for r in routes {
         matcher.add_route(&r.method, &r.path, r.variants);

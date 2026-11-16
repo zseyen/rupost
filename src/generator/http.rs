@@ -457,13 +457,8 @@ impl HttpGenerator {
             } else if ah.contains('=') {
                 // OAuth implicit 形态：#access_token=SECRET（无 '?'）——与 redact 侧
                 // 双形态对齐（审查 P1-4），否则同一凭据 export 掩码、generate 明文
-                let (rebuilt, frag_changed) = Self::variabilize_query_pairs(
-                    ah,
-                    variables,
-                    traced,
-                    policy,
-                    keep_credentials,
-                );
+                let (rebuilt, frag_changed) =
+                    Self::variabilize_query_pairs(ah, variables, traced, policy, keep_credentials);
                 if frag_changed {
                     changed = true;
                     rebuilt

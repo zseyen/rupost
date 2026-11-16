@@ -1,11 +1,10 @@
-use crate::report::generator::ReportGenerator;
 use crate::report::types::{ReportAssertionItem, ReportContext, TimingWaterfall, escape_html};
 
 /// 静态 HTML 报告渲染器（零外部依赖、单文件自包含、高审美现代化 Dashboard）
 pub struct HtmlReportGenerator;
 
-impl ReportGenerator for HtmlReportGenerator {
-    fn generate(&self, context: &ReportContext) -> crate::Result<String> {
+impl HtmlReportGenerator {
+    pub fn generate(&self, context: &ReportContext) -> crate::Result<String> {
         let mut html = String::with_capacity(32 * 1024);
 
         let title = escape_html(&context.title);

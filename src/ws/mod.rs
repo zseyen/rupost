@@ -6,6 +6,6 @@ pub mod session;
 
 pub use action_parser::WsActionParser;
 pub use client::{WsClient, WsClientConfig};
-pub use frame::{FrameDirection, MsgPackDecoder, PayloadDecoder, WsAction, WsFrame, WsFrameType};
+pub use frame::{FrameDirection, MsgPackDecoder, WsAction, WsFrame, WsFrameType};
 pub use matcher::{FrameMatcher, JsonPathMatcher, TextContainsMatcher, WsConditionMatcher};
 pub use session::{BoundedFrameBuffer, SessionState, WsSession};

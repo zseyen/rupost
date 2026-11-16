@@ -135,7 +135,7 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
 }
 
 /// 黑匣子契约快照 (ExecutionSnapshotEntry) 的 Secrets Masker：
-/// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/exporter/redact.rs`），
+/// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/security/redact.rs`），
 /// 覆盖 URL、Headers、Body、Error、Assertions 与 Warnings 全展示面（02 §2/§4）。
 pub fn mask_execution_snapshot_entry(
     entry: &mut crate::history::model::ExecutionSnapshotEntry,

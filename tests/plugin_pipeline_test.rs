@@ -356,6 +356,71 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
     );
 }
 
+/// 审查 P1-1：`RUPOST_*` 前缀透传是文档化契约（管线变量 WORKSPACE/BIN/CONFIG_DIR
+/// 依赖它），但密钥命名空间必须豁免——否则任何插件子进程都能读走宿主 AI 密钥。
+/// 契约双面锁定：良性 RUPOST_* 仍透传（既有测试锁定），密钥必须不可见。
+#[tokio::test]
+async fn test_pipeline_never_forwards_secret_env_to_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    unsafe {
+        std::env::set_var("RUPOST_AI_API_KEY", "sk-leak-probe-DO-NOT-FORWARD");
+        std::env::set_var("RUPOST_TEST_BENIGN_PASSTHROUGH", "benign-ok");
+    }
+
+    // 同一插件同时回显密钥与良性变量：前者必须为空，后者必须透传
+    let exe = install_script_plugin(
+        dir.path(),
+        "secret-probe",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        vec![],
+        "READ_STDIN=\nSTDOUT_LINE={\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Secret\" ,\"$ENV{RUPOST_AI_API_KEY}\"],[\"X-Benign\",\"$ENV{RUPOST_TEST_BENIGN_PASSTHROUGH}\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
+    );
+
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let out = PluginPipeline::execute_for_request(
+        &[PluginDirective::new("sign", "secret-probe", PluginStage::Sign)],
+        &reg,
+        &PluginRuntimeOptions {
+            plugin_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+        &SuiteHookCache::new(),
+        "http://x",
+        "GET",
+        &[],
+        None,
+    )
+    .await;
+    assert!(out.blocking_error.is_none(), "{:?}", out.blocking_error);
+    let headers = out.patch.expect("插件应产出 patch").extra_headers;
+    let secret = headers
+        .iter()
+        .find(|(k, _)| k == "X-Secret")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    assert_eq!(
+        secret, "",
+        "RUPOST_AI_API_KEY 绝不能透传给插件子进程，实际收到: {secret:?}"
+    );
+    let benign = headers
+        .iter()
+        .find(|(k, _)| k == "X-Benign")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    assert_eq!(benign, "benign-ok", "良性 RUPOST_* 透传契约不得被破坏");
+
+    unsafe {
+        std::env::remove_var("RUPOST_AI_API_KEY");
+        std::env::remove_var("RUPOST_TEST_BENIGN_PASSTHROUGH");
+    }
+}
+
 #[tokio::test]
 async fn test_pipeline_per_request_hooks_run_concurrently_without_global_lock() {
     // 确定性并行门禁（无耗时抖动假阳/假阴性）：

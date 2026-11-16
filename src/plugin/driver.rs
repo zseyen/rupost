@@ -204,7 +204,13 @@ fn is_bad_exe_format(err: &std::io::Error) -> bool {
     cfg!(windows) && err.raw_os_error() == Some(WINDOWS_ERROR_BAD_EXE_FORMAT)
 }
 
-/// 统一裁剪插件子进程环境变量白名单（03 §6.2 SSOT）：仅 allowlist + RUPOST_* + 显式放行覆盖项。
+/// 插件子进程永不透传的敏感变量（审查 P1-1：`RUPOST_*` 前缀透传是管线变量
+/// 契约，但会把 `RUPOST_AI_API_KEY` 送进任意插件子进程——密钥面必须显式经
+/// manifest `requires_env` + `--plugin-env` 放行，豁免清单只增不改）。
+pub const PLUGIN_ENV_SECRET_DENYLIST: [&str; 1] = ["RUPOST_AI_API_KEY"];
+
+/// 统一裁剪插件子进程环境变量白名单（03 §6.2 SSOT）：allowlist + `RUPOST_*`
+/// 前缀（除 [`PLUGIN_ENV_SECRET_DENYLIST`]）+ 显式放行覆盖项。
 pub fn apply_plugin_env(cmd: &mut tokio::process::Command, env_overrides: &[(String, String)]) {
     cmd.env_clear();
     for key in super::types::PLUGIN_ENV_ALLOWLIST {
@@ -212,7 +218,10 @@ pub fn apply_plugin_env(cmd: &mut tokio::process::Command, env_overrides: &[(Str
             cmd.env(key, value);
         }
     }
-    for (key, value) in std::env::vars().filter(|(k, _)| k.starts_with("RUPOST_")) {
+    for (key, value) in std::env::vars().filter(|(k, _)| {
+        k.starts_with("RUPOST_")
+            && !PLUGIN_ENV_SECRET_DENYLIST.contains(&k.as_str())
+    }) {
         cmd.env(key, value);
     }
     for (key, value) in env_overrides {

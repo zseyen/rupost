@@ -494,7 +494,7 @@ impl PluginRegistry {
         entries
     }
 
-    /// 收集已使用插件指令/命令的 `requires_env` 未放行告警（去重；放行 `RUPOST_*`、`PLUGIN_ENV_ALLOWLIST` 与 `--plugin-env`）。
+    /// 收集已使用插件指令/命令的 `requires_env` 未放行告警（去重；放行 `RUPOST_*`〔除密钥豁免清单 PLUGIN_ENV_SECRET_DENYLIST〕、`PLUGIN_ENV_ALLOWLIST` 与 `--plugin-env`）。
     pub fn collect_missing_env_warnings(
         &self,
         used_directives: &[String],

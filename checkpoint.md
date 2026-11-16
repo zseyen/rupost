@@ -9,8 +9,8 @@
 
 * **项目定位**: 基于文档（`.http` 与 `.md`）驱动的极简高性能 API 测试、回归与排障引擎。
 * **分支与代码基线**:
-  * **主干分支**: `main`（PR #15 已合流，包含差异化 Phase 0+1、插件体系 M1–M7、免重填主线与测试隔离三件套）。
-  * **当前活跃推送分支**: `feature/contract-drift-and-hygiene`（已推送至 `origin`，含 `--contract-baseline` 契约漂移门禁、`WP-P2c` 方法前置解析修复、二进制契约/黄金测试与 CI 三新 job 扩展，待建 PR 触发 CI 首跑）。
+  * **主干分支**: `main`（PR #17 已合流；本地新增 Mock 加固、性能优化、Clean Imports 与 Web/TUI 对齐原子提交序列，待推进 `main` 书签）。
+  * **最新专题交付（2026-11-16/17）**: 完成 Mock 核心引擎加固（`TrieNode::upsert`、`EvalContext` 单次解析、`extract_route_path` 词法路径提取、SSE `\n\n` 帧切分、404 安全序列化）、TUI `MockTrafficEvent` 实时流量视图与 `AbortOnDrop` RAII 守卫、Web 工作台对齐（`mock/simulate` 路由统一、`mock/reload` 原地热重载、`mock/traffic` 流量观测、`history/{id}` 脱敏详情），以及 `HistoryStorage::tail` $O(N)$ 逆向 Seek 与 `VariableResolver` fast-path 性能优化。
   * **下一步待办与未执行归档**: 全部未执行内容已统一归档至 [`doc/plans/future_backlog.md`](doc/plans/future_backlog.md)（重点包括 `2026-11-16-unified-services-and-config-plan.md` Wave 0–3 基础服务与统一配置收口、流式 runner `source_line` 回填及暂缓生态项）。
 * **质量保障金字塔**:
   * **单元测试**: 590+ 个核心库单测（`cargo test -p rupost --lib`）**100% PASS**（0 失败、0 忽略）。

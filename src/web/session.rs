@@ -80,6 +80,13 @@ pub fn session_set_cookie_value(session_id: &str) -> String {
     format!("{SESSION_COOKIE_NAME}={session_id}; {SESSION_COOKIE_ATTRIBUTES}")
 }
 
+/// 从请求头提取 Cookie 字符串（SSOT：run / session 处理器共用）
+pub fn cookie_header_of(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+}
+
 impl WebSessionStore {
     /// 从请求 Cookie 头装载或创建会话：无 Cookie / 非法 / 未知 ID / 过期一律
     /// 等价新会话（`created = true`，调用方需附 `Set-Cookie`）

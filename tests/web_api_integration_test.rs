@@ -1400,3 +1400,121 @@ async fn test_web_export_block_api() {
     let bad_res = app.oneshot(bad_req).await.unwrap();
     assert_eq!(bad_res.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn test_web_session_inspect_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        ..WebServerConfig::default()
+    };
+    let app = create_web_router(config);
+
+    // 无 Cookie 请求 /api/v1/session 会下发新会话 Set-Cookie 并返回空摘要
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/session")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let set_cookie = res
+        .headers()
+        .get("set-cookie")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(set_cookie.contains("rupost_session="));
+
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let api_res: ApiResponse<rupost::web::types::SessionStateResponse> =
+        serde_json::from_slice(&body).unwrap();
+    let data = api_res.data.unwrap();
+    assert!(data.captured_variables.is_empty());
+    assert!(!data.has_cookie_state);
+}
+
+#[tokio::test]
+async fn test_web_history_and_diagnose_and_ws_bridge_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let ro_config = WebServerConfig {
+        store: Arc::new(LocalFsDocumentStore::new(dir.path())),
+        working_dir: dir.path().to_path_buf(),
+        readonly: true,
+        ..WebServerConfig::default()
+    };
+    let ro_app = create_web_router(ro_config.clone());
+
+    // 1. 只读模式禁用 /history 与 /diagnose 与 /ws/bridge
+    let h_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/history")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(ro_app.clone().oneshot(h_req).await.unwrap().status(), StatusCode::FORBIDDEN);
+
+    let d_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/diagnose")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"url":"https://example.com"}"#))
+        .unwrap();
+    assert_eq!(ro_app.clone().oneshot(d_req).await.unwrap().status(), StatusCode::FORBIDDEN);
+
+    // 2. 非只读模式下 SSRF 护栏拦截内网/元数据/非法协议
+    let rw_app = create_web_router(WebServerConfig {
+        readonly: false,
+        ..ro_config
+    });
+    let ssrf_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/diagnose")
+        .header("host", "127.0.0.1")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"url":"http://169.254.169.254/latest/meta-data/"}"#))
+        .unwrap();
+    assert_eq!(rw_app.clone().oneshot(ssrf_req).await.unwrap().status(), StatusCode::FORBIDDEN);
+
+    // 3. /history 在非只读下正常返回 200 数组
+    let h_ok = Request::builder()
+        .method("GET")
+        .uri("/api/v1/history?limit=5")
+        .header("host", "127.0.0.1")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(rw_app.clone().oneshot(h_ok).await.unwrap().status(), StatusCode::OK);
+
+    // 4. /ws/bridge 在只读模式与 SSRF 地址下均返回 403 Forbidden（需带 WebSocket 升级头）
+    let ws_ro_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/ws/bridge?url=wss%3A%2F%2Fecho.websocket.events")
+        .header("host", "127.0.0.1")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        ro_app.oneshot(ws_ro_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let ws_ssrf_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/ws/bridge?url=ws%3A%2F%2F127.0.0.1%3A9999%2Fws")
+        .header("host", "127.0.0.1")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        rw_app.oneshot(ws_ssrf_req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}

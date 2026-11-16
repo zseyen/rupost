@@ -10,3 +10,4 @@ trigger: always_on
 4. **TDD 驱动重构 (Red-Green-Refactor)**：重构或增加功能前必须先写测试锁定行为契约；守护测试必须经受反转生产代码必然变红的验证，禁止假守护。
 5. **跨平台路径与安全性**：暴露至外部的相对路径必须统一经过 `normalize_posix_path`；严禁在沙箱之外使用未经校验的裸路径。
 6. **JJ 原子化提交**：遵循原子化提交纪律，每次提交只包含当次变更，提交信息中的数字与行为变更必须通过实测验证。
+7. **路径引入规范 (Clean Imports)**：禁止在函数体、结构体初始化或测试代码内直接书写冗长的全限定路径（如 `std::sync::Arc::new(...)`、`crate::web::store::LocalFsDocumentStore::new(...)`、`axum::http::header::COOKIE`）；必须统一在文件顶部或 `mod tests` 顶部通过 `use` 引入后使用短名称（仅保留消除同名符号冲突的极少数情况）。

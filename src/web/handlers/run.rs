@@ -11,7 +11,7 @@ use crate::security::fs::env_flag_enabled;
 use crate::utils::path_guard::is_http_doc;
 use crate::variable::{ConfigLoader, PluginTomlConfig, VariableContext, WorkspaceConfig};
 use crate::web::server::AppState;
-use crate::web::session::{SessionHandle, session_set_cookie_value};
+use crate::web::session::{SessionHandle, cookie_header_of, session_set_cookie_value};
 use crate::web::types::{
     ApiResponse, PluginOverrides, RunBlockRequest, RunBlockResponse, RunSuiteRequest,
     RunSuiteResponse, SuiteItemResult,
@@ -19,7 +19,7 @@ use crate::web::types::{
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::http::header::{COOKIE, HeaderMap, HeaderValue, SET_COOKIE};
+use axum::http::header::{HeaderMap, HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 use std::path::Path;
@@ -63,11 +63,6 @@ fn prune_incident_dirs(root: &std::path::Path, max: usize) {
         let _ = std::fs::remove_dir_all(root.join(&oldest));
         named.remove(0);
     }
-}
-
-/// 从请求头提取 Cookie 值（无 Cookie / 非法编码一律等价新会话，不泄露原因）
-fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
-    headers.get(COOKIE).and_then(|v| v.to_str().ok())
 }
 
 /// 会话装载（WP-1 共享 helper 1/2）：解析会话 → 回灌捕获变量（显式

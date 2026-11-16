@@ -235,3 +235,28 @@ pub struct ExportBlockResponse {
     pub command: String,
     pub warnings: Vec<String>,
 }
+
+/// 当前浏览器会话状态摘要（仅限当前 rupost_session）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStateResponse {
+    pub captured_variables: std::collections::BTreeMap<String, String>,
+    pub has_cookie_state: bool,
+}
+
+/// 工作区隔离后的历史记录摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryItemSummary {
+    pub id: String,
+    pub timestamp: String,
+    pub method: String,
+    pub url: String,
+    pub status: u16,
+    pub duration_ms: u64,
+    pub source: Option<String>,
+}
+
+/// 链路诊断请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnoseRequest {
+    pub url: String,
+}

@@ -7,7 +7,7 @@ use crate::platform;
 use crate::variable::WorkspaceConfig;
 use std::env;
 use std::fs::{self, OpenOptions, Permissions};
-use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -165,12 +165,74 @@ impl HistoryStorage {
     /// To display "Latest First", the caller (Printer) should reverse the result.
     ///
     /// # Optimization
-    /// Currently reads the whole file (up to 20MB limit).
-    /// Future optimization: Use `Seek` to read from end backwards.
+    /// Uses reverse `Seek` from end of file in chunks so `tail(N)` is O(N) instead of
+    /// reading the full 20MB file, while still preserving the compaction threshold check.
     pub fn tail(&self, n: usize) -> Result<Vec<HistoryEntry>> {
-        let entries = self.list()?;
-        let skip = entries.len().saturating_sub(n);
-        Ok(entries.into_iter().skip(skip).collect())
+        if n == 0 || !self.file_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file_len = fs::metadata(&self.file_path)
+            .map_err(RupostError::IoError)?
+            .len();
+        if file_len >= COMPACTION_THRESHOLD_BYTES {
+            self.compact_if_needed()?;
+        }
+
+        let mut file = fs::File::open(&self.file_path).map_err(RupostError::IoError)?;
+        file.lock_shared().map_err(RupostError::IoError)?;
+        Self::read_tail_with_chunk_size(&mut file, n, 8192)
+    }
+
+    fn read_tail_with_chunk_size(
+        file: &mut fs::File,
+        n: usize,
+        chunk_size: usize,
+    ) -> Result<Vec<HistoryEntry>> {
+        let mut pos = file.seek(SeekFrom::End(0)).map_err(RupostError::IoError)?;
+        let mut collected = Vec::with_capacity(n);
+        let mut trailing_bytes: Vec<u8> = Vec::new();
+        let chunk_size = chunk_size.max(1);
+        let mut buf = vec![0u8; chunk_size];
+
+        while pos > 0 && collected.len() < n {
+            let read_len = usize::try_from(pos).unwrap_or(chunk_size).min(chunk_size);
+            pos -= read_len as u64;
+            file.seek(SeekFrom::Start(pos)).map_err(RupostError::IoError)?;
+            file.read_exact(&mut buf[..read_len])
+                .map_err(RupostError::IoError)?;
+
+            let mut combined = Vec::with_capacity(read_len + trailing_bytes.len());
+            combined.extend_from_slice(&buf[..read_len]);
+            combined.extend_from_slice(&trailing_bytes);
+
+            let mut end = combined.len();
+            while let Some(nl_idx) = combined[..end].iter().rposition(|&b| b == b'\n') {
+                Self::try_push_json_line(&combined[nl_idx + 1..end], &mut collected);
+                end = nl_idx;
+                if collected.len() >= n {
+                    break;
+                }
+            }
+
+            trailing_bytes = combined[..end].to_vec();
+        }
+
+        if collected.len() < n && !trailing_bytes.is_empty() {
+            Self::try_push_json_line(&trailing_bytes, &mut collected);
+        }
+
+        collected.reverse();
+        Ok(collected)
+    }
+
+    fn try_push_json_line(line: &[u8], out: &mut Vec<HistoryEntry>) {
+        if line.iter().all(|b| b.is_ascii_whitespace()) {
+            return;
+        }
+        if let Ok(entry) = serde_json::from_slice::<HistoryEntry>(line) {
+            out.push(entry);
+        }
     }
 
     fn read_all(&self) -> Result<Vec<HistoryEntry>> {
@@ -433,5 +495,47 @@ mod tests {
             list[0].response.body.as_deref().unwrap(),
             "{\"hello\":\"world\"}"
         );
+    }
+
+    #[test]
+    fn test_tail_reverse_seek_handles_utf8_large_lines_and_corrupt_entries() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("history_tail.jsonl");
+        let storage = HistoryStorage::new_with_path(file_path.clone());
+
+        assert!(storage.tail(0).unwrap().is_empty());
+
+        let mut e1 = create_dummy_entry("id-1");
+        e1.response.body = Some("第一条历史".to_string());
+        let mut e2 = create_dummy_entry("id-2");
+        // 构造超过 8KB 且含多字节中文的响应体，验证跨块逆向读取与 UTF-8 完整性
+        e2.response.body = Some("中文跨块测试-".repeat(1200));
+        let mut e3 = create_dummy_entry("id-3");
+        e3.response.body = Some("第三条".to_string());
+
+        storage.append(&e1).unwrap();
+        // 手动注入损坏行与空行
+        {
+            let mut f = OpenOptions::new().append(true).open(&file_path).unwrap();
+            writeln!(f, "{{corrupt-json-line").unwrap();
+            writeln!(f).unwrap();
+        }
+        storage.append(&e2).unwrap();
+        storage.append(&e3).unwrap();
+
+        // 小块尺寸强制触发多次跨块逆向读取
+        let mut file = fs::File::open(&file_path).unwrap();
+        let last2 = HistoryStorage::read_tail_with_chunk_size(&mut file, 2, 64).unwrap();
+        assert_eq!(last2.len(), 2);
+        assert_eq!(last2[0].id, "id-2");
+        assert_eq!(last2[1].id, "id-3");
+        assert_eq!(last2[0].response.body, e2.response.body);
+
+        // 正常入口 tail(3) 跳过损坏行与空行，返回全部 3 条有效条目（由旧到新）
+        let all3 = storage.tail(3).unwrap();
+        assert_eq!(all3.len(), 3);
+        assert_eq!(all3[0].id, "id-1");
+        assert_eq!(all3[1].id, "id-2");
+        assert_eq!(all3[2].id, "id-3");
     }
 }

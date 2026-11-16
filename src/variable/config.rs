@@ -94,7 +94,15 @@ impl ConfigLoader {
         let Some(path) = Self::find_config_path() else {
             return crate::security::redact::RedactionPolicy::builtin();
         };
-        let (policy, warning) = Self::load_redaction_policy_from_path(&path);
+        Self::load_redaction_policy_from_path_with_sink(&path, sink)
+    }
+
+    /// 从指定路径加载脱敏策略配置并通过 `WarningSink` 输出异常告警（消除重复 `[!]` 前缀）。
+    pub fn load_redaction_policy_from_path_with_sink(
+        path: &Path,
+        sink: &dyn crate::diagnostics::WarningSink,
+    ) -> crate::security::redact::RedactionPolicy {
+        let (policy, warning) = Self::load_redaction_policy_from_path(path);
         if let Some(w) = warning {
             let stripped = w.strip_prefix("[!] ").unwrap_or(&w);
             sink.emit(
@@ -861,24 +869,19 @@ sensitive_keys = ["x_custom_secret"]
 
     #[test]
     fn test_redaction_policy_sink_strips_duplicate_alert_prefix() {
-        use crate::diagnostics::WarningSink;
         let dir = tempfile::tempdir().unwrap();
         let broken = dir.path().join("broken.toml");
         std::fs::write(&broken, "[export.redaction\nbad").unwrap();
-        let (_policy, warning) = ConfigLoader::load_redaction_policy_from_path(&broken);
-        let raw = warning.unwrap();
-        let stripped = raw.strip_prefix("[!] ").unwrap_or(&raw);
         let sink = crate::diagnostics::BufferedWarningSink::new();
-        sink.emit(
-            crate::diagnostics::WarningSeverity::Alert,
-            "variable::config",
-            stripped,
-        );
+        let _policy = ConfigLoader::load_redaction_policy_from_path_with_sink(&broken, &sink);
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].severity, crate::diagnostics::WarningSeverity::Alert);
         let formatted = crate::diagnostics::warning_sink::format_stderr_line(
-            crate::diagnostics::WarningSeverity::Alert,
-            &sink.messages()[0],
+            recs[0].severity,
+            &recs[0].message,
         );
         assert!(formatted.starts_with("[!] "));
-        assert!(!formatted.contains("[WARN] [!]"));
+        assert!(!formatted.contains("[!] [!]") && !formatted.contains("[WARN] [!]"));
     }
 }

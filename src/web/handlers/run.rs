@@ -64,12 +64,12 @@ fn cookie_header_of(headers: &HeaderMap) -> Option<&str> {
 /// 会话装载（WP-1 共享 helper 1/2）：解析会话 → 回灌捕获变量（显式
 /// extra_variables 恒优先，已存在的键不覆盖）→ 导入上游 cookie 桥态。
 /// 返回执行租约，供执行完成后 `session_finish` 持久化增量。
-/// B3（WP-2026-11-14-01）：请求覆盖 > toml [plugins] > 默认 的合并（单点 SSOT，
-/// run_block/run_suite 共用）；返回 (plugin_cfg, 警告)。
-fn resolve_plugin_options(
+/// B3（WP-2026-11-14-01）：请求覆盖 > 工作区 toml [plugins] > 默认 的合并（单点 SSOT，
+/// run_block/run_suite 共用，直接基于 `WorkspaceConfig.plugins` 叠加，避免二次读盘与 `current_dir` 漂移）。
+fn apply_plugin_overrides(
+    mut cfg: crate::variable::PluginTomlConfig,
     overrides: Option<&crate::web::types::PluginOverrides>,
-) -> (crate::variable::PluginTomlConfig, Vec<String>) {
-    let (mut cfg, warnings) = crate::variable::ConfigLoader::find_and_load_plugin_config();
+) -> crate::variable::PluginTomlConfig {
     if let Some(ov) = overrides {
         if let Some(v) = ov.allow_missing_plugins {
             cfg.allow_missing_plugins = v;
@@ -90,7 +90,7 @@ fn resolve_plugin_options(
             cfg.allow_project_plugins = v;
         }
     }
-    (cfg, warnings)
+    cfg
 }
 
 /// B3 strict 门禁：严格模式下降级形态的成功 → 判失败（与 CLI --strict-plugins 语义一致）
@@ -246,26 +246,16 @@ pub async fn run_block_handler(
     // 4. 原位单块调试执行（无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
     // （显式值恒优先；跨客户端零共享）
-    // B3：请求覆盖 > toml [plugins] > 默认（通过 BufferedWarningSink 捕获装配/工作区沙箱告警）
+    // B3：请求覆盖 > toml [plugins] > 默认（通过 WorkspaceConfig + BufferedWarningSink 单点加载）
     let sink = crate::diagnostics::BufferedWarningSink::new();
-    let web_root = state
-        .incident_root
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf());
-    if let Some(root) = &web_root {
-        let _ws_cfg = crate::variable::WorkspaceConfig::load(root, &sink);
-    }
-    let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
-    for w in &plugin_warnings {
-        tracing::warn!("web run: {w}");
-    }
+    let ws_cfg = crate::variable::WorkspaceConfig::load(&state.working_dir, &sink);
+    let plugin_cfg = apply_plugin_overrides(ws_cfg.plugins, req.plugin_overrides.as_ref());
     let executor =
         crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
             &crate::plugin::DiscoverOptions {
                 allow_project_plugins: plugin_cfg.allow_project_plugins
                     || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-                project_root: web_root,
+                project_root: Some(state.working_dir.clone()),
             },
             &plugin_cfg,
             plugin_cfg.strict_vars,
@@ -317,7 +307,6 @@ pub async fn run_block_handler(
         plugin_cfg.strict_plugins,
     );
     let mut warnings = sink.messages();
-    warnings.extend(plugin_warnings);
     warnings.extend(result.warnings);
     let response = RunBlockResponse {
         success: block_success,
@@ -394,30 +383,23 @@ pub async fn run_suite_handler(
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
     // B3：请求覆盖 > toml [plugins] > 默认（接入 WorkspaceConfig 与 BufferedWarningSink）
     let sink = crate::diagnostics::BufferedWarningSink::new();
-    let web_root = state
-        .incident_root
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf());
-    if let Some(root) = &web_root {
-        let _ws_cfg = crate::variable::WorkspaceConfig::load(root, &sink);
-    }
-    let (plugin_cfg, plugin_warnings) = resolve_plugin_options(req.plugin_overrides.as_ref());
-    for w in &plugin_warnings {
-        tracing::warn!("web run: {w}");
-    }
+    let ws_cfg = crate::variable::WorkspaceConfig::load(&state.working_dir, &sink);
+    let plugin_cfg = apply_plugin_overrides(ws_cfg.plugins, req.plugin_overrides.as_ref());
     let start_time = std::time::Instant::now();
     let executor =
         crate::runner::executor_factory::build_interactive_executor_with_options_and_sink(
             &crate::plugin::DiscoverOptions {
                 allow_project_plugins: plugin_cfg.allow_project_plugins
                     || crate::security::fs::env_flag_enabled("RUPOST_ALLOW_PROJECT_PLUGINS"),
-                project_root: web_root,
+                project_root: Some(state.working_dir.clone()),
             },
             &plugin_cfg,
             plugin_cfg.strict_vars,
             &sink,
         );
+    for w in sink.messages() {
+        tracing::warn!("web suite warning: {w}");
+    }
     let handle = session_begin(
         &state,
         cookie_header_of(&headers),

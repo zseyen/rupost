@@ -44,23 +44,64 @@ impl MockServer {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_nonblocking(false);
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        // 读完 HTTP 请求头避免客户端发送期间提前关闭产生 RST
+                        // 读完 HTTP 请求头 + Content-Length 请求体，避免 Windows Winsock 未读完 body 关闭触发 TCP RST
                         let mut total = 0;
+                        let mut header_end = None;
+                        let mut expected_total = None;
                         while total < buf.len() {
                             match stream.read(&mut buf[total..]) {
                                 Ok(0) | Err(_) => break,
                                 Ok(n) => {
                                     total += n;
-                                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                                    if header_end.is_none()
+                                        && let Some(pos) =
+                                            buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                                    {
+                                        let h_end = pos + 4;
+                                        header_end = Some(h_end);
+                                        let header_str = String::from_utf8_lossy(&buf[..h_end]);
+                                        let content_len = header_str
+                                            .lines()
+                                            .find_map(|line| {
+                                                let (k, v) = line.split_once(':')?;
+                                                k.trim()
+                                                    .eq_ignore_ascii_case("content-length")
+                                                    .then(|| v.trim().parse::<usize>().ok())
+                                                    .flatten()
+                                            })
+                                            .unwrap_or(0);
+                                        expected_total = Some(h_end + content_len);
+                                    }
+                                    if let Some(exp) = expected_total
+                                        && total >= exp
+                                    {
                                         break;
                                     }
                                 }
                             }
                         }
-                        let _ = stream.write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                        let req_line = String::from_utf8_lossy(&buf[..total])
+                            .lines()
+                            .next()
+                            .unwrap_or("")
+                            .to_string();
+                        let body_slice = match header_end {
+                            Some(h_end) if total >= h_end => &buf[h_end..total],
+                            _ => b"",
+                        };
+                        let resp_body = if body_slice.is_empty() {
+                            format!("ok:{req_line}")
+                        } else {
+                            format!("ok:{req_line}:{}", String::from_utf8_lossy(body_slice))
+                        };
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            resp_body.len(),
+                            resp_body
                         );
+                        let _ = stream.write_all(resp.as_bytes());
                         let _ = stream.flush();
+                        let _ = stream.shutdown(std::net::Shutdown::Write);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(5));
@@ -138,7 +179,8 @@ fn test_inline_post_positional_body() {
         .args(["POST", &url, "hello"])
         .assert()
         .code(0)
-        .stdout(contains("200"));
+        .stdout(contains("200"))
+        .stdout(contains("POST /echo"));
 }
 
 /// 例 3（M1.3）：内联双风格边界（实测锁定——详见指南 M1.3 与计划查漏）：

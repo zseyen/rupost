@@ -249,17 +249,24 @@ pub fn resolve_sandboxed_workspace_path(
 ) -> std::result::Result<PathBuf, String> {
     let rel = Path::new(raw_rel);
     // Windows 下 `/etc/evil` 的 is_absolute() 为 false（属 RootDir 驱动器相对路径），
-    // 因此必须显式拦截前导 `/`、`\` 以及 Component::RootDir / Prefix。
-    if rel.is_absolute() || raw_rel.starts_with('/') || raw_rel.starts_with('\\') {
-        return Err("禁止绝对路径或根路径".to_string());
+    // 且跨平台配置统一使用 POSIX `/` 分隔符，因此显式拦截前导 `/`、任意 `\` 以及 RootDir/Prefix/CurDir。
+    if rel.is_absolute() || raw_rel.starts_with('/') || raw_rel.contains('\\') {
+        return Err("禁止绝对路径、根路径或反斜杠分隔符".to_string());
     }
+    let mut has_normal = false;
     for comp in rel.components() {
-        if matches!(
-            comp,
-            Component::RootDir | Component::ParentDir | Component::Prefix(_)
-        ) {
-            return Err("禁止根路径、父级回溯 `..` 或盘符前缀".to_string());
+        match comp {
+            Component::Normal(_) => has_normal = true,
+            Component::CurDir
+            | Component::RootDir
+            | Component::ParentDir
+            | Component::Prefix(_) => {
+                return Err("禁止 `.`、根路径、父级回溯 `..` 或盘符前缀".to_string());
+            }
         }
+    }
+    if !has_normal {
+        return Err("路径必须包含有效的子目录或文件名".to_string());
     }
 
     let canon_root = std::fs::canonicalize(project_root)
@@ -400,6 +407,11 @@ snapshots_dir = "/etc/evil"
         );
         let msgs = sink.messages();
         assert_eq!(msgs.len(), 2, "两处逃逸路径均应触发安全告警: {msgs:?}");
+
+        // 3. `.` 与含 `\` 的路径同样必须被拒绝
+        assert!(resolve_sandboxed_workspace_path(dir.path(), ".").is_err());
+        assert!(resolve_sandboxed_workspace_path(dir.path(), "./sub").is_err());
+        assert!(resolve_sandboxed_workspace_path(dir.path(), "a\\b").is_err());
     }
 
     #[cfg(unix)]

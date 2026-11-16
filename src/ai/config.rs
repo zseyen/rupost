@@ -69,6 +69,9 @@ pub struct ResolvedAiConfig {
     pub notice: Option<String>,
     /// 本次解析到的实际密钥（仅用于注册进动态脱敏词表；`"local"` 占位符为 None）
     pub resolved_secret: Option<String>,
+    /// 生效的端点与模型名称（供诊断与配置合并契约测试验证）
+    pub base_url: Option<String>,
+    pub model: Option<String>,
 }
 
 /// B4 零 Key 边界：本地回环地址允许占位密钥（Ollama 不校验鉴权），远程端点必须显式 Key
@@ -155,16 +158,25 @@ impl AiClient for RedactingAiClient {
             Err(rupost_ai::AiError::TranslationFailed(msg)) => {
                 Err(rupost_ai::AiError::TranslationFailed(mask(&msg)))
             }
-            Err(other) => Err(rupost_ai::AiError::TranslationFailed(mask(
-                &other.to_string(),
-            ))),
+            Err(rupost_ai::AiError::RequestFailed(e)) => Err(
+                rupost_ai::AiError::RequestFailedMessage(mask(&e.to_string())),
+            ),
+            Err(rupost_ai::AiError::RequestFailedMessage(msg)) => {
+                Err(rupost_ai::AiError::RequestFailedMessage(mask(&msg)))
+            }
+            Err(rupost_ai::AiError::ParseError(e)) => {
+                Err(rupost_ai::AiError::ParseErrorMessage(mask(&e.to_string())))
+            }
+            Err(rupost_ai::AiError::ParseErrorMessage(msg)) => {
+                Err(rupost_ai::AiError::ParseErrorMessage(mask(&msg)))
+            }
         }
     }
 }
 
 fn wrap_client_with_secret(client: Arc<dyn AiClient>, secret: Option<&str>) -> Arc<dyn AiClient> {
     // 仅对长度 >= 8 的真实密钥启用子串掩码，避免测试中使用的短占位 Key（如 "k"）误伤正常单词
-    match secret.filter(|s| s.trim().len() >= 8) {
+    match secret.map(str::trim).filter(|s| s.len() >= 8) {
         Some(s) => Arc::new(RedactingAiClient {
             inner: client,
             secret: s.to_string(),
@@ -215,22 +227,22 @@ fn parse_user_file(path: &std::path::Path) -> Result<ParsedUserAiConfig, String>
     build_parsed_ai_config(parsed, &path.display().to_string())
 }
 
-/// 解析项目级 `./rupost.toml` 的 `[ai]` 段（同样受 TC-C05 禁明文 `api_key` 门禁约束）
+/// 解析项目级 `./rupost.toml` 的 `[ai]` 段（同样受 TC-C05 禁明文 `api_key` 门禁约束，且损坏时返回 Err 告警）
 fn parse_project_rupost_ai_section(
     path: &std::path::Path,
 ) -> Option<Result<ParsedUserAiConfig, String>> {
-    #[derive(serde::Deserialize)]
-    struct RupostAiWrapper {
-        ai: Option<UserAiFile>,
-    }
     let raw = std::fs::read_to_string(path).ok()?;
-    let wrapper: RupostAiWrapper = match toml::from_str(&raw) {
-        Ok(w) => w,
+    let doc: toml::Value = match toml::from_str(&raw) {
+        Ok(v) => v,
         Err(_) => return None,
     };
-    let ai = wrapper.ai?;
+    let ai_table = doc.get("ai")?.clone();
+    let parsed: UserAiFile = match ai_table.try_into() {
+        Ok(cfg) => cfg,
+        Err(e) => return Some(Err(format!("解析 {} [ai] 失败: {e}", path.display()))),
+    };
     Some(build_parsed_ai_config(
-        ai,
+        parsed,
         &format!("{} [ai]", path.display()),
     ))
 }
@@ -432,57 +444,19 @@ async fn resolve_with_parsed_and_env(
     let rupost_env_key = non_empty(env_lookup("RUPOST_AI_API_KEY"));
     let openai_env_key = non_empty(env_lookup("OPENAI_API_KEY"));
 
-    if let Some((path_disp, cfg)) = parsed_entry {
-        let custom_env_key = cfg
-            .api_key_env
-            .as_deref()
-            .and_then(|name| non_empty(env_lookup(name)));
+    let custom_env_key = parsed_entry
+        .as_ref()
+        .and_then(|(_, cfg)| cfg.api_key_env.as_deref())
+        .and_then(|name| non_empty(env_lookup(name)));
 
-        let creds_key = || {
-            credentials_path
-                .and_then(|p| load_credentials_file_with_sink(p, sink))
-                .and_then(|creds| creds.resolve_key(cfg.active_profile.as_deref()))
-        };
-
-        let merged_base = env.base_url.clone().or(cfg.base_url);
-        let merged_model = env.model.clone().or(cfg.model);
-
-        // 若未配置 base_url 但 env.api_key 存在，允许走默认 OpenAiClient 端点（与 env-only 语义兼容）
-        let (key, resolved_secret, source) = if let Some(k) = rupost_env_key {
-            (k.clone(), Some(k), AiSource::Env)
-        } else if let Some(k) = custom_env_key {
-            (k.clone(), Some(k), AiSource::UserFile)
-        } else if let Some(k) = openai_env_key {
-            (k.clone(), Some(k), AiSource::Env)
-        } else if let Some(k) = &env.api_key {
-            (k.clone(), Some(k.clone()), AiSource::Env)
-        } else if let Some(k) = creds_key() {
-            (k.clone(), Some(k), AiSource::UserFile)
-        } else if let Some(base) = &merged_base
-            && is_local_base(base)
-        {
-            ("local".to_string(), None, AiSource::UserFile)
-        } else if merged_base.is_none() {
-            return Err(format!("{path_disp} 缺少 base_url 字段"));
-        } else {
-            return Err(NOT_CONFIGURED_GUIDANCE.to_string());
-        };
-
-        let raw_client: Arc<dyn AiClient> =
-            Arc::new(OpenAiClient::new(key, merged_base, merged_model));
-        return Ok(ResolvedAiConfig {
-            client: wrap_client_with_secret(raw_client, resolved_secret.as_deref()),
-            source,
-            notice: None,
-            resolved_secret,
-        });
-    }
-
-    // ── 无有效配置文件：纯 env 一级 ──
-    if let Some(key) = rupost_env_key
-        .or(openai_env_key)
-        .or_else(|| env.api_key.clone())
-    {
+    // ── 一级：显式环境变量（当 RUPOST_AI_API_KEY 存在，或 env.api_key 存在且未被二级 custom_env_key 接管时，
+    //    严格保持 Env 级独立性，不混入本地 Ollama ai.toml 的 base_url，符合 TC-C01） ──
+    if let Some(key) = rupost_env_key.clone().or_else(|| {
+        custom_env_key
+            .is_none()
+            .then(|| env.api_key.clone())
+            .flatten()
+    }) {
         let raw_client: Arc<dyn AiClient> = Arc::new(OpenAiClient::new(
             key.clone(),
             env.base_url.clone(),
@@ -493,6 +467,67 @@ async fn resolve_with_parsed_and_env(
             source: AiSource::Env,
             notice: None,
             resolved_secret: Some(key),
+            base_url: env.base_url.clone(),
+            model: env.model.clone(),
+        });
+    }
+
+    // ── 二级：用户级/项目级配置文件（必须具备有效 base_url，严禁缺省发往官方 OpenAI） ──
+    if let Some((path_disp, cfg)) = parsed_entry {
+        let merged_base = env
+            .base_url
+            .clone()
+            .or(cfg.base_url)
+            .ok_or_else(|| format!("{path_disp} 缺少 base_url 字段"))?;
+        let merged_model = env.model.clone().or(cfg.model);
+
+        let creds_key = || {
+            credentials_path
+                .and_then(|p| load_credentials_file_with_sink(p, sink))
+                .and_then(|creds| creds.resolve_key(cfg.active_profile.as_deref()))
+        };
+
+        let (key, resolved_secret) = if let Some(k) = custom_env_key {
+            (k.clone(), Some(k))
+        } else if let Some(k) = openai_env_key {
+            (k.clone(), Some(k))
+        } else if let Some(k) = creds_key() {
+            (k.clone(), Some(k))
+        } else if is_local_base(&merged_base) {
+            ("local".to_string(), None)
+        } else {
+            return Err(NOT_CONFIGURED_GUIDANCE.to_string());
+        };
+
+        let raw_client: Arc<dyn AiClient> = Arc::new(OpenAiClient::new(
+            key,
+            Some(merged_base.clone()),
+            merged_model.clone(),
+        ));
+        return Ok(ResolvedAiConfig {
+            client: wrap_client_with_secret(raw_client, resolved_secret.as_deref()),
+            source: AiSource::UserFile,
+            notice: None,
+            resolved_secret,
+            base_url: Some(merged_base),
+            model: merged_model,
+        });
+    }
+
+    // ── 无配置文件但存在 OPENAI_API_KEY ──
+    if let Some(key) = openai_env_key {
+        let raw_client: Arc<dyn AiClient> = Arc::new(OpenAiClient::new(
+            key.clone(),
+            env.base_url.clone(),
+            env.model.clone(),
+        ));
+        return Ok(ResolvedAiConfig {
+            client: wrap_client_with_secret(raw_client, Some(&key)),
+            source: AiSource::Env,
+            notice: None,
+            resolved_secret: Some(key),
+            base_url: env.base_url.clone(),
+            model: env.model.clone(),
         });
     }
 
@@ -505,12 +540,14 @@ async fn resolve_with_parsed_and_env(
         return Ok(ResolvedAiConfig {
             client: Arc::new(OpenAiClient::new(
                 "local".to_string(),
-                Some(base),
-                Some(model),
+                Some(base.clone()),
+                Some(model.clone()),
             )),
             source: AiSource::LocalProbe,
             notice: Some(notice),
             resolved_secret: None,
+            base_url: Some(base),
+            model: Some(model),
         });
     }
 
@@ -913,6 +950,11 @@ api_key_env = "DEEPSEEK_API_KEY"
         .unwrap();
         assert_eq!(r2.resolved_secret.as_deref(), Some("sk-deepseek"));
         assert_eq!(r2.source, AiSource::UserFile);
+        assert_eq!(
+            r2.base_url.as_deref(),
+            Some("https://api.deepseek.example/v1")
+        );
+        assert_eq!(r2.model.as_deref(), Some("deepseek-chat"));
 
         // 3. OPENAI_API_KEY 胜过 credentials.toml
         let m3: HashMap<&str, &str> = [("OPENAI_API_KEY", "sk-openai")].into_iter().collect();
@@ -968,7 +1010,7 @@ api_key_env = "DEEPSEEK_API_KEY"
             "profile 明文 api_key 必须触发告警拒载"
         );
 
-        // rupost.toml [ai] 段解析同样遵守 TC-C05
+        // rupost.toml [ai] 段解析同样遵守 TC-C05，且合法配置可正确解析
         let rupost_toml = dir.path().join("rupost.toml");
         std::fs::write(
             &rupost_toml,
@@ -977,6 +1019,18 @@ api_key_env = "DEEPSEEK_API_KEY"
         .unwrap();
         let proj_err = parse_project_rupost_ai_section(&rupost_toml).unwrap();
         assert!(proj_err.is_err());
+
+        std::fs::write(
+            &rupost_toml,
+            "[ai]\nprofile = \"dev\"\n[ai.profiles.dev]\nbase_url = \"https://dev.example/v1\"\nmodel = \"m1\"\napi_key_env = \"DEV_KEY\"\n",
+        )
+        .unwrap();
+        let proj_ok = parse_project_rupost_ai_section(&rupost_toml)
+            .unwrap()
+            .unwrap();
+        assert_eq!(proj_ok.base_url.as_deref(), Some("https://dev.example/v1"));
+        assert_eq!(proj_ok.model.as_deref(), Some("m1"));
+        assert_eq!(proj_ok.api_key_env.as_deref(), Some("DEV_KEY"));
     }
 
     #[cfg(unix)]

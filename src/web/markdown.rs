@@ -31,6 +31,10 @@ fn is_safe_url(url: &str) -> bool {
         .collect();
     let lower = normalized.to_ascii_lowercase();
 
+    if lower.starts_with("//") {
+        return false;
+    }
+
     if lower.starts_with('#')
         || lower.starts_with('/')
         || lower.starts_with("./")
@@ -264,6 +268,7 @@ Inline <img src=x onerror=alert(1)> html
 
 [Bad Link](javascript:alert(1))
 [Tab Bypass](java\tscript:alert(1))
+[Proto Relative](//evil.com/payload)
 [Data Link](data:text/html,<script>alert(1)</script>)
 [Safe Link](https://example.com/docs?a=1)
 [Relative Link](doc/guides/quickstart.md)
@@ -273,6 +278,7 @@ Inline <img src=x onerror=alert(1)> html
         assert!(!res.html.contains("<img"));
         assert!(res.html.contains("&lt;img src=x onerror=alert(1)&gt;"));
         assert!(!res.html.contains("javascript:"));
+        assert!(!res.html.contains("//evil.com"));
         assert!(!res.html.contains("data:text/html"));
         assert!(res.html.contains("&lt;script&gt;alert('xss')&lt;/script&gt;"));
         assert!(res.html.contains("href=\"https://example.com/docs?a=1\""));

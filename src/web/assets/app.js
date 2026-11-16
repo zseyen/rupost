@@ -122,12 +122,7 @@ async function loadFiles() {
         );
       }
 
-      const queryEl = document.getElementById('file-filter-input');
-      if (queryEl && queryEl.value && queryEl.value.trim()) {
-        filterFiles();
-      } else {
-        renderFileList(allFiles);
-      }
+      refreshFileTreeView();
 
       // Auto-open first document if not selected
       const firstDoc = allFiles.find(f => !f.is_dir);
@@ -140,17 +135,26 @@ async function loadFiles() {
   }
 }
 
+function refreshFileTreeView() {
+  const queryEl = document.getElementById('file-filter-input');
+  if (queryEl && queryEl.value && queryEl.value.trim()) {
+    filterFiles();
+  } else {
+    renderFileList(allFiles);
+  }
+}
+
 // Toggle directory expand/collapse with lazy loading & concurrency guard
 async function toggleDir(dirPath) {
   if (expandedDirs.has(dirPath)) {
     expandedDirs.delete(dirPath);
-    renderFileList(allFiles);
+    refreshFileTreeView();
     return;
   }
 
   if (dirCache.has(dirPath)) {
     expandedDirs.add(dirPath);
-    renderFileList(allFiles);
+    refreshFileTreeView();
     return;
   }
 
@@ -159,7 +163,7 @@ async function toggleDir(dirPath) {
   }
 
   loadingDirs.add(dirPath);
-  renderFileList(allFiles);
+  refreshFileTreeView();
 
   try {
     const res = await fetch(`/api/v1/files?path=${encodeURIComponent(dirPath)}`);
@@ -172,7 +176,7 @@ async function toggleDir(dirPath) {
     console.error(`Failed to load directory ${dirPath}:`, e);
   } finally {
     loadingDirs.delete(dirPath);
-    renderFileList(allFiles);
+    refreshFileTreeView();
   }
 }
 
@@ -866,12 +870,15 @@ async function submitImport() {
 
 function insertIntoEditor(text) {
   const editor = document.getElementById('code-editor');
-  const start = editor.selectionStart;
-  const end = editor.selectionEnd;
+  const start = editor.selectionStart ?? editor.value.length;
+  const end = editor.selectionEnd ?? editor.value.length;
   const current = editor.value;
   editor.value = current.substring(0, start) + '\n\n' + text + '\n\n' + current.substring(end);
   updateGutter();
   updateEditorMeta();
+  if (editorMode !== 'source') {
+    renderMarkdownPreview();
+  }
 }
 
 // 6.1 Markdown View Mode & Live Preview Renderer
@@ -961,15 +968,66 @@ function syncMarkdownRunButtonsReadonly() {
   });
 }
 
+function resolveRelativeDocPath(baseFilePath, href) {
+  if (!href || typeof href !== 'string') return null;
+  const trimmed = href.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('#') ||
+    /^(https?:|mailto:|javascript:|data:)/i.test(trimmed)
+  ) {
+    return null;
+  }
+
+  const cleanHref = trimmed.split('#')[0].split('?')[0];
+  if (!cleanHref || !/\.(md|http)$/i.test(cleanHref)) {
+    return null;
+  }
+
+  const baseParts =
+    !cleanHref.startsWith('/') && baseFilePath
+      ? String(baseFilePath).split('/').slice(0, -1)
+      : [];
+  const rawParts = cleanHref.replace(/^\/+/, '').split('/');
+  const resolved = [...baseParts];
+
+  for (const seg of rawParts) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (resolved.length === 0) return null;
+      resolved.pop();
+    } else {
+      resolved.push(seg);
+    }
+  }
+
+  return resolved.length > 0 ? resolved.join('/') : null;
+}
+
 function initMarkdownPreviewEvents() {
   const previewPane = document.getElementById('markdown-preview');
   if (!previewPane) return;
   previewPane.addEventListener('click', (e) => {
-    const btn = e.target.closest ? e.target.closest('.md-run-btn') : null;
-    if (!btn || isReadonly) return;
-    const idx = Number(btn.dataset.blockIndex);
-    if (!Number.isNaN(idx) && typeof lastRenderedExecBlocks[idx] === 'string') {
-      executeRawBlock(lastRenderedExecBlocks[idx], btn);
+    const runBtn = e.target.closest ? e.target.closest('.md-run-btn') : null;
+    if (runBtn) {
+      if (isReadonly) return;
+      const idx = Number(runBtn.dataset.blockIndex);
+      if (!Number.isNaN(idx) && typeof lastRenderedExecBlocks[idx] === 'string') {
+        executeRawBlock(lastRenderedExecBlocks[idx], runBtn);
+      }
+      return;
+    }
+
+    const link = e.target.closest ? e.target.closest('a[href]') : null;
+    if (!link) return;
+    const rawHref = link.getAttribute('href') || '';
+    const resolvedDoc = resolveRelativeDocPath(currentFilePath, rawHref);
+    if (resolvedDoc) {
+      e.preventDefault();
+      openFile(resolvedDoc);
+    } else if (/^https?:\/\//i.test(rawHref)) {
+      e.preventDefault();
+      window.open(rawHref, '_blank', 'noopener,noreferrer');
     }
   });
 }
@@ -999,6 +1057,8 @@ if (typeof module !== 'undefined' && module.exports) {
     setEditorMode,
     syncEditorModeForFile,
     renderMarkdownPreview,
+    resolveRelativeDocPath,
+    insertIntoEditor,
     setCurrentFilePath: (p) => { currentFilePath = p; },
     getCurrentFilePath: () => currentFilePath,
     setAllFiles: (f) => { allFiles = f; },

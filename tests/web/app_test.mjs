@@ -363,3 +363,96 @@ test('syncEditorModeForFile defaults .md to preview and .http to source', async 
   assert.equal(sourcePane.style.display, 'flex');
   assert.equal(previewPane.style.display, 'none');
 });
+
+test('resolveRelativeDocPath resolves internal .md/.http links and ignores external/anchor links', () => {
+  assert.equal(
+    app.resolveRelativeDocPath('README.md', 'doc/guides/quickstart.md'),
+    'doc/guides/quickstart.md'
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('doc/guides/a.md', '../b.http#step1'),
+    'doc/b.http'
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('doc/a.md', '../../outside.md'),
+    null
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('README.md', 'https://example.com/docs.md'),
+    null
+  );
+  assert.equal(
+    app.resolveRelativeDocPath('README.md', '#section-1'),
+    null
+  );
+});
+
+test('toggleDir preserves active file filter view', async () => {
+  app.clearTreeState();
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  const fileListEl = getOrCreateElement('file-list');
+  fileListEl.children = [];
+  Object.defineProperty(fileListEl, 'innerHTML', {
+    get: () => '',
+    set: (val) => { if (val === '') fileListEl.children = []; },
+  });
+  fileListEl.appendChild = (child) => { fileListEl.children.push(child); };
+
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  app.setAllFiles([
+    { path: 'doc', name: 'doc', is_dir: true },
+    { path: 'README.md', name: 'README.md', is_dir: false },
+  ]);
+  const filterInput = getOrCreateElement('file-filter-input');
+  filterInput.value = 'quickstart';
+
+  global.fetch = async () => ({
+    json: async () => ({
+      success: true,
+      data: [{ path: 'doc/quickstart.md', name: 'quickstart.md', is_dir: false }],
+    }),
+  });
+
+  await app.toggleDir('doc');
+  assert.equal(fileListEl.children.length, 1);
+  assert.equal(fileListEl.children[0].dataset.path, 'doc/quickstart.md');
+});
+
+test('insertIntoEditor refreshes markdown preview when not in source mode', async () => {
+  const { mockDocument, mockWindow, getOrCreateElement } = createMockDom();
+  global.document = mockDocument;
+  global.window = mockWindow;
+
+  const editorEl = getOrCreateElement('code-editor');
+  editorEl.value = '# Doc';
+  editorEl.selectionStart = 5;
+  editorEl.selectionEnd = 5;
+  const previewPane = getOrCreateElement('markdown-preview');
+  const wrapper = getOrCreateElement('editor-wrapper');
+  wrapper.classList = { toggle: () => {} };
+
+  let renderCalled = 0;
+  global.fetch = async (url) => {
+    if (url === '/api/v1/markdown/render') {
+      renderCalled += 1;
+      return {
+        json: async () => ({
+          success: true,
+          data: { html: '<h1>Doc</h1><p>imported</p>', executable_blocks: [] },
+        }),
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  app.setEditorMode('preview');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(renderCalled, 1);
+
+  app.insertIntoEditor('```http\nGET https://example.com\n```');
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(renderCalled, 2);
+  assert.match(previewPane.innerHTML, /imported/);
+});

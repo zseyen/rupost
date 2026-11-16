@@ -1,196 +1,252 @@
-# RuPost 
+# RuPost
 
-> **极简、强大、富有美感的终端 HTTP 客户端与 API 测试工具**
+> **极简、强大、富有美感的终端 API 活文档与回归测试引擎**
 
-RuPost 是一个基于 Rust 开发的现代化终端工具，旨在通过第一性原理重新定义 API 开发与测试体验。它不仅支持传统的 `.http` 文件，更能完美解析 Markdown 文件中的代码块，让文档即是测试，测试即是文档。
+RuPost 是一个基于 Rust 构建的现代化 API 开发与测试工具。它主张**“文档即测试，测试即文档”**——不仅可以直接在命令行发送临时请求、解析传统 `.http` 文件，还能原生执行 Markdown（`.md`）文档中的请求代码块，并提供终端交互界面（TUI）与浏览器活文档工作台（Web）。
 
----
-
-## 核心特性
-
-- **极致美感**：精心设计的终端输出，采用 HSL 调色方案与平滑的微动画，追求极致的视觉交互体验。
-- **文档即测试**：原生支持 `.http` 与 `.md` 文件解析。你可以直接在 Markdown 文档中编写和执行 API 请求。
-- **强大断言**：内置高性能断言系统，支持 `@assert` 指令，轻松实现全自动接口验证。
-- **AI 创作辅助**：`rupost ai assert` 用一句自然语言生成标准 `@assert` 断言行；支持任意 OpenAI 兼容后端（含本地 Ollama），密钥仅走环境变量，测试执行期零 AI 依赖。详见 [AI 断言生成指南](file:///examples/ai_assert/README.md)。
-- **AI 失败智能处理**：`test --explain` 断言失败就地归因、`ai triage <report.json>` 批量失败聚类（E2/E5）；`ai resolve` 将 `# @ai-assert <自然语言>` 原地展开为标准断言；`ai bootstrap --from history` 把调试历史蒸馏成语义增强回归文件；`import curl` 把 curl 命令逆向为可执行 `.http` 请求块。详见 [AI 能力线文档](doc/plans/2026-10-28-ai-e2e5-master-execution-plan.md)。
-- **变量与环境管理**：灵活的变量替换机制与多环境一键切换。详见 [变量与环境管理指南](file:///doc/guides/variables_and_environments.md)。
-- **批量与并发测试**：支持跨文件有向无环图 (DAG) 拓扑排序依赖执行，支持顺序/并行双模式运行与状态单向克隆。详见 [批量测试指南](file:///doc/guides/batch_testing.md)。
-- **网络诊断分析**：细粒度的网络耗时瀑布图与 X.509 证书到期健康分析。详见 [网络诊断工具指南](file:///doc/guides/network_diagnostics.md)。
-- **全链路调试**：失败自动诊断、`--explain` 就地归因、`ai triage` 批量分诊、`--on-failure` trace 取证钩子、快照重放失败定位到条与历史导出供给链、**故障复现包**（`--incident-out`：失败运行产出脱敏、可重放、可移交的目录工件，仅失败时创建、绝不覆盖）。详见 [调试指南](file:///doc/guides/debug_guide.md)。
-- **本地 Mock 服务**：Trie 树路径匹配、路径参数捕获与多分支条件响应。详见 [本地 Mock 服务器指南](file:///doc/guides/mock_server.md)。
-- **WebSocket 协议调试**：支持 WebSocket 订阅流剧本、操作符软匹配断言与自动重连自愈。详见 [WebSocket 协议调试指南](file:///doc/guides/websocket_testing.md)。
-- **历史与追踪**：自动记录请求历史，支持从历史记录交互式生成测试文件。
-- **极致效率**：支持 curl 与 httpie 风格的命令行输入，并提供极短的别名（`t`, `h`, `g`）以提升操作流转速度。
-- **交互式终端 TUI 模式**：内置基于 Model-View-Update 单向数据流与自适应布局的交互式调试终端。支持文件与请求历史双 Tab 状态解耦切换、基于内存预折行 (Pre-wrapping) 算法的长 Response/WS/SSE 日志高精度垂直滚动、路径显示配置切换、以及历史快照一键 Enter 反向还原代码并重新加载运行。
-- **底层架构**：遵循 Clean Architecture 设计模式，代码结构清晰，易于扩展与维护。
-- **插件生态**：hook（请求管线签名/认证/改写）与 command（CLI 工具扩展）双形态，支持跨平台 `#!` Shebang 透明桥接、零子进程运行时预检（含 Windows `.exe`/`.cmd`/`.bat` 与 `python3` 回退探测）及 `RuntimeMissing` 三选一自愈降级；命令型最小示例与作者指南见 [插件与扩展](file:///doc/architecture/features/plugin_and_extensibility.md)，社区插件索引见 [community-plugins.md](file:///doc/community-plugins.md)。
+> 初次使用？推荐先阅读 **[5 分钟新手快速上手指南](doc/guides/quickstart.md)**。
 
 ---
 
-## 快速上手
+## 一、三种工作模式，按需选择
 
-### 安装
+| 模式 | 启动命令 | 适用场景 |
+| :--- | :--- | :--- |
+| **CLI 命令行与自动化** | `rupost GET ...` / `rupost test ...` | 临时发包、本地批量回归、CI/CD 门禁与契约校验 |
+| **TUI 交互终端** | `rupost tui [file]` | 全键盘终端内编辑请求、查看时延瀑布、实时流式日志与一键 Mock |
+| **Web 活文档工作台** | `rupost web` | 浏览器浏览 Markdown/HTTP 活文档、单块点击调试与团队只读分享 |
 
-确保你已安装 Rust 环境，然后在项目目录下运行：
+---
+
+## 二、5 分钟快速开始
+
+### 1. 安装
+
+确保本机已安装 Rust 工具链（`rustc` / `cargo`），在仓库根目录执行：
 
 ```bash
+# 安装到 ~/.cargo/bin（推荐）
+cargo install --path .
+
+# 或仅编译 release 二进制（target/release/rupost）
 cargo build --release
 ```
 
-### 常用命令大纲
+### 2. 免建文件，直接发一个请求
 
-RuPost 提供了直观且高效的命令行接口：
+```bash
+# 支持 curl / httpie 风格的快捷请求
+rupost GET https://httpbin.org/get
+rupost POST https://httpbin.org/post name=alice role=admin
 
-* **启动活文档工作台 (Web Workbench)**:
-  ```bash
-  rupost web
-  # 指定端口与外部自定义前端静态目录 (覆盖内置前端)
-  rupost web --port 8080 --static-dir ./custom_web_dist
-  # 开启只读保护模式 (禁止在线保存覆盖文档)
-  rupost web --readonly
-  # 开发者跨域模式 (宽松 CORS 供独立前端联调；仅允许本地回环绑定，浏览器侧任意网页可读写本地文档，仅限临时调试)
-  rupost web --dev
-  ```
-* **初始化环境模板与契约规格脚手架**:
-  ```bash
-  rupost init
-  # 生成双角色活文档与 Mock 变体规格书
-  rupost init spec -o spec.md
-  ```
-* **运行单个测试文件 (REST / WebSocket / SSE)**:
-  ```bash
-  rupost t examples/basic.http
-  # 指定环境执行
-  rupost t examples/basic.http -e dev
-  ```
-* **递归扫描并运行文件夹下所有测试**:
-  ```bash
-  rupost t examples/batch/
-  # 开启并行模式与并发度控制
-  rupost t examples/batch/ --mode parallel --concurrency 4
-  ```
-* **一键发起网络诊断**:
-  ```bash
-  rupost diagnose https://api.example.com
-  ```
-* **启动本地 Mock 服务器**:
-  ```bash
-  rupost mock examples/mock_config.json --port 9000
-  ```
-* **管理请求历史记录**:
-  ```bash
-  rupost history list --limit 10
-  # 导出最近 N 条历史为可重放快照
-  rupost history export --last 5 -o snap.json
-  ```
-* **快照重放与失败定位**:
-  ```bash
-  rupost replay snap.json --target http://staging.example.com
-  # 失败输出 Failed entries 清单（定位到条），并以退出码 1 供 CI 门禁
-  # body 深比较默认开启（timestamp/uuid 等动态键自动排除）；--explain 就地归因
-  rupost replay snap.json -t http://staging.example.com --ignore-fields my_key --explain
-  ```
-* **Cookie 会话管理**:
-  ```bash
-  # 默认为临时会话：同一运行内的请求共享 Cookie，进程退出即失效
-  rupost t login.http
-  # 传入 --cookie-file 跨运行持久化（-e dev 会按环境隔离为 cookies_dev.json）
-  rupost t login.http --cookie-file cookies.json -e dev
-  rupost t whoami.http --cookie-file cookies.json -e dev
-  # 完全禁用自动 Cookie
-  rupost t api.http --no-cookies
-  ```
-* **SSE/LLM 模板快速生成**:
-  ```bash
-  rupost template sse -o my_sse.http
-  ```
-* **启动交互式终端 UI 调试模式 (TUI)**:
-  ```bash
-  rupost tui
-  ```
-* **导出测试用例为原生命令行 (cURL / HTTPie / Wget)**:
-  ```bash
-  # 查看支持的导出目标
-  rupost export --list
-  # 导出为 cURL 命令 (支持环境变量注入与凭据自动脱敏)
-  rupost export curl examples/basic.http -e dev --redact
-  # 导出单行紧凑格式并保存到脚本
-  rupost export httpie examples/basic.http --compact -o request.sh
-  ```
-* **插件发现、静态校验与项目闸门**:
-  ```bash
-  # 列出全局已发现插件及就绪状态
-  rupost plugin list
-  # 开启项目本地插件目录 (.rupost/plugins) 并允许缺失降级
-  rupost --allow-project-plugins --allow-missing-plugins t suite.http
-  # 分发前静态体检 manifest（不执行插件、不触发 TOFU）
-  rupost plugin validate examples/plugins/rupost-plugin-cmd-hello.json
-  # 导出 IDE 补全与校验四段统一 Schema
-  rupost plugin schema
-  ```
+# 内联模式下，全局选项（如 --debug）需紧跟在 rupost 之后
+rupost --debug GET https://httpbin.org/get
+```
 
----
+### 3. 创建或导入你的第一个测试文件
 
-## 文件格式示例
+```bash
+# 方式 A：生成初始化模板（不会覆盖已有文件）
+rupost init
 
-### 1. `.http` 文件格式
+# 方式 B：直接把现有 curl 命令转换为可执行 .http 文件
+rupost import curl 'curl -X POST https://api.example.com/login -d "{\"user\":\"alice\"}"' -o login.http
+```
+
+你也可以手写一个 `.http` 或 `.md` 文件（`demo.http`）：
 
 ```http
 ### 获取用户信息
-@name = GetUser
-@timeout = 3000
-GET {{baseUrl}}/users/1
+# @name = GetUser
+# @timeout = 3s
+GET {{base_url}}/users/1
 Authorization: Bearer {{token}}
+X-Request-Id: {{$uuid}}
 
 @assert status == 200
 @assert body.name == "Alice"
 @capture user_id from body.id
 ```
 
-**断言运算符**：`==`、`!=`、`contains`、`>`、`>=`、`<`、`<=`、`exists`（目标支持 `status`、`headers.*`、`body.<jsonpath>`、`response.time`）。
-**动态变量**：`$uuid`、`$timestamp`、`$random_int` 可直接内插（如 `X-Request-Id: {{$uuid}}`）。
-**超时**：`@timeout 500ms`（或 `1s`/`2m`）对非流式请求生效；SSE 用 `@sse_timeout`、WebSocket 握手用 `@timeout`。
+Markdown（`.md`）同样可以直接作为测试文件运行，只需把请求写在 ```` ```http ```` 代码块中：
 
-### 2. `.md` 文件格式
-
-可以直接在 Markdown 文档中书写测试代码块：
-
-```markdown
-# 登录接口测试
-
-使用下面的代码块执行登录：
+````markdown
+# 用户接口文档
 
 ```http
-POST /login
-Content-Type: application/json
-
-{
-  "username": "admin",
-  "password": "{{password}}"
-}
-
+GET {{base_url}}/users/1
 @assert status == 200
-@capture token from body.token
 ```
+````
+
+### 4. 运行测试并查看结果
+
+```bash
+# 运行单个文件（t 为 test 的别名）
+rupost t demo.http
+
+# 指定环境，并把提取到的 @capture 变量持久化供下次请求复用
+rupost t demo.http -e dev --var-state
+
+# 递归扫描并并行执行整个目录
+rupost t examples/batch/ --mode parallel --concurrency 4
 ```
 
-关于更高级的流式剧本（SSE/WebSocket），请参阅 [WebSocket 调试指南](file:///doc/guides/websocket_testing.md) 及 [SSE 测试指南](file:///doc/guides/sse_testing.md)。
+### 5. 进入可视化调试界面
+
+```bash
+# 启动终端交互界面（TUI）
+rupost tui demo.http
+
+# 启动浏览器活文档工作台（Web）
+rupost web --port 8080
+```
 
 ---
 
-## 技术选型
+## 三、核心功能与高频命令速查
 
-- **Language**: Rust
-- **Async Runtime**: Tokio
-- **CLI Framework**: Clap
-- **HTTP Client**: Reqwest
-- **Serialization**: Serde
-- **Logging**: Tracing
+### 1. 文档测试、选择重跑与环境控制
+
+- **单请求精选与依赖闭包**：用 `--only` 或 `#` 片段只跑某一条，配合 `--with-deps` 自动按 `@depends-on` 拓扑序先跑前置登录/准备文件：
+  ```bash
+  rupost t api.http#GetUser
+  rupost t profile.http --only 1 --with-deps
+  ```
+- **变量与 Cookie 跨运行延续**：
+  ```bash
+  # 自动保存/回灌 @capture 变量（默认 .rupost/vars.json，显式 --var/.env/toml 恒优先）
+  rupost t login.http --var-state
+  # 持久化 Cookie（配合 -e dev 自动按环境隔离）
+  rupost t login.http --cookie-file cookies.json -e dev
+  ```
+- **严格校验与无痕执行**：
+  ```bash
+  # 拦截未解析的 {{var}}、插件降级视为失败、且不写入本地历史文件
+  rupost --no-history t suite.http --strict-vars --strict-plugins
+  ```
+- **内置断言与动态宏**：支持 `==`、`!=`、`contains`、`>`、`>=`、`<`、`<=`、`exists`（覆盖 `status`、`headers.*`、`body.<jsonpath>`、`response.time`），内置 `{{$uuid}}`、`{{$timestamp}}`、`{{$random_int}}`。
+
+### 2. API 契约漂移检测、快照重放与调试排障
+
+- **契约漂移基线（CI 门禁）**：首次运行生成字段结构基线，后续运行自动检出新增字段、类型变更与字段移除：
+  ```bash
+  rupost t api.http --contract-baseline baseline.json
+  ```
+- **网络诊断与失败归因**：
+  ```bash
+  # 分阶段检测 DNS / TCP / TLS / HTTP 耗时与证书健康度
+  rupost diagnose https://api.example.com
+
+  # 测试失败时保留脱敏、可重放的故障复现包（仅失败时创建，绝不覆盖已有目录）
+  rupost t suite/ --incident-out ./incident-01 --explain
+  ```
+- **快照重放与本地 Mock**：
+  ```bash
+  # 录制并重放快照（支持自动改写目标地址并逐条定位响应体差异）
+  rupost t suite.http --save-snapshot snap.json
+  rupost replay snap.json --target http://staging.example.com --explain
+
+  # 启动本地 Mock 服务器（支持 Trie 路径参数与多变体条件响应）
+  rupost mock examples/incident_bundle/mock.json --port 9000
+  ```
+
+### 3. 多协议（WebSocket / SSE）与导入导出
+
+- **WebSocket / SSE 流式测试**：支持 `@websocket` 长连接 `SEND`/`EXPECT` 剧本与自动重连、SSE 流式响应断言与大模型增量输出落盘（`@stream_to`）。
+- **与 `curl` / `httpie` / `wget` 双向互通**：
+  ```bash
+  # 导入 curl 为 .http（可选将域名模板化为 {{base_url}}）
+  rupost import curl 'curl https://api.example.com/items' --templatize-host -o items.http
+
+  # 将 .http/.md 导出为脱敏命令行脚本
+  rupost export curl demo.http -e dev --redact
+  ```
+- **历史管理与生成**：
+  ```bash
+  rupost history list --limit 10
+  rupost history export --last 5 -o snap.json
+  rupost generate --last 5 -o regression.http
+  ```
+
+### 4. AI 辅助创作与失败分诊（执行期零 AI 依赖）
+
+支持任意 OpenAI 兼容接口及本地 Ollama；测试执行本身完全确定性，不依赖大模型：
+
+```bash
+# 一句自然语言生成标准 @assert 断言（可附带最近历史或响应文件上下文）
+rupost ai assert "状态码为 200 且 data.items 非空" --last 1
+
+# 将文件内的 `# @ai-assert <自然语言>` 原地展开为标准断言
+rupost ai resolve demo.http --dry-run
+
+# 从请求历史提炼语义增强回归测试（AI 不可用时自动降级为确定性基线）
+rupost ai bootstrap --from history --last 5 -o regression.http
+
+# 对 CI 失败 JSON 报告或故障快照做根因聚类分诊
+rupost ai triage report.json
+```
+
+### 5. 插件与扩展生态
+
+支持 `hook`（请求签名/认证/改写）与 `command`（CLI 扩展）双形态，具备静态 Manifest 预检与缺失自愈降级：
+
+```bash
+rupost plugin list
+rupost plugin validate examples/plugins/rupost-plugin-cmd-hello.json
+rupost plugin schema
+```
 
 ---
 
-## 贡献与设计原则
+## 四、工作区配置与凭据安全
 
-RuPost 始终坚持：
-1. **第一性原理**：从零思考每一个功能的最优解。
-2. **极致简洁**：奥卡姆剃刀，如无必要，勿增实体。
+RuPost 通过项目根目录 `rupost.toml` 管理环境、路径沙箱、插件默认门禁与 AI Profile，并通过 `$HOME/.rupost/credentials.toml`（强制 `0600` 权限与防符号链接保护）安全存放个人密钥：
+
+```toml
+# rupost.toml（可安全提交至 Git，禁止写入明文 api_key）
+default_env = "dev"
+
+[environments.dev]
+base_url = "http://127.0.0.1:8080"
+
+[paths]
+history_file = ".rupost/history.jsonl"
+logs_dir = ".rupost/logs"
+snapshots_dir = "snapshots"
+
+[plugins]
+allow_missing_plugins = false
+strict_plugins = false
+strict_vars = false
+
+[ai]
+default_profile = "default"
+
+[ai.profiles.default]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+```
+
+---
+
+## 五、文档导航
+
+| 主题 | 文档 |
+| :--- | :--- |
+| **新手入门** | [5 分钟快速上手指南](doc/guides/quickstart.md) · [用户手册](doc/guides/user_guide.md) |
+| **环境与批量** | [变量与环境管理](doc/guides/variables_and_environments.md) · [批量与并发测试](doc/guides/batch_testing.md) |
+| **调试与 Mock** | [全链路调试指南](doc/guides/debug_guide.md) · [网络诊断工具](doc/guides/network_diagnostics.md) · [本地 Mock 服务器](doc/guides/mock_server.md) |
+| **流式协议** | [WebSocket 调试指南](doc/guides/websocket_testing.md) · [SSE 与大模型流式测试](doc/guides/sse_testing.md) · [LLM 模板](doc/guides/llm_templates.md) |
+| **插件与生态** | [插件与扩展架构](doc/architecture/features/plugin_and_extensibility.md) · [社区插件索引](doc/community-plugins.md) |
+| **项目演进** | [更新日志 (CHANGELOG)](CHANGELOG.md) · [进度汇总](doc/plans/progress_summary.md) |
+
+---
+
+## 六、技术栈与设计原则
+
+- **技术选型**：Rust · Tokio · Clap · Reqwest (`rustls`) · Axum · Ratatui · Serde · Tracing
+- **设计原则**：
+  1. **第一性原理**：从零思考每一个功能的最优解。
+  2. **Clean Architecture & 极致简洁**：严格分层解耦，奥卡姆剃刀，如无必要勿增实体。

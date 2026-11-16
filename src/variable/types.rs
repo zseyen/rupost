@@ -248,12 +248,17 @@ pub fn resolve_sandboxed_workspace_path(
     raw_rel: &str,
 ) -> std::result::Result<PathBuf, String> {
     let rel = Path::new(raw_rel);
-    if rel.is_absolute() {
-        return Err("禁止绝对路径".to_string());
+    // Windows 下 `/etc/evil` 的 is_absolute() 为 false（属 RootDir 驱动器相对路径），
+    // 因此必须显式拦截前导 `/`、`\` 以及 Component::RootDir / Prefix。
+    if rel.is_absolute() || raw_rel.starts_with('/') || raw_rel.starts_with('\\') {
+        return Err("禁止绝对路径或根路径".to_string());
     }
     for comp in rel.components() {
-        if matches!(comp, Component::ParentDir | Component::Prefix(_)) {
-            return Err("禁止父级回溯 `..` 或盘符前缀".to_string());
+        if matches!(
+            comp,
+            Component::RootDir | Component::ParentDir | Component::Prefix(_)
+        ) {
+            return Err("禁止根路径、父级回溯 `..` 或盘符前缀".to_string());
         }
     }
     let joined = project_root.join(rel);

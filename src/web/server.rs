@@ -172,6 +172,10 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         )
         .route("/session", get(handlers::session::get_session_handler))
         .route("/history", get(handlers::history::list_history_handler))
+        .route(
+            "/history/{id}",
+            get(handlers::history::get_history_detail_handler),
+        )
         .route("/diagnose", post(handlers::diagnose::diagnose_handler))
         .route("/ws/bridge", get(handlers::ws::ws_bridge_handler));
 

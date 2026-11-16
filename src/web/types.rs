@@ -117,7 +117,7 @@ pub struct WorkbenchMeta {
 }
 
 /// 整篇文档套件批量执行入参
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunSuiteRequest {
     pub path: String,
     #[serde(default)]
@@ -129,6 +129,10 @@ pub struct RunSuiteRequest {
     /// B3：请求级插件/门禁覆盖（> toml [plugins] > 默认）
     #[serde(default)]
     pub plugin_overrides: Option<PluginOverrides>,
+    #[serde(default)]
+    pub extra_variables: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub selector: Option<String>,
 }
 
 /// 套件单条请求执行摘要
@@ -142,6 +146,8 @@ pub struct SuiteItemResult {
     pub success: bool,
     pub skipped: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub source_line: Option<usize>,
 }
 
 /// 整篇文档套件批量执行响应
@@ -372,6 +378,22 @@ pub struct HistoryItemSummary {
     pub status: u16,
     pub duration_ms: u64,
     pub source: Option<String>,
+}
+
+/// 单条历史记录脱敏详情（供编辑器回填或转 Mock，绝不返回明文凭据）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryDetailDto {
+    pub id: String,
+    pub timestamp: String,
+    pub duration_ms: u64,
+    pub source: Option<String>,
+    pub method: String,
+    pub url: String,
+    pub request_headers: Vec<HttpHeaderDto>,
+    pub request_body: Option<String>,
+    pub status: Option<u16>,
+    pub response_headers: Vec<HttpHeaderDto>,
+    pub response_body: Option<String>,
 }
 
 /// 链路诊断请求

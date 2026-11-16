@@ -1,11 +1,13 @@
-use crate::history::model::HistoryEntry;
+use crate::history::mask_snapshot_entry;
+use crate::history::model::{HistoryEntry, SnapshotEntry};
 use crate::history::storage::HistoryStorage;
 use crate::web::server::AppState;
-use crate::web::types::{ApiResponse, HistoryItemSummary};
+use crate::web::types::{ApiResponse, HistoryDetailDto, HistoryItemSummary, HttpHeaderDto};
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -91,6 +93,86 @@ pub async fn list_history_handler(
     }
 }
 
+fn header_map_to_dtos(map: &HeaderMap) -> Vec<HttpHeaderDto> {
+    map.iter()
+        .map(|(k, v)| HttpHeaderDto {
+            key: k.to_string(),
+            value: String::from_utf8_lossy(v.as_bytes()).into_owned(),
+        })
+        .collect()
+}
+
+/// 在工作区隔离范围内查找单条历史记录并执行强制脱敏投影
+pub fn find_history_detail_for_workspace(
+    entries: Vec<HistoryEntry>,
+    working_dir: &Path,
+    id: &str,
+) -> Option<HistoryDetailDto> {
+    let entry = entries
+        .into_iter()
+        .rev()
+        .find(|e| e.id == id && entry_belongs_to_workspace(e, working_dir))?;
+
+    let timestamp = entry.timestamp.to_rfc3339();
+    let duration_ms = entry.duration_ms;
+    let source = entry.source.clone();
+    let mut snap = SnapshotEntry::from(entry);
+    mask_snapshot_entry(&mut snap);
+
+    let (status, response_headers, response_body) = match snap.response {
+        Some(resp) => (
+            Some(resp.status),
+            header_map_to_dtos(&resp.headers),
+            Some(resp.body),
+        ),
+        None => (None, Vec::new(), None),
+    };
+
+    Some(HistoryDetailDto {
+        id: snap.id,
+        timestamp,
+        duration_ms,
+        source,
+        method: snap.request.method,
+        url: snap.request.url,
+        request_headers: header_map_to_dtos(&snap.request.headers),
+        request_body: snap.request.body,
+        status,
+        response_headers,
+        response_body,
+    })
+}
+
+/// 获取当前工作区隔离后的单条历史记录脱敏详情（只读模式禁止）
+pub async fn get_history_detail_handler(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> impl IntoResponse {
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "History access is disabled in read-only mode",
+            )),
+        );
+    }
+
+    let storage = HistoryStorage::new();
+    match storage.tail(500) {
+        Ok(entries) => match find_history_detail_for_workspace(entries, &state.working_dir, &id) {
+            Some(detail) => (StatusCode::OK, Json(ApiResponse::ok(detail))),
+            None => (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::err(format!("History entry not found: {id}"))),
+            ),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(format!("Failed to load history: {}", e))),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +221,29 @@ mod tests {
         let filtered = filter_history_for_workspace(entries, ws.path(), 20);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "5");
+    }
+
+    #[test]
+    fn test_find_history_detail_masks_secrets_and_isolates_workspace() {
+        let ws = TempDir::new().unwrap();
+        std::fs::write(ws.path().join("api.http"), "GET https://example.com\n").unwrap();
+
+        let mut own = make_entry("own-1", Some("file:api.http"));
+        own.request.headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_static("Bearer super-secret-token"),
+        );
+        let foreign = make_entry("foreign-1", Some("cli"));
+        let entries = vec![own, foreign];
+
+        assert!(find_history_detail_for_workspace(entries.clone(), ws.path(), "foreign-1").is_none());
+        let detail =
+            find_history_detail_for_workspace(entries, ws.path(), "own-1").expect("detail");
+        let auth = detail
+            .request_headers
+            .iter()
+            .find(|h| h.key.eq_ignore_ascii_case("authorization"))
+            .expect("auth header");
+        assert!(!auth.value.contains("super-secret-token"));
     }
 }

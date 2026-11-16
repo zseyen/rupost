@@ -59,6 +59,33 @@ fn outcome_to_diag(
     }
 }
 
+/// 单个插件参数值的内核解析（03 §321）：裸 `env.NAME` 前缀直读上下文
+/// （进程环境优先、局部变量回退），其余文本走 `{{var}}`/`${VAR}` 解析 SSOT；
+/// 解析失败（env 未设置/占位符残留）值按字面量透传并返回告警——与全局
+/// 未定义变量告警语义一致，绝不静默。
+fn resolve_plugin_param(raw: &str, context: &mut VariableContext) -> (String, Option<String>) {
+    if let Some(env_name) = raw
+        .strip_prefix("env.")
+        .filter(|name| !name.is_empty() && !name.contains(char::is_whitespace))
+    {
+        return match context.get(raw) {
+            Some(value) => (value, None),
+            None => (
+                raw.to_string(),
+                Some(format!("插件参数引用的 env.{env_name} 未设置，已按字面量传给插件")),
+            ),
+        };
+    }
+    let resolved = crate::variable::VariableResolver::resolve(raw, context);
+    if resolved.contains("{{") && resolved.contains("}}") {
+        return (
+            resolved,
+            Some(format!("插件参数含未解析占位符，已按字面量传给插件: {raw}")),
+        );
+    }
+    (resolved, None)
+}
+
 /// 执行单请求的插件生命周期管线（Prepare → Transform → Sign）并处理阻断/降级兜底早退。
 pub(crate) async fn run_plugin_stage(
     mut parsed: ParsedRequest,
@@ -82,12 +109,39 @@ pub(crate) async fn run_plugin_stage(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    // 03 §321：插件 params 的 `env.*`/`{{var}}` 由内核解析（变量解析 SSOT），
+    // 明文仅经 Stdio IPC 传给插件进程，解析值永不落盘快照/报告。
+    // 此前 payload 原样透传字面量——照契约文档写 `secret=env.X` 的插件会拿
+    // 错误密钥材料且零告警（审查 P1-2）。缓存键随解析值变化：动态参数
+    // （{{$uuid}}）逐请求异键，语义上更正确地禁用了其请求级缓存。
+    let mut param_warnings: Vec<String> = Vec::new();
     let directives: Vec<crate::plugin::PluginDirective> = parsed
         .metadata
         .plugins
         .iter()
-        .map(crate::plugin::PluginDirective::from)
+        .map(|p| {
+            let mut d = crate::plugin::PluginDirective::from(p);
+            d.params = d
+                .params
+                .into_iter()
+                .map(|(k, v)| {
+                    let (resolved, warning) = resolve_plugin_param(&v, context);
+                    if let Some(warning) = warning {
+                        param_warnings.push(warning);
+                    }
+                    (k, resolved)
+                })
+                .collect();
+            d
+        })
         .collect();
+    for warning in &param_warnings {
+        plugin_ctx.warning_sink.emit(
+            crate::diagnostics::WarningSeverity::Warn,
+            "executor_plugin",
+            warning,
+        );
+    }
     let stage = PluginPipeline::execute_for_request(
         &directives,
         registry,

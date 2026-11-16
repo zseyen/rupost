@@ -438,3 +438,81 @@ async fn test_dod_parallel_multi_stage_plugins_across_multiple_files() {
     assert!(results.iter().all(|(_, rs)| rs.len() == 1 && rs[0].success));
     server.verify().await;
 }
+
+/// 审查 P1-2（03 §321 契约）：插件 params 的 `env.*`/`{{var}}` 必须由内核
+/// （变量解析 SSOT）解析后才经 Stdio IPC 传给插件，明文永不落盘快照/报告。
+/// 此前 payload 将 directive.params 原样透传——照文档写 `secret=env.X` 的
+/// 插件收到的是字面量 "env.X"，加密/签名插件拿错误密钥材料且零告警。
+///
+/// 判别针设计：插件读净 stdin 后按 payload 是否含**原始字面量**分叉——
+/// `ON_STDIN_CONTAINS`（raw → X-Mode: raw）与 `ON_STDIN_ABSENT`（已解析 →
+/// X-Mode: resolved）互斥，恰产出一条 stdout（协议纪律）。
+#[tokio::test]
+async fn test_plugin_params_resolved_by_kernel_before_ipc() {
+    unsafe {
+        std::env::set_var("P12_SECRET_PROBE", "resolved-secret-42");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let (exe, manifest) = install_hook_plugin(
+        dir.path(),
+        "p12",
+        "p12",
+        PluginStage::Sign,
+        PluginCacheScope::None,
+        "READ_STDIN=\nON_STDIN_CONTAINS=env.P12_SECRET_PROBE|||{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Mode\",\"raw\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\nON_STDIN_ABSENT=env.P12_SECRET_PROBE|||{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Mode\",\"resolved\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{},\"warnings\":[]}\n",
+    );
+    let mut registry = PluginRegistry::new();
+    registry.register_manifest(exe, manifest);
+
+    let server = MockServer::start().await;
+    // raw 分支命中即失败证据（expect(0)）
+    Mock::given(method("GET"))
+        .and(path("/item"))
+        .and(header("X-Mode", "raw"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/item"))
+        .and(header("X-Mode", "resolved"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let work_dir = tempfile::tempdir().unwrap();
+    let fp = work_dir.path().join("p12.http");
+    std::fs::write(
+        &fp,
+        format!(
+            "### P1-2\n# @sign p12 params_var={{{{params_var}}}} secret=env.P12_SECRET_PROBE\nGET {}/item\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let parsed = HttpFileParser::parse_file(&fp).unwrap();
+
+    let executor = TestExecutor::new().with_plugins(
+        Arc::new(registry),
+        PluginRuntimeOptions {
+            allow_missing_plugins: false,
+            strict_plugins: false,
+            plugin_timeout: Duration::from_secs(5),
+            plugin_env: Default::default(),
+        },
+    );
+    let mut ctx = VariableContext::new();
+    ctx.insert("params_var", "resolved-via-context");
+
+    let result = executor
+        .execute_one(parsed.requests.into_iter().next().unwrap(), 1, &mut ctx, None)
+        .await;
+    assert!(result.success, "插件调用必须成功: {:?}", result.error);
+
+    server.verify().await; // resolved expect(1) 未满足或 raw expect(0) 被命中都会在此失败
+    unsafe {
+        std::env::remove_var("P12_SECRET_PROBE");
+    }
+}

@@ -114,11 +114,9 @@
 ### A. 流程与 CI 待确认项
 *   **CI 三新 Job 首跑确认**（`feature/contract-drift-and-hygiene` @ `ce633224` 已推送，`CHANGELOG.md` 已于同提交去重补齐）：因 [ci.yml](file:///Users/zsyzzx/project/rust/rupost/.github/workflows/ci.yml#L3-L8) 仅对 `main` 的 `push`/`pull_request` 及管理员 `workflow_dispatch` 触发，需建 PR（`feature/contract-drift-and-hygiene -> main`）后确认 `smoke-bash`（须绿）、`e2e-pytest`（须绿）、`nextest-pilot`（`continue-on-error` 试点，若红需归因）首跑结果。
 
-### B. 已定稿待实施：统一基础服务与配置体系（P0–P2）
+### B. 已定稿待实施：统一基础服务与配置体系（Wave 0–2 ✅ 已完成，仅余 Wave 3）
 详见 [`2026-11-16-unified-services-and-config-plan.md`](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-11-16-unified-services-and-config-plan.md)：
-*   **Wave 0（编译卫生与文档）**：移除 `Cargo.toml` 闲置 `semver = "1.0"`；为 `storage.rs`、`on_failure_test.rs`、`snapshot_contract_test.rs` 补 `#[cfg(unix)]` 门控消除 Windows 警告；更新 `README.md` 跨平台插件与命令说明。
-*   **Wave 1（P0 基础原语）**：`WarningSink` 诊断告警总线（收口全库 30+ 处裸 `eprintln!`，修复 TUI 撕裂与 Web 不可见）；`ProcessGroupGuard` 进程组强剿原语合并（`plugin/driver.rs` + `runner/on_failure.rs`）；`src/http/client.rs` 共享构建函数收口。
-*   **Wave 2（P1 统一配置与 AI 凭据安全）**：`WorkspaceConfig` / `WorkspacePathsConfig`（锚定 `project_root`、`[paths]` 沙箱防逃逸、移除 `HistoryStorage::get_storage()` 全局单例与硬编码 `.rupost`）；AI 自定义 `api_key_env`、多 `[ai.profiles.<name>]` 与 `$HOME/.rupost/credentials.toml`（`0o600` + 属主校验 + 动态脱敏）；`AtomicFileWriter` 原子安全落盘收口。
+*   ~~Wave 0 / Wave 1 / Wave 2~~：✅ 已于 2026-11-16 完成交付（编译卫生、`WarningSink`、`ProcessGroupGuard`、`WorkspaceConfig` 沙箱、移除 `get_storage()`、`AtomicFileWriter`、AI `api_key_env` / 多 Profile / `credentials.toml` `0o600` 门禁）。
 *   **Wave 3（P2 交互会话同构）**：抽取共享 `InteractiveSession`（Web/TUI 语义同构）与 `PrescriptionFormatter` 处方文案收口。
 
 ### C. 既有功能链路小项与生态延伸

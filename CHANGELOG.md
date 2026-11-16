@@ -12,6 +12,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Added
 
+- **统一基础服务、配置体系与凭据安全（Wave 0–2）**：
+  - `WarningSink` 诊断告警总线（`StderrWarningSink` / `BufferedWarningSink`），收敛 `executor_factory`、`suite_setup`、`variable/config`、`security/redact`、`executor_plugin` 裸 `eprintln!`；
+  - `ProcessGroupGuard` 跨平台进程组强杀与取消原语（合并 `plugin/driver.rs` 与 `runner/on_failure.rs`）；
+  - `WorkspaceConfig::load` 与 `WorkspacePathsConfig`（严格锚定 `project_root`、`[paths]` 沙箱防逃逸），移除 `HistoryStorage::get_storage()` 全局单例，统一 `AtomicFileWriter`；
+  - AI 多 Profile 与自定义 `api_key_env` 支持，新增 `$HOME/.rupost/credentials.toml`（`0o600` + `O_NOFOLLOW` + 属主门禁 + 脱敏 `Debug` + 动态密钥掩码）；移除 `Cargo.toml` 闲置 `semver`/`trycmd` 依赖并补齐 Windows `#[cfg(unix)]` 编译门控。
 - **测试基建与 CI 扩展**：`tests/binary_contract_test.rs`（assert_cmd 形态二进制契约 9 例）、`tests/binary_output_golden_test.rs`（ast/validate 黄金精确断言）、`.config/nextest.toml`（optional 试点）、`ci.yml` 新增 `smoke-bash` / `e2e-pytest` / `nextest-pilot` 三个 job（`--contract-baseline` 契约漂移基线已于 `[0.4.0]` 登记，此处去重）。
 
 ## [0.4.0] - 2026-11-15

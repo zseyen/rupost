@@ -1,10 +1,13 @@
 #![allow(clippy::collapsible_if)]
 use crate::Result;
+use crate::diagnostics::BufferedWarningSink;
 use crate::error::RupostError;
 use crate::history::model::HistoryEntry;
 use crate::platform;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use crate::variable::WorkspaceConfig;
+use std::env;
+use std::fs::{self, OpenOptions, Permissions};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -28,18 +31,15 @@ impl HistoryStorage {
 
 impl Default for HistoryStorage {
     fn default() -> Self {
-        if let Some(env_dir) = std::env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
+        if let Some(env_dir) = env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
             return Self {
                 file_path: PathBuf::from(env_dir).join(HISTORY_FILE),
             };
         }
-        if let Ok(cwd) = std::env::current_dir()
+        if let Ok(cwd) = env::current_dir()
             && cwd.join("rupost.toml").exists()
         {
-            let ws = crate::variable::WorkspaceConfig::load(
-                &cwd,
-                &crate::diagnostics::BufferedWarningSink::new(),
-            );
+            let ws = WorkspaceConfig::load(&cwd, &BufferedWarningSink::new());
             return Self {
                 file_path: ws.paths.history_file,
             };
@@ -70,14 +70,14 @@ impl HistoryStorage {
                 .open(&self.file_path)
             {
                 Ok(_) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(RupostError::IoError(e)),
             }
             // 既有文件：收紧宽松权限（幂等；chmod 跟随 symlink 的 TOCTOU 由
             // append 前置的 regular-file 语义缓解——history 路径不经用户可控 symlink）
-            let meta = std::fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
+            let meta = fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
             if meta.is_file() && meta.permissions().mode() & 0o777 & 0o077 != 0 {
-                std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(0o600))?;
+                fs::set_permissions(&self.file_path, Permissions::from_mode(0o600))?;
             }
         }
         #[cfg(not(unix))]
@@ -251,13 +251,12 @@ impl HistoryStorage {
         // `file` is `File`. `File` implements `Write`.
         // We need to seek to start? `set_len(0)` usually truncates but doesn't move cursor?
         // Yes, need to seek.
-        use std::io::Seek;
         let mut file = file; // make mutable
-        file.seek(std::io::SeekFrom::Start(0))
+        file.seek(SeekFrom::Start(0))
             .map_err(RupostError::IoError)?;
 
         // Use BufWriter for performance
-        let mut writer = std::io::BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
 
         for entry in to_keep {
             let json = serde_json::to_string(entry)?;
@@ -281,34 +280,37 @@ pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entr
 #[cfg(all(test, unix))]
 mod privacy_tests {
     use super::*;
+    use crate::history::model::{RequestSnapshot, ResponseMeta};
+    use chrono::Utc;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
 
     /// S-1：history.jsonl 权限必须与快照防线对齐——新建即 0600，宽松旧文件收紧。
     #[test]
     fn test_history_file_permissions_tightened() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let path = dir.path().join("history.jsonl");
         // 1) 预置 0644 旧文件 → append 后必须收紧
-        std::fs::write(&path, "{}\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&path, "{}\n").unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o644)).unwrap();
         let store = HistoryStorage::new_with_path(path.clone());
         store.append(&sample_entry()).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "宽松权限必须被收紧");
         // 2) 新建路径 → append 创建即 0600
         let path2 = dir.path().join("history2.jsonl");
         let store2 = HistoryStorage::new_with_path(path2.clone());
         store2.append(&sample_entry()).unwrap();
-        let mode2 = std::fs::metadata(&path2).unwrap().permissions().mode() & 0o777;
+        let mode2 = fs::metadata(&path2).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode2, 0o600, "新建文件必须 0600");
     }
 
     fn sample_entry() -> HistoryEntry {
         HistoryEntry {
             id: "s1".to_string(),
-            timestamp: chrono::Utc::now(),
+            timestamp: Utc::now(),
             duration_ms: 1,
-            request: crate::history::model::RequestSnapshot {
+            request: RequestSnapshot {
                 method: "GET".to_string(),
                 url: "http://x".to_string(),
                 headers: Default::default(),
@@ -316,7 +318,7 @@ mod privacy_tests {
                 timeout: None,
             },
             source: Some("test".to_string()),
-            response: crate::history::model::ResponseMeta {
+            response: ResponseMeta {
                 status: 200,
                 headers: Default::default(),
                 body: Some("{}".to_string()),

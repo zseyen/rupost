@@ -3,12 +3,13 @@ use crate::assertion::{
     json_value_to_assert_value, parse_assert_value,
 };
 use crate::utils::jsonpath::JsonPathResolver;
+use crate::ws::PayloadDecoder;
 use crate::ws::frame::WsFrame;
 use serde_json::Value;
 
 pub struct WsFrameTarget<'a> {
     pub frame: &'a WsFrame,
-    pub decoder: Option<&'a dyn crate::ws::PayloadDecoder>,
+    pub decoder: Option<&'a dyn PayloadDecoder>,
 }
 
 impl<'a> AssertTarget for WsFrameTarget<'a> {
@@ -126,7 +127,7 @@ impl<'a> AssertTarget for WsFrameTarget<'a> {
 /// 解耦对接收帧匹配判定的接口
 pub trait FrameMatcher {
     /// 判断给定的帧是否匹配该条件
-    fn matches(&self, frame: &WsFrame, decoder: Option<&dyn crate::ws::PayloadDecoder>) -> bool;
+    fn matches(&self, frame: &WsFrame, decoder: Option<&dyn PayloadDecoder>) -> bool;
 }
 
 /// JSONPath 匹配器，利用预编译的 segments 进行匹配
@@ -151,7 +152,7 @@ impl JsonPathMatcher {
 }
 
 impl FrameMatcher for JsonPathMatcher {
-    fn matches(&self, frame: &WsFrame, decoder: Option<&dyn crate::ws::PayloadDecoder>) -> bool {
+    fn matches(&self, frame: &WsFrame, decoder: Option<&dyn PayloadDecoder>) -> bool {
         let expr = if let Some(ref expected) = self.expected_value {
             let op_str = self.operator.as_deref().unwrap_or("==");
             let op = CompareOp::parse(op_str).unwrap_or(CompareOp::Equal);
@@ -180,7 +181,7 @@ pub struct TextContainsMatcher {
 }
 
 impl FrameMatcher for TextContainsMatcher {
-    fn matches(&self, frame: &WsFrame, _decoder: Option<&dyn crate::ws::PayloadDecoder>) -> bool {
+    fn matches(&self, frame: &WsFrame, _decoder: Option<&dyn PayloadDecoder>) -> bool {
         let txt = frame.payload_as_string();
         txt.contains(&self.pattern)
     }
@@ -214,7 +215,7 @@ impl WsConditionMatcher {
 }
 
 impl FrameMatcher for WsConditionMatcher {
-    fn matches(&self, frame: &WsFrame, decoder: Option<&dyn crate::ws::PayloadDecoder>) -> bool {
+    fn matches(&self, frame: &WsFrame, decoder: Option<&dyn PayloadDecoder>) -> bool {
         if self.condition.is_empty() {
             return true;
         }

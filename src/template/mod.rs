@@ -1,5 +1,6 @@
 pub mod strategy;
 
+use crate::{Result, RupostError};
 use colored::Colorize;
 use std::fs;
 use std::path::Path;
@@ -21,7 +22,7 @@ pub fn run_template(
     output: Option<&str>,
     force: bool,
     list: bool,
-) -> crate::Result<()> {
+) -> Result<()> {
     let templates = get_templates();
 
     // 1. 处理 --list 选项
@@ -38,7 +39,7 @@ pub fn run_template(
         .into_iter()
         .find(|t| t.name() == r#type)
         .ok_or_else(|| {
-            crate::RupostError::Other(format!(
+            RupostError::Other(format!(
                 "Unsupported template type '{}'. Use 'rupost init --list' to view available templates.",
                 r#type
             ))
@@ -81,13 +82,13 @@ pub fn run_template(
         }
     } else {
         if http_exists {
-            return Err(crate::RupostError::Other(format!(
+            return Err(RupostError::Other(format!(
                 "File already exists: {}. Use --force to overwrite.",
                 resolved_output
             )));
         }
         if env_exists {
-            return Err(crate::RupostError::Other(format!(
+            return Err(RupostError::Other(format!(
                 "File already exists: {}. Use --force to overwrite.",
                 env_path.display()
             )));

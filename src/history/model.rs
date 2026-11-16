@@ -1,8 +1,14 @@
-use chrono::{DateTime, Utc};
-use reqwest::header::HeaderMap;
-use serde::{Deserialize, Serialize};
-
 use crate::history::serialization;
+use crate::http::diagnose::DiagnosticsReport;
+use crate::http::timing::{RequestTiming, TimingAttribution, TimingSource};
+use crate::http::timing_connector::ConnectSpan;
+use crate::parser::ParsedRequest;
+use chrono::{DateTime, Utc};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use url::Url;
+use uuid::Uuid;
 
 /// 历史记录条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +46,7 @@ pub struct RequestSnapshot {
     /// `@timeout`（仅非流式请求设置）。`serde(default)` 兼容没有该字段的旧快照：
     /// 缺失时重放退回 client 级默认超时，而非报错。
     #[serde(default)]
-    pub timeout: Option<std::time::Duration>,
+    pub timeout: Option<Duration>,
 }
 
 /// 响应元数据 (TUI 模式下可选包含 Body，节省空间且向前兼容)
@@ -128,7 +134,7 @@ pub struct ResponseSnapshot {
     pub status: u16,
 
     #[serde(with = "serialization::header_map")]
-    pub headers: reqwest::header::HeaderMap,
+    pub headers: HeaderMap,
 
     pub body: String,
 
@@ -159,8 +165,7 @@ impl From<HistoryEntry> for SnapshotEntry {
 
 impl RequestSnapshot {
     /// 从解析实例化后的 `ParsedRequest` 构建请求历史记录快照
-    pub fn from_parsed(parsed: &crate::parser::ParsedRequest) -> Self {
-        use reqwest::header::{HeaderName, HeaderValue};
+    pub fn from_parsed(parsed: &ParsedRequest) -> Self {
         let mut headers = HeaderMap::new();
         for (k, v) in &parsed.headers {
             if let (Ok(n), Ok(v)) = (
@@ -279,11 +284,11 @@ pub struct ExecutionSnapshotEntry {
 
     /// M7-A: 时序采集来源（connector / probe_degraded / none）
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timing_source: Option<crate::http::timing::TimingSource>,
+    pub timing_source: Option<TimingSource>,
 
     /// M7-A: 时序归属精度（exact / approximate）
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timing_attribution: Option<crate::http::timing::TimingAttribution>,
+    pub timing_attribution: Option<TimingAttribution>,
 
     /// 底层物理连接诊断指纹
     #[serde(default)]
@@ -374,8 +379,8 @@ impl TimingWaterfallUs {
     /// 从 runner 采集的细粒度时序 + 深度诊断报告合成微秒级瀑布。
     /// TLS 阶段仅在 diagnose 报告可得时填充（reqwest 公开 API 不暴露握手时序）。
     pub fn from_probes(
-        timing: &crate::http::timing::RequestTiming,
-        diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
+        timing: &RequestTiming,
+        diagnose: Option<&DiagnosticsReport>,
     ) -> Self {
         let dns_us = timing.dns_lookup.as_micros() as u64;
         let tcp_us = timing.tcp_connect.as_micros() as u64;
@@ -396,10 +401,10 @@ impl TimingWaterfallUs {
     /// 从 M7-A `ConnectSpan` + 请求自身 `ttfb`/`transfer` 合成微秒级瀑布。
     /// 连接复用时 `span` 为 `None`，`dns_lookup_us` 与 `tcp_connect_us` 均保持 `None`（JSON `null`）。
     pub fn from_connect_span(
-        span: Option<crate::http::timing_connector::ConnectSpan>,
-        ttfb: std::time::Duration,
-        transfer: std::time::Duration,
-        diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
+        span: Option<ConnectSpan>,
+        ttfb: Duration,
+        transfer: Duration,
+        diagnose: Option<&DiagnosticsReport>,
     ) -> Self {
         let dns_lookup_us = span.and_then(|s| s.dns_us);
         let tcp_connect_us = span.and_then(|s| s.tcp_us);
@@ -425,8 +430,8 @@ impl TimingWaterfallUs {
 
 impl SocketDiagnostics {
     /// 从深度诊断报告提取物理连接指纹；非 HTTPS 时 TLS/证书字段为 None
-    pub fn from_diagnose(diagnose: &crate::http::diagnose::DiagnosticsReport) -> Option<Self> {
-        let port = url::Url::parse(&diagnose.url)
+    pub fn from_diagnose(diagnose: &DiagnosticsReport) -> Option<Self> {
+        let port = Url::parse(&diagnose.url)
             .ok()
             .map(|u| u.port_or_known_default().unwrap_or(80))?;
         let cert = diagnose.cert_info.as_ref().filter(|_| diagnose.is_https);
@@ -445,8 +450,7 @@ impl SocketDiagnostics {
     }
 }
 
-fn header_pairs_to_map(pairs: &[(String, String)]) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderName, HeaderValue};
+fn header_pairs_to_map(pairs: &[(String, String)]) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (name, value) in pairs {
         if let (Ok(n), Ok(v)) = (
@@ -467,7 +471,7 @@ impl SnapshotRequest {
             url: self.url.clone(),
             headers: header_pairs_to_map(&self.headers),
             body: self.body.clone(),
-            timeout: self.timeout_ms.map(std::time::Duration::from_millis),
+            timeout: self.timeout_ms.map(Duration::from_millis),
         }
     }
 }
@@ -484,7 +488,7 @@ impl ExecutionSnapshotFile {
                 .entries
                 .iter()
                 .map(|e| SnapshotEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: Uuid::new_v4().to_string(),
                     request: e.request.to_history_request(),
                     response: e.response.as_ref().map(|r| ResponseSnapshot {
                         status: r.status,
@@ -506,7 +510,6 @@ impl ExecutionSnapshotFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ParsedRequest;
 
     #[test]
     fn test_request_snapshot_from_parsed() {
@@ -535,17 +538,14 @@ mod tests {
     fn test_request_snapshot_timeout_roundtrip_and_old_format_compat() {
         // 回归：快照此前不记录 @timeout——重放带超时语义的请求会静默退回 30s 默认
         let mut parsed = ParsedRequest::new(1);
-        parsed.metadata.timeout = Some(std::time::Duration::from_millis(500));
+        parsed.metadata.timeout = Some(Duration::from_millis(500));
         let snapshot = RequestSnapshot::from_parsed(&parsed);
-        assert_eq!(
-            snapshot.timeout,
-            Some(std::time::Duration::from_millis(500))
-        );
+        assert_eq!(snapshot.timeout, Some(Duration::from_millis(500)));
 
         // 序列化往返保持 timeout
         let json = serde_json::to_string(&snapshot).unwrap();
         let back: RequestSnapshot = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.timeout, Some(std::time::Duration::from_millis(500)));
+        assert_eq!(back.timeout, Some(Duration::from_millis(500)));
 
         // 旧格式快照（无 timeout 字段）反序列化为 None，不报错
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();

@@ -259,7 +259,7 @@ pub async fn run_block_handler(
     for warning in &loader_warnings {
         tracing::warn!("web run: {warning}");
     }
-    var_context.insert("__default_scheme", "http");
+    var_context.set_default_scheme("http");
 
     // 4. 原位单块调试执行（无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
@@ -403,7 +403,7 @@ pub async fn run_suite_handler(
     for warning in &loader_warnings {
         tracing::warn!("web run: {warning}");
     }
-    var_context.insert("__default_scheme", "http");
+    var_context.set_default_scheme("http");
     if let Some(extra) = &req.extra_variables {
         for (k, v) in extra {
             var_context.insert(k, v);

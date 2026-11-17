@@ -279,7 +279,7 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
         let captured: std::collections::HashMap<String, String> = var_context
             .variables()
             .iter()
-            .filter(|(k, _)| k.as_str() != "__default_scheme")
+            .filter(|(k, _)| k.as_str() != crate::variable::types::DEFAULT_SCHEME_KEY)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         crate::variable::var_state::save_var_state(Path::new(state_path), &captured)?;

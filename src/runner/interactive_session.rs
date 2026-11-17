@@ -88,7 +88,7 @@ mod tests {
         ctx.insert("UNCHANGED", "v1");
         ctx.insert("UPDATED", "v2-new");
         ctx.insert("CREATED", "v3");
-        ctx.insert("__default_scheme", "https");
+        ctx.set_default_scheme("https");
 
         let pre_run = HashMap::from([
             ("UNCHANGED".to_string(), "v1".to_string()),

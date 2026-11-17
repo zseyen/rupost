@@ -32,7 +32,7 @@ pub(crate) fn load_suite_context_with_sink(
     for warning in &warnings {
         sink.emit(WarningSeverity::Alert, "suite_setup", warning);
     }
-    var_context.insert("__default_scheme", &options.default_scheme);
+    var_context.set_default_scheme(&options.default_scheme);
     // R-2 免重填：--var-state 回灌为最低优先级层（只补缺；缺失静默、损坏指名告警）
     if let Some(state_path) = &options.var_state {
         match load_var_state(Path::new(state_path)) {

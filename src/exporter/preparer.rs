@@ -194,7 +194,7 @@ impl RequestPreparer {
 
         // 3. 解析并拼接最终 URL
         let default_scheme = context
-            .get("__default_scheme")
+            .default_scheme()
             .unwrap_or_else(|| "http".to_string());
 
         let final_url = resolve_final_url(

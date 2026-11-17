@@ -393,7 +393,7 @@ impl TestExecutor {
 
         // 2. 解析最终 URL 并进行补全和拼接
         let default_scheme = context
-            .get("__default_scheme")
+            .default_scheme()
             .map(|s| s.to_string())
             .unwrap_or_else(|| "http".to_string());
 

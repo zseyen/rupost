@@ -63,7 +63,7 @@ pub fn run_export(opts: ExportRunOptions) -> Result<()> {
     for warning in &loader_warnings {
         eprintln!("[!] {warning}");
     }
-    var_context.insert("__default_scheme", &opts.default_scheme);
+    var_context.set_default_scheme(&opts.default_scheme);
 
     // 4. 加载 CookieStore (若指定了 cookie_file)
     let cookie_store = if let Some(ref cf) = opts.cookie_file {

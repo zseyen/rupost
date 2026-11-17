@@ -3,6 +3,13 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+/// `__default_scheme` 的唯一权威定义点（批三-5，架构审查 #6 收敛）：
+/// 变量上下文承载的隐式参数通道——读写必须经本常量与
+/// [`VariableContext::set_default_scheme`] / [`VariableContext::default_scheme`]，
+/// 禁止散落字符串字面量（此前 13 处）。完整 ExecutionContext 参数化
+/// 登记 Phase-6 RunParams 议程。
+pub const DEFAULT_SCHEME_KEY: &str = "__default_scheme";
+
 /// 变量上下文，存储所有可用变量
 #[derive(Debug, Clone)]
 pub struct VariableContext {
@@ -56,6 +63,16 @@ impl VariableContext {
         } else {
             self.variables.get(key).cloned()
         }
+    }
+
+    /// 写入默认协议 scheme（隐式参数通道的类型化入口）
+    pub fn set_default_scheme(&mut self, scheme: impl Into<String>) {
+        self.insert(DEFAULT_SCHEME_KEY, scheme);
+    }
+
+    /// 读取默认协议 scheme
+    pub fn default_scheme(&self) -> Option<String> {
+        self.get(DEFAULT_SCHEME_KEY)
     }
 
     /// 批量插入变量

@@ -1,6 +1,7 @@
 pub mod compiler;
 pub mod matcher;
 pub mod server;
+pub mod session;
 pub mod trie;
 pub mod variant;
 

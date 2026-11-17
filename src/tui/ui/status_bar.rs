@@ -34,9 +34,9 @@ pub(crate) fn render(frame: &mut Frame, area: Rect, state: &AppState) {
     }
     if let Some(sess) = &state.mock_session {
         let badge = if let Some(last) = state.mock_traffic.back() {
-            format!(" MOCK :{} ({} {}) ", sess.port, last.status, last.path)
+            format!(" MOCK :{} ({} {}) ", sess.port(), last.status, last.path)
         } else {
-            format!(" MOCK :{} ", sess.port)
+            format!(" MOCK :{} ", sess.port())
         };
         spans.push(Span::styled(
             badge,
@@ -199,11 +199,16 @@ mod tests {
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
-        state.mock_session = Some(MockSessionState::new(
-            tokio::spawn(async {}).abort_handle(),
-            8080,
-            "test.http".to_string(),
-        ));
+        // 批三-3：MockServerSession 需真实绑定——0 端口自动分配（测试不实际打流）
+        let session = crate::mock::session::MockServerSession::start(
+            0,
+            std::sync::Arc::new(crate::mock::matcher::TrieRouteMatcher::new()),
+            false,
+            tokio::sync::mpsc::unbounded_channel().0,
+        )
+        .await
+        .unwrap();
+        state.mock_session = Some(MockSessionState::new(session, "test.http".to_string()));
 
         terminal
             .draw(|f| {

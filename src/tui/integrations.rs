@@ -6,50 +6,43 @@ use crate::ai::AssertionTranslator;
 use crate::ai::config::resolve as resolve_ai_config;
 use crate::diagnostics::BufferedWarningSink;
 use crate::middleware::ERR_COOKIE_PERSIST;
-use crate::mock::server::axum_adapter::{MockTrafficEvent, serve_matcher_with_events};
+use crate::mock::server::axum_adapter::MockTrafficEvent;
 use crate::mock::server::build_mock_matcher;
 use crate::runner::ReplayExecutor;
 use crate::tui::event::TuiEvent;
 use crate::variable::WorkspaceConfig;
 use std::fmt;
 use std::fs;
-use std::future::pending;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::net::TcpListener;
 use tokio::sync::mpsc::{Sender, unbounded_channel};
 use tokio::task::AbortHandle;
 
-struct AbortOnDrop(AbortHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-/// 活跃 mock 会话（`M` 键开关）；最后一份引用销毁时自动停止服务
 #[derive(Clone)]
 pub struct MockSessionState {
-    _abort: Arc<AbortOnDrop>,
-    pub port: u16,
+    /// 批三-3：共享会话句柄（Arc——克隆后仅最后一个持有者 drop 才关停，
+    /// 原语义由 Arc 计数保留；关停从 abort 强杀改为 session 内 oneshot 优雅退）
+    session: Arc<crate::mock::session::MockServerSession>,
     pub file: String,
 }
 
 impl MockSessionState {
-    pub fn new(abort: AbortHandle, port: u16, file: String) -> Self {
+    pub fn new(session: crate::mock::session::MockServerSession, file: String) -> Self {
         Self {
-            _abort: Arc::new(AbortOnDrop(abort)),
-            port,
+            session: Arc::new(session),
             file,
         }
+    }
+
+    pub fn port(&self) -> u16 {
+        self.session.port
     }
 }
 
 impl fmt::Debug for MockSessionState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MockSessionState")
-            .field("port", &self.port)
+            .field("port", &self.port())
             .field("file", &self.file)
             .finish_non_exhaustive()
     }
@@ -142,20 +135,13 @@ pub async fn toggle_mock_server(state: &mut AppState, event_tx: &Sender<TuiEvent
         return;
     }
 
-    // 直接绑定空闲端口并将同一个 TcpListener 交给 serve_matcher_with_events，消除二次绑定竞态
-    let listener = match TcpListener::bind("127.0.0.1:0").await {
-        Ok(l) => l,
-        Err(e) => {
-            state.last_error = Some(format!("mock bind: {e}"));
-            return;
-        }
-    };
-    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-
+    // 批三-3：bind+serve+shutdown 核心收敛到 MockServerSession（宿主无关）；
+    // 单次绑定语义由 session 内部保证，关停走 oneshot 优雅退出（Drop 兜底）
     state.mock_traffic.clear();
-    let (mock_tx, mut mock_rx) = unbounded_channel::<MockTrafficEvent>();
+    let (mock_tx, mock_rx) = unbounded_channel::<MockTrafficEvent>();
     let tui_tx = event_tx.clone();
     tokio::spawn(async move {
+        let mut mock_rx = mock_rx;
         while let Some(ev) = mock_rx.recv().await {
             if tui_tx.send(TuiEvent::MockTraffic(ev)).await.is_err() {
                 break;
@@ -163,12 +149,18 @@ pub async fn toggle_mock_server(state: &mut AppState, event_tx: &Sender<TuiEvent
         }
     });
 
-    let matcher = Arc::new(matcher);
-    let handle = tokio::spawn(async move {
-        let _ = serve_matcher_with_events(listener, matcher, true, pending(), Some(mock_tx)).await;
-    });
+    let session =
+        match crate::mock::session::MockServerSession::start(0, Arc::new(matcher), true, mock_tx)
+            .await
+        {
+            Ok(sess) => sess,
+            Err(e) => {
+                state.last_error = Some(format!("mock bind: {e}"));
+                return;
+            }
+        };
 
-    state.mock_session = Some(MockSessionState::new(handle.abort_handle(), port, path));
+    state.mock_session = Some(MockSessionState::new(session, path));
     state.last_error = None;
 }
 
@@ -261,7 +253,7 @@ mod tests {
             .mock_session
             .as_ref()
             .expect("mock session should start")
-            .port;
+            .port();
         assert!(port > 0);
 
         let resp = Client::new()
@@ -301,7 +293,7 @@ mod tests {
         let mut state = AppState::new();
         state.editor_file_path = Some(doc_path.to_string_lossy().into_owned());
         toggle_mock_server(&mut state, &tx).await;
-        let port = state.mock_session.as_ref().unwrap().port;
+        let port = state.mock_session.as_ref().unwrap().port();
 
         // 克隆后再释放克隆体不应终止服务；仅当最后一个持有者 drop 时才终止
         let cloned = state.mock_session.clone();

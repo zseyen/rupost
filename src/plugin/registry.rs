@@ -329,7 +329,9 @@ impl PluginRegistry {
             // 批三-2（审查漏项 4）：裸 directive 跨插件同名同阶段——后注册者
             // 静默覆盖会让"哪个插件生效"不可知；告警对齐 alias 分支先例。
             // 同插件自撞（alias 与 directive 同名）跳过：语义等价覆盖，非冲突
-            if let Some((prev_exe, _)) = self.hooks_by_stage.get(&(hook.directive.clone(), hook.stage))
+            if let Some((prev_exe, _)) = self
+                .hooks_by_stage
+                .get(&(hook.directive.clone(), hook.stage))
                 && prev_exe != &executable_path
             {
                 self.warnings.push(format!(
@@ -850,7 +852,10 @@ mod tests {
     #[test]
     fn test_bare_directive_cross_plugin_collision_warns() {
         let mut reg = PluginRegistry::new();
-        for (exe, plugin) in [("/tmp/a/rupost-plugin-a", "plugin-a"), ("/tmp/b/rupost-plugin-b", "plugin-b")] {
+        for (exe, plugin) in [
+            ("/tmp/a/rupost-plugin-a", "plugin-a"),
+            ("/tmp/b/rupost-plugin-b", "plugin-b"),
+        ] {
             reg.register_manifest(
                 PathBuf::from(exe),
                 PluginManifest {
@@ -871,9 +876,21 @@ mod tests {
                 },
             );
         }
-        let collisions: Vec<_> = reg.warnings.iter().filter(|w| w.contains("'auth'") && w.contains("冲突")).collect();
-        assert_eq!(collisions.len(), 1, "跨插件同 directive 覆盖应恰好一条冲突告警: {:?}", reg.warnings);
-        assert!(collisions[0].contains("plugin-b"), "告警应指明覆盖者: {collisions:?}");
+        let collisions: Vec<_> = reg
+            .warnings
+            .iter()
+            .filter(|w| w.contains("'auth'") && w.contains("冲突"))
+            .collect();
+        assert_eq!(
+            collisions.len(),
+            1,
+            "跨插件同 directive 覆盖应恰好一条冲突告警: {:?}",
+            reg.warnings
+        );
+        assert!(
+            collisions[0].contains("plugin-b"),
+            "告警应指明覆盖者: {collisions:?}"
+        );
     }
     /// 审查盲扫 #1（本批 P1-1 修复的残留缺口）：registry 授权判定层漏掉
     /// DENYLIST——requires_env 声明 `RUPOST_AI_API_KEY` 时 registry 认为已放行

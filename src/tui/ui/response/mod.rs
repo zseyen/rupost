@@ -80,7 +80,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
     } else if state.mock_session.is_some() && state.last_response.is_none() {
         format!(
             " Response Viewer [Mock Traffic :{}] ",
-            state.mock_session.as_ref().map(|s| s.port).unwrap_or(0)
+            state.mock_session.as_ref().map(|s| s.port()).unwrap_or(0)
         )
     } else {
         if is_ws {

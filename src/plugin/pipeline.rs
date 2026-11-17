@@ -653,7 +653,8 @@ mod tests {
         h2.insert("beta", "2");
 
         let norm = |m: &std::collections::HashMap<&str, &str>| {
-            let sorted: std::collections::BTreeMap<_, _> = m.iter().map(|(k, v)| (*k, *v)).collect();
+            let sorted: std::collections::BTreeMap<_, _> =
+                m.iter().map(|(k, v)| (*k, *v)).collect();
             serde_json::json!({ "params": sorted }).to_string()
         };
         assert_eq!(norm(&h1), norm(&h2), "同键集必须产出相同 IPC 字节");

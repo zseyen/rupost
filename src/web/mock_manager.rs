@@ -1,6 +1,5 @@
 use crate::error::RupostError;
-use crate::mock::matcher::SwappableMatcher;
-use crate::mock::server::axum_adapter::{MockTrafficEvent, serve_matcher_with_events};
+use crate::mock::server::axum_adapter::MockTrafficEvent;
 use crate::mock::server::build_mock_matcher;
 use crate::security::PathSandbox;
 use crate::utils::path_guard::{
@@ -16,10 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::net::TcpListener;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 const MAX_MANAGED_MOCK_SERVERS: usize = 8;
@@ -29,11 +25,9 @@ const SKIP_SCAN_DIRS: &[&str] = &["target", "node_modules", "benches"];
 
 struct RunningMockEntry {
     info: MockServerInfo,
-    swappable: Arc<SwappableMatcher>,
+    session: crate::mock::session::MockServerSession,
     traffic: Arc<Mutex<VecDeque<MockTrafficItemDto>>>,
     request_count: Arc<AtomicU64>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    task: JoinHandle<()>,
 }
 
 /// Web 托管 Mock 服务生命周期管理器（支持多实例启停与端口/沙箱安全约束）
@@ -46,10 +40,7 @@ impl Drop for WebMockManager {
     fn drop(&mut self) {
         let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
         for (_, mut entry) in guard.drain() {
-            if let Some(tx) = entry.shutdown_tx.take() {
-                let _ = tx.send(());
-            }
-            entry.task.abort();
+            entry.session.shutdown();
         }
     }
 }
@@ -148,14 +139,17 @@ impl WebMockManager {
             ));
         }
 
-        let addr = format!("127.0.0.1:{bind_port}");
-        let listener = TcpListener::bind(&addr).await.map_err(|e| {
-            MockManagerError::new(StatusCode::CONFLICT, format!("Failed to bind {addr}: {e}"))
-        })?;
-        let actual_port = listener
-            .local_addr()
-            .map_err(|e| MockManagerError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .port();
+        // 批三-3：bind+serve+shutdown 核心收敛到 MockServerSession（宿主无关）
+        let (ev_tx, mut ev_rx) = unbounded_channel::<MockTrafficEvent>();
+        let session = crate::mock::session::MockServerSession::start(
+            bind_port,
+            Arc::new(matcher),
+            enable_cors,
+            ev_tx,
+        )
+        .await
+        .map_err(|e| MockManagerError::new(StatusCode::CONFLICT, format!("Failed to bind: {e}")))?;
+        let actual_port = session.port;
 
         let id = Uuid::new_v4().simple().to_string()[..8].to_string();
         let abs_root =
@@ -165,22 +159,8 @@ impl WebMockManager {
             .map(normalize_posix_path)
             .unwrap_or_else(|_| file_path.to_string());
 
-        let info = MockServerInfo {
-            id: id.clone(),
-            file_path: norm_path,
-            port: actual_port,
-            url: format!("http://127.0.0.1:{actual_port}"),
-            route_count,
-            request_count: 0,
-        };
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let swappable = Arc::new(SwappableMatcher::new(Arc::new(matcher)));
-        let matcher_for_task = Arc::clone(&swappable);
-
         let traffic = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_TRAFFIC_EVENTS)));
         let request_count = Arc::new(AtomicU64::new(0));
-        let (ev_tx, mut ev_rx) = unbounded_channel::<MockTrafficEvent>();
 
         let traffic_for_consumer = Arc::clone(&traffic);
         let count_for_consumer = Arc::clone(&request_count);
@@ -203,30 +183,23 @@ impl WebMockManager {
             }
         });
 
-        // ev_tx 仅移入 serve_matcher_with_events，服务停止时 sender 销毁自动结束消费协程
-        let task = tokio::spawn(async move {
-            let _ = serve_matcher_with_events(
-                listener,
-                matcher_for_task,
-                enable_cors,
-                async move {
-                    let _ = shutdown_rx.await;
-                },
-                Some(ev_tx),
-            )
-            .await;
-        });
+        let info = MockServerInfo {
+            id: id.clone(),
+            file_path: norm_path,
+            port: actual_port,
+            url: format!("http://127.0.0.1:{actual_port}"),
+            route_count,
+            request_count: 0,
+        };
 
         let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(
             id,
             RunningMockEntry {
                 info: info.clone(),
-                swappable,
+                session,
                 traffic,
                 request_count,
-                shutdown_tx: Some(shutdown_tx),
-                task,
             },
         );
 
@@ -268,15 +241,11 @@ impl WebMockManager {
         id: Option<&str>,
         port: Option<u16>,
     ) -> Result<MockServerInfo, MockManagerError> {
-        let (key, file_path, swappable) = {
+        let (key, file_path) = {
             let guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
             let key = Self::find_server_key(&guard, id, port, "reload")?;
-            let entry = &guard[&key];
-            (
-                key,
-                entry.info.file_path.clone(),
-                Arc::clone(&entry.swappable),
-            )
+            let file_path = guard[&key].info.file_path.clone();
+            (key, file_path)
         };
 
         // 锁外校验沙箱并重新编译；编译失败保留旧 Matcher 不中断原端口服务
@@ -305,7 +274,13 @@ impl WebMockManager {
             ));
         }
 
-        swappable.swap(Arc::new(new_matcher));
+        {
+            let guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = guard.get(&key).ok_or_else(|| {
+                MockManagerError::new(StatusCode::NOT_FOUND, "Running mock server not found")
+            })?;
+            entry.session.swap(Arc::new(new_matcher));
+        }
 
         let mut guard = self.servers.lock().unwrap_or_else(|e| e.into_inner());
         let entry = guard.get_mut(&key).ok_or_else(|| {
@@ -350,10 +325,7 @@ impl WebMockManager {
         let key = Self::find_server_key(&guard, id, port, "stop")?;
 
         let mut entry = guard.remove(&key).unwrap();
-        if let Some(tx) = entry.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        entry.task.abort();
+        entry.session.shutdown();
         Ok(entry.info)
     }
 }

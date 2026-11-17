@@ -139,7 +139,6 @@ async fn probe_after_connect(
     start_all: Instant,
     dns_lookup_duration: Duration,
     tcp_connect_duration: Duration,
-    lenient: bool,
 ) -> Result<DiagnosticsReport, String> {
     let host = target.host.as_str();
     let is_https = target.is_https;
@@ -157,26 +156,24 @@ async fn probe_after_connect(
                               tls_dur: Option<Duration>,
                               cert: Option<CertInfo>|
      -> Result<DiagnosticsReport, String> {
-        if lenient {
-            Ok(DiagnosticsReport {
-                url: url_str.to_string(),
-                is_https,
-                is_websocket,
-                ws_upgrade_success: None,
-                resolved_ips: resolved_ips.clone(),
-                dns_lookup_duration,
-                tcp_connect_duration,
-                tls_handshake_duration: tls_dur,
-                cert_info: cert,
-                http_status: None,
-                http_version: None,
-                ttfb: None,
-                total_duration: start_all.elapsed(),
-                connection_error: Some(err),
-            })
-        } else {
-            Err(err)
-        }
+        // 批三-4：lenient 恒定——阶段失败统一沉淀为 connection_error 部分报告；
+        // 严格契约由 diagnose_url 包装层转译回 Err
+        Ok(DiagnosticsReport {
+            url: url_str.to_string(),
+            is_https,
+            is_websocket,
+            ws_upgrade_success: None,
+            resolved_ips: resolved_ips.clone(),
+            dns_lookup_duration,
+            tcp_connect_duration,
+            tls_handshake_duration: tls_dur,
+            cert_info: cert,
+            http_status: None,
+            http_version: None,
+            ttfb: None,
+            total_duration: start_all.elapsed(),
+            connection_error: Some(err),
+        })
     };
 
     // 根据是否是 WebSocket，自适应组装 Upgrade 握手或常规 HTTP 请求
@@ -367,35 +364,15 @@ async fn probe_after_connect(
 }
 
 /// 诊断给定 URL 的 DNS、TCP、TLS 和 HTTP 性能及证书健康度（严格契约：
-/// 连接/TLS 阶段失败返回 Err，diagnose 命令的失败退出语义依赖于此）
+/// 任一阶段失败返回 Err，diagnose 命令的失败退出语义依赖于此）。
+/// 批三-4：实现收编为 [`diagnose_url_lenient`] 包装——两阶段的失败消息都
+/// 沉淀在 `connection_error`，转译回 Err 即完整复现严格语义（同源消息）。
 pub async fn diagnose_url(url_str: &str) -> Result<DiagnosticsReport, String> {
-    let start_all = Instant::now();
-    let target = resolve_target(url_str)?;
-
-    // 1 & 2. 结合超时进行统一的 DNS + TCP 握手诊断测量（失败 → Err）
-    let probe = crate::http::timing::DiagnosticsProber::connect_tcp_staged(
-        &target.host,
-        target.port,
-        DIAGNOSE_STAGE_TIMEOUT,
-    )
-    .await;
-    let Some(stream) = probe.stream else {
-        return Err(probe
-            .failure
-            .unwrap_or_else(|| "connection failed".to_string()));
-    };
-
-    probe_after_connect(
-        stream,
-        probe.socket_addr.unwrap(),
-        url_str,
-        &target,
-        start_all,
-        probe.dns_lookup_duration,
-        probe.tcp_connect_duration.unwrap_or_default(),
-        false,
-    )
-    .await
+    let report = diagnose_url_lenient(url_str).await?;
+    if let Some(err) = report.connection_error.clone() {
+        return Err(err);
+    }
+    Ok(report)
 }
 
 /// 部分诊断报告组装（连接阶段或 TLS/HTTP 探测阶段失败时的降级产物）：
@@ -471,7 +448,6 @@ pub async fn diagnose_url_lenient(url_str: &str) -> Result<DiagnosticsReport, St
         start_all,
         probe.dns_lookup_duration,
         probe.tcp_connect_duration.unwrap_or_default(),
-        true,
     )
     .await
 }

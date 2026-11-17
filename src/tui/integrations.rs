@@ -16,7 +16,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Sender, unbounded_channel};
-use tokio::task::AbortHandle;
 
 #[derive(Clone)]
 pub struct MockSessionState {

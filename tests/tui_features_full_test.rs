@@ -426,7 +426,7 @@ async fn test_r11_mock_toggle_serves_and_stops() {
     rupost::tui::integrations::toggle_mock_server(&mut state, &tx).await;
     eprintln!("DEBUG-R11: last_error={:?}", state.last_error);
     let session = state.mock_session.as_ref().expect("mock session must open");
-    let port = session.port;
+    let port = session.port();
     assert!(port > 0, "bound port must be known");
 
     // 真实 HTTP 往返命中 mock 路由

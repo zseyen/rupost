@@ -97,7 +97,11 @@ pub fn is_sensitive_key(key: &str) -> bool {
 pub struct RedactionPolicy {
     /// 项目自定义新增的敏感键（强制判定为敏感）
     extra_keys: HashSet<String>,
-    /// 用户与内置的豁免键（豁免 SUBSTRINGS 模糊匹配）
+    /// 用户与内置的豁免键（审查批二 C-d 裁决：子串包含豁免——键名精确等于
+    /// 豁免键、或包含豁免键作为子串，均豁免模糊匹配层；后缀变体如
+    /// `next_page_token_v2` 可被 `next_page_token` 豁免。硬键护栏前置不可豁免。
+    /// 注：豁免键自身也是子串语义——`ignore=["token"]` 会豁免全部含 token 的键，
+    /// 用户自行承担粒度）
     ignore_keys: HashSet<String>,
 }
 
@@ -360,8 +364,13 @@ impl RedactionPolicy {
             return true;
         }
 
-        // 3. 豁免检查（只作用于模糊/词根匹配层）
-        if self.ignore_keys.contains(key_str) {
+        // 3. 豁免检查（只作用于模糊匹配层；精确命中或包含豁免键为子串均豁免）
+        if self.ignore_keys.contains(key_str)
+            || self
+                .ignore_keys
+                .iter()
+                .any(|ig| !ig.is_empty() && key_str.contains(ig.as_str()))
+        {
             return false;
         }
 
@@ -816,6 +825,21 @@ mod tests {
 
     /// Step 2 Red 测试：RedactionPolicy 策略实体与自定义 extra_keys / ignore_keys
     #[test]
+    /// 审查批二 C-d：ignore_keys 豁免决策表——doc 承诺"豁免 SUBSTRINGS 模糊
+    /// 匹配"，此前仅精确匹配（next_page_token_v2 类后缀键无法豁免）。
+    /// 最终裁决：子串包含豁免（精确= 或 contains=豁免键）；硬键护栏前置不变。
+    #[test]
+    fn test_ignore_keys_word_root_exemption_decision_table() {
+        let policy =
+            RedactionPolicy::new([] as [&str; 0], ["next_page_token"]);
+
+        assert!(!policy.is_sensitive("next_page_token"));
+        assert!(!policy.is_sensitive("next_page_token_v2"));
+        assert!(policy.is_sensitive("access_token"));
+        assert!(policy.is_sensitive("Authorization"));
+        assert!(!policy.is_sensitive("page.next_page_token.count"));
+    }
+
     fn test_redaction_policy_custom_extra_and_ignore() {
         let policy = RedactionPolicy::new(
             ["x-sentry-key", "fastly-key"],

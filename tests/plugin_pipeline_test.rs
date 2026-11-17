@@ -356,6 +356,95 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
     );
 }
 
+/// 审查批二 C-c（对抗审查漏项 6）：suite 作用域缓存 × 降级的自愈语义（D6 裁决）
+/// 此前只有注释——无直接断言：失败不写槽、下一请求按各自现场重试、成功后写槽、
+/// 第三请求命中缓存不再 spawn。
+#[tokio::test]
+async fn test_suite_cache_degradation_self_heal_semantics() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("heal.marker");
+    let counter = dir.path().join("counter.txt");
+    // WAIT_FILE：marker 不存在 → 等待 → 驱动超时判定失败降级；存在 → 立即成功
+    let exe = install_script_plugin(
+        dir.path(),
+        "heal-probe",
+        PluginStage::Sign,
+        PluginCacheScope::Suite,
+        vec![],
+        // DSL 行必须含 '='（split_once 解析，无 '=' 整行被跳过——与 C-a 同族陷阱）
+        &format!(
+            "WAIT_FILE={}|60000|3\nAPPEND_LINE={}|run\nSTDOUT_LINE={{\"protocol_version\":\"1.0\",\"extra_headers\":[[\"X-Heal\",\"ok\"]],\"remove_headers\":[],\"mutated_body\":null,\"set_variables\":{{}},\"warnings\":[]}}\n",
+            marker.display(),
+            counter.display()
+        ),
+    );
+
+    let mut reg = PluginRegistry::new();
+    let m: PluginManifest =
+        serde_json::from_str(&std::fs::read_to_string(exe.with_extension("json")).unwrap())
+            .unwrap();
+    reg.register_manifest(exe, m);
+
+    let cache = SuiteHookCache::new();
+    let opts = PluginRuntimeOptions {
+        plugin_timeout: Duration::from_secs(1), // 首请求必然超时 → 降级
+        ..Default::default()
+    };
+    // ?optional 语义（03 §6.3）：失败 → DegradedPass（自愈重试窗口），而非阻断
+    let directives = [PluginDirective {
+        optional: true,
+        ..PluginDirective::new("sign", "heal-probe", PluginStage::Sign)
+    }];
+    let run = || async {
+        PluginPipeline::execute_for_request(
+            &directives,
+            &reg,
+            &opts,
+            &cache,
+            "http://x",
+            "GET",
+            &[],
+            None,
+        )
+        .await
+    };
+
+    // 请求 1：marker 缺席 → 超时降级，绝不写缓存槽
+    let out1 = run().await;
+    assert!(out1.blocking_error.is_none(), "?optional 超时应降级而非阻断: {:?}", out1.blocking_error);
+    assert!(out1.degraded, "?optional 超时必须 DegradedPass: {:?}", out1);
+    assert!(
+        out1.warnings.iter().any(|w| w.contains("降级") || w.contains("超时")),
+        "降级应携带告警: {:?}",
+        out1.warnings
+    );
+
+    // 现场"修复"：创建 marker（模拟依赖恢复）
+    std::fs::write(&marker, b"healed").unwrap();
+
+    // 请求 2：成功并写入缓存槽
+    let out2 = run().await;
+    assert!(!out2.degraded, "请求 2 应自愈成功");
+    assert_eq!(
+        out2.patch.as_ref().unwrap().extra_headers[0],
+        ("X-Heal".to_string(), "ok".to_string())
+    );
+
+    // 请求 3：命中缓存槽——不再 spawn（计数器不增长）
+    let out3 = run().await;
+    assert_eq!(
+        out3.patch.as_ref().unwrap().extra_headers[0],
+        ("X-Heal".to_string(), "ok".to_string())
+    );
+
+    let lines = std::fs::read_to_string(&counter).unwrap();
+    assert_eq!(
+        lines.lines().count(),
+        1,
+        "自愈语义：r1 超时被杀（未写槽）→ r2 真实 spawn 成功写槽 → r3 命中缓存不再 spawn，计数器应恰 1 行:\n{lines}"
+    );
+}
+
 /// 审查 P1-1：`RUPOST_*` 前缀透传是文档化契约（管线变量 WORKSPACE/BIN/CONFIG_DIR
 /// 依赖它），但密钥命名空间必须豁免——否则任何插件子进程都能读走宿主 AI 密钥。
 /// 契约双面锁定：良性 RUPOST_* 仍透传（既有测试锁定），密钥必须不可见。

@@ -547,6 +547,32 @@ fn test_missing_env_warning_on_plugin_command_and_suite_startup() {
     );
 }
 
+/// 审查批二 C-c（对抗审查漏项 5）：M4 提交信息宣称 "e2e: ... exit-7 passthrough"
+/// 但 tests/ 零断言——CI 依赖插件退出码作为唯一执行结果通道，此契约必须真实锁定。
+#[test]
+fn test_plugin_command_exit_code_passthrough_e2e() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_home = dir.path().join("home");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    let bin = install_cli_plugin(dir.path(), "exit7", "EXIT_CODE=7\n");
+    preseed_tofu(&fake_home, &bin);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(dir.path())
+        .env("HOME", &fake_home)
+        .args(["--allow-project-plugins", "exit7"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "插件 exit 7 必须原样透传，实际 {:?} stdout={} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// WP-AST 守护：插件命令必须收到内核注入的 `RUPOST_BIN`（评估报告 §6/§8——
 /// 插件经 `$RUPOST_BIN ast <file>` 消费核心解析 AST，杜绝 PATH 陈旧二进制漂移）。
 #[test]

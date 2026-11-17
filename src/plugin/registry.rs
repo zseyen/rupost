@@ -326,6 +326,20 @@ impl PluginRegistry {
                 self.hooks
                     .insert(alias.clone(), (executable_path.clone(), hook.clone()));
             }
+            // 批三-2（审查漏项 4）：裸 directive 跨插件同名同阶段——后注册者
+            // 静默覆盖会让"哪个插件生效"不可知；告警对齐 alias 分支先例。
+            // 同插件自撞（alias 与 directive 同名）跳过：语义等价覆盖，非冲突
+            if let Some((prev_exe, _)) = self.hooks_by_stage.get(&(hook.directive.clone(), hook.stage))
+                && prev_exe != &executable_path
+            {
+                self.warnings.push(format!(
+                    "插件钩子 '{}' (stage={:?}) 冲突：'{}' 覆盖 '{}' 的注册",
+                    hook.directive,
+                    hook.stage,
+                    plugin_name,
+                    prev_exe.display()
+                ));
+            }
             self.hooks_by_stage.insert(
                 (hook.directive.clone(), hook.stage),
                 (executable_path.clone(), hook.clone()),
@@ -830,6 +844,37 @@ pub fn preflight_runtime(
 
 #[cfg(test)]
 mod tests {
+
+    /// 批三-2（审查漏项 4）：裸 directive 跨插件同名同阶段覆盖必须有告警
+    /// （此前静默 last-wins；alias 分支早有同款告警）。同插件自撞不告警。
+    #[test]
+    fn test_bare_directive_cross_plugin_collision_warns() {
+        let mut reg = PluginRegistry::new();
+        for (exe, plugin) in [("/tmp/a/rupost-plugin-a", "plugin-a"), ("/tmp/b/rupost-plugin-b", "plugin-b")] {
+            reg.register_manifest(
+                PathBuf::from(exe),
+                PluginManifest {
+                    manifest_version: "1.0".to_string(),
+                    name: plugin.to_string(),
+                    version: "0.1.0".to_string(),
+                    description: "t".to_string(),
+                    runtime: None,
+                    hooks: vec![HookCapability {
+                        directive: "auth".to_string(),
+                        alias: None,
+                        stage: PluginStage::Prepare,
+                        cache_scope: Default::default(),
+                        requires_env: vec![],
+                        parameters_schema: serde_json::json!({}),
+                    }],
+                    commands: vec![],
+                },
+            );
+        }
+        let collisions: Vec<_> = reg.warnings.iter().filter(|w| w.contains("'auth'") && w.contains("冲突")).collect();
+        assert_eq!(collisions.len(), 1, "跨插件同 directive 覆盖应恰好一条冲突告警: {:?}", reg.warnings);
+        assert!(collisions[0].contains("plugin-b"), "告警应指明覆盖者: {collisions:?}");
+    }
     /// 审查盲扫 #1（本批 P1-1 修复的残留缺口）：registry 授权判定层漏掉
     /// DENYLIST——requires_env 声明 `RUPOST_AI_API_KEY` 时 registry 认为已放行
     /// （零告警），driver 透传层却剥掉它 → "没警告却拿不到值"。

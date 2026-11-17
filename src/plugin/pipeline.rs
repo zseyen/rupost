@@ -528,6 +528,14 @@ impl PluginPipeline {
         current_body: Option<&str>,
         current_vars: &serde_json::Map<String, serde_json::Value>,
     ) -> HookInvokeStep {
+        // 批三-2（审查漏项 3）：params 序列化经 BTreeMap 归一 key 顺序——
+        // std HashMap 迭代序随进程随机，同输入产生不同 IPC 字节，违反
+        // 执行期确定性；hook_cache_key 已是 BTreeMap，此处理应对齐
+        let sorted_params: BTreeMap<&str, &str> = directive
+            .params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let payload = json!({
             "protocol_version": "1.0",
             "stage": directive.stage,
@@ -539,7 +547,7 @@ impl PluginPipeline {
                 "body": current_body,
             },
             "variables": current_vars,
-            "params": directive.params,
+            "params": sorted_params,
         })
         .to_string();
 
@@ -628,6 +636,28 @@ impl PluginPipeline {
 
 #[cfg(test)]
 mod tests {
+
+    /// 批三-2（审查漏项 3）：IPC payload 的 params key 顺序确定性——
+    /// 同一键集无论以何种插入顺序进入 HashMap，序列化字节必须一致。
+    #[test]
+    fn test_hook_payload_params_key_order_deterministic() {
+        // 注意：payload 由 invoke_hook_once 内联构建，此处复刻其排序归一逻辑
+        // 锁定"HashMap → BTreeMap"这一行为本身
+        let mut h1 = std::collections::HashMap::new();
+        h1.insert("alpha", "1");
+        h1.insert("beta", "2");
+        h1.insert("gamma", "3");
+        let mut h2 = std::collections::HashMap::new();
+        h2.insert("gamma", "3");
+        h2.insert("alpha", "1");
+        h2.insert("beta", "2");
+
+        let norm = |m: &std::collections::HashMap<&str, &str>| {
+            let sorted: std::collections::BTreeMap<_, _> = m.iter().map(|(k, v)| (*k, *v)).collect();
+            serde_json::json!({ "params": sorted }).to_string()
+        };
+        assert_eq!(norm(&h1), norm(&h2), "同键集必须产出相同 IPC 字节");
+    }
     use super::*;
     use crate::plugin::PluginPatch;
 

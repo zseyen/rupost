@@ -189,3 +189,21 @@ fn test_validate_bare_relative_filename() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).contains("✓ ready: bare"));
 }
+
+/// 审查批二 C-e（对抗审查漏项）：内置命令集 clap 派生前的两个盲区——
+/// ①手写清单不含 clap alias：插件注册名 `t`/`exp`（test/export 的 alias）
+/// 会被 clap alias 永久遮蔽，validate 放行、运行永不可达、零警告；
+/// ②清单与 Commands 枚举同步靠人肉。派生后 alias 盲区闭合。
+#[test]
+fn test_validate_warns_on_clap_alias_shadowing() {
+    let dir = tempfile::tempdir().unwrap();
+    // "t" 是 test 的 visible alias——派生集必须识别为内置遮蔽
+    let path = write_legal(dir.path(), "t", "shadowed by clap alias");
+    let out = run_validate(&path);
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("永不可达") && stdout.contains("'t'"),
+        "alias 遮蔽必须在 validate 处置名道姓警告: {stdout}"
+    );
+}

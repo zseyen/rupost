@@ -271,6 +271,23 @@ impl RequestPreparer {
             }
         };
 
+        // 审查批二 C-b：豁免审计——`@no-redact` 声明且基础策略本会命中的键，
+        // 值保留原样出站，但脚注如实记录"谁被豁免了"（杜绝静默免脱敏）
+        if redact_secrets
+            && let Some(log) = audit_log.as_deref_mut()
+            && !parsed.metadata.no_redact_keys.is_empty()
+        {
+            let base = match policy {
+                Some(p) => p,
+                None => &RedactionPolicy::builtin(),
+            };
+            for key in &parsed.metadata.no_redact_keys {
+                if base.is_sensitive(key) {
+                    log.record_exemption(key);
+                }
+            }
+        }
+
         let url_out = if redact_secrets {
             effective_policy.redact_url_audited(&final_url, audit_log.as_deref_mut())
         } else {

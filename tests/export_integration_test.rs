@@ -186,3 +186,34 @@ fn test_export_corrupt_cookie_file_warns_but_exports() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("curl"), "导出命令应照常产出: {stdout}");
 }
+
+/// 审查批二 C-b：`@no-redact` 豁免必须进审计脚注——值保留原样（豁免语义），
+/// 但 stderr footer 如实记录"谁被豁免了"，杜绝静默免脱敏。
+#[test]
+fn test_export_no_redact_exempt_key_appears_in_footer() {
+    let dir = tempfile::tempdir().unwrap();
+    let case = dir.path().join("exempt.http");
+    std::fs::write(
+        &case,
+        "### t\n# @no-redact x-my-api-token\nGET https://api.example.com/data\nX-My-Api-Token: super-secret-val-42\n",
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .args(["export", "curl", case.to_str().unwrap(), "--redact"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Exempted by @no-redact") && stderr.contains("x-my-api-token"),
+        "豁免键必须出现在 footer: {stderr}"
+    );
+    // 豁免语义：值保留原样（对比：未豁免的敏感键会被掩码）
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("super-secret-val-42"),
+        "豁免键的值应保留原样: {stdout}"
+    );
+    assert!(out.status.success());
+}

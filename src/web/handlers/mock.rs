@@ -21,6 +21,9 @@ pub async fn simulate_mock_handler(
     State(_state): State<AppState>,
     Json(req): Json<MockSimulateRequest>,
 ) -> impl IntoResponse {
+    // 契约（审查批二 C-f）：file_path 仅用于按扩展名选择解析器，**从不读盘**——
+    // 内容恒来自请求体。若未来把该字段升级为"服务端读取文档"，必须先接
+    // PathSandbox（与 start/reload 同源），否则即构成路径穿越面。
     let parsed_res = if let Some(ref file_path) = req.file_path {
         if req.raw_block.contains("```") {
             MarkdownFileParser::parse_content(&req.raw_block)

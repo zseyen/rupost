@@ -823,15 +823,12 @@ mod tests {
         }
     }
 
-    /// Step 2 Red 测试：RedactionPolicy 策略实体与自定义 extra_keys / ignore_keys
-    #[test]
     /// 审查批二 C-d：ignore_keys 豁免决策表——doc 承诺"豁免 SUBSTRINGS 模糊
     /// 匹配"，此前仅精确匹配（next_page_token_v2 类后缀键无法豁免）。
     /// 最终裁决：子串包含豁免（精确= 或 contains=豁免键）；硬键护栏前置不变。
     #[test]
     fn test_ignore_keys_word_root_exemption_decision_table() {
-        let policy =
-            RedactionPolicy::new([] as [&str; 0], ["next_page_token"]);
+        let policy = RedactionPolicy::new([] as [&str; 0], ["next_page_token"]);
 
         assert!(!policy.is_sensitive("next_page_token"));
         assert!(!policy.is_sensitive("next_page_token_v2"));
@@ -840,6 +837,8 @@ mod tests {
         assert!(!policy.is_sensitive("page.next_page_token.count"));
     }
 
+    /// Step 2 Red 测试：RedactionPolicy 策略实体与自定义 extra_keys / ignore_keys
+    #[test]
     fn test_redaction_policy_custom_extra_and_ignore() {
         let policy = RedactionPolicy::new(
             ["x-sentry-key", "fastly-key"],
@@ -1131,21 +1130,11 @@ pub fn truncate_utf8_safe(text: &str, max_bytes: usize) -> String {
 
 /// 对响应体进行结构化脱敏并安全截断至 `max_bytes`
 pub fn redact_and_truncate_body(body: &str, max_bytes: usize) -> String {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
+    // 盲扫 #5：掩码逻辑委托 `RedactionPolicy::mask_body_secrets` 单一实现
+    // （此前两份逐行同构的 JSON/非 JSON 分支靠 parity 测试锁同步）
+    let masked = RedactionPolicy::builtin().mask_body_secrets(body);
 
-    let sanitized = if (trimmed.starts_with('{') || trimmed.starts_with('['))
-        && let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(trimmed)
-    {
-        mask_json_pii_value_in_place(&mut json_val);
-        serde_json::to_string(&json_val).unwrap_or_else(|_| trimmed.to_string())
-    } else {
-        mask_pii(&mask_inline_secrets(&redact_free_text(trimmed)))
-    };
-
-    truncate_utf8_safe(&sanitized, max_bytes)
+    truncate_utf8_safe(&masked, max_bytes)
 }
 
 #[cfg(test)]
@@ -1383,9 +1372,10 @@ mod mask_tests {
     }
 }
 
-// —— 以下 15 项测试自 ai/redactor.rs 垫片迁移（垫片删除，覆盖合并入 SSOT 引擎的家）——
+// —— body 掩码族测试（原 ai/redactor.rs 垫片的 15 项独有覆盖，垫片已删、
+// 测试并入本 SSOT 文件；命名按主题而非出生地——审查盲扫 #6）——
 #[cfg(test)]
-mod migrated_shim_tests {
+mod body_masking_tests {
     use super::*;
     use serde_json::Value;
 

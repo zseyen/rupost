@@ -61,6 +61,15 @@ pub fn parse_plugin_env_specs_with_warnings(
 ) -> (Vec<(String, String)>, Vec<String>) {
     let mut values = Vec::new();
     let mut warnings = Vec::new();
+    // 代码复查修复（本批自查 P1）：三个生产调用点仍走 `.0`-only 包装——
+    // 若只返回不外发，告警在全部生产路径被静默丢弃（测试直测 helper 掩盖了这一点）。
+    // 告警在构造处即 tracing::warn!（Release CLI 默认 warn 级可见），
+    // 返回值仅供需要结构化处理的调用方叠加使用。
+    let emit = |warnings: &[String]| {
+        for w in warnings {
+            tracing::warn!("{}", w);
+        }
+    };
     for spec in specs {
         if let Some((key, value)) = spec.split_once('=') {
             let key = key.trim();
@@ -82,6 +91,7 @@ pub fn parse_plugin_env_specs_with_warnings(
             }
         }
     }
+    emit(&warnings);
     (values, warnings)
 }
 

@@ -182,9 +182,7 @@ fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadat
             // 忽略——与 stage=/optional= 的显式报错先例对齐，fail-fast
             return Err(ParseError::InvalidMetadata {
                 line: 0,
-                message: format!(
-                    "插件参数 '{token}' 缺少 '='（写法应为 key=value）"
-                ),
+                message: format!("插件参数 '{token}' 缺少 '='（写法应为 key=value）"),
             });
         }
     }
@@ -629,8 +627,6 @@ mod tests {
         assert!(!plain.is_teardown);
     }
 
-    /// Step 4 Red 测试：@sensitive 与 @no-redact 元数据解析与应用
-    #[test]
     /// 走查缺口 #6 家族收尾（审查漏项 2）：@plugin 系指令的裸 token（漏写 '='）
     /// 此前静默忽略——现 fail-fast ParseError（与 stage=/optional= 先例对齐）
     #[test]
@@ -641,11 +637,16 @@ mod tests {
             ParseError::InvalidMetadata { message, .. } => message.clone(),
             other => panic!("应为 InvalidMetadata: {other:?}"),
         };
-        assert!(msg.contains("bareword") && msg.contains("缺少 '='"), "{msg}");
+        assert!(
+            msg.contains("bareword") && msg.contains("缺少 '='"),
+            "{msg}"
+        );
         // 全 key=value 形态不受影响
         assert!(parse_metadata("@sign hmac-sha256 key=abc").is_ok());
     }
 
+    /// Step 4 Red 测试：@sensitive 与 @no-redact 元数据解析与应用
+    #[test]
     fn test_sensitive_and_no_redact_metadata() {
         // 1. @sensitive 支持多值逗号与空白分隔，且小写规范化
         let res = parse_metadata("@sensitive X-Sentry-Key, fastly_key  custom-token")

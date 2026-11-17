@@ -377,29 +377,25 @@ impl ReplayExecutor {
             println!("  {} Body mismatch: {}", "[✗]".bold().red(), diff);
         }
 
+        // 盲扫 #7：verbose 打印与失败 snippet 共享同一次脱敏——单点计算，
+        // 防"未来调截断上限漏改一处"（P1-3 泄露即此形态的例证）
+        let redacted_body = || {
+            crate::security::redact::redact_and_truncate_body(
+                &res.body,
+                crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
+            )
+        };
+
         if self.verbose {
             // 与失败条目 snippet 同源脱敏（接手成本审查 P1：verbose 打印面
             // 曾直出明文响应体——同一函数内一个出口掩码、一个出口泄露）
             println!("  ┌─ Replayed Response Body ──────────────────────────");
-            println!(
-                "  │ {}",
-                crate::security::redact::redact_and_truncate_body(
-                    &res.body,
-                    crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
-                )
-            );
+            println!("  │ {}", redacted_body());
             println!("  └──────────────────────────────────────────────────");
         }
 
         // 失败条目采集脱敏片段（Gap Review P3：直上 LLM 前必经脱敏截断）
-        let response_body_snippet = if matched {
-            None
-        } else {
-            Some(crate::security::redact::redact_and_truncate_body(
-                &res.body,
-                crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
-            ))
-        };
+        let response_body_snippet = if matched { None } else { Some(redacted_body()) };
 
         ReplayEntryResult {
             request_number,

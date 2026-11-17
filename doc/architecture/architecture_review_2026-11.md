@@ -131,6 +131,9 @@ runner      -> assertion  history  http  middleware  parser  reporter ✗  varia
 | 12 | 中间件闭枚举 OCP | ✅ 销案 | — |
 | 13 | warning 四通道收敛（`TestResult.warnings` 唯一事实 / WarningSink 仅实时渲染 / 业务路径 66 处裸 `eprintln!` 清零——与 warning_sink.rs 自我声明矛盾） | ❌ 待办（2026-11-17 第二审查新增，证据：runner/executor_plugin.rs 双写、diagnostics/warning_sink.rs:1-3） | ~1 天 |
 | 14 | report 双管线合并（`from_file_results` 在线直渲与 `from_json_file_reports` 离线逐字段平行——JUnit 已走 JsonFileReport 单路径，照抄即可） | ❌ 待办（第二审查新增，证据：report/types.rs:191 vs 316-428） | ~半天 |
+| 16 | 新代码函数族收敛：`parse_plugin_env_spec/_specs/_with_warnings` 三函数族（batch 内联复制未委托、Option 版生产已死）；诊断域 6 入口 + strict/lenient 双体（`connect_tcp_with_timeout` 仅剩 1 生产调用者） | ❌ 待办（2026-11-18 第三审查·新鲜眼盲扫新增，证据：plugin/pipeline.rs:42-101、http/diagnose.rs:371/438） | ~半天 |
+| 17 | ConfigLoader 16 pub fn：同一 rupost.toml 三条加载路径三种损坏策略（redaction→builtin / plugins→default / variables→None+warning），新人无从选择 | ❌ 待办（同上，证据：variable/config.rs:88/140/165） | 收口 ~1 天 |
+| 18 | mock 插件测试 DSL 协议零文档：未知指令静默跳过（`_ => {}`）、stdin 单次消耗、分段数不一（split_once/splitn(4)/splitn(3)）——8 个测试文件共用，新测试已三踩 | ❌ 待办（同上，证据：tests/common/mock_plugin.rs:172 起；三踩记录见 plugin_pipeline/plugin_dod 测试注释） | fail-loud + 指令表 ~2h |
 | 15 | mock 生命周期三写归口（web/mock_manager.rs 576 行 × tui/integrations.rs 325 行各自实现启停/端口/流量环 → 抽宿主无关 `mock/session.rs`） | ❌ 待办（第二审查新增） | ~1 天 |
 
 > **维护约定**：每完成一项，在本表更新状态并保留销案证据（file:line）；新发现按 §1–§8 归类后入表，禁止口头跟踪。

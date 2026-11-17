@@ -15,6 +15,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 - **generate OAuth implicit fragment 残口**（P1-4）：`variabilize_url` 仅处理 SPA 形态（`#path?k=v`）——`#access_token=SECRET`（无 `?`）明文落盘而 export 侧同形态已掩码；补齐裸键值 fragment 臂（场景 G 红线）。
 - **`--env`/`--plugin-env`/`@plugin` 参数静默失败告警化**（走查缺口 #6 收尾 + 审查扩展）：显式 `--env-file` 缺失/目录/损坏、`rupost.toml` 存在但损坏、SSE/WS 流式日志写失败（once 闸门）、`--var`/`--plugin-env` 非法格式、toml `${VAR}` 未设置、`--env` 两层同时落空——全部告警化（`EnvFileOutcome`/`CliVarOutcome` 决策表 SSOT 封装，四入口各自渲染）。
 
+- **插件域静默失败清偿 + 豁免审计**（批二审查收口）：①`--plugin-env` 空键/缺失 KEY 与 `@plugin` 裸 token（漏写 `=`）从静默丢弃改为告警/ParseError（决策表锁定，合法形态零告警）；②export 脚注新增豁免审计行——`@no-redact` 声明且基础策略本会命中的键，值保留原样但 footer 如实记录 `Exempted by @no-redact (N): k1, k2`（杜绝静默免脱敏；豁免按实际头名精确匹配）。
+- **ignore_keys 子串包含豁免**（doc-code 漂移裁决）：doc 承诺"豁免 SUBSTRINGS 模糊匹配"但实现仅精确匹配——现裁决为子串包含语义（精确相等或包含豁免键均豁免模糊层，`next_page_token_v2` 可被 `next_page_token` 豁免；硬键护栏前置不可豁免；`@no-redact` 与 toml 双入口同语义自动升级；粒度自负已在字段 doc 声明）。
+- **插件 exit code 透传 e2e + suite 降级自愈守护**：M4 提交信息宣称的 exit-7 透传补上真实 e2e（命令插件 `EXIT_CODE=7` → rupost 透传 7）；D6 自愈语义从注释升格为直接守护（`?optional` + suite 缓存：降级不写槽 → 依赖恢复后自愈成功写槽 → 第三请求命中缓存恰一次真实 spawn，`WAIT_FILE` 门控 + 计数器断言）。
+- **TUI 快照目录私有化**：`create_dir_all`（0755）→ `ensure_private_dir`（0700 + 拒绝符号链接）——目录泄露快照文件名清单，文件体此前已 0600。
+- **内置子命令集从 clap 派生**：手写 14 正名清单的 alias 盲区根除（t/h/g/d/m/i/template/r/exp/w 此前不在清单——插件注册同名被 clap alias 永久遮蔽：validate 放行、运行不可达、零警告）；现从 `Cli::command()` 派生含全部 alias，validate 对遮蔽点名警告（e2e 锁定）。
+- **web simulate 契约注释锁死**：`file_path` 仅作解析器分派从不读盘的边界写入源码——未来升级为服务端读文档必须先接 PathSandbox。
+
 ### Refactoring
 
 - **redact SSOT 收口**：删除 `exporter/redact.rs`（2 行垫片）与 `ai/redactor.rs`（18 项 re-export + 15 项独有测试随迁入 `security/redact.rs`），12 个调用文件 import 收敛单一出口。

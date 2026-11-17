@@ -6,6 +6,7 @@ use super::types::{
 };
 use crate::Result;
 use crate::platform;
+use crate::plugin::driver::PLUGIN_ENV_SECRET_DENYLIST;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -527,7 +528,12 @@ impl PluginRegistry {
                 if key.is_empty() {
                     continue;
                 }
-                if key.starts_with("RUPOST_")
+                // 审查盲扫 #1：DENYLIST 键必须经 `--plugin-env` 显式放行才放行——
+                // 此前 `starts_with("RUPOST_*")` 无豁免判定，声明即视为已放行
+                // （零告警）而 driver 透传层却剥掉它，两层语义漂移
+                let prefix_authorized =
+                    key.starts_with("RUPOST_") && !PLUGIN_ENV_SECRET_DENYLIST.contains(&key);
+                if prefix_authorized
                     || PLUGIN_ENV_ALLOWLIST.contains(&key)
                     || authorized_env_keys.contains(key)
                 {
@@ -824,6 +830,52 @@ pub fn preflight_runtime(
 
 #[cfg(test)]
 mod tests {
+    /// 审查盲扫 #1（本批 P1-1 修复的残留缺口）：registry 授权判定层漏掉
+    /// DENYLIST——requires_env 声明 `RUPOST_AI_API_KEY` 时 registry 认为已放行
+    /// （零告警），driver 透传层却剥掉它 → "没警告却拿不到值"。
+    /// 契约：DENYLIST 键未经 `--plugin-env` 显式放行必须告警；显式放行则不告警。
+    #[test]
+    fn test_missing_env_warnings_exclude_secret_denylist() {
+        let mut reg = PluginRegistry::new();
+        reg.register_manifest(
+            PathBuf::from("/tmp/vault/rupost-plugin-secret"),
+            PluginManifest {
+                manifest_version: "1.0".to_string(),
+                name: "secret-plugin".to_string(),
+                version: "0.1.0".to_string(),
+                description: "secret".to_string(),
+                runtime: None,
+                hooks: vec![HookCapability {
+                    directive: "sign".to_string(),
+                    alias: None,
+                    stage: PluginStage::Sign,
+                    cache_scope: Default::default(),
+                    requires_env: vec!["RUPOST_AI_API_KEY".to_string()],
+                    parameters_schema: serde_json::json!({}),
+                }],
+                commands: vec![],
+            },
+        );
+
+        let directives = vec!["sign".to_string()];
+        // 1. 无显式放行 → 必须告警（当前实现漏掉 → 红）
+        let warnings = reg.collect_missing_env_warnings(&directives, &HashSet::new());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("RUPOST_AI_API_KEY") && w.contains("未")),
+            "DENYLIST 键未经显式放行必须告警: {warnings:?}"
+        );
+
+        // 2. 显式 --plugin-env 放行 → 不告警（授权集优先于 DENYLIST）
+        let authorized: HashSet<String> = ["RUPOST_AI_API_KEY".to_string()].into();
+        let warnings = reg.collect_missing_env_warnings(&directives, &authorized);
+        assert!(
+            !warnings.iter().any(|w| w.contains("RUPOST_AI_API_KEY")),
+            "显式放行的密钥不得告警: {warnings:?}"
+        );
+    }
+
     use super::*;
 
     fn make_fake_exe(path: &Path) {

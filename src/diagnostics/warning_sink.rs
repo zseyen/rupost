@@ -1,4 +1,12 @@
 //! 统一诊断告警总线（WarningSink）：将核心装配与运行时告警从裸 `eprintln!` 解耦，
+//! 警告通道裁决（批三-7，审查批二/接手成本审查收敛）：
+//! 1. `TestResult.warnings` —— **事实通道**（随结果落 JSON/HTML/快照，必经）；
+//! 2. `WarningSink` —— **终端实时渲染通道**（不承载需进报告的事实）；
+//! 3. `tracing::warn!` —— 选项级/装配级提示（测试结果存在之前）；
+//! 4. `eprintln!` —— 仅限表现层（src/cli/**、suite_presenter、main.rs）。
+//! 核心层（runner/ai/exporter/middleware 等）禁止裸 eprintln——CI grep 守护
+//! 冻结增长（allowlist 见 ci.yml），存量迁移登记架构审查 #13。
+
 //! 避免 TUI Raw Mode 终端撕裂与 Web 端告警静默丢失。
 
 use std::sync::Mutex;

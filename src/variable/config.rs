@@ -84,7 +84,10 @@ impl ConfigLoader {
         }
     }
 
-    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
+    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）。
+    /// ⚠️ 同一 rupost.toml 的三条加载路径之一，损坏策略各异（本路径静默回退内置；
+    /// `find_and_load` 携根因告警；`find_and_load_plugin_config` 回退 default）——
+    /// 修改解析行为时三处联动。
     pub fn find_and_load_redaction_policy() -> RedactionPolicy {
         Self::find_and_load_redaction_policy_with_sink(&StderrWarningSink)
     }
@@ -256,14 +259,6 @@ impl ConfigLoader {
         warnings.dedup();
         context.extend(vars);
         (context, warnings)
-    }
-
-    /// 解析 CLI 变量参数 "key=value"
-    pub fn parse_cli_var(s: &str) -> Option<(String, String)> {
-        match Self::parse_cli_var_outcome(s) {
-            CliVarOutcome::Parsed(k, v) => Some((k, v)),
-            CliVarOutcome::Warn(_) => None,
-        }
     }
 
     /// 解析 CLI 变量参数（走查缺口 #6 家族收尾：`--var no_equals` 此前经
@@ -676,18 +671,21 @@ base_url = "http://localhost:8080"
     }
 
     #[test]
-    fn test_parse_cli_var() {
+    fn test_parse_cli_var_outcome_parity() {
         assert_eq!(
-            ConfigLoader::parse_cli_var("key=value"),
-            Some(("key".to_string(), "value".to_string()))
+            ConfigLoader::parse_cli_var_outcome("key=value"),
+            CliVarOutcome::Parsed("key".to_string(), "value".to_string())
         );
 
         assert_eq!(
-            ConfigLoader::parse_cli_var("url=https://example.com"),
-            Some(("url".to_string(), "https://example.com".to_string()))
+            ConfigLoader::parse_cli_var_outcome("url=https://example.com"),
+            CliVarOutcome::Parsed("url".to_string(), "https://example.com".to_string())
         );
 
-        assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
+        assert!(matches!(
+            ConfigLoader::parse_cli_var_outcome("invalid"),
+            CliVarOutcome::Warn(_)
+        ));
     }
 
     /// `--var` 决策表（#6 家族收尾）：显式传参落空必须告警，三调用点共用
@@ -720,12 +718,6 @@ base_url = "http://localhost:8080"
                 (got, want) => panic!("input={input:?}: got {got:?}, want {want:?}"),
             }
         }
-        // 兼容入口委托同一决策（Option 语义不变）
-        assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
-        assert_eq!(
-            ConfigLoader::parse_cli_var("k=v"),
-            Some(("k".to_string(), "v".to_string()))
-        );
     }
 
     /// toml `${VAR}` 未设置告警 + 同变量多处引用去重

@@ -1,6 +1,7 @@
 pub mod fs;
 pub mod path;
 pub mod redact;
+pub mod redact_audit;
 pub mod sanitize;
 
 pub use path::PathSandbox;

@@ -673,27 +673,15 @@ async fn test_pipeline_suite_hook_cold_start_singleflight_dedup() {
 
 #[test]
 fn test_parse_plugin_env_spec_supports_key_and_key_equals_value() {
-    use rupost::plugin::{
-        parse_plugin_env_spec, parse_plugin_env_specs, parse_plugin_env_specs_with_warnings,
-    };
+    use rupost::plugin::{parse_plugin_env_specs, parse_plugin_env_specs_with_warnings};
 
     unsafe {
         std::env::set_var("RUPOST_TEST_SPEC_KEY", "inherited_val");
         std::env::remove_var("RUPOST_TEST_MISSING_KEY");
     }
-    assert_eq!(
-        parse_plugin_env_spec("FOO=bar=baz"),
-        Some(("FOO".to_string(), "bar=baz".to_string()))
-    );
-    assert_eq!(
-        parse_plugin_env_spec("RUPOST_TEST_SPEC_KEY"),
-        Some((
-            "RUPOST_TEST_SPEC_KEY".to_string(),
-            "inherited_val".to_string()
-        ))
-    );
-    assert_eq!(parse_plugin_env_spec("RUPOST_TEST_MISSING_KEY"), None);
-    assert_eq!(parse_plugin_env_spec("=bad"), None);
+    // 单条决策已经 batch 入口覆盖（outcome 形态见 C-a 决策表），此处保 batch 断言
+    let (vals, _) = parse_plugin_env_specs_with_warnings(&["FOO=bar=baz".to_string()]);
+    assert_eq!(vals, vec![("FOO".to_string(), "bar=baz".to_string())]);
 
     // 走查缺口 #6 家族收尾（审查漏项 1）：--plugin-env 的两种静默形态必须告警
     // （此前 filter_map 无声丢弃——用户确信传了凭据，插件实际什么都没拿到）

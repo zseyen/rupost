@@ -38,17 +38,31 @@ impl Default for PluginRuntimeOptions {
     }
 }
 
-/// 解析 CLI `--plugin-env` 单条规格：`KEY=VALUE` 直接取值；`KEY` 从父进程环境变量读取（缺失返回 None）。
-pub fn parse_plugin_env_spec(spec: &str) -> Option<(String, String)> {
+/// 单条规格决策（批三-6 #16：三函数族收敛——单条决策唯一，batch 委托之）
+fn parse_plugin_env_spec_outcome(spec: &str) -> (Option<(String, String)>, Option<String>) {
     if let Some((key, value)) = spec.split_once('=') {
         let key = key.trim();
-        (!key.is_empty()).then(|| (key.to_string(), value.to_string()))
+        if key.is_empty() {
+            return (
+                None,
+                Some(format!("--plugin-env '{spec}': 变量名为空，变量未生效")),
+            );
+        }
+        (Some((key.to_string(), value.to_string())), None)
     } else {
         let key = spec.trim();
         if key.is_empty() {
-            return None;
+            return (None, Some(format!("--plugin-env '{spec}': 缺少参数内容")));
         }
-        std::env::var(key).ok().map(|val| (key.to_string(), val))
+        match std::env::var(key) {
+            Ok(val) => (Some((key.to_string(), val)), None),
+            Err(_) => (
+                None,
+                Some(format!(
+                    "--plugin-env {key}: 父进程环境变量未设置，变量未传给插件"
+                )),
+            ),
+        }
     }
 }
 
@@ -61,37 +75,18 @@ pub fn parse_plugin_env_specs_with_warnings(
 ) -> (Vec<(String, String)>, Vec<String>) {
     let mut values = Vec::new();
     let mut warnings = Vec::new();
-    // 代码复查修复（本批自查 P1）：三个生产调用点仍走 `.0`-only 包装——
-    // 若只返回不外发，告警在全部生产路径被静默丢弃（测试直测 helper 掩盖了这一点）。
     // 告警在构造处即 tracing::warn!（Release CLI 默认 warn 级可见），
     // 返回值仅供需要结构化处理的调用方叠加使用。
-    let emit = |warnings: &[String]| {
-        for w in warnings {
-            tracing::warn!("{}", w);
-        }
-    };
     for spec in specs {
-        if let Some((key, value)) = spec.split_once('=') {
-            let key = key.trim();
-            if key.is_empty() {
-                warnings.push(format!("--plugin-env '{spec}': 变量名为空，变量未生效"));
-            } else {
-                values.push((key.to_string(), value.to_string()));
-            }
-        } else {
-            let key = spec.trim();
-            if key.is_empty() {
-                warnings.push(format!("--plugin-env '{spec}': 缺少参数内容，变量未生效"));
-            } else if let Ok(val) = std::env::var(key) {
-                values.push((key.to_string(), val));
-            } else {
-                warnings.push(format!(
-                    "--plugin-env {key}: 父进程环境变量未设置，变量未传给插件"
-                ));
-            }
+        let (value, warning) = parse_plugin_env_spec_outcome(spec);
+        if let Some(w) = warning {
+            tracing::warn!("{}", w);
+            warnings.push(w);
+        }
+        if let Some(pair) = value {
+            values.push(pair);
         }
     }
-    emit(&warnings);
     (values, warnings)
 }
 

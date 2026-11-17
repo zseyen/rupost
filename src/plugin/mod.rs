@@ -14,6 +14,7 @@ pub use driver::invoke_plugin;
 pub use patch::PluginPatch;
 pub use pipeline::{
     PluginPipeline, PrescriptionFormatter, parse_plugin_env_spec, parse_plugin_env_specs,
+    parse_plugin_env_specs_with_warnings,
 };
 pub use protocol::{PluginFailureKind, PluginInvocationOutcome};
 pub use registry::{DiscoverOptions, PluginRegistry, RegistryCacheFile};

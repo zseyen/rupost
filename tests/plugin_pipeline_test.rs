@@ -578,7 +578,7 @@ async fn test_pipeline_suite_hook_cold_start_singleflight_dedup() {
 
 #[test]
 fn test_parse_plugin_env_spec_supports_key_and_key_equals_value() {
-    use rupost::plugin::{parse_plugin_env_spec, parse_plugin_env_specs};
+    use rupost::plugin::{parse_plugin_env_spec, parse_plugin_env_specs, parse_plugin_env_specs_with_warnings};
 
     unsafe {
         std::env::set_var("RUPOST_TEST_SPEC_KEY", "inherited_val");
@@ -597,6 +597,28 @@ fn test_parse_plugin_env_spec_supports_key_and_key_equals_value() {
     );
     assert_eq!(parse_plugin_env_spec("RUPOST_TEST_MISSING_KEY"), None);
     assert_eq!(parse_plugin_env_spec("=bad"), None);
+
+    // 走查缺口 #6 家族收尾（审查漏项 1）：--plugin-env 的两种静默形态必须告警
+    // （此前 filter_map 无声丢弃——用户确信传了凭据，插件实际什么都没拿到）
+    let (_, missing_warn) = parse_plugin_env_specs_with_warnings(&["RUPOST_TEST_GAP2_UNSET".to_string()]);
+    assert_eq!(missing_warn.len(), 1, "缺失 KEY 应告警: {missing_warn:?}");
+    assert!(missing_warn[0].contains("RUPOST_TEST_GAP2_UNSET"), "{missing_warn:?}");
+    assert!(missing_warn[0].contains("未设置") || missing_warn[0].contains("不存在"), "{missing_warn:?}");
+
+    let (_, empty_key_warn) = parse_plugin_env_specs_with_warnings(["=leak-value".to_string()].iter().cloned().collect::<Vec<_>>().as_slice());
+    assert_eq!(empty_key_warn.len(), 1, "空键应告警: {empty_key_warn:?}");
+    assert!(empty_key_warn[0].contains("变量名为空"), "{empty_key_warn:?}");
+
+    // 合法形态零告警（既有语义不回归）
+    unsafe { std::env::set_var("RUPOST_TEST_GAP2_SET", "v-ok"); }
+    let (parsed, warns) = parse_plugin_env_specs_with_warnings(&[
+        "RUPOST_TEST_GAP2_SET".to_string(),
+        "K=V".to_string(),
+    ]);
+    unsafe { std::env::remove_var("RUPOST_TEST_GAP2_SET"); }
+    assert!(warns.is_empty(), "合法形态不得告警: {warns:?}");
+    assert!(parsed.contains(&("RUPOST_TEST_GAP2_SET".to_string(), "v-ok".to_string())));
+    assert!(parsed.contains(&("K".to_string(), "V".to_string())));
     assert_eq!(
         parse_plugin_env_specs(&[
             "RUPOST_TEST_SPEC_KEY".to_string(),

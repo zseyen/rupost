@@ -8,6 +8,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Fixed
 
+- **插件子进程密钥透传豁免**（P1-1）：`apply_plugin_env` 此前无条件转发全部 `RUPOST_*` 变量——含 `RUPOST_AI_API_KEY`（真实 AI 密钥）送进任意插件子进程；现 `PLUGIN_ENV_SECRET_DENYLIST` 豁免密钥命名空间（良性前缀透传契约保留，双面守护测试锁定）。
+- **replay 双出口脱敏**（P1-3 + verbose 补齐）：传输错误→重放恢复的 mismatch 分支 snippet 此前 `chars().take(200)` 明文；`--verbose` 的 Replayed Response Body 打印同函数内直出明文——两出口现均走 `redact_and_truncate_body` 同源脱敏（e2e 守护：凭据不出 stdout）。
+- **`history list --limit` 无界预分配崩溃回归**（P1-5）：O(N) tail 优化把用户可控 n 直通 `Vec::with_capacity`——`--limit usize::MAX` capacity overflow abort；预分配上限 4096 与收集语义解耦（bin 级守护）。
+- **插件 params 内核解析**（P1-2，03 §321 契约兑现）：IPC payload 此前原样透传 `directive.params`——照文档写 `secret=env.SECRET` 的插件收到字面量且零告警；现裸 `env.*` 与 `{{var}}` 经内核 SSOT 解析，未解析透传 + WarningSink 告警；缓存键随解析值变化（动态参数正确禁用请求级缓存）。
+- **generate OAuth implicit fragment 残口**（P1-4）：`variabilize_url` 仅处理 SPA 形态（`#path?k=v`）——`#access_token=SECRET`（无 `?`）明文落盘而 export 侧同形态已掩码；补齐裸键值 fragment 臂（场景 G 红线）。
+- **`--env`/`--plugin-env`/`@plugin` 参数静默失败告警化**（走查缺口 #6 收尾 + 审查扩展）：显式 `--env-file` 缺失/目录/损坏、`rupost.toml` 存在但损坏、SSE/WS 流式日志写失败（once 闸门）、`--var`/`--plugin-env` 非法格式、toml `${VAR}` 未设置、`--env` 两层同时落空——全部告警化（`EnvFileOutcome`/`CliVarOutcome` 决策表 SSOT 封装，四入口各自渲染）。
+
+### Refactoring
+
+- **redact SSOT 收口**：删除 `exporter/redact.rs`（2 行垫片）与 `ai/redactor.rs`（18 项 re-export + 15 项独有测试随迁入 `security/redact.rs`），12 个调用文件 import 收敛单一出口。
+- **死抽象清理**：`with_observer`（零调用 builder）、MockCompiler lenient `compile()`（生产不可达，17 处测试迁移 `try_compile`）、`ReportGenerator`/`PayloadDecoder` 单实现 trait 塌缩为固有方法；裁决保留：`AssertTarget`（双协议双实现）、`DocumentStore`（web 明示扩展点）。
+- **runner/mod.rs 跨模块桶装 re-export 删除**（history::gc / http::url / parser::scanner / reporter 四条边，5 调用点直呼其名）。
+
+### Fixed
+
 - **解析器选择边界修复（WP-P2c）**：`GET url --verbose` 等旗标混入形态此前误切 curl 解析器（方法 token 被当 URL 吞掉）——现按"方法前置"判定（首 token 为标准 HTTP 方法 → httpie 解析器，未知旗标容忍），旗标前置仍走根路由裁决 exit 2（`fix(parser,cli)` 5a290e05）。
 
 ### Added

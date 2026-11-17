@@ -52,12 +52,42 @@ pub fn parse_plugin_env_spec(spec: &str) -> Option<(String, String)> {
     }
 }
 
-/// 批量解析 `--plugin-env` 参数列表
+/// 批量解析 `--plugin-env` 参数列表（带告警，走查缺口 #6 家族收尾）：
+/// `=VALUE`（空键）与 `KEY`（父进程环境变量缺失）此前经 filter_map 静默丢弃——
+/// 用户确信传了凭据，插件实际什么都没拿到。两种形态现各产出一条告警；
+/// 调用方（suite_setup / executor_factory / plugin_exec）自行渲染。
+pub fn parse_plugin_env_specs_with_warnings(
+    specs: &[String],
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut values = Vec::new();
+    let mut warnings = Vec::new();
+    for spec in specs {
+        if let Some((key, value)) = spec.split_once('=') {
+            let key = key.trim();
+            if key.is_empty() {
+                warnings.push(format!("--plugin-env '{spec}': 变量名为空，变量未生效"));
+            } else {
+                values.push((key.to_string(), value.to_string()));
+            }
+        } else {
+            let key = spec.trim();
+            if key.is_empty() {
+                warnings.push(format!("--plugin-env '{spec}': 缺少参数内容，变量未生效"));
+            } else if let Ok(val) = std::env::var(key) {
+                values.push((key.to_string(), val));
+            } else {
+                warnings.push(format!(
+                    "--plugin-env {key}: 父进程环境变量未设置，变量未传给插件"
+                ));
+            }
+        }
+    }
+    (values, warnings)
+}
+
+/// 批量解析 `--plugin-env` 参数列表（无告警兼容形态）
 pub fn parse_plugin_env_specs(specs: &[String]) -> Vec<(String, String)> {
-    specs
-        .iter()
-        .filter_map(|s| parse_plugin_env_spec(s))
-        .collect()
+    parse_plugin_env_specs_with_warnings(specs).0
 }
 
 /// suite 级 Hook 结果缓存（03 §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）。

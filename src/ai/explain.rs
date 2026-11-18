@@ -72,12 +72,12 @@ impl ExplainSession {
     }
 
     /// 便捷入口：走 B4 配置链（env > 用户级文件 > 本地探测）构建客户端后调用
-    /// [`Self::explain_failure_with_client`]。解析失败输出黄色指引（PRD US1 验收条款）。
+    /// [`Self::explain_failure_with_client`]。解析失败经 tracing 警示指引（PRD US1 验收条款）。
     pub async fn explain_failure(&mut self, r: &TestResult) {
         let client = match crate::ai::config::resolve().await {
             Ok(resolved) => Some(resolved.client),
             Err(msg) => {
-                eprintln!("    {} {}", "⚠".yellow(), msg);
+                tracing::warn!("{msg}");
                 None
             }
         };
@@ -117,9 +117,9 @@ impl ExplainSession {
         }
 
         let Some(client) = client else {
-            // PRD US1 And：未配置 AI 时输出黄色提示（每轮一次）
+            // PRD US1 And：未配置 AI 时经 tracing 警示（每轮一次）
             if !self.no_key_warned {
-                eprintln!("    {} AI 归因已跳过（未检测到可用 AI 配置）", "⚠".yellow());
+                tracing::warn!("AI 归因已跳过（未检测到可用 AI 配置）");
                 self.no_key_warned = true;
             }
             return;
@@ -131,9 +131,8 @@ impl ExplainSession {
 
         if self.ai_calls_made >= MAX_AI_EXPLAIN_CALLS {
             if !self.limit_warned {
-                eprintln!(
-                    "    {} Reached per-run AI explanation limit ({MAX_AI_EXPLAIN_CALLS}); using deterministic rules for remaining failures (tip: use `--triage` for batch clustering).",
-                    "ℹ".cyan()
+                tracing::info!(
+                    "Reached per-run AI explanation limit ({MAX_AI_EXPLAIN_CALLS}); using deterministic rules for remaining failures (tip: use `--triage` for batch clustering)."
                 );
                 self.limit_warned = true;
             }
@@ -161,16 +160,11 @@ impl ExplainSession {
             Err(e) => {
                 self.consecutive_ai_errors += 1;
                 let safe_err = truncate_utf8_safe(&e.to_string(), 160);
-                eprintln!(
-                    "    {} [AI Explanation unavailable: {}]",
-                    "⚠".yellow(),
-                    safe_err
-                );
+                tracing::warn!("[AI Explanation unavailable: {}]", safe_err);
                 // 熔断开启的一次性提示（Gap Review P3：此前静默降级无任何说明）
                 if self.consecutive_ai_errors == CIRCUIT_BREAKER_THRESHOLD {
-                    eprintln!(
-                        "    {} AI 连续失败 {} 次，熔断已开启——本轮剩余失败将仅使用规则版归因（tip: `--triage` 可做批量聚类）",
-                        "⚠".yellow(),
+                    tracing::warn!(
+                        "AI 连续失败 {} 次，熔断已开启——本轮剩余失败将仅使用规则版归因（tip: `--triage` 可做批量聚类）",
                         CIRCUIT_BREAKER_THRESHOLD
                     );
                 }

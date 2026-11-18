@@ -8,6 +8,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Fixed
 
+- **走查 #6c 契约补齐 + 死测试复活**：批三-6 提交将 `#[test]` 属性错位（`test_corrupt_toml_warns_consistently_across_three_paths` 重复悬挂、`test_try_load_config_file_classifies_missing_vs_corrupt` 丢失属性成死代码）——复活后暴露 `try_load_config_file` 解析失败臂只报根因不带后果；现与 schema 失配臂同口径补齐"环境变量配置未加载，请修复 rupost.toml 后重试"（clippy 双警告清零）。
 - **插件子进程密钥透传豁免**（P1-1）：`apply_plugin_env` 此前无条件转发全部 `RUPOST_*` 变量——含 `RUPOST_AI_API_KEY`（真实 AI 密钥）送进任意插件子进程；现 `PLUGIN_ENV_SECRET_DENYLIST` 豁免密钥命名空间（良性前缀透传契约保留，双面守护测试锁定）。
 - **replay 双出口脱敏**（P1-3 + verbose 补齐）：传输错误→重放恢复的 mismatch 分支 snippet 此前 `chars().take(200)` 明文；`--verbose` 的 Replayed Response Body 打印同函数内直出明文——两出口现均走 `redact_and_truncate_body` 同源脱敏（e2e 守护：凭据不出 stdout）。
 - **`history list --limit` 无界预分配崩溃回归**（P1-5）：O(N) tail 优化把用户可控 n 直通 `Vec::with_capacity`——`--limit usize::MAX` capacity overflow abort；预分配上限 4096 与收集语义解耦（bin 级守护）。
@@ -24,6 +25,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Refactoring
 
+- **eprintln 四通道收敛主体（架构审查 #13 批A/B）**：`runner/engine/batch.rs` 两处 teardown 通知 → `TestSuiteOutcome.notices`（`SuiteNotice` 结构化出口，app.rs 装配侧派生、`files_map` 移动前计数，终端输出字节级不变，守护测试 `test_suite_notices_carry_skip_marked_and_failed_teardown` 锁定）；`src/ai/*` 20 处 → `tracing`（logger stderr writer 保 stdout 机器可读管道纯净，彩色 glyph 移除）；CI 棘轮基线 34→12（实测值，剩余 12 处存量逐条裁决）。
 - **redact SSOT 收口**：删除 `exporter/redact.rs`（2 行垫片）与 `ai/redactor.rs`（18 项 re-export + 15 项独有测试随迁入 `security/redact.rs`），12 个调用文件 import 收敛单一出口。
 - **死抽象清理**：`with_observer`（零调用 builder）、MockCompiler lenient `compile()`（生产不可达，17 处测试迁移 `try_compile`）、`ReportGenerator`/`PayloadDecoder` 单实现 trait 塌缩为固有方法；裁决保留：`AssertTarget`（双协议双实现）、`DocumentStore`（web 明示扩展点）。
 - **runner/mod.rs 跨模块桶装 re-export 删除**（history::gc / http::url / parser::scanner / reporter 四条边，5 调用点直呼其名）。

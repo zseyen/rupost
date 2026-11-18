@@ -110,7 +110,7 @@ impl ConfigLoader {
         policy
     }
 
-    /// 三路径共用的读 + 解析单点（批三-6 #17 收口：`find_and_load` / 
+    /// 三路径共用的读 + 解析单点（批三-6 #17 收口：`find_and_load` /
     /// `find_and_load_redaction_policy` / `find_and_load_plugin_config` 此前各自
     /// 读盘解析——同一 run 磁盘 I/O ×3 且错误措辞三套）。
     /// 返回：Ok(None) = 文件不存在（各消费者自行决定缺省）；
@@ -121,10 +121,10 @@ impl ConfigLoader {
         if !path.exists() {
             return Ok(None);
         }
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
-        let value = toml::from_str(&content)
-            .map_err(|e| format!("解析 {} 失败: {e}", path.display()))?;
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+        let value =
+            toml::from_str(&content).map_err(|e| format!("解析 {} 失败: {e}", path.display()))?;
         Ok(Some((content, value)))
     }
 
@@ -133,11 +133,17 @@ impl ConfigLoader {
     /// 不存在 → Ok(None)（继续下一查找位）；损坏 → Err(根因)（调用方停止搜索，
     /// 坏文件优先于静默回退，否则用户会误用更高层级目录的错误配置）。
     fn try_load_config_file(path: &Path) -> Result<Option<VariableConfig>, String> {
-        match Self::load_toml_document(path)? {
-            None => Ok(None),
-            Some((_, doc)) => doc.try_into().map(Some).map_err(|e| {
-                format!("{e} —— 环境变量配置未加载，请修复 rupost.toml 后重试")
-            }),
+        match Self::load_toml_document(path) {
+            // 走查 #6c 完整契约：读取/解析失败与 schema 失配同口径——
+            // 根因（load_toml_document）之外必须说明后果并携带修复指引
+            Err(e) => Err(format!(
+                "{e} —— 环境变量配置未加载，请修复 rupost.toml 后重试"
+            )),
+            Ok(None) => Ok(None),
+            Ok(Some((_, doc))) => doc
+                .try_into()
+                .map(Some)
+                .map_err(|e| format!("{e} —— 环境变量配置未加载，请修复 rupost.toml 后重试")),
         }
     }
 
@@ -177,7 +183,9 @@ impl ConfigLoader {
             },
             Ok(None) => (PluginTomlConfig::default(), warnings),
             Err(root_cause) => {
-                warnings.push(format!("rupost.toml [plugins] 段解析失败，已回退默认: {root_cause}"));
+                warnings.push(format!(
+                    "rupost.toml [plugins] 段解析失败，已回退默认: {root_cause}"
+                ));
                 (PluginTomlConfig::default(), warnings)
             }
         }
@@ -652,7 +660,6 @@ base_url = "http://localhost:8080"
         );
     }
 
-    #[test]
     /// 批三-6 #17 收口一致性守护：同一坏 toml，三路径的告警必须携带同一根因
     /// （"解析 ... 失败"）——杜绝"某路径静默、某路径告警"的漂移。
     #[test]
@@ -688,6 +695,7 @@ base_url = "http://localhost:8080"
         let _ = err; // 已断言
     }
 
+    #[test]
     fn test_try_load_config_file_classifies_missing_vs_corrupt() {
         // 走查缺口 #6c：不存在 → Ok(None)（继续查找位），损坏 → Err(根因)
         use tempfile::NamedTempFile;

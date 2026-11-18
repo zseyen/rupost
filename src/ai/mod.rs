@@ -31,17 +31,16 @@ pub async fn run_ai_assert(params: &AiAssertParams, text: &str) -> Result<()> {
         .await
         .map_err(RupostError::Other)?;
     if let Some(notice) = &resolved.notice {
-        // 提示走 stderr：--raw 的 stdout 是机器可读管道，不得混入
-        eprintln!("{} {}", "ℹ".cyan(), notice);
+        // 提示经 tracing（logger stderr writer）：--raw 的 stdout 是机器可读管道，不得混入
+        tracing::info!("{notice}");
     }
 
     // ── 上下文采集（确定性；错误直接上抛为可读指引）──
     // mask = !no_mask：默认脱敏；--no-mask 时原样保留（仅截断），并打印一次性风险提示
     let mask = !params.no_mask;
     if params.no_mask && (params.response.is_some() || params.last.is_some()) {
-        eprintln!(
-            "{} --no-mask 已显式关闭脱敏：上下文中的敏感值将原样发送给 AI 端点，请确认合规",
-            "⚠".yellow().bold()
+        tracing::warn!(
+            "--no-mask 已显式关闭脱敏：上下文中的敏感值将原样发送给 AI 端点，请确认合规"
         );
     }
 

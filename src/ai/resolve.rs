@@ -123,9 +123,8 @@ pub async fn resolve_file(path: &Path, dry_run: bool) -> Result<ResolveReport> {
                 out.push_str(&format!("  # ⚠ 展开失败: {safe_err}\n"));
                 if consecutive_errors >= CIRCUIT_BREAKER_THRESHOLD {
                     breaker_open = true;
-                    eprintln!(
-                        "{} AI 连续失败 {} 次，熔断已开启——剩余指令保留原样",
-                        "⚠".yellow(),
+                    tracing::warn!(
+                        "AI 连续失败 {} 次，熔断已开启——剩余指令保留原样",
                         CIRCUIT_BREAKER_THRESHOLD
                     );
                 }

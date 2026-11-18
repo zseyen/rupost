@@ -75,24 +75,6 @@ impl BatchExecutor {
                 }
             }
         }
-        // 若有 teardown 被跳标（--only / @skip），一次性提示（P1-10：提示不可为死代码）
-        let skip_marked_teardowns: usize = request
-            .files_map
-            .values()
-            .map(|f| {
-                f.requests
-                    .iter()
-                    .filter(|r| r.metadata.is_teardown && r.metadata.skip)
-                    .count()
-            })
-            .sum();
-        if skip_marked_teardowns > 0 {
-            eprintln!(
-                "[i] {} 个 @teardown 请求被跳过（--only 未选中或 @skip 标记）——清理阶段不执行",
-                skip_marked_teardowns
-            );
-        }
-
         let mut parallel_cookie_state: Option<serde_json::Value> = None;
         let mut parallel_started_files: Option<Vec<PathBuf>> = None;
 
@@ -150,7 +132,6 @@ impl BatchExecutor {
         // serial 的 fail_fast break 已由 'outer 标签记录中断点。
         let started: Vec<PathBuf> = parallel_started_files
             .unwrap_or_else(|| results.iter().map(|(p, _)| p.clone()).collect());
-        let mut teardown_failure = false;
         // 并行分支若带有捕获的会话 Cookie，只装配临时 teardown 执行器消费，
         // 避免污染主执行器的持久化仓库（守护 cookie_persistence_test 契约 2a/2b）。
         let ephemeral_teardown_executor = if !teardowns_map.is_empty()
@@ -197,9 +178,6 @@ impl BatchExecutor {
                             )
                             .await;
                         r.is_teardown = true;
-                        if !r.success {
-                            teardown_failure = true;
-                        }
                         r
                     };
                     result.is_teardown = true;
@@ -221,9 +199,6 @@ impl BatchExecutor {
                     }
                 }
             }
-        }
-        if teardown_failure {
-            eprintln!("[!] @teardown 清理请求执行失败——清理结果已计入失败统计");
         }
 
         // 最终按照原定的拓扑顺序排序，以保持稳定输出

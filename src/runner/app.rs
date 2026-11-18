@@ -243,6 +243,24 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
         BatchMode::Serial
     };
 
+    // P1-10（自 batch.rs 上移，files_map 移动前派生）：skip 标记的 @teardown
+    // 一次性提示走 outcome.notices 结构化出口，核心层不再裸 eprintln
+    let skip_marked_teardowns: usize = files_map
+        .values()
+        .map(|f| {
+            f.requests
+                .iter()
+                .filter(|r| r.metadata.is_teardown && r.metadata.skip)
+                .count()
+        })
+        .sum();
+    if skip_marked_teardowns > 0 {
+        notices.push(SuiteNotice::Stderr(format!(
+            "[i] {} 个 @teardown 请求被跳过（--only 未选中或 @skip 标记）——清理阶段不执行",
+            skip_marked_teardowns
+        )));
+    }
+
     let batch_request = BatchRunRequest {
         execution_order,
         dependencies,
@@ -255,6 +273,17 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
 
     let mut batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
+
+    // M3 Finally 事实出口（自 batch.rs 上移，以结果为准派生）：teardown 失败
+    // 统计随 outcome.notices 结构化出口，表现层 suite_presenter 统一渲染
+    if batch_results
+        .iter()
+        .any(|(_, res_list)| res_list.iter().any(|r| r.is_teardown && !r.success))
+    {
+        notices.push(SuiteNotice::Stderr(
+            "[!] @teardown 清理请求执行失败——清理结果已计入失败统计".to_string(),
+        ));
+    }
 
     // M7-A 语义边界收敛（02 §2）：并行池竞争 → connector 观测 dns/tcp 标 approximate；
     // `--timing off` → 时序字段整体归零（timing_source=none）。单点后置修正，

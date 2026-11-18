@@ -48,16 +48,17 @@ jobs:
       - name: Guard eprintln channel boundary (batch3-7 / arch review #13, ratchet)
         run: |
           # 核心层禁止裸 eprintln——警告通道裁决见 src/diagnostics/warning_sink.rs 头注。
-          # 棘轮模式：基线 34（2026-11-18），只防净增长；存量迁移（ai/bootstrap、
-          # runner/on_failure 等 ~34 处 → WarningSink/tracing）登记 #13，完成后调低基线。
+          # 棘轮模式：基线 12（2026-11-19，runner/batch+app 与 ai/* 22 处迁移后的实测值），
+          # 只防净增长；剩余 12 处存量（exporter/on_failure/app/web/generator/report
+          # + warning_sink 本体）逐条通道裁决后继续调低，登记 #13。
           # allowlist：表现层 cli/**、suite_presenter、main.rs。
           COUNT=$(grep -rnE 'eprintln!' src/ \
             --include='*.rs' \
             --exclude-dir=cli \
             --exclude=main.rs \
             | grep -cvE 'suite_presenter' || true)
-          if [ "$COUNT" -gt 34 ]; then
-            echo "::error::eprintln count ($COUNT) exceeds ratchet baseline (34) — use tracing::warn! / WarningSink / TestResult.warnings (see src/diagnostics/warning_sink.rs header). New sites: "
+          if [ "$COUNT" -gt 12 ]; then
+            echo "::error::eprintln count ($COUNT) exceeds ratchet baseline (12) — use tracing::warn! / WarningSink / TestResult.warnings (see src/diagnostics/warning_sink.rs header). New sites: "
             grep -rnE 'eprintln!' src/ --include='*.rs' --exclude-dir=cli --exclude=main.rs | grep -vE 'suite_presenter'
             exit 1
           fi

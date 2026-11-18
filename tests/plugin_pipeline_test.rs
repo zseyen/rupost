@@ -10,6 +10,11 @@ use rupost::plugin::types::{
 use rupost::plugin::{PluginPipeline, PluginRegistry};
 use std::time::Duration;
 
+/// env 突变互斥锁（flake 批，先例：template_test CWD_MUTATION_LOCK）——
+/// 同二进制内的 env 突变测试并行时互相污染进程级环境（已知 flaky 根因假设之一），
+/// 突变段持锁串行化。
+static ENV_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn install_script_plugin(
     root: &std::path::Path,
     name: &str,
@@ -202,6 +207,7 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
 
 #[tokio::test]
 async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
+    let _env_lock = ENV_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     unsafe {
         std::env::set_var("RUPOST_TEST_REQ_TOKEN", "from_parent_env");

@@ -255,7 +255,7 @@ fn test_write_execution_snapshot_tightens_existing_0644_permissions() {
 
 /// M6-4（冻结清单缺口 #4）：`--max-snapshot-body-bytes` 旗标接线。
 /// 自定义上限必须真实生效：body 截断 + `body_truncated` 标记 + 截断前完整 Body 的
-/// SHA-256 验真摘要（03 §10.6）；默认 256KB 路径行为不变（防回归对照）。
+/// SHA-256 验真摘要（03-plugin-spi-and-degradation.md §10.6）；默认 256KB 路径行为不变（防回归对照）。
 #[test]
 fn test_save_batch_snapshot_honors_custom_body_limit() {
     let dir = tempfile::tempdir().unwrap();
@@ -920,7 +920,7 @@ async fn test_parallel_mode_marks_connector_timing_approximate() {
     }
 }
 
-/// P1-2（02 §2:135 契约兑现）：`--timing off` → 快照 timing_waterfall=null、
+/// P1-2（02-artifact-contract-for-plugins.md §2 契约兑现）：`--timing off` → 快照 timing_waterfall=null、
 /// timing_source=none（显式记录"未采集"，与字段缺省 null 区分）。
 #[tokio::test]
 async fn test_timing_off_writes_null_waterfall_and_none_source() {

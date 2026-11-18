@@ -177,12 +177,12 @@ pub async fn run_ai_triage_from_file(
     Ok(())
 }
 
-/// 离线黑匣子挖掘入口（02 §3.2 / 05 ADR-D9：首个内置 miner 消费者，M5）。
+/// 离线黑匣子挖掘入口（02-artifact-contract-for-plugins.md §3.2 / 05 ADR-D9：首个内置 miner 消费者，M5）。
 ///
 /// 读取现场拷回的 incident snapshot（ExecutionSnapshotFile Schema v1.0），适配为
 /// `JsonFileReport` 后复用失败聚类 SSOT（确定性机械归因为 B1 基线；配置 AI Key 时
 /// 五阶段管线的 C 阶段自动增强——与 `ai triage` 同一判定路径）。消费前执行
-/// 02 §3.3 不可信输入校验：体积上限 64MB。
+/// 02-artifact-contract-for-plugins.md §3.3 不可信输入校验：体积上限 64MB。
 pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool, format: &str) -> Result<()> {
     const MAX_CONSUME_BYTES: u64 = 64 * 1024 * 1024;
     let meta = std::fs::metadata(snapshot_path).map_err(|e| {
@@ -193,7 +193,7 @@ pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool, format: &
     })?;
     if meta.len() > MAX_CONSUME_BYTES {
         return Err(RupostError::ParseError(format!(
-            "snapshot 体积 {} 超过消费上限 64MB（02 §3.3 不可信输入防线）",
+            "snapshot 体积 {} 超过消费上限 64MB（02-artifact-contract-for-plugins.md §3.3 不可信输入防线）",
             meta.len()
         )));
     }

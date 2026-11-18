@@ -14,7 +14,7 @@ use super::types::{PluginCacheScope, PluginDirective, PluginRuntime, PluginStage
 /// 插件外部子进程默认执行超时 (5 秒硬熔断，`--plugin-timeout` 可覆盖)
 pub const DEFAULT_PLUGIN_TIMEOUT_SECS: u64 = 5;
 
-/// 插件降级 / 门禁运行时选项（03 §2 唯一权威语义的执行载体）
+/// 插件降级 / 门禁运行时选项（03-plugin-spi-and-degradation.md §2 唯一权威语义的执行载体）
 #[derive(Debug, Clone)]
 pub struct PluginRuntimeOptions {
     /// CLI `--allow-missing-plugins`：缺失/失败统一降级为警告跳过
@@ -95,7 +95,7 @@ pub fn parse_plugin_env_specs(specs: &[String]) -> Vec<(String, String)> {
     parse_plugin_env_specs_with_warnings(specs).0
 }
 
-/// suite 级 Hook 结果缓存（03 §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）。
+/// suite 级 Hook 结果缓存（03-plugin-spi-and-degradation.md §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）。
 /// 外层使用极短同步锁获取独立槽位，各 `cache_key` 异步单飞隔离，避免阻塞无锁的 `PerRequest` 插件。
 #[derive(Debug, Default)]
 pub struct SuiteHookCache {
@@ -130,7 +130,7 @@ pub struct PluginStageOutcome {
     pub degraded: bool,
     /// 插件管道总耗时（微秒，时延隔离）
     pub plugin_duration_us: u64,
-    /// 降级/失败告警（终端 + 报告 + 快照三处同文，03 §2.1）
+    /// 降级/失败告警（终端 + 报告 + 快照三处同文，03-plugin-spi-and-degradation.md §2.1）
     pub warnings: Vec<String>,
     /// 未声明降级旗标时的阻断错误（友好报错 + 搜索路径清单，exit 1 路径）
     pub blocking_error: Option<String>,
@@ -153,7 +153,7 @@ fn hook_cache_key(directive: &PluginDirective) -> String {
     .to_string()
 }
 
-/// 仅透传 `--plugin-env` 显式放行的环境变量（03 §6.2 最小权限原则：严禁静默读取宿主机 `requires_env`）
+/// 仅透传 `--plugin-env` 显式放行的环境变量（03-plugin-spi-and-degradation.md §6.2 最小权限原则：严禁静默读取宿主机 `requires_env`）
 fn build_plugin_env_overrides(cli_env: &[(String, String)]) -> Vec<(String, String)> {
     let mut merged: BTreeMap<String, String> = BTreeMap::new();
     for (k, v) in cli_env {
@@ -281,7 +281,7 @@ enum HookInvokeStep {
 pub struct PluginPipeline;
 
 impl PluginPipeline {
-    /// 对声明的插件注解集合执行确定性排序仲裁（03 §5.2 唯一权威）：
+    /// 对声明的插件注解集合执行确定性排序仲裁（03-plugin-spi-and-degradation.md §5.2 唯一权威）：
     /// 1. 严格依据生命周期阶段不可逆流升序 (Prepare -> Transform -> Sign)；
     /// 2. 同阶段内 100% 保留 `.http` 文件书写声明行序（稳定排序）。
     pub fn sort_directives(directives: &mut [PluginDirective]) {
@@ -296,7 +296,7 @@ impl PluginPipeline {
         directives.iter().filter(|d| d.stage == stage).collect()
     }
 
-    /// 对单请求执行完整插件管线（03 §5.1 阶段串联传递 + §2 统一降级语义）。
+    /// 对单请求执行完整插件管线（03-plugin-spi-and-degradation.md §5.1 阶段串联传递 + §2 统一降级语义）。
     #[allow(clippy::too_many_arguments)]
     pub async fn execute_for_request(
         directives: &[PluginDirective],
@@ -316,7 +316,7 @@ impl PluginPipeline {
         let mut current_headers = resolved_headers.to_vec();
         let mut current_body = resolved_body.map(str::to_string);
         let mut current_vars = serde_json::Map::new();
-        // 请求局部 Hook 结果备忘录（03 §3.1 `cache_scope=request`：同一请求内同指令复用，
+        // 请求局部 Hook 结果备忘录（03-plugin-spi-and-degradation.md §3.1 `cache_scope=request`：同一请求内同指令复用，
         // 跨请求绝不复用——套件级复用专属 suite 作用域）。
         // `None` = 降级哨兵：同请求内同一失败指令不重试、不重复告警（审查 D1/D5 收口）。
         let mut request_cache: HashMap<String, Option<super::PluginPatch>> = HashMap::new();
@@ -609,7 +609,7 @@ impl PluginPipeline {
         HookInvokeStep::Continue
     }
 
-    /// 统一降级门（03 §2.1）：返回 `true` 表示必须阻断并中止后续管线。
+    /// 统一降级门（03-plugin-spi-and-degradation.md §2.1）：返回 `true` 表示必须阻断并中止后续管线。
     fn gate_degradation(
         outcome: &mut PluginStageOutcome,
         directive: &PluginDirective,

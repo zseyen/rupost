@@ -439,7 +439,7 @@ async fn test_dod_parallel_multi_stage_plugins_across_multiple_files() {
     server.verify().await;
 }
 
-/// 审查 P1-2（03 §321 契约）：插件 params 的 `env.*`/`{{var}}` 必须由内核
+/// 审查 P1-2（03-plugin-spi-and-degradation.md §321 契约）：插件 params 的 `env.*`/`{{var}}` 必须由内核
 /// （变量解析 SSOT）解析后才经 Stdio IPC 传给插件，明文永不落盘快照/报告。
 /// 此前 payload 将 directive.params 原样透传——照文档写 `secret=env.X` 的
 /// 插件收到的是字面量 "env.X"，加密/签名插件拿错误密钥材料且零告警。

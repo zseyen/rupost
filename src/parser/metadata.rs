@@ -123,7 +123,7 @@ fn parse_key_list(content: &str) -> ParseResult<Vec<String>> {
 
 /// 解析插件语义注解：@auth, @transform, @sign, @plugin
 ///
-/// 语法契约（03 §4.1 唯一权威）：
+/// 语法契约（03-plugin-spi-and-degradation.md §4.1 唯一权威）：
 /// - 阶段由注解本身决定（`@auth`=Prepare / `@transform`=Transform / `@sign`=Sign），
 ///   `stage=` / `priority=` 等底层调度魔数已彻底废除，出现即语法错误（05 ADR-D6）；
 /// - 可选声明唯一拼写为 `?optional` 后缀（P1-1 裁决，`optional=true` 废除）；

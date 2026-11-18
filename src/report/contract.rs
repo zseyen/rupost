@@ -51,7 +51,7 @@ fn display_path(path: &std::path::Path) -> String {
     }
     // 审查 P3：剥离失败 = id 将以绝对路径入基线（跨机器/目录复跑全部变 new，
     // 可移植性退化）——显式提示，不静默
-    eprintln!("[!] 契约 id 无法相对化（将写入绝对路径）: {s}");
+    tracing::warn!("契约 id 无法相对化（将写入绝对路径）: {s}");
     s
 }
 

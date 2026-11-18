@@ -55,7 +55,7 @@ Content-Type: application/json
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "内置宏全流程必须离线闭环: {stderr}");
 
-    // 快照产物 + 0600 权限（02 §2.7 安全不变量）
+    // 快照产物 + 0600 权限（02-artifact-contract-for-plugins.md §2.7 安全不变量）
     assert!(snap.is_file(), "快照必须落盘");
     if let Some(mode) = rupost::platform::unix_mode(&snap).unwrap() {
         assert_eq!(mode, 0o600, "黑匣子快照权限必须 0600");

@@ -403,7 +403,7 @@ async fn test_suite_cache_degradation_self_heal_semantics() {
         plugin_timeout: Duration::from_secs(1), // 首请求必然超时 → 降级
         ..Default::default()
     };
-    // ?optional 语义（03 §6.3）：失败 → DegradedPass（自愈重试窗口），而非阻断
+    // ?optional 语义（03-plugin-spi-and-degradation.md §6.3）：失败 → DegradedPass（自愈重试窗口），而非阻断
     let directives = [PluginDirective {
         optional: true,
         ..PluginDirective::new("sign", "heal-probe", PluginStage::Sign)

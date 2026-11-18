@@ -128,7 +128,7 @@ impl ReplayExecutor {
             "[*]".bold().blue(),
             suite.entries.len()
         );
-        // B-2（02 §4）：masked 快照消费前必须声明"数据不完整"——验签/Diff 结论降级
+        // B-2（02-artifact-contract-for-plugins.md §4）：masked 快照消费前必须声明"数据不完整"——验签/Diff 结论降级
         if suite.masking.as_deref() == Some("secrets") {
             println!(
                 "{} 该快照为脱敏形态（masking=secrets）：敏感值已替换为 [REDACTED]，body 比对与验签类结论按数据不完整降级",

@@ -1,4 +1,4 @@
-//! CLI 插件命令执行器与 TOFU 可信校验（03 §6.2 交互直通与环境变量隔离）。
+//! CLI 插件命令执行器与 TOFU 可信校验（03-plugin-spi-and-degradation.md §6.2 交互直通与环境变量隔离）。
 
 use rupost::platform::{self, ExitStatusExt};
 use std::path::Path;
@@ -97,7 +97,7 @@ fn verify_or_prompt_tofu(
 
 use rupost::plugin::extract_authorized_env_keys;
 
-/// 拉起插件命令子进程（03 §6.2）：
+/// 拉起插件命令子进程（03-plugin-spi-and-degradation.md §6.2）：
 /// - TTY 独占直通（inherit 三向）
 /// - 来源横幅（路径 + sha256 前 16 位）+ 首次 TOFU 确认
 /// - 环境白名单：基础允许集 + RUPOST_* + 显式 `--plugin-env`

@@ -1,4 +1,4 @@
-//! 黑匣子契约快照与重放快照脱敏（02 §4 凭据掩码 SSOT）。
+//! 黑匣子契约快照与重放快照脱敏（02-artifact-contract-for-plugins.md §4 凭据掩码 SSOT）。
 
 use crate::security::redact::{
     is_sensitive_key, mask_body_secrets, mask_inline_secrets, mask_pii, order_secret_values,
@@ -136,7 +136,7 @@ pub fn mask_snapshot_entry(entry: &mut crate::history::model::SnapshotEntry) {
 
 /// 黑匣子契约快照 (ExecutionSnapshotEntry) 的 Secrets Masker：
 /// 与 [`mask_snapshot_entry`] 共享同一组 redactor SSOT（`src/security/redact.rs`），
-/// 覆盖 URL、Headers、Body、Error、Assertions 与 Warnings 全展示面（02 §2/§4）。
+/// 覆盖 URL、Headers、Body、Error、Assertions 与 Warnings 全展示面（02-artifact-contract-for-plugins.md §2/§4）。
 pub fn mask_execution_snapshot_entry(
     entry: &mut crate::history::model::ExecutionSnapshotEntry,
     secret_values: &[String],

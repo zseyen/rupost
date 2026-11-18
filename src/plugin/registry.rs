@@ -18,7 +18,7 @@ pub struct PluginRegistry {
     pub commands: HashMap<String, (PathBuf, CommandCapability)>,
     /// HTTP 钩子路由索引（兼容性扁平视图）: 指令/别名 -> (所属插件路径, 钩子能力描述)
     pub hooks: HashMap<String, (PathBuf, HookCapability)>,
-    /// HTTP 钩子复合键索引（03 §3.2 #1 SSOT）: (指令/别名, 阶段) -> (所属插件路径, 钩子能力描述)
+    /// HTTP 钩子复合键索引（03-plugin-spi-and-degradation.md §3.2 #1 SSOT）: (指令/别名, 阶段) -> (所属插件路径, 钩子能力描述)
     hooks_by_stage: HashMap<(String, PluginStage), (PathBuf, HookCapability)>,
     /// 已发现插件的可执行路径 -> (原始静态 manifest 路径, 已归一化 Manifest 实体)
     discovered_manifests: HashMap<PathBuf, (PathBuf, PluginManifest)>,
@@ -30,7 +30,7 @@ pub struct PluginRegistry {
     pub warnings: Vec<String>,
 }
 
-/// 插件根目录扫描配置（03 §3.0/§3.2 安全裁决）
+/// 插件根目录扫描配置（03-plugin-spi-and-degradation.md §3.0/§3.2 安全裁决）
 #[derive(Debug, Clone, Default)]
 pub struct DiscoverOptions {
     /// 工作区 `./.rupost/plugins` 放行旗标（默认隔离防恶意仓库 RCE）
@@ -39,7 +39,7 @@ pub struct DiscoverOptions {
     pub project_root: Option<PathBuf>,
 }
 
-/// 静态 manifest 文件命名契约：`rupost-plugin-<name>.json`（03 §3.0）
+/// 静态 manifest 文件命名契约：`rupost-plugin-<name>.json`（03-plugin-spi-and-degradation.md §3.0）
 pub fn is_manifest_file(file_name: &str) -> bool {
     file_name.starts_with("rupost-plugin-") && file_name.ends_with(".json")
 }
@@ -179,13 +179,13 @@ fn parse_and_validate_manifest(
             format!("不支持的 manifest_version: {}", manifest.manifest_version),
         ));
     }
-    // P2-9（review，03 §6.4）：description ≤80 字符——渲染净化上限，
+    // P2-9（review，03-plugin-spi-and-degradation.md §6.4）：description ≤80 字符——渲染净化上限，
     // schema（plugin schema manifestSchema）与注册校验对齐
     if manifest.description.chars().count() > 80 {
         return Err((
             Some(manifest.name),
             format!(
-                "manifest description 超长（{} > 80 字符，03 §6.4 渲染净化上限）",
+                "manifest description 超长（{} > 80 字符，03-plugin-spi-and-degradation.md §6.4 渲染净化上限）",
                 manifest.description.chars().count()
             ),
         ));
@@ -383,7 +383,7 @@ impl PluginRegistry {
             .get(&(directive_or_alias.to_string(), stage))
     }
 
-    /// 静态 manifest 发现（03 §3.0 安全裁决：readdir + JSON 解析，**零子进程**）。
+    /// 静态 manifest 发现（03-plugin-spi-and-degradation.md §3.0 安全裁决：readdir + JSON 解析，**零子进程**）。
     pub fn discover(options: &DiscoverOptions) -> Result<Self> {
         Self::discover_with_roots(options, None)
     }
@@ -826,7 +826,7 @@ pub fn resolve_interpreter_in_path(interp: &str, path_env: Option<&OsStr>) -> Op
     resolve_interpreter_with_count_impl(interp, path_env, cfg!(windows)).ok()
 }
 
-/// 零子进程运行时解释器预检（03 §3.1.1：仅对 PATH 目录做 stat + Unix `mode & 0o111 != 0` 校验，绝不 spawn `--version`）。
+/// 零子进程运行时解释器预检（03-plugin-spi-and-degradation.md §3.1.1：仅对 PATH 目录做 stat + Unix `mode & 0o111 != 0` 校验，绝不 spawn `--version`）。
 pub fn preflight_runtime(
     runtime: Option<&PluginRuntime>,
     path_env: Option<&OsStr>,

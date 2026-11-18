@@ -666,6 +666,33 @@ async fn test_suite_notices_carry_skip_marked_and_failed_teardown() {
     assert!(outcome.has_failure);
 }
 
+// #13 尾巴（批E）：--var-state 持久化提示走 SuiteNotice 结构化出口（自裸 eprintln 迁移，
+// 与批A teardown 通知同型——TUI/Web 可从 outcome.notices 消费）。
+#[tokio::test]
+async fn test_suite_notice_carries_var_state_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("s.http");
+    std::fs::write(&doc, "### a\nGET http://127.0.0.1:9/x\n").unwrap();
+    let state_path = dir.path().join("state.toml");
+
+    let outcome = run_test_suite(TestSuiteOptions {
+        paths: vec![doc.to_string_lossy().to_string()],
+        var_state: Some(state_path.to_string_lossy().to_string()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        outcome.notices.iter().any(|n| matches!(
+            n,
+            SuiteNotice::Stderr(m) if m.contains("捕获变量已持久化")
+        )),
+        "var_state 持久化提示必须进 notices, 实际 notices={:?}",
+        outcome.notices
+    );
+}
+
 #[tokio::test]
 async fn test_suite_setup_respects_allow_project_plugins_env_flag() {
     let server = MockServer::start().await;

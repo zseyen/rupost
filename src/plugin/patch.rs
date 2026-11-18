@@ -8,7 +8,7 @@ pub struct PluginPatch {
     #[serde(default)]
     pub extra_headers: Vec<(String, String)>,
 
-    /// 需要显式移除的请求头名称列表（大小写不敏感匹配，03 §5.3；
+    /// 需要显式移除的请求头名称列表（大小写不敏感匹配，03-plugin-spi-and-degradation.md §5.3；
     /// 后序插件覆盖前序兜底 Authorization 时先 remove 再 append，杜绝重复头）
     #[serde(default)]
     pub remove_headers: Vec<String>,
@@ -26,7 +26,7 @@ pub struct PluginPatch {
     pub warnings: Vec<String>,
 }
 
-/// HTTP 头名大小写不敏感匹配（03 §5.3 Upsert 契约）
+/// HTTP 头名大小写不敏感匹配（03-plugin-spi-and-degradation.md §5.3 Upsert 契约）
 fn header_eq(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }

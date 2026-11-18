@@ -48,18 +48,34 @@ jobs:
       - name: Guard eprintln channel boundary (batch3-7 / arch review #13, ratchet)
         run: |
           # 核心层禁止裸 eprintln——警告通道裁决见 src/diagnostics/warning_sink.rs 头注。
-          # 棘轮模式：基线 12（2026-11-19，runner/batch+app 与 ai/* 22 处迁移后的实测值），
-          # 只防净增长；剩余 12 处存量（exporter/on_failure/app/web/generator/report
-          # + warning_sink 本体）逐条通道裁决后继续调低，登记 #13。
+          # 棘轮模式：基线 7（2026-11-19 批E 实测），只防净增长。
+          # 剩余 7 处均为裁决豁免：warning_sink.rs 2（实时通道实现本体 + 头注提及）、
+          # exporter/mod.rs 3（唯一调用方为 CLI stderr，Web 接入时随接入加 sink 参数）、
+          # generator/http.rs 1（body 凭据警告——随生成签名扩展再迁）、
+          # web/server.rs 1（--dev 安全姿态横幅，刻意醒目直出）。
           # allowlist：表现层 cli/**、suite_presenter、main.rs。
           COUNT=$(grep -rnE 'eprintln!' src/ \
             --include='*.rs' \
             --exclude-dir=cli \
             --exclude=main.rs \
             | grep -cvE 'suite_presenter' || true)
-          if [ "$COUNT" -gt 12 ]; then
-            echo "::error::eprintln count ($COUNT) exceeds ratchet baseline (12) — use tracing::warn! / WarningSink / TestResult.warnings (see src/diagnostics/warning_sink.rs header). New sites: "
+          if [ "$COUNT" -gt 7 ]; then
+            echo "::error::eprintln count ($COUNT) exceeds ratchet baseline (7) — use tracing::warn! / WarningSink / TestResult.warnings (see src/diagnostics/warning_sink.rs header). New sites: "
             grep -rnE 'eprintln!' src/ --include='*.rs' --exclude-dir=cli --exclude=main.rs | grep -vE 'suite_presenter'
+            exit 1
+          fi
+      - name: Guard plan-doc citation anchors (batch4: 02/03 refs must carry file stem)
+        run: |
+          # 02/03 契约裸短引用禁止：`02 §x`/`03 §x` 必须携带文档 stem（rg 可直达），
+          # 行号引用（§x:NNN）禁止（plan 文档演进即断链）。
+          # 映射：doc/plans/2026-11-10-cross-scenario-engine-and-plugins/ 下
+          # 02=artifact-contract-for-plugins.md、03=plugin-spi-and-degradation.md。
+          BAD=$( { grep -rnE '02 ?§' src/ tests/ --include='*.rs' | grep -v '02-artifact-contract-for-plugins' || true
+                   grep -rnE '03 ?§' src/ tests/ --include='*.rs' | grep -v '03-plugin-spi-and-degradation' || true
+                   grep -rnE '§[0-9]+:[0-9]+' src/ tests/ --include='*.rs' || true; } )
+          if [ -n "$BAD" ]; then
+            echo "::error::裸 02/03 契约引用或行号引用禁止——请携带文档 stem 锚点:"
+            echo "$BAD"
             exit 1
           fi
       - name: Install Rust

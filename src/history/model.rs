@@ -119,7 +119,7 @@ pub struct SnapshotSuite {
     pub source_file: Option<String>,
     pub entries: Vec<SnapshotEntry>,
     /// B-2：来源契约的 masking 标记透传（"secrets" → replay 警告"数据不完整"，
-    /// 02 §4：掩码模式验签/Diff 结论必须降级声明）
+    /// 02-artifact-contract-for-plugins.md §4：掩码模式验签/Diff 结论必须降级声明）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub masking: Option<String>,
 }
@@ -188,16 +188,16 @@ impl RequestSnapshot {
 
 // =====================================================================
 // 离线数据黑匣子契约 (Execution Snapshot, Schema v1.0)
-// 唯一权威: doc/plans/2026-11-10-cross-scenario-engine-and-plugins/02 §2
-// 演进策略 (02 §2.6): 只允许追加字段、禁止改语义/删字段；消费者必须容忍
+// 唯一权威: doc/plans/2026-11-10-cross-scenario-engine-and-plugins/02-artifact-contract-for-plugins.md §2
+// 演进策略 (02-artifact-contract-for-plugins.md §2.6): 只允许追加字段、禁止改语义/删字段；消费者必须容忍
 // 未知字段；破坏性变更必须递增 schema_version。
-// 安全不变量 (02 §2.7): plugin_args 永不序列化进快照；文件落盘 0600。
+// 安全不变量 (02-artifact-contract-for-plugins.md §2.7): plugin_args 永不序列化进快照；文件落盘 0600。
 // =====================================================================
 
-/// 快照契约版本 (02 §2)
+/// 快照契约版本 (02-artifact-contract-for-plugins.md §2)
 pub const SNAPSHOT_SCHEMA_VERSION: &str = "1.0";
 
-/// 单响应体录入上限 (03 §10.6 防 OOM；可通过 `--max-snapshot-body-bytes` 覆盖，M3 接线)
+/// 单响应体录入上限 (03-plugin-spi-and-degradation.md §10.6 防 OOM；可通过 `--max-snapshot-body-bytes` 覆盖，M3 接线)
 pub const DEFAULT_MAX_SNAPSHOT_BODY_BYTES: usize = 256 * 1024;
 
 /// 文件级脱敏形态标记 (消费者据此判断产物敏感性；掩码模式下验签类
@@ -219,7 +219,7 @@ pub struct RunnerFingerprint {
     pub rupost_version: String,
 }
 
-/// 三态执行判定 (03 §10.5)：严禁把插件自愈降级混淆为纯粹成功
+/// 三态执行判定 (03-plugin-spi-and-degradation.md §10.5)：严禁把插件自愈降级混淆为纯粹成功
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionOutcome {
@@ -317,7 +317,7 @@ pub struct SnapshotRequest {
 
 /// 黑匣子响应镜像（256KB 截断保护 + SHA-256 验真摘要）
 ///
-/// `body_sha256` 语义随 `masking` 分态（P1-1 review 裁决，02 §2）：
+/// `body_sha256` 语义随 `masking` 分态（P1-1 review 裁决，02-artifact-contract-for-plugins.md §2）：
 /// ① 未掩码：截断时对**截断前完整原始 body**，未截断为 None；
 /// ② 掩码模式（masking=secrets）：恒 Some，对**文件内掩码后形态**（离线可验真；
 ///    截断+掩码组合时原完整体摘要不可恢复——登记取舍）。
@@ -475,7 +475,7 @@ impl SnapshotRequest {
 
 impl ExecutionSnapshotFile {
     /// 黑匣子契约快照 → 重放套件（`replay` 消费 `--save-snapshot` 产物的桥，
-    /// 02 §3.2：现场 dump 拷回开发机后可直接 `replay --explain`）
+    /// 02-artifact-contract-for-plugins.md §3.2：现场 dump 拷回开发机后可直接 `replay --explain`）
     pub fn to_replay_suite(&self) -> SnapshotSuite {
         SnapshotSuite {
             version: 2,

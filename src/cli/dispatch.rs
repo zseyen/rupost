@@ -56,7 +56,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             // --explain 兼容环境变量开关（flag 未传时 RUPOST_AI_EXPLAIN=1/true/yes/on 生效）
             let explain_enabled =
                 explain || rupost::security::fs::env_flag_enabled("RUPOST_AI_EXPLAIN");
-            // --timing 仅支持 off（02 §2:135 契约：none = 未采集）；未知模式按语法错误 exit 2
+            // --timing 仅支持 off（02-artifact-contract-for-plugins.md §2 契约：none = 未采集）；未知模式按语法错误 exit 2
             let timing_off = match timing.as_deref() {
                 None => false,
                 Some("off") => true,
@@ -314,7 +314,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
                 tracing::error!("No command provided");
                 std::process::exit(1);
             } else {
-                // 03 §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
+                // 03-plugin-spi-and-degradation.md §6.1 双模路由裁决序：内置 > 插件 > HTTP 方法 > 未知 exit 2。
                 // 先从 cli.args 剥离 rupost 路由旗标再查表，确保前置/后置均可达插件命令。
                 let parsed = super::plugin_route::parse_routing_args(&cli.args)?;
                 let builtins = super::plugin_route::builtin_subcommand_names();

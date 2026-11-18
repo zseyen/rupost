@@ -105,7 +105,7 @@ pub async fn present_suite_outcome(
         }
     }
 
-    // 保存快照（黑匣子契约 Schema v1.0，02 §2；--env 记入 environment 字段）
+    // 保存快照（黑匣子契约 Schema v1.0，02-artifact-contract-for-plugins.md §2；--env 记入 environment 字段）
     if let Some(snapshot_path) = &options.save_snapshot {
         save_batch_snapshot(
             &outcome.batch_results,

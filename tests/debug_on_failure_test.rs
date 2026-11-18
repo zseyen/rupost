@@ -149,6 +149,40 @@ async fn test_json_report_carries_diagnose_report() {
     );
 }
 
+/// #13 尾巴（批E，实证缺口）：on-failure 钩子失败事实必须进 `TestResult.warnings`
+/// 随 JSON 报告落盘——此前仅裸 eprintln 到 stderr，存活产物（报告）零痕迹，
+/// CI 消费 `--report json` 无法审计钩子健康度（同 run 对照：trace 头缺失走
+/// warnings 通道有痕迹，钩子失败走 eprintln 无痕迹）。
+#[tokio::test]
+async fn test_json_report_carries_on_failure_hook_warning() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/broken"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&server)
+        .await;
+    let case = write_failing_case(dir.path(), &server.uri());
+
+    let out = run(
+        dir.path(),
+        &["t", &case, "--report", "json", "--on-failure", "exit 3"],
+    );
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout 应为纯 JSON 报告");
+    let first = &report[0]["results"][0];
+    let warnings: Vec<String> =
+        serde_json::from_value(first["warnings"].clone()).expect("warnings 数组");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("on-failure hook") && w.contains("非零退出")),
+        "钩子非零退出必须进 warnings（报告可审计）, warnings: {warnings:?}"
+    );
+}
+
 /// 走查缺口 #5（D2 连接层拆分）：连接拒绝时 `diagnose_url_lenient` 产出
 /// 带 `connection_error` 阶段分类的部分诊断报告——resolved_ips 非空证明
 /// DNS 阶段成功、tls/cert/http 字段为空证明失败落在 TCP 阶段。

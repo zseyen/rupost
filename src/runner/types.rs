@@ -73,7 +73,7 @@ pub struct TestResult {
     /// M3：是否为 @teardown 清理请求（快照导出默认排除；报告/终端可区分）
     pub is_teardown: bool,
 
-    /// 插件管线是否以降级形态发送（03 §10.5 DegradedPass 判定源；
+    /// 插件管线是否以降级形态发送（03-plugin-spi-and-degradation.md §10.5 DegradedPass 判定源；
     /// 快照 outcome 与 --strict-plugins 门禁均由本标记驱动）
     pub degraded: bool,
 

@@ -1,4 +1,4 @@
-//! 黑匣子快照 → AI 分诊报告适配器（03 §7.2 脱敏先于 AI 红线守护）。
+//! 黑匣子快照 → AI 分诊报告适配器（03-plugin-spi-and-degradation.md §7.2 脱敏先于 AI 红线守护）。
 
 use crate::history::model::{ExecutionSnapshotEntry, ExecutionSnapshotFile, MaskingMode};
 use crate::report::json::{JsonAssertionReport, JsonFileReport, JsonTestReport};

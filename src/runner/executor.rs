@@ -432,7 +432,7 @@ impl TestExecutor {
         let url = parsed.url.clone();
         let name = parsed.name().map(|s| s.to_string());
 
-        // 2.5 插件管线（03 §5.1 阶段不可逆流；03 §2 统一降级语义）：
+        // 2.5 插件管线（03-plugin-spi-and-degradation.md §5.1 阶段不可逆流；03-plugin-spi-and-degradation.md §2 统一降级语义）：
         // 变量解析后、发包前执行；即使注册表未装配也不旁路，早退路径共享统一诊断收口。
         let (parsed, diag) = match crate::runner::executor_plugin::run_plugin_stage(
             parsed,

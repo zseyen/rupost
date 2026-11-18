@@ -129,7 +129,7 @@ runner      -> assertion  history  http  middleware  parser  reporter ✗  varia
 | 10 | TUI state.rs 拆分 | ✅ 销案 | — |
 | 11 | is_supported_file 归位 / SSOT | ✅ 销案 | — |
 | 12 | 中间件闭枚举 OCP | ✅ 销案 | — |
-| 13 | warning 四通道收敛（`TestResult.warnings` 唯一事实 / WarningSink 仅实时渲染 / 业务路径 66 处裸 `eprintln!` 清零——与 warning_sink.rs 自我声明矛盾） | 🟡 **主体完成**（2026-11-19 批A/B：runner/engine/batch 两处 teardown 通知 → `TestSuiteOutcome.notices`（app.rs 装配侧派生，守护测试 `test_suite_notices_carry_skip_marked_and_failed_teardown`）；src/ai/* 20 处 → `tracing`（logger stderr writer 保 stdout 纯净）；CI 棘轮 34→12（实测）。剩余 12 处存量（exporter 3 / on_failure 2 / app 1 / web 1 / generator 2 / report 1 / warning_sink 本体 2）逐条通道裁决后继续调低） | ~半天（剩余） |
+| 13 | warning 四通道收敛（`TestResult.warnings` 唯一事实 / WarningSink 仅实时渲染 / 业务路径 66 处裸 `eprintln!` 清零——与 warning_sink.rs 自我声明矛盾） | 🟡 **收口（批E，2026-11-19）**：批A/B 主体（batch→SuiteNotice、ai/* 20 处→tracing）+ 批E 尾巴（on_failure 2 处→warnings 实证修复、app var-state→SuiteNotice、generator/mod+report/contract→tracing）；棘轮 34→7。剩余 7 处为**裁决豁免**（理由写入 ci.yml）：warning_sink 本体 2、exporter 3（唯一调用方 CLI，Web 接入时随加 sink）、generator/http 1（随签名扩展再迁）、web --dev 横幅 1（刻意直出）——豁免项触发条件出现时再迁，本项不再跟踪 | —（销案） |
 | 14 | report 双管线合并（`from_file_results` 在线直渲与 `from_json_file_reports` 离线逐字段平行——JUnit 已走 JsonFileReport 单路径，照抄即可） | ❌ 待办（第二审查新增，证据：report/types.rs:191 vs 316-428） | ~半天 |
 | 16 | 新代码函数族收敛：`parse_plugin_env_spec/_specs/_with_warnings` 三函数族（batch 内联复制未委托、Option 版生产已死）；诊断域 6 入口 + strict/lenient 双体（`connect_tcp_with_timeout` 仅剩 1 生产调用者） | ❌ 待办（2026-11-18 第三审查·新鲜眼盲扫新增，证据：plugin/pipeline.rs:42-101、http/diagnose.rs:371/438） | ~半天 |
 | 17 | ConfigLoader 16 pub fn：同一 rupost.toml 三条加载路径三种损坏策略（redaction→builtin / plugins→default / variables→None+warning），新人无从选择 | ❌ 待办（同上，证据：variable/config.rs:88/140/165） | 收口 ~1 天 |

@@ -1,4 +1,4 @@
-//! Stdio IPC 驱动器（03 §8/§10 唯一权威实现）：
+//! Stdio IPC 驱动器（03-plugin-spi-and-degradation.md §8/§10 唯一权威实现）：
 //! - 异步双工：stdin 写入与 stdout/stderr 排水拆独立并发 Task（大包防死锁）
 //! - 载荷硬上限 10MB（出站先验校验 + 入站 `MAX_PLUGIN_PAYLOAD_BYTES` 限读）
 //! - stdin 写毕显式 `shutdown()` + drop 发送 EOF
@@ -209,7 +209,7 @@ fn is_bad_exe_format(err: &std::io::Error) -> bool {
 /// manifest `requires_env` + `--plugin-env` 放行，豁免清单只增不改）。
 pub const PLUGIN_ENV_SECRET_DENYLIST: [&str; 1] = ["RUPOST_AI_API_KEY"];
 
-/// 统一裁剪插件子进程环境变量白名单（03 §6.2 SSOT）：allowlist + `RUPOST_*`
+/// 统一裁剪插件子进程环境变量白名单（03-plugin-spi-and-degradation.md §6.2 SSOT）：allowlist + `RUPOST_*`
 /// 前缀（除 [`PLUGIN_ENV_SECRET_DENYLIST`]）+ 显式放行覆盖项。
 pub fn apply_plugin_env(cmd: &mut tokio::process::Command, env_overrides: &[(String, String)]) {
     cmd.env_clear();
@@ -447,7 +447,7 @@ pub async fn invoke_plugin(
         stderr_task: Some(stderr_task),
     };
 
-    // 超时硬熔断：整个进程组 SIGKILL（03 §8.3）
+    // 超时硬熔断：整个进程组 SIGKILL（03-plugin-spi-and-degradation.md §8.3）
     let wait_result = match guard.child.as_mut() {
         Some(child_ref) => tokio::time::timeout(timeout, child_ref.wait()).await,
         None => unreachable!(),

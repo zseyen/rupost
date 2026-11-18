@@ -59,7 +59,7 @@ fn outcome_to_diag(
     }
 }
 
-/// 单个插件参数值的内核解析（03 §321）：裸 `env.NAME` 前缀直读上下文
+/// 单个插件参数值的内核解析（03-plugin-spi-and-degradation.md §321）：裸 `env.NAME` 前缀直读上下文
 /// （进程环境优先、局部变量回退），其余文本走 `{{var}}`/`${VAR}` 解析 SSOT；
 /// 解析失败（env 未设置/占位符残留）值按字面量透传并返回告警——与全局
 /// 未定义变量告警语义一致，绝不静默。
@@ -111,7 +111,7 @@ pub(crate) async fn run_plugin_stage(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    // 03 §321：插件 params 的 `env.*`/`{{var}}` 由内核解析（变量解析 SSOT），
+    // 03-plugin-spi-and-degradation.md §321：插件 params 的 `env.*`/`{{var}}` 由内核解析（变量解析 SSOT），
     // 明文仅经 Stdio IPC 传给插件进程，解析值永不落盘快照/报告。
     // 此前 payload 原样透传字面量——照契约文档写 `secret=env.X` 的插件会拿
     // 错误密钥材料且零告警（审查 P1-2）。缓存键随解析值变化：动态参数
@@ -195,7 +195,7 @@ pub(crate) async fn run_plugin_stage(
 
     let diag = outcome_to_diag(&stage, patch_warnings);
 
-    // 03 §2.1 兜底缺失守卫：降级时含未解析 {{var}} 的 Header 不得把
+    // 03-plugin-spi-and-degradation.md §2.1 兜底缺失守卫：降级时含未解析 {{var}} 的 Header 不得把
     // 字面量（如 {{DEBUG_FALLBACK_TOKEN}}）当 Bearer 发往生产 → 跳过请求。
     if diag.degraded
         && parsed
@@ -205,7 +205,7 @@ pub(crate) async fn run_plugin_stage(
     {
         let mut skipped = TestResult::skipped(request_number, name, method, url);
         skipped.warnings.push(
-            "降级请求的兜底 Header 含未解析 {{var}}（兜底缺失），已跳过外发（03 §2.1）".to_string(),
+            "降级请求的兜底 Header 含未解析 {{var}}（兜底缺失），已跳过外发（03-plugin-spi-and-degradation.md §2.1）".to_string(),
         );
         return PluginDispatchOutcome::EarlyReturn(Box::new(finalize_plugin_result(
             skipped,

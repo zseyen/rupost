@@ -22,6 +22,7 @@ jobs:
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -35,6 +36,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Guard rupost_ai crate boundary (P1-9/B0)
@@ -73,6 +75,7 @@ jobs:
   test:
     name: Test & Debug Artifact (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +112,7 @@ jobs:
   web-assets:
     name: Web Frontend Tests (node --test)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -123,6 +127,7 @@ jobs:
   smoke-bash:
     name: Feature Verification Smoke (bash)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -140,6 +145,7 @@ jobs:
   nextest-pilot:
     name: nextest pilot (optional)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -156,6 +162,7 @@ jobs:
   e2e-pytest:
     name: E2E Blackbox (pytest)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -178,6 +185,7 @@ jobs:
   musl-static:
     name: musl Static Build & Size Budget
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust with musl target

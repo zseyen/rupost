@@ -45,8 +45,10 @@ impl SwappableMatcher {
 
 impl MockMatcher for SwappableMatcher {
     fn match_request(&self, req: &MockRequest) -> Option<MockResponse> {
-        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        guard.match_request(req)
+        // 轨道 B2：clone Arc 后立即放锁——reload 写锁等待时间从"全部匹配耗时
+        //（含 body JSON 反序列化）"降到"指针拷贝一瞬"
+        let matcher = std::sync::Arc::clone(&self.inner.read().unwrap_or_else(|e| e.into_inner()));
+        matcher.match_request(req)
     }
 }
 

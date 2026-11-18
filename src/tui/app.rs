@@ -235,6 +235,11 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                 TuiEvent::MockTraffic(ev) => {
                     state.push_mock_traffic(ev);
                 }
+                TuiEvent::MockTrafficBatch(batch) => {
+                    for ev in batch {
+                        state.push_mock_traffic(ev);
+                    }
+                }
                 TuiEvent::Tick => {
                     state.check_and_reload_editor_file();
                     if state.is_loading {

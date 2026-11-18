@@ -34,6 +34,8 @@ pub enum TuiEvent {
         path: String,
     },
     MockTraffic(MockTrafficEvent),
+    /// 轨道 B1 合帧：一次排空积压后的批量流量事件（≤64/帧）
+    MockTrafficBatch(Vec<MockTrafficEvent>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

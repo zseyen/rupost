@@ -141,8 +141,25 @@ pub async fn toggle_mock_server(state: &mut AppState, event_tx: &Sender<TuiEvent
     let tui_tx = event_tx.clone();
     tokio::spawn(async move {
         let mut mock_rx = mock_rx;
-        while let Some(ev) = mock_rx.recv().await {
-            if tui_tx.send(TuiEvent::MockTraffic(ev)).await.is_err() {
+        // 轨道 B1（合帧）：recv 一条后立即排空积压，打包为单帧批次——
+        // 高吞吐 mock 下重绘次数从"每请求一帧"降到 ~tick 频率
+        loop {
+            let first = match mock_rx.recv().await {
+                Some(ev) => ev,
+                None => break,
+            };
+            let mut batch = vec![first];
+            while batch.len() < 64 {
+                match mock_rx.try_recv() {
+                    Ok(ev) => batch.push(ev),
+                    Err(_) => break,
+                }
+            }
+            if tui_tx
+                .send(TuiEvent::MockTrafficBatch(batch))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -264,8 +281,11 @@ mod tests {
         assert_eq!(resp.text().await.unwrap(), "pong");
 
         let ev = rx.recv().await.expect("should emit MockTraffic event");
+        // 批三/轨道 B1：relay 现以合帧批次回流——单请求场景批次恰含 1 条
         match ev {
-            TuiEvent::MockTraffic(traffic) => {
+            TuiEvent::MockTrafficBatch(batch) => {
+                assert_eq!(batch.len(), 1, "单请求应恰一条流量事件");
+                let traffic = &batch[0];
                 assert_eq!(traffic.method, "GET");
                 assert_eq!(traffic.path, "/api/ping");
                 assert_eq!(traffic.status, 200);

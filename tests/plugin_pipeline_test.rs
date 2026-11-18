@@ -207,11 +207,15 @@ async fn test_pipeline_suite_cache_distinguishes_params() {
 
 #[tokio::test]
 async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
-    let _env_lock = ENV_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // flake 批：env 突变段持锁串行化（clippy await_holding_lock 要求锁不跨
+    // .await——突变语句本身同步无 await，用作用域块收紧锁生命周期）
     let dir = tempfile::tempdir().unwrap();
-    unsafe {
-        std::env::set_var("RUPOST_TEST_REQ_TOKEN", "from_parent_env");
-        std::env::set_var("CUSTOM_SIGN_SECRET_STEP2", "custom_secret_42");
+    {
+        let _g = ENV_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var("RUPOST_TEST_REQ_TOKEN", "from_parent_env");
+            std::env::set_var("CUSTOM_SIGN_SECRET_STEP2", "custom_secret_42");
+        }
     }
 
     // 1. RUPOST_* 变量默认放行
@@ -320,9 +324,12 @@ async fn test_pipeline_forwards_requires_env_and_clean_blocking_error() {
         None,
     )
     .await;
-    unsafe {
-        std::env::remove_var("CUSTOM_SIGN_SECRET_STEP2");
-        std::env::remove_var("RUPOST_TEST_REQ_TOKEN");
+    {
+        let _g = ENV_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("CUSTOM_SIGN_SECRET_STEP2");
+            std::env::remove_var("RUPOST_TEST_REQ_TOKEN");
+        }
     }
     assert!(
         out_env.blocking_error.is_none(),

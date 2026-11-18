@@ -191,7 +191,9 @@ impl HttpGenerator {
                 block.push_str(&format!("{key_str}: {rendered}\n"));
                 continue;
             }
-            // 凭据模板化：生成的测试文件严禁落盘明文凭证
+            // 凭据模板化：生成的测试文件严禁落盘明文凭证。
+            // 豁免粒度锐边（批四）：@no-redact/toml ignore_keys 为子串包含语义——
+            // ignore=["token"] 豁免全部含 token 的键，粒度自负（security/redact.rs 字段 doc）
             // （E-3：--keep-credentials 显式豁免——保留字面值免手工回填）
             if is_key_sensitive(key_str, policy) && !keep_credentials {
                 let var = Self::var_name_from_key(key_str);

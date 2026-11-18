@@ -45,6 +45,12 @@ const DEFAULT_IGNORE_FIELDS: [&str; 14] = [
 /// `duration_ms` 毫秒 u64（同 `HistoryEntry`）、`actual_status: Option<u16>`
 /// 传输层失败为 `None`（同 `FailureContext.status_code`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// 消费点地图（批四，新字段必读）：①本文件三构造点（:306 传输错误早退 /
+/// :396 正常比对 / :511 占位）；②ai/rules.rs context_from_replay_entry（→
+/// FailureContext/LLM——新字段必须防御性脱敏，redact_url/redact_free_text 先例）；③
+/// cli/dispatch.rs 终端打印 + --explain；④tui/state/mod.rs last_replay（存而未渲染）；
+/// ⑤tests/snapshot_replay_test.rs 逐字段断言。schema 注释（ai/rules.rs:37/:79）
+/// 与守护测试须随字段同步。见 architecture_review_2026-11.md。
 pub struct ReplayEntryResult {
     /// 快照内 1-based 序号（对齐终端 `#N` 打印）
     pub request_number: usize,

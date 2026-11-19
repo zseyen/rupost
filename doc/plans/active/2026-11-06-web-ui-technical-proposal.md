@@ -7,7 +7,7 @@
 - **执行队列**：独立（不并入 master execution runbook）
 - **关联文档**：
   - [2026-10-25 竞争格局复审](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-25-competitive-landscape-review.md)（定位约束来源）
-  - [2026-10-25 测试方案 20 功能域](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-strategy-plan.md)（报告域 §5.18 的延伸）
+  - 2026-10-25 测试方案 20 功能域（原文 git 历史）（报告域 §5.18 的延伸）
   - [directory_structure.md](file:///Users/zsyzzx/project/rust/rupost/doc/architecture/directory_structure.md)（Clean Architecture 落位依据）
 - **事实源分工**：本文件只承载需求与技术规格，不记进度——进度唯一事实源是 `doc/plans/progress_summary.md`
 

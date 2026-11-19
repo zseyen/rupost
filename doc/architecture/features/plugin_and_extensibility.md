@@ -15,7 +15,7 @@
 | 插件 SPI / IPC 协议 / 降级语义 / 执行仲裁 | 同目录 `03-plugin-spi-and-degradation.md` |
 | 黑匣子快照契约（Schema v1.0） | 同目录 `02-artifact-contract-for-plugins.md` |
 | P0/P1 与 M6 对账底账 | 同目录 `p0-p1-remediation-plan.md` |
-| 免重填/重放收口底账 | `doc/plans/2026-11-12-replay-reuse-backlog.md` |
+| 免重填/重放收口底账 | 已完成归档——结论存档 `../executed_plans_digest.md` §2.2，原文 git 历史 |
 
 ## 2. 当前架构（已落地，M1–M7 全量交付）
 
@@ -130,7 +130,7 @@ rupost "$RUPOST_BIN" ast suite.http        # → AstDocument JSON v1.0（stdout 
 
 **扩展缝指引**：`import`/`export` 管线**不开放**插件扩展点（2026-11-13 评估裁决）；转换类工具一律走命令插件形态。
 
-**社区扩展方向参考**（2026-11-13 范围裁决移交社区）：OpenAPI 导入（建议命令名 `openapi2md`）与 k6 场景草稿（`k6gen`）——设计骨架与核心侧现场核验（importer/exporter 字段、变量插值语义）见 `doc/plans/2026-11-13-phase01-remediation-plan.md` 暂缓节与 [插件承载能力评估](../../doc/plans/2026-11-13-plugin-readiness-assessment.md) §6；使用方案与版本协调见同报告 §7/§8。
+**社区扩展方向参考**（2026-11-13 范围裁决移交社区）：OpenAPI 导入（建议命令名 `openapi2md`）与 k6 场景草稿（`k6gen`）——设计骨架（WP-P3a/P3b 暂缓节、importer/exporter 字段与变量插值语义）、承载能力评估与 AST 桥使用方案/版本协调原文见 git 历史（2026-11-19 治理归档），结论存档 `executed_plans_digest.md` §2.3。
 
 ## 4. 登记不做项（P2/生态期，有裁决背书）
 
@@ -152,7 +152,7 @@ rupost "$RUPOST_BIN" ast suite.http        # → AstDocument JSON v1.0（stdout 
 
 | 定位 | 既有端点/能力 |
 |---|---|
-| 辅助执行 | `/api/v1/run/block`（单块调试）、`/api/v1/run/suite`（整篇套件）、`/api/v1/mock/simulate`（规则仿真）、套件失败复现包（`incident` 开关，见 `doc/plans/2026-11-13-phase01-remediation-plan.md` WP-R2） |
+| 辅助执行 | `/api/v1/run/block`（单块调试）、`/api/v1/run/suite`（整篇套件）、`/api/v1/mock/simulate`（规则仿真）、套件失败复现包（`incident` 开关，设计见 WP-R2，原文 git 历史） |
 | 辅助创建 | `/api/v1/files` + `/save`（活文档读写）、`/api/v1/import` + `/import/curl`（curl → 可执行 .http） |
 
 ### 6.2 四条预留扩展缝

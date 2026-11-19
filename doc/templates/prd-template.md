@@ -4,7 +4,7 @@
 
 - **状态**：Proposed（待评审）→ Accepted（待实施）→ In Progress → Done
 - **日期**：`$(date)`（生成时自动填充）
-- **执行队列**：独立 / 并入主执行文档（`doc/plans/2026-10-27-master-execution-runbook.md`）
+- **执行队列**：独立 / 并入主执行文档（原主执行文档，2026-11-19 治理归 git 历史）
 - **关联文档**：
 - **事实源分工**：本文件只承载需求与规格，**不记进度**——进度唯一事实源是
   `doc/plans/progress_summary.md`，完成后在其中登记批次行。

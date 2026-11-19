@@ -361,7 +361,7 @@ manifest 的 `name/description/usage` 与插件 `warnings` 渲染进终端前必
 
 ## 7. AI 集成裁决：AI-as-Plugin（v2.1.0 修订，取代"四大内核 SPI"）
 
-严格遵循 `doc/plans/archive/2026-q4/2026-10-27-ai-master-roadmap.md` 宪法原则（B0 运行期零 AI、B1/B2 兜底分级、五阶段管线模板、"AI 建议，引擎裁决"）。
+严格遵循 AI Master Roadmap 宪法原则（原文 git 历史）（B0 运行期零 AI、B1/B2 兜底分级、五阶段管线模板、"AI 建议，引擎裁决"）。
 
 ### 7.1 裁决内容
 

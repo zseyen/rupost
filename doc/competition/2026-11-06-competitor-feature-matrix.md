@@ -1,7 +1,7 @@
 # RuPost 竞品功能级对照矩阵与差距分析 (2026-11)
 
 > **知识基线**: 2026-10-26（复用仓库既有已验证竞品事实，不重新检索；战略层格局判断见[竞争格局复审](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-25-competitive-landscape-review.md)，本文只回答一个问题：**每个功能域上，RuPost 相对谁强、谁平、谁弱**）
-> **RuPost 基准**: [测试方案 20 功能域 v3](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-strategy-plan.md)（2026-10-28）+ README 当前能力
+> **RuPost 基准**: 测试方案 20 功能域 v3（原文 git 历史）（2026-10-28）+ README 当前能力
 > **口径**: ✅=具备且可用；⚠️=部分具备/需脚本/受限；❌=不具备；🔮=未声明（可能随底层依赖获得，未承诺）
 > **与既有文档分工**: 6/4 的 [`competitive_analysis.md`](file:///Users/zsyzzx/project/rust/rupost/doc/competition/competitive_analysis.md) 矩阵已过时（当时 replay 仍是"规划"且未含 TUI 对手），本文取代其矩阵部分；其定位/用户画像章节仍有效
 
@@ -97,7 +97,7 @@
 - [2026-10-25 竞争格局复审](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-25-competitive-landscape-review.md)（外部信源清单见其 §5）
 - [终端 API 客户端深度剖析：ain/ATAC/slumber](file:///Users/zsyzzx/project/rust/rupost/doc/competition/2026-10-27-terminal-api-clients-ain-atac-slumber-deep-dive.md)
 - [Hurl 功能对比](file:///Users/zsyzzx/project/rust/rupost/doc/competition/hurl_comparison.md)（6/4，断言细节仍有效）/[Reqable 分析](file:///Users/zsyzzx/project/rust/rupost/doc/competition/reqable_analysis.md)/[流量重放专题](file:///Users/zsyzzx/project/rust/rupost/doc/competition/traffic_replay_analysis.md)
-- [测试方案 20 功能域](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-25-test-strategy-plan.md) / [README 当前能力](file:///Users/zsyzzx/project/rust/rupost/README.md)
+- 测试方案 20 功能域（原文 git 历史） / [README 当前能力](file:///Users/zsyzzx/project/rust/rupost/README.md)
 
 ## 修订记录
 

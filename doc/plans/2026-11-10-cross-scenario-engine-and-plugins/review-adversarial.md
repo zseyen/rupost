@@ -69,7 +69,7 @@
 
 ## 4. AI 功能切入角度裁决（补录）
 
-既有规划（`doc/plans/archive/2026-q4/2026-10-27-ai-master-roadmap.md` B0~B4 宪法 + E 系列切入点）已裁决主战场为"失败处理"；本任务新增的最大角度是**离线快照黑匣子挖掘**。落地裁决：
+既有规划（AI Master Roadmap，原文 git 历史；B0~B4 宪法 + E 系列切入点）已裁决主战场为"失败处理"；本任务新增的最大角度是**离线快照黑匣子挖掘**。落地裁决：
 1. 快照契约为一切黑匣子 AI 的 P0 前置（06 M1 owner 已补）；
 2. AI 扩展机制复用插件方案 D（AI-as-Plugin），内核不新增 AI trait（05 ADR-D9）；
 3. 首个内置消费者 `ai triage --snapshot`（M5），复用 `crates/rupost-ai` 归因能力；
@@ -78,7 +78,7 @@
 
 ## 5. 遗留待办（本次修订未覆盖，需后续处理）
 
-1. `doc/plans/archive/2026-q4/2026-10-28-ai-feature-roadmap.md` 等既有 AI 文档与 AI-as-Plugin 裁决的对齐（由 AI 主线独立处理）；
+1. 既有 AI 文档（2026-10-28-ai-feature-roadmap 等，原文 git 历史）与 AI-as-Plugin 裁决的对齐（由 AI 主线独立处理）；
 2. musl 静态构建 target 与 CI 容器化裸机 job 的具体流水线设计（06 已登记任务）；
 3. `progress_summary.md` 与 `checkpoint.md` 的进度归档（随 M1 开工执行，AGENTS.md Stage 6）；
 4. v2.0.0 → v2.1.0 的 CHANGELOG 条目（随首次实施提交一并登记）。

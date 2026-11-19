@@ -84,4 +84,4 @@
 
 ## 5. 执行顺序指针
 
-施工顺序以 [06 §4](./06-mvp-implementation-plan-personas-and-scenarios.md) 的 M1~M5 为唯一权威（本文件 v2.0.0 §5 路线图已删除——其与 06 的双轨冲突是 v2.1.0 重构的直接动因）。AI 能力的切入角度与优先级裁决见 `doc/plans/archive/2026-q4/2026-10-27-ai-master-roadmap.md`（B0~B4 宪法 + 五阶段管线 + E 系列切入点）。
+施工顺序以 [06 §4](./06-mvp-implementation-plan-personas-and-scenarios.md) 的 M1~M5 为唯一权威（本文件 v2.0.0 §5 路线图已删除——其与 06 的双轨冲突是 v2.1.0 重构的直接动因）。AI 能力的切入角度与优先级裁决见 AI Master Roadmap（2026-11-19 治理归 git 历史；B0~B4 宪法 + 五阶段管线 + E 系列切入点）。

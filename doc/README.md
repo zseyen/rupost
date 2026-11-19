@@ -24,9 +24,9 @@ RuPost 是一个基于纯文本文档（`.http` 与 `.md`）驱动的极简高�
 | :--- | :--- | :--- |
 | **💡 快速上手与场景实操** | [`doc/guides/user_guide.md`](guides/user_guide.md)<br>[`doc/guides/batch_testing.md`](guides/batch_testing.md) | 从单请求调试到大规模目录批处理、变量多级覆盖的端到端教程 |
 | **🔍 调试、诊断与 Mock** | [`doc/guides/debug_guide.md`](guides/debug_guide.md)<br>[`doc/guides/mock_server.md`](guides/mock_server.md)<br>[`doc/guides/network_diagnostics.md`](guides/network_diagnostics.md) | 深入使用网络连通性瀑布图、单条用例重放、多分支条件 Mock 服务 |
-| **🏛️ 深入系统核心架构** | [`doc/architecture/master_plan.md`](architecture/master_plan.md)<br>[`doc/architecture/directory_structure.md`](architecture/directory_structure.md) | 掌握 Clean Architecture 分层依赖、物理目录职责与请求处理生命周期 |
+| **🏛️ 深入系统核心架构** | [`doc/architecture/directory_structure.md`](architecture/directory_structure.md)<br>[`doc/architecture/architecture_review_2026-11.md`](architecture/architecture_review_2026-11.md) | 掌握 Clean Architecture 分层依赖、物理目录职责与审查跟踪 |
 | **📦 核心特性三段式档案** | [`doc/architecture/features/`](architecture/features/) | **7 大权威业务档案**：需求是什么、已完成什么、后续待办什么 |
-| **🛠️ 参与贡献与开发规范** | [`doc/dev/development_workflow.md`](dev/development_workflow.md)<br>[`doc/dev/QUICK_REFERENCE.md`](dev/QUICK_REFERENCE.md) | 严格遵循的 Stage 0~6 研发工作流、TDD 流程、JJ 提交与三层测试守则 |
+| **🛠️ 参与贡献与开发规范** | [`doc/dev/development_workflow.md`](dev/development_workflow.md)<br>[`doc/dev/development_standards.md`](dev/development_standards.md) | 严格遵循的 Stage 0~6 研发工作流、TDD 流程、JJ 提交与三层测试守则 |
 | **📈 查看当前进度与路线** | [`doc/plans/progress_summary.md`](plans/progress_summary.md)<br>[`doc/plans/README.md`](plans/README.md) | 项目唯一进度事实来源 (SSOT)、5 大演进主线、未来待办池 |
 | **🌐 行业竞争与差异化定位**| [`doc/competition/`](competition/)<br>[`doc/plans/rupost_product_strategy.md`](plans/rupost_product_strategy.md) | 与 Hurl、HTTPie、ain、ATAC、slumber 的深度全方位对比矩阵 |
 
@@ -60,13 +60,14 @@ doc/
 ├── README.md                      # [本文档] 全局知识导航地图
 ├── guides/                        # 用户指南（保持路径稳定，对齐 README 链接）
 ├── architecture/                  # 系统核心架构设计
-│   ├── master_plan.md             # 顶层架构设计蓝图
 │   ├── directory_structure.md     # 物理与逻辑目录映射指南
+│   ├── architecture_review_2026-11.md  # 审查发现与改进项跟踪（SSOT）
+│   ├── executed_plans_digest.md   # 已执行方案结论存档（架构/需求/规范/经验）
 │   ├── http_md_role_contract.md   # HTTP 与 Markdown 职责契约
 │   └── features/                  # 7 大权威领域三段式技术档案
 ├── dev/                           # 工程与研发流程
 │   ├── development_workflow.md    # 核心研发流程规范 (Stage 0~6)
-│   ├── QUICK_REFERENCE.md         # 开发者速查手册
+│   ├── development_standards.md   # 开发规范（实战教训提炼版）
 │   └── github_actions.md          # CI 自动化流水线
 ├── competition/                   # 竞品分析与行业战略
 ├── templates/                     # 模版库 (prd-template.md 由 Makefile 动态引用)
@@ -74,11 +75,12 @@ doc/
     ├── README.md                  # 演进主线总纲与交叉引用索引
     ├── progress_summary.md        # 唯一开发进度事实来源 (SSOT)
     ├── future_backlog.md          # 统一未来待办需求池
-    ├── active/                    # 正在讨论与推进中的活跃 PRD
-    └── archive/                   # 历史交付方案分期归档 (2026-q2/q3/q4 & legacy_research/)
+    ├── active/                    # 正在讨论与推进中的活跃 PRD（未复审，建议补状态横幅）
+    └── 2026-11-10-cross-scenario-engine-and-plugins/  # 插件/快照契约规范系列（代码引用锚点）
 ```
 
 ### 文档维护契约
 1. **单一事实来源原则**：所有开发进度的新增与闭环，必须且仅能记录于 [`doc/plans/progress_summary.md`](plans/progress_summary.md)；未排期想法统一录入 [`doc/plans/future_backlog.md`](plans/future_backlog.md)。
 2. **规范模板契约**：所有新功能必须先通过 `make prd` 生成标准模版并进行架构评审，确认后再进入代码实现。
 3. **零破损原则**：保持各子目录中的重定向说明与历史原案链接通畅，确保外部工具链（Makefile、CI 脚本）稳定运行。
+4. **执行文档生命周期**（2026-11-19 制度化）：已完成的 PRD/实施计划删除前必须萃取结论入 [`architecture/executed_plans_digest.md`](architecture/executed_plans_digest.md)，原文以 git 历史为准；设想超两季度未启动 → future_backlog 一行条目。

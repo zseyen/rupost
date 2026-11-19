@@ -64,7 +64,7 @@ jobs:
             grep -rnE 'eprintln!' src/ --include='*.rs' --exclude-dir=cli --exclude=main.rs | grep -vE 'suite_presenter'
             exit 1
           fi
-      - name: Guard plan-doc citation anchors (batch4: 02/03 refs must carry file stem)
+      - name: "Guard plan-doc citation anchors (batch4: 02/03 refs must carry file stem)"
         run: |
           # 02/03 契约裸短引用禁止：`02 §x`/`03 §x` 必须携带文档 stem（rg 可直达），
           # 行号引用（§x:NNN）禁止（plan 文档演进即断链）。

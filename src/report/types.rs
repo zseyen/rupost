@@ -1,7 +1,5 @@
 use crate::report::json::JsonFileReport;
 use crate::runner::types::TestResult;
-use crate::security::redact as redactor;
-use crate::utils::path_guard::normalize_posix_path;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -193,123 +191,13 @@ impl ReportContext {
         title: Option<&str>,
         environment: Option<&str>,
     ) -> Self {
-        let mut total_requests: usize = 0;
-        let mut passed_requests: usize = 0;
-        let mut failed_requests: usize = 0;
-        let mut skipped_requests: usize = 0;
-        let mut total_duration_ms: u64 = 0;
-
-        let mut file_entries = Vec::new();
-
-        for (path, results) in file_results {
-            let mut file_passed = 0;
-            let mut file_failed = 0;
-            let mut file_duration_ms = 0;
-            let mut request_items = Vec::new();
-
-            for res in results {
-                total_requests += 1;
-                let duration_ms = res.duration.as_millis() as u64;
-                file_duration_ms += duration_ms;
-
-                if res.skipped {
-                    skipped_requests += 1;
-                } else if res.success {
-                    passed_requests += 1;
-                    file_passed += 1;
-                } else {
-                    failed_requests += 1;
-                    file_failed += 1;
-                }
-
-                // 断言 expected/actual/message 与 JSON 出口同源脱敏（可能携带
-                // body.access_token 等响应敏感值；raw 命中敏感键 → 整体 [REDACTED]）
-                let assertions = res
-                    .assertions
-                    .iter()
-                    .map(|a| ReportAssertionItem {
-                        raw: a.raw.clone(),
-                        passed: a.passed,
-                        message: redactor::redact_assertion_value(&a.raw, a.message.as_deref()),
-                        expected: redactor::redact_assertion_value(
-                            &a.raw,
-                            (!a.expected.is_empty()).then_some(a.expected.as_str()),
-                        ),
-                        actual: redactor::redact_assertion_value(&a.raw, a.actual.as_deref()),
-                    })
-                    .collect();
-
-                // 失败片段与 JSON 报告出口同源脱敏（redact_and_truncate_body：JSON
-                // 敏感键掩码 / 非 JSON 自由文本 URL+内联凭据兜底 + UTF-8 安全截断）——
-                // HTML 工件常随 CI 归档共享，不得弱于机器可读出口（走查缺口 #2）
-                let body_snippet = if !res.success {
-                    res.response
-                        .as_ref()
-                        .and_then(|resp| resp.text().ok())
-                        .map(|text| {
-                            redactor::redact_and_truncate_body(
-                                text,
-                                redactor::DEFAULT_SNIPPET_MAX_BYTES,
-                            )
-                        })
-                        .filter(|s| !s.is_empty())
-                } else {
-                    None
-                };
-
-                let timing_waterfall = TimingWaterfall::from_test_result(res);
-
-                request_items.push(ReportRequestItem {
-                    request_number: res.request_number,
-                    name: res.name.clone(),
-                    method: res.method.clone(),
-                    // 以下四字段与 build_json_reports 同一脱敏原语（审查发现：在线
-                    // 直渲路径曾弱于 JSON 出口——url query 凭据/错误文本 URL/断言值）
-                    url: redactor::redact_url(&res.url),
-                    status: res.status,
-                    duration_ms,
-                    success: res.success,
-                    skipped: res.skipped,
-                    error: res.error.as_deref().map(redactor::redact_free_text),
-                    assertions,
-                    warnings: res
-                        .warnings
-                        .iter()
-                        .map(|w| redactor::redact_free_text(w))
-                        .collect(),
-                    timing_waterfall,
-                    body_snippet,
-                });
-            }
-
-            total_duration_ms += file_duration_ms;
-
-            file_entries.push(ReportFileEntry {
-                file_path: normalize_posix_path(path),
-                total_requests: results.len(),
-                passed_requests: file_passed,
-                failed_requests: file_failed,
-                duration_ms: file_duration_ms,
-                requests: request_items,
-            });
-        }
-
-        let summary = ReportSummary::calculate(
-            file_results.len(),
-            total_requests,
-            passed_requests,
-            failed_requests,
-            skipped_requests,
-            total_duration_ms,
-        );
-
-        Self {
-            title: title.unwrap_or("Rupost API Test Report").to_string(),
-            generated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            environment: environment.map(|s| s.to_string()),
-            summary,
-            files: file_entries,
-        }
+        // 批三-1 单管线收口：在线直渲与离线二次渲染共用 build_json_reports
+        // 单一字段映射——双管线曾三次漂移（url/error/warnings 脱敏、body_snippet、
+        // timing 瀑布，审查批二/接手成本审查各实锤一次）；JUnit 出口早已是本形态。
+        // timing 经 JsonTiming 进 JSON（M7/E-5），瀑布三级链在
+        // from_json_file_reports 单点维护。
+        let reports = crate::report::json::build_json_reports(file_results);
+        Self::from_json_file_reports(&reports, title, environment)
     }
 
     /// 从已保存的 JsonFileReport 列表还原报告上下文（用于离线二次渲染）

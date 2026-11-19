@@ -2,7 +2,7 @@
 //! 端口只覆盖写路径（用例文件的创建）；读路径 I/O 见设计文档债务登记。
 
 use std::collections::HashMap;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -32,18 +32,15 @@ impl FileRepository for FsRepository {
     }
 
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
-        std::fs::canonicalize(path)
+        fs::canonicalize(path)
     }
 
     fn file_len(&self, path: &Path) -> u64 {
-        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+        fs::metadata(path).map(|m| m.len()).unwrap_or(0)
     }
 
     fn append(&self, path: &Path, data: &str) -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         file.write_all(data.as_bytes())
     }
 }

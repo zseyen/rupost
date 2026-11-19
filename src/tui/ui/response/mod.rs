@@ -17,6 +17,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
@@ -76,6 +77,11 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         }
     } else if state.ws_session.is_some() {
         " Response Viewer [WS Interactive] ".to_string()
+    } else if state.mock_session.is_some() && state.last_response.is_none() {
+        format!(
+            " Response Viewer [Mock Traffic :{}] ",
+            state.mock_session.as_ref().map(|s| s.port()).unwrap_or(0)
+        )
     } else {
         if is_ws {
             " Response Viewer [WS Completed] ".to_string()
@@ -158,6 +164,41 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
         );
     } else if state.last_response.is_some() {
         response_tab::render_http_completed(frame, content_area, block, state, visible_height);
+    } else if state.mock_session.is_some() || !state.mock_traffic.is_empty() {
+        let lines: Vec<Line> = if state.mock_traffic.is_empty() {
+            vec![Line::from(Span::styled(
+                "Mock server listening — waiting for incoming requests...",
+                Style::default().fg(t.dim),
+            ))]
+        } else {
+            state
+                .mock_traffic
+                .iter()
+                .rev()
+                .take(visible_height.max(1))
+                .map(|ev| {
+                    let status_color = if ev.status < 400 { t.ok } else { t.err };
+                    let route_desc = ev.matched_pattern.as_deref().unwrap_or("<unmatched>");
+                    Line::from(vec![
+                        Span::styled(
+                            format!("[{}] ", ev.status),
+                            Style::default()
+                                .fg(status_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("{} {} ", ev.method, ev.path),
+                            Style::default().fg(t.info),
+                        ),
+                        Span::styled(
+                            format!("-> {} ({}ms)", route_desc, ev.elapsed_ms),
+                            Style::default().fg(t.dim),
+                        ),
+                    ])
+                })
+                .collect()
+        };
+        frame.render_widget(Paragraph::new(lines).block(block), content_area);
     } else {
         frame.render_widget(
             Paragraph::new("No response data. Trigger execution via Ctrl+Enter.")
@@ -165,5 +206,37 @@ pub fn render(frame: &mut Frame, area: Rect, state: &mut AppState) {
                 .block(block),
             content_area,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::server::axum_adapter::MockTrafficEvent;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn test_response_viewer_renders_mock_traffic_lines() {
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = AppState::new();
+        state.push_mock_traffic(MockTrafficEvent {
+            method: "GET".to_string(),
+            path: "/api/users/42".to_string(),
+            status: 200,
+            matched_pattern: Some("/api/users/:id".to_string()),
+            elapsed_ms: 2,
+        });
+
+        terminal
+            .draw(|f| {
+                render(f, f.area(), &mut state);
+            })
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("[200] GET /api/users/42 -> /api/users/:id"));
     }
 }

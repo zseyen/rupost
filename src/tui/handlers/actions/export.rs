@@ -21,7 +21,7 @@ pub fn export_current_request(state: &mut AppState, redact: bool) {
     inject_quick_auth(&mut req, state.quick_auth());
 
     let mut ctx = state.variables.clone();
-    ctx.insert("__default_scheme", "http");
+    ctx.set_default_scheme("http");
     let captured: std::collections::HashSet<String> =
         state.variables.variables().keys().cloned().collect();
 

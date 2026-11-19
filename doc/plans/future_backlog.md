@@ -47,11 +47,11 @@
 *   **状态**：登记观察。xh 与 curl 已支持；RuPost 经 reqwest 的能力边界待确认后再排期。
 
 ### 6. `generate` 命令的 AI 延伸（历史 → 测试建议）
-*   **状态**：**已正式设计**（2026-10-26，从"远期构想"升级为待实施方案）——演进为 [`rupost ai bootstrap` 自举测试方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-bootstrap-proposal.md) Phase 1（历史→语义增强测试文件，含脱敏/引擎 lint/降级语义）。前置依赖：AI 激活 Phase 0（[AI 激活 PRD](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-26-ai-activation-prd.md)）。
+*   **状态**：**已正式设计**（2026-10-26，从"远期构想"升级为待实施方案）——演进为 `rupost ai bootstrap` 自举测试方案（原文 git 历史） Phase 1（历史→语义增强测试文件，含脱敏/引擎 lint/降级语义）。前置依赖：AI 激活 Phase 0（AI 激活 PRD（原文 git 历史））。
 
 ---
 
-## 📌 2026-10-27 对抗审查裁决登记（来源：[生成语义与调试取证执行计划](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-generation-semantics-execution-plan.md)）
+## 📌 2026-10-27 对抗审查裁决登记（来源：生成语义与调试取证执行计划（原文 git 历史））
 
 > 背景：云调试/自动日志/录制需求经 7 个对抗性子代理审查后降级收敛，以下为显式取舍（比照 gRPC Won't do 先例，防止摇摆）。
 
@@ -72,7 +72,7 @@
 *   **前置决策**：旧历史条目 body=None 的导出语义（跳过 or 占位）。
 
 ### 11. 生成语义批次（Phase 1）
-*   语义化命名 / Host 模板化 / 动态值反向识别 / 链式值溯源（复制型）——设计与量级见[执行计划 §3-§4](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-10-27-generation-semantics-execution-plan.md)；其中动态值识别即 ai bootstrap 机械降级路径，与 A1 激活存在复利关系。
+*   语义化命名 / Host 模板化 / 动态值反向识别 / 链式值溯源（复制型）——设计与量级见执行计划 §3-§4（原文 git 历史）；其中动态值识别即 ai bootstrap 机械降级路径，与 A1 激活存在复利关系。
 *   `rupost g --failed` 失败选择器、`--emit-env`、`--format md`：backlog 观察，有真实抱怨再排。
 
 ### 12. TUI 历史反向还原路径审计 — **已完成（2026-10-28，T10）**
@@ -115,7 +115,7 @@
 *   **CI 三新 Job 首跑确认**（`feature/contract-drift-and-hygiene` @ `ce633224` 已推送，`CHANGELOG.md` 已于同提交去重补齐）：因 [ci.yml](file:///Users/zsyzzx/project/rust/rupost/.github/workflows/ci.yml#L3-L8) 仅对 `main` 的 `push`/`pull_request` 及管理员 `workflow_dispatch` 触发，需建 PR（`feature/contract-drift-and-hygiene -> main`）后确认 `smoke-bash`（须绿）、`e2e-pytest`（须绿）、`nextest-pilot`（`continue-on-error` 试点，若红需归因）首跑结果。
 
 ### B. 已定稿待实施：统一基础服务与配置体系（Wave 0–3 ✅ 已全量完成）
-详见 [`2026-11-16-unified-services-and-config-plan.md`](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-11-16-unified-services-and-config-plan.md)：
+详见原执行方案（2026-11-19 治理已归 git 历史，结论存档 §2.5）：
 *   ~~Wave 0 / Wave 1 / Wave 2~~：✅ 已于 2026-11-16 完成交付（编译卫生、`WarningSink`、`ProcessGroupGuard`、`WorkspaceConfig` 沙箱、移除 `get_storage()`、`AtomicFileWriter`、AI `api_key_env` / 多 Profile / `credentials.toml` `0o600` 门禁）。
 *   ~~Wave 3（P2 交互会话同构，WP-S1~S3）~~：✅ 已于 2026-11-16 完成交付（`history_file`/`logs_dir`/`snapshots_dir` 全链路配置化、`ai/resolve` 收口 `AtomicFileWriter`、`TestExecutor` 挂载 `Arc<dyn WarningSink>`、`PrescriptionFormatter` 处方文案收口、抽取 `runner::interactive_session` Web/TUI 共享原语）。
 
@@ -129,3 +129,22 @@
 *   **安全/校验**：manifest `artifact_digests` 密钥级签名防篡改；`replay`/`ai triage` 强制校验 `--verify-digests`；CLI `--incident-out` 保留上限裁剪。
 *   **定位/契约**：Markdown `heading-slug` 锚点定位；快照 Schema v1.0 新增 `source_line`；扩充第四个退出码。
 *   **扩展缝/交互**：`import`/`export` 管线插件化扩展点、`stdin` AST 注入协议、Rust 库 SDK 承诺、TUI 复现包/契约漂移入口。
+
+---
+
+## 📌 2026-11-19 文档治理回收登记（来源：已完成执行文档萃取，结论存档见 [executed_plans_digest.md](../architecture/executed_plans_digest.md)，原文见 git 历史）
+
+以下为本次删除的执行文档中**新发现**的未落地项（与 2026-11-16 汇总不重复部分）：
+
+### E. 功能设想（有完整设计存档，排期时取回 git 原文）
+*   **变量加密存储**（Pending_Features P3-8）：SOPS-like `ENC[...]` 语法，敏感配置值加密解析。
+*   **`rupost doc export`（.http → OpenAPI 3.1 + Redoc 托管）**（local_doc_gen_proposal）：裁决过"自研 UI 否、Converter 路线是"——与 P3a 社区 OpenAPI 主题同域，一起评估。
+*   **`rupost ai gen`（AI OpenAPI-gen P2）**与 **AI 蒸馏**（q4 存档 PRD）：AI 族未做的两个分支。
+*   **快照重放增强**（2026-07-01 roadmap 残留）：虚拟响应注入、加密重放。
+*   **历史存储 HistoryConfig**（2026-07-11 设计）：20MB/10000 条硬编码阈值配置化（tail O(N) 已落地）。
+*   **脱敏二期三项**（R7 Sensitivity 枚举 / R8 `--redact safe|typed|shape` 档位 / R9 值形态正则——设计要点见存档 §2.1）。
+*   **生成物结构污染告警**（安全评估 P2-1 设计任务）：`format_entry` 对 body 行首 `###`/`# @` 内容行告警（"告警不改写"倾向）。
+
+### F. 流程与方向性（低频触发）
+*   **`make audit`**（cargo audit 发版前仪式，安全评估流程建议）。
+*   **统一"会话资产"抽象**（token/cookie/变量单一 session store）与**黄金样本变更检测实践**（replay-reuse 方向性登记）——R 系与 B-2/B-5 前提已满足，真实需求出现再立项。

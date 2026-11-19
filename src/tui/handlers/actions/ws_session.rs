@@ -36,7 +36,7 @@ pub async fn start_ws_session(state: &mut AppState, event_tx: &mpsc::Sender<TuiE
     }
     inject_quick_auth(&mut req, state.quick_auth());
     let mut var_context = state.variables.clone();
-    var_context.insert("__default_scheme", "ws");
+    var_context.set_default_scheme("ws");
 
     match crate::tui::ws_interactive::start_session(&req, &var_context, event_tx.clone()).await {
         Ok(sess) => {

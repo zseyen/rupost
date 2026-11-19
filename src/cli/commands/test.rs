@@ -86,7 +86,7 @@ pub struct TestArgs {
     #[arg(long, value_name = "BYTES")]
     pub max_snapshot_body_bytes: Option<usize>,
 
-    /// 时序采集模式（02 §2 契约）：仅支持 `off`——关闭时序采集，快照 timing_waterfall=null、timing_source=none
+    /// 时序采集模式（02-artifact-contract-for-plugins.md §2 契约）：仅支持 `off`——关闭时序采集，快照 timing_waterfall=null、timing_source=none
     #[arg(long, value_name = "MODE")]
     pub timing: Option<String>,
 
@@ -111,11 +111,11 @@ pub struct TestArgs {
     #[arg(long, value_name = "FILE", num_args = 0..=1, default_missing_value = ".rupost/vars.json")]
     pub var_state: Option<String>,
 
-    /// 插件缺失/失败时降级为警告跳过，请求按 .http 原样外发（03 §2；现场排障）
+    /// 插件缺失/失败时降级为警告跳过，请求按 .http 原样外发（03-plugin-spi-and-degradation.md §2；现场排障）
     #[arg(long)]
     pub allow_missing_plugins: bool,
 
-    /// CI 严格门禁：发生任何插件降级 → 整体判失败 exit 1（03 §10.5）
+    /// CI 严格门禁：发生任何插件降级 → 整体判失败 exit 1（03-plugin-spi-and-degradation.md §10.5）
     #[arg(long)]
     pub strict_plugins: bool,
 

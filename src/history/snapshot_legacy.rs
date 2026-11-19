@@ -22,14 +22,14 @@ pub fn read_snapshot_suite<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
     Ok(suite)
 }
 
-/// B-5：replay 快照体积上限（02 §3，与 `ai triage` 64MB 对齐）
+/// B-5：replay 快照体积上限（02-artifact-contract-for-plugins.md §3，与 `ai triage` 64MB 对齐）
 pub const MAX_REPLAY_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// 双格式兼容读取（`replay` 消费入口）：
 /// 优先按黑匣子契约 ExecutionSnapshotFile (Schema v1.0, `--save-snapshot` 产物)
 /// 解析并转换为重放套件；失败回退旧 SnapshotSuite（`history export` 产物）。
 pub fn read_snapshot_suite_compat<P: AsRef<Path>>(path: P) -> Result<SnapshotSuite> {
-    // B-5（02 §3）：离线快照视为不可信输入——消费前体积上限（与 triage 64MB 对齐）
+    // B-5（02-artifact-contract-for-plugins.md §3）：离线快照视为不可信输入——消费前体积上限（与 triage 64MB 对齐）
     let path = path.as_ref();
     let meta = fs::metadata(path).map_err(RupostError::IoError)?;
     if meta.len() > MAX_REPLAY_SNAPSHOT_BYTES {

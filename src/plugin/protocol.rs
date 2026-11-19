@@ -1,11 +1,11 @@
-//! Stdio IPC 协议契约、失败分类学与单 JSON 补丁解析（03 §8/§10 SSOT）。
+//! Stdio IPC 协议契约、失败分类学与单 JSON 补丁解析（03-plugin-spi-and-degradation.md §8/§10 SSOT）。
 
 use super::PluginPatch;
 
 /// 操作系统 Stdio IPC 管道硬限制载荷阈值 (10MB，防止打满管道缓冲区挂死)
 pub const MAX_PLUGIN_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 
-/// 插件调用失败分类（03 §8.3 唯一权威；与"缺失"共享降级开关）
+/// 插件调用失败分类（03-plugin-spi-and-degradation.md §8.3 唯一权威；与"缺失"共享降级开关）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginFailureKind {
     /// 超过超时窗，进程组已被 SIGKILL
@@ -71,7 +71,7 @@ pub struct PluginInvocationOutcome {
     pub stderr_tail: String,
 }
 
-/// stdout 单对象纪律（03 §8.2）：非单 JSON / 版本不兼容 / 失败信封 → `InvalidOutput`
+/// stdout 单对象纪律（03-plugin-spi-and-degradation.md §8.2）：非单 JSON / 版本不兼容 / 失败信封 → `InvalidOutput`
 pub fn parse_plugin_output(
     stdout_bytes: &[u8],
 ) -> std::result::Result<serde_json::Value, PluginFailureKind> {

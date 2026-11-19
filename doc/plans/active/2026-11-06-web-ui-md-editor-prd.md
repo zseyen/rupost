@@ -1,6 +1,6 @@
 # RuPost Web UI 活文档工作台（.md/.http 编辑）PRD
 
-> 由架构师评审流程产出（Stage 0/1）。本 PRD 即 [Web UI 技术方案](file:///Users/zsyzzx/project/rust/rupost/doc/plans/2026-11-06-web-ui-technical-proposal.md) §五 Phase 2 中预留的"另立 PRD"。
+> 由架构师评审流程产出（Stage 0/1）。本 PRD 即 [Web UI 技术方案](./2026-11-06-web-ui-technical-proposal.md) §五 Phase 2 中预留的"另立 PRD"。
 
 - **状态**：Proposed（待评审）→ Accepted（待实施）→ In Progress → Done
 - **日期**：2026-11-06

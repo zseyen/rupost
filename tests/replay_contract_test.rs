@@ -25,7 +25,7 @@ fn base_file() -> ExecutionSnapshotFile {
     .unwrap()
 }
 
-/// B-5：>64MB 快照必须拒绝（02 §3 不可信输入防线，与 triage 对齐）
+/// B-5：>64MB 快照必须拒绝（02-artifact-contract-for-plugins.md §3 不可信输入防线，与 triage 对齐）
 #[tokio::test]
 async fn test_replay_rejects_oversized_snapshot() {
     let dir = tempfile::tempdir().unwrap();
@@ -75,7 +75,7 @@ async fn test_replay_rejects_future_schema_version() {
     );
 }
 
-/// B-2：masking=secrets 快照重放必须警告"数据不完整"（02 §4：验签/Diff 结论降级）
+/// B-2：masking=secrets 快照重放必须警告"数据不完整"（02-artifact-contract-for-plugins.md §4：验签/Diff 结论降级）
 #[tokio::test]
 async fn test_replay_masked_snapshot_warns_data_incomplete() {
     let server = MockServer::start().await;

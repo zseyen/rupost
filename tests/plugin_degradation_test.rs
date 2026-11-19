@@ -1,5 +1,5 @@
 //! 04 套件 2：插件缺失、自愈降级与三态门禁验证（M3 owner）
-//! 语义对齐 03 §2 唯一权威：降级 = 插件不注入 + 请求按 .http 原样外发 +
+//! 语义对齐 03-plugin-spi-and-degradation.md §2 唯一权威：降级 = 插件不注入 + 请求按 .http 原样外发 +
 //! 三处 WARNING + 快照 DegradedPass；--strict-plugins 下降级即整体 exit 1。
 //! 反假守护：正向对照组（真实插件注入特征 Header）保证"降级成功"与
 //! "插件根本没被调用"可区分——反转生产逻辑必红。
@@ -259,7 +259,7 @@ async fn test_strict_plugins_fails_suite_on_degradation() {
 }
 
 /// 含未解析 {{var}} 的兜底 Header：变量解析失败的兜底视为兜底缺失，
-/// 该请求跳过并 WARNING（03 §2.1 禁止字面量外发）
+/// 该请求跳过并 WARNING（03-plugin-spi-and-degradation.md §2.1 禁止字面量外发）
 #[tokio::test]
 async fn test_unresolved_placeholder_header_skips_request() {
     use wiremock::matchers::{method, path};

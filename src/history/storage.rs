@@ -1,10 +1,13 @@
 #![allow(clippy::collapsible_if)]
 use crate::Result;
+use crate::diagnostics::BufferedWarningSink;
 use crate::error::RupostError;
 use crate::history::model::HistoryEntry;
 use crate::platform;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use crate::variable::WorkspaceConfig;
+use std::env;
+use std::fs::{self, OpenOptions, Permissions};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -28,18 +31,15 @@ impl HistoryStorage {
 
 impl Default for HistoryStorage {
     fn default() -> Self {
-        if let Some(env_dir) = std::env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
+        if let Some(env_dir) = env::var_os("RUPOST_HISTORY_DIR").filter(|v| !v.is_empty()) {
             return Self {
                 file_path: PathBuf::from(env_dir).join(HISTORY_FILE),
             };
         }
-        if let Ok(cwd) = std::env::current_dir()
+        if let Ok(cwd) = env::current_dir()
             && cwd.join("rupost.toml").exists()
         {
-            let ws = crate::variable::WorkspaceConfig::load(
-                &cwd,
-                &crate::diagnostics::BufferedWarningSink::new(),
-            );
+            let ws = WorkspaceConfig::load(&cwd, &BufferedWarningSink::new());
             return Self {
                 file_path: ws.paths.history_file,
             };
@@ -70,14 +70,14 @@ impl HistoryStorage {
                 .open(&self.file_path)
             {
                 Ok(_) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(RupostError::IoError(e)),
             }
             // 既有文件：收紧宽松权限（幂等；chmod 跟随 symlink 的 TOCTOU 由
             // append 前置的 regular-file 语义缓解——history 路径不经用户可控 symlink）
-            let meta = std::fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
+            let meta = fs::metadata(&self.file_path).map_err(RupostError::IoError)?;
             if meta.is_file() && meta.permissions().mode() & 0o777 & 0o077 != 0 {
-                std::fs::set_permissions(&self.file_path, std::fs::Permissions::from_mode(0o600))?;
+                fs::set_permissions(&self.file_path, Permissions::from_mode(0o600))?;
             }
         }
         #[cfg(not(unix))]
@@ -165,12 +165,96 @@ impl HistoryStorage {
     /// To display "Latest First", the caller (Printer) should reverse the result.
     ///
     /// # Optimization
-    /// Currently reads the whole file (up to 20MB limit).
-    /// Future optimization: Use `Seek` to read from end backwards.
+    /// Uses reverse `Seek` from end of file in chunks so `tail(N)` is O(N) instead of
+    /// reading the full 20MB file, while still preserving the compaction threshold check.
     pub fn tail(&self, n: usize) -> Result<Vec<HistoryEntry>> {
-        let entries = self.list()?;
-        let skip = entries.len().saturating_sub(n);
-        Ok(entries.into_iter().skip(skip).collect())
+        if n == 0 || !self.file_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let file_len = fs::metadata(&self.file_path)
+            .map_err(RupostError::IoError)?
+            .len();
+        if file_len >= COMPACTION_THRESHOLD_BYTES {
+            self.compact_if_needed()?;
+        }
+
+        let mut file = fs::File::open(&self.file_path).map_err(RupostError::IoError)?;
+        file.lock_shared().map_err(RupostError::IoError)?;
+        Self::read_tail_with_chunk_size(&mut file, n, 8192)
+    }
+
+    fn read_tail_with_chunk_size(
+        file: &mut fs::File,
+        n: usize,
+        chunk_size: usize,
+    ) -> Result<Vec<HistoryEntry>> {
+        let mut pos = file.seek(SeekFrom::End(0)).map_err(RupostError::IoError)?;
+        // 预分配上限与用户可控 n 解耦（审查 P1-5：`--limit usize::MAX` 此前
+        // capacity overflow abort；实际收集量仍由 n 与文件行数双重约束，
+        // 预分配只是优化手段，cap 不改变语义）
+        let mut collected = Vec::with_capacity(n.min(4096));
+        // 逆向暂存未遇到 '\n' 的尾部块（由后向前存放），避免单条大行反复 O(K^2) 拷贝
+        let mut pending_tail_chunks: Vec<Vec<u8>> = Vec::new();
+        let chunk_size = chunk_size.max(1);
+        let mut buf = vec![0u8; chunk_size];
+
+        while pos > 0 && collected.len() < n {
+            let read_len = usize::try_from(pos).unwrap_or(chunk_size).min(chunk_size);
+            pos -= read_len as u64;
+            file.seek(SeekFrom::Start(pos))
+                .map_err(RupostError::IoError)?;
+            file.read_exact(&mut buf[..read_len])
+                .map_err(RupostError::IoError)?;
+
+            let chunk = &buf[..read_len];
+            let mut end = chunk.len();
+            while let Some(nl_idx) = chunk[..end].iter().rposition(|&b| b == b'\n') {
+                let head = &chunk[nl_idx + 1..end];
+                if pending_tail_chunks.is_empty() {
+                    Self::try_push_json_line(head, &mut collected);
+                } else {
+                    let assembled = Self::assemble_line(head, &mut pending_tail_chunks);
+                    Self::try_push_json_line(&assembled, &mut collected);
+                }
+                end = nl_idx;
+                if collected.len() >= n {
+                    break;
+                }
+            }
+
+            if collected.len() < n && end > 0 {
+                pending_tail_chunks.push(chunk[..end].to_vec());
+            }
+        }
+
+        if collected.len() < n && !pending_tail_chunks.is_empty() {
+            let assembled = Self::assemble_line(&[], &mut pending_tail_chunks);
+            Self::try_push_json_line(&assembled, &mut collected);
+        }
+
+        collected.reverse();
+        Ok(collected)
+    }
+
+    fn assemble_line(head: &[u8], reversed_tail_chunks: &mut Vec<Vec<u8>>) -> Vec<u8> {
+        let total = head.len() + reversed_tail_chunks.iter().map(Vec::len).sum::<usize>();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(head);
+        for chunk in reversed_tail_chunks.iter().rev() {
+            out.extend_from_slice(chunk);
+        }
+        reversed_tail_chunks.clear();
+        out
+    }
+
+    fn try_push_json_line(line: &[u8], out: &mut Vec<HistoryEntry>) {
+        if line.iter().all(|b| b.is_ascii_whitespace()) {
+            return;
+        }
+        if let Ok(entry) = serde_json::from_slice::<HistoryEntry>(line) {
+            out.push(entry);
+        }
     }
 
     fn read_all(&self) -> Result<Vec<HistoryEntry>> {
@@ -251,13 +335,12 @@ impl HistoryStorage {
         // `file` is `File`. `File` implements `Write`.
         // We need to seek to start? `set_len(0)` usually truncates but doesn't move cursor?
         // Yes, need to seek.
-        use std::io::Seek;
         let mut file = file; // make mutable
-        file.seek(std::io::SeekFrom::Start(0))
+        file.seek(SeekFrom::Start(0))
             .map_err(RupostError::IoError)?;
 
         // Use BufWriter for performance
-        let mut writer = std::io::BufWriter::new(file);
+        let mut writer = BufWriter::new(file);
 
         for entry in to_keep {
             let json = serde_json::to_string(entry)?;
@@ -281,34 +364,37 @@ pub use super::snapshot_mask::{mask_execution_snapshot_entry, mask_snapshot_entr
 #[cfg(all(test, unix))]
 mod privacy_tests {
     use super::*;
+    use crate::history::model::{RequestSnapshot, ResponseMeta};
+    use chrono::Utc;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
 
     /// S-1：history.jsonl 权限必须与快照防线对齐——新建即 0600，宽松旧文件收紧。
     #[test]
     fn test_history_file_permissions_tightened() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let path = dir.path().join("history.jsonl");
         // 1) 预置 0644 旧文件 → append 后必须收紧
-        std::fs::write(&path, "{}\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&path, "{}\n").unwrap();
+        fs::set_permissions(&path, Permissions::from_mode(0o644)).unwrap();
         let store = HistoryStorage::new_with_path(path.clone());
         store.append(&sample_entry()).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "宽松权限必须被收紧");
         // 2) 新建路径 → append 创建即 0600
         let path2 = dir.path().join("history2.jsonl");
         let store2 = HistoryStorage::new_with_path(path2.clone());
         store2.append(&sample_entry()).unwrap();
-        let mode2 = std::fs::metadata(&path2).unwrap().permissions().mode() & 0o777;
+        let mode2 = fs::metadata(&path2).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode2, 0o600, "新建文件必须 0600");
     }
 
     fn sample_entry() -> HistoryEntry {
         HistoryEntry {
             id: "s1".to_string(),
-            timestamp: chrono::Utc::now(),
+            timestamp: Utc::now(),
             duration_ms: 1,
-            request: crate::history::model::RequestSnapshot {
+            request: RequestSnapshot {
                 method: "GET".to_string(),
                 url: "http://x".to_string(),
                 headers: Default::default(),
@@ -316,7 +402,7 @@ mod privacy_tests {
                 timeout: None,
             },
             source: Some("test".to_string()),
-            response: crate::history::model::ResponseMeta {
+            response: ResponseMeta {
                 status: 200,
                 headers: Default::default(),
                 body: Some("{}".to_string()),
@@ -431,5 +517,47 @@ mod tests {
             list[0].response.body.as_deref().unwrap(),
             "{\"hello\":\"world\"}"
         );
+    }
+
+    #[test]
+    fn test_tail_reverse_seek_handles_utf8_large_lines_and_corrupt_entries() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("history_tail.jsonl");
+        let storage = HistoryStorage::new_with_path(file_path.clone());
+
+        assert!(storage.tail(0).unwrap().is_empty());
+
+        let mut e1 = create_dummy_entry("id-1");
+        e1.response.body = Some("第一条历史".to_string());
+        let mut e2 = create_dummy_entry("id-2");
+        // 构造超过 8KB 且含多字节中文的响应体，验证跨块逆向读取与 UTF-8 完整性
+        e2.response.body = Some("中文跨块测试-".repeat(1200));
+        let mut e3 = create_dummy_entry("id-3");
+        e3.response.body = Some("第三条".to_string());
+
+        storage.append(&e1).unwrap();
+        // 手动注入损坏行与空行
+        {
+            let mut f = OpenOptions::new().append(true).open(&file_path).unwrap();
+            writeln!(f, "{{corrupt-json-line").unwrap();
+            writeln!(f).unwrap();
+        }
+        storage.append(&e2).unwrap();
+        storage.append(&e3).unwrap();
+
+        // 小块尺寸强制触发多次跨块逆向读取
+        let mut file = fs::File::open(&file_path).unwrap();
+        let last2 = HistoryStorage::read_tail_with_chunk_size(&mut file, 2, 64).unwrap();
+        assert_eq!(last2.len(), 2);
+        assert_eq!(last2[0].id, "id-2");
+        assert_eq!(last2[1].id, "id-3");
+        assert_eq!(last2[0].response.body, e2.response.body);
+
+        // 正常入口 tail(3) 跳过损坏行与空行，返回全部 3 条有效条目（由旧到新）
+        let all3 = storage.tail(3).unwrap();
+        assert_eq!(all3.len(), 3);
+        assert_eq!(all3[0].id, "id-1");
+        assert_eq!(all3[1].id, "id-2");
+        assert_eq!(all3[2].id, "id-3");
     }
 }

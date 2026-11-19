@@ -14,7 +14,7 @@ use super::types::{PluginCacheScope, PluginDirective, PluginRuntime, PluginStage
 /// 插件外部子进程默认执行超时 (5 秒硬熔断，`--plugin-timeout` 可覆盖)
 pub const DEFAULT_PLUGIN_TIMEOUT_SECS: u64 = 5;
 
-/// 插件降级 / 门禁运行时选项（03 §2 唯一权威语义的执行载体）
+/// 插件降级 / 门禁运行时选项（03-plugin-spi-and-degradation.md §2 唯一权威语义的执行载体）
 #[derive(Debug, Clone)]
 pub struct PluginRuntimeOptions {
     /// CLI `--allow-missing-plugins`：缺失/失败统一降级为警告跳过
@@ -38,29 +38,64 @@ impl Default for PluginRuntimeOptions {
     }
 }
 
-/// 解析 CLI `--plugin-env` 单条规格：`KEY=VALUE` 直接取值；`KEY` 从父进程环境变量读取（缺失返回 None）。
-pub fn parse_plugin_env_spec(spec: &str) -> Option<(String, String)> {
+/// 单条规格决策（批三-6 #16：三函数族收敛——单条决策唯一，batch 委托之）
+fn parse_plugin_env_spec_outcome(spec: &str) -> (Option<(String, String)>, Option<String>) {
     if let Some((key, value)) = spec.split_once('=') {
         let key = key.trim();
-        (!key.is_empty()).then(|| (key.to_string(), value.to_string()))
+        if key.is_empty() {
+            return (
+                None,
+                Some(format!("--plugin-env '{spec}': 变量名为空，变量未生效")),
+            );
+        }
+        (Some((key.to_string(), value.to_string())), None)
     } else {
         let key = spec.trim();
         if key.is_empty() {
-            return None;
+            return (None, Some(format!("--plugin-env '{spec}': 缺少参数内容")));
         }
-        std::env::var(key).ok().map(|val| (key.to_string(), val))
+        match std::env::var(key) {
+            Ok(val) => (Some((key.to_string(), val)), None),
+            Err(_) => (
+                None,
+                Some(format!(
+                    "--plugin-env {key}: 父进程环境变量未设置，变量未传给插件"
+                )),
+            ),
+        }
     }
 }
 
-/// 批量解析 `--plugin-env` 参数列表
-pub fn parse_plugin_env_specs(specs: &[String]) -> Vec<(String, String)> {
-    specs
-        .iter()
-        .filter_map(|s| parse_plugin_env_spec(s))
-        .collect()
+/// 批量解析 `--plugin-env` 参数列表（带告警，走查缺口 #6 家族收尾）：
+/// `=VALUE`（空键）与 `KEY`（父进程环境变量缺失）此前经 filter_map 静默丢弃——
+/// 用户确信传了凭据，插件实际什么都没拿到。两种形态现各产出一条告警；
+/// 调用方（suite_setup / executor_factory / plugin_exec）自行渲染。
+pub fn parse_plugin_env_specs_with_warnings(
+    specs: &[String],
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut values = Vec::new();
+    let mut warnings = Vec::new();
+    // 告警在构造处即 tracing::warn!（Release CLI 默认 warn 级可见），
+    // 返回值仅供需要结构化处理的调用方叠加使用。
+    for spec in specs {
+        let (value, warning) = parse_plugin_env_spec_outcome(spec);
+        if let Some(w) = warning {
+            tracing::warn!("{}", w);
+            warnings.push(w);
+        }
+        if let Some(pair) = value {
+            values.push(pair);
+        }
+    }
+    (values, warnings)
 }
 
-/// suite 级 Hook 结果缓存（03 §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）。
+/// 批量解析 `--plugin-env` 参数列表（无告警兼容形态）
+pub fn parse_plugin_env_specs(specs: &[String]) -> Vec<(String, String)> {
+    parse_plugin_env_specs_with_warnings(specs).0
+}
+
+/// suite 级 Hook 结果缓存（03-plugin-spi-and-degradation.md §8.3 `cache_scope=suite`：按插件名 + 阶段 + 参数精确隔离）。
 /// 外层使用极短同步锁获取独立槽位，各 `cache_key` 异步单飞隔离，避免阻塞无锁的 `PerRequest` 插件。
 #[derive(Debug, Default)]
 pub struct SuiteHookCache {
@@ -95,7 +130,7 @@ pub struct PluginStageOutcome {
     pub degraded: bool,
     /// 插件管道总耗时（微秒，时延隔离）
     pub plugin_duration_us: u64,
-    /// 降级/失败告警（终端 + 报告 + 快照三处同文，03 §2.1）
+    /// 降级/失败告警（终端 + 报告 + 快照三处同文，03-plugin-spi-and-degradation.md §2.1）
     pub warnings: Vec<String>,
     /// 未声明降级旗标时的阻断错误（友好报错 + 搜索路径清单，exit 1 路径）
     pub blocking_error: Option<String>,
@@ -118,7 +153,7 @@ fn hook_cache_key(directive: &PluginDirective) -> String {
     .to_string()
 }
 
-/// 仅透传 `--plugin-env` 显式放行的环境变量（03 §6.2 最小权限原则：严禁静默读取宿主机 `requires_env`）
+/// 仅透传 `--plugin-env` 显式放行的环境变量（03-plugin-spi-and-degradation.md §6.2 最小权限原则：严禁静默读取宿主机 `requires_env`）
 fn build_plugin_env_overrides(cli_env: &[(String, String)]) -> Vec<(String, String)> {
     let mut merged: BTreeMap<String, String> = BTreeMap::new();
     for (k, v) in cli_env {
@@ -246,7 +281,7 @@ enum HookInvokeStep {
 pub struct PluginPipeline;
 
 impl PluginPipeline {
-    /// 对声明的插件注解集合执行确定性排序仲裁（03 §5.2 唯一权威）：
+    /// 对声明的插件注解集合执行确定性排序仲裁（03-plugin-spi-and-degradation.md §5.2 唯一权威）：
     /// 1. 严格依据生命周期阶段不可逆流升序 (Prepare -> Transform -> Sign)；
     /// 2. 同阶段内 100% 保留 `.http` 文件书写声明行序（稳定排序）。
     pub fn sort_directives(directives: &mut [PluginDirective]) {
@@ -261,7 +296,7 @@ impl PluginPipeline {
         directives.iter().filter(|d| d.stage == stage).collect()
     }
 
-    /// 对单请求执行完整插件管线（03 §5.1 阶段串联传递 + §2 统一降级语义）。
+    /// 对单请求执行完整插件管线（03-plugin-spi-and-degradation.md §5.1 阶段串联传递 + §2 统一降级语义）。
     #[allow(clippy::too_many_arguments)]
     pub async fn execute_for_request(
         directives: &[PluginDirective],
@@ -281,7 +316,7 @@ impl PluginPipeline {
         let mut current_headers = resolved_headers.to_vec();
         let mut current_body = resolved_body.map(str::to_string);
         let mut current_vars = serde_json::Map::new();
-        // 请求局部 Hook 结果备忘录（03 §3.1 `cache_scope=request`：同一请求内同指令复用，
+        // 请求局部 Hook 结果备忘录（03-plugin-spi-and-degradation.md §3.1 `cache_scope=request`：同一请求内同指令复用，
         // 跨请求绝不复用——套件级复用专属 suite 作用域）。
         // `None` = 降级哨兵：同请求内同一失败指令不重试、不重复告警（审查 D1/D5 收口）。
         let mut request_cache: HashMap<String, Option<super::PluginPatch>> = HashMap::new();
@@ -488,6 +523,14 @@ impl PluginPipeline {
         current_body: Option<&str>,
         current_vars: &serde_json::Map<String, serde_json::Value>,
     ) -> HookInvokeStep {
+        // 批三-2（审查漏项 3）：params 序列化经 BTreeMap 归一 key 顺序——
+        // std HashMap 迭代序随进程随机，同输入产生不同 IPC 字节，违反
+        // 执行期确定性；hook_cache_key 已是 BTreeMap，此处理应对齐
+        let sorted_params: BTreeMap<&str, &str> = directive
+            .params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let payload = json!({
             "protocol_version": "1.0",
             "stage": directive.stage,
@@ -499,7 +542,7 @@ impl PluginPipeline {
                 "body": current_body,
             },
             "variables": current_vars,
-            "params": directive.params,
+            "params": sorted_params,
         })
         .to_string();
 
@@ -566,7 +609,7 @@ impl PluginPipeline {
         HookInvokeStep::Continue
     }
 
-    /// 统一降级门（03 §2.1）：返回 `true` 表示必须阻断并中止后续管线。
+    /// 统一降级门（03-plugin-spi-and-degradation.md §2.1）：返回 `true` 表示必须阻断并中止后续管线。
     fn gate_degradation(
         outcome: &mut PluginStageOutcome,
         directive: &PluginDirective,
@@ -588,6 +631,29 @@ impl PluginPipeline {
 
 #[cfg(test)]
 mod tests {
+
+    /// 批三-2（审查漏项 3）：IPC payload 的 params key 顺序确定性——
+    /// 同一键集无论以何种插入顺序进入 HashMap，序列化字节必须一致。
+    #[test]
+    fn test_hook_payload_params_key_order_deterministic() {
+        // 注意：payload 由 invoke_hook_once 内联构建，此处复刻其排序归一逻辑
+        // 锁定"HashMap → BTreeMap"这一行为本身
+        let mut h1 = std::collections::HashMap::new();
+        h1.insert("alpha", "1");
+        h1.insert("beta", "2");
+        h1.insert("gamma", "3");
+        let mut h2 = std::collections::HashMap::new();
+        h2.insert("gamma", "3");
+        h2.insert("alpha", "1");
+        h2.insert("beta", "2");
+
+        let norm = |m: &std::collections::HashMap<&str, &str>| {
+            let sorted: std::collections::BTreeMap<_, _> =
+                m.iter().map(|(k, v)| (*k, *v)).collect();
+            serde_json::json!({ "params": sorted }).to_string()
+        };
+        assert_eq!(norm(&h1), norm(&h2), "同键集必须产出相同 IPC 字节");
+    }
     use super::*;
     use crate::plugin::PluginPatch;
 

@@ -6,13 +6,11 @@
 //!
 //! 钩子语义（DX-Debug PRD US-R7）：
 //! - 每个失败请求触发一次，stderr/stdout 透传；
-//! - 超时/非零退出/未检出 trace 头均不影响测试退出码（不阻塞 Fail-Fast）；
-//! - 无 trace 头时变量为空串，并向 `TestResult.warnings` 追加可见提示。
+//! - 超时/非零退出/未检出 trace 头均不影响测试退出码（不阻塞 Fail-Fast），
+//!   且均向 `TestResult.warnings` 追加可见提示（随报告/快照落盘可审计）。
 
 use std::process::Stdio;
 use std::time::Duration;
-
-use colored::Colorize;
 use tokio::process::Command;
 
 use crate::runner::types::TestResult;
@@ -146,16 +144,15 @@ pub async fn fire_failure_hooks(
             // --report json 的 stdout 是机器可读契约（保持纯净），钩子输出混入即毁
             eprint!("{}", outcome.stderr);
             eprint!("{}", outcome.stdout);
+            // 钩子异常事实进 warnings（随报告/快照落盘可审计）——stderr 只有钩子
+            // 自身输出的透传，rupost 自身判断不再裸 eprintln（#13 尾巴）
             if outcome.timed_out {
-                eprintln!(
-                    "    {} on-failure hook timed out after {HOOK_TIMEOUT:?} (process killed)",
-                    "⚠".yellow()
-                );
+                r.warnings.push(format!(
+                    "on-failure hook 超时（>{HOOK_TIMEOUT:?}，进程已杀）——清理动作可能未完成"
+                ));
             } else if !outcome.exit_success {
-                eprintln!(
-                    "    {} on-failure hook exited non-zero (test exit code unaffected)",
-                    "⚠".yellow()
-                );
+                r.warnings
+                    .push("on-failure hook 非零退出（测试退出码不受影响）".to_string());
             }
         }
     }

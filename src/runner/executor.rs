@@ -173,12 +173,6 @@ impl TestExecutor {
         self
     }
 
-    /// Inject a custom [`ExecutionObserver`] (e.g., `NoopExecutionObserver` in tests).
-    pub fn with_observer(mut self, observer: Arc<dyn ExecutionObserver>) -> Self {
-        self.observer = observer;
-        self
-    }
-
     pub fn with_middleware(
         mut self,
         middleware: Arc<crate::middleware::routing::RoutingMiddleware>,
@@ -399,7 +393,7 @@ impl TestExecutor {
 
         // 2. 解析最终 URL 并进行补全和拼接
         let default_scheme = context
-            .get("__default_scheme")
+            .default_scheme()
             .map(|s| s.to_string())
             .unwrap_or_else(|| "http".to_string());
 
@@ -438,7 +432,7 @@ impl TestExecutor {
         let url = parsed.url.clone();
         let name = parsed.name().map(|s| s.to_string());
 
-        // 2.5 插件管线（03 §5.1 阶段不可逆流；03 §2 统一降级语义）：
+        // 2.5 插件管线（03-plugin-spi-and-degradation.md §5.1 阶段不可逆流；03-plugin-spi-and-degradation.md §2 统一降级语义）：
         // 变量解析后、发包前执行；即使注册表未装配也不旁路，早退路径共享统一诊断收口。
         let (parsed, diag) = match crate::runner::executor_plugin::run_plugin_stage(
             parsed,

@@ -1,3 +1,6 @@
+use crate::utils::path_guard::is_markdown_doc;
+use std::path::Path;
+
 pub mod ast_json;
 pub mod http_file;
 pub mod markdown_file;
@@ -32,11 +35,8 @@ pub fn parse_http_header(line: &str) -> Option<(&str, &str)> {
 }
 
 /// 依据文件扩展名统一解析活文档（.md, .markdown 或 .http）
-pub fn parse_document_by_path<P: AsRef<std::path::Path>>(
-    path: P,
-    content: &str,
-) -> ParseResult<ParsedFile> {
-    if crate::utils::path_guard::is_markdown_doc(path.as_ref()) {
+pub fn parse_document_by_path<P: AsRef<Path>>(path: P, content: &str) -> ParseResult<ParsedFile> {
+    if is_markdown_doc(path.as_ref()) {
         MarkdownFileParser::parse_content(content)
     } else {
         HttpFileParser::parse_content(content)
@@ -44,7 +44,7 @@ pub fn parse_document_by_path<P: AsRef<std::path::Path>>(
 }
 
 /// 从文件路径解析 HTTP 文件
-pub fn parse_file<P: AsRef<std::path::Path>>(path: P) -> ParseResult<ParsedFile> {
+pub fn parse_file<P: AsRef<Path>>(path: P) -> ParseResult<ParsedFile> {
     HttpFileParser::parse_file(path)
 }
 

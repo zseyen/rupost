@@ -2,8 +2,8 @@
 
 > 纯 PR 维护的轻量索引（零基建）：想收录你的插件，提交 PR 在下表加一行即可。
 > 作者指南：[插件与扩展](architecture/features/plugin_and_extensibility.md) §3
-> （两种插件形态矩阵、命令插件五步、AST 桥）；使用与版本协调见
-> `doc/plans/2026-11-13-plugin-readiness-assessment.md` §7/§8。
+> （两种插件形态矩阵、命令插件五步、AST 桥）；AST 桥版本协调守则见
+> `architecture/executed_plans_digest.md` §2.3（原评估文档已归 git 历史）。
 
 | 插件 | 形态 | 一句话 | 链接 | 维护者 |
 | :-- | :-- | :-- | :-- | :-- |

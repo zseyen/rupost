@@ -1,7 +1,7 @@
-use crate::exporter::redact::{RedactionAuditLog, RedactionPolicy};
 use crate::exporter::types::{ExportableRequest, SkippedItem};
 use crate::http::url::resolve_final_url;
 use crate::parser::{ParsedFile, ParsedRequest};
+use crate::security::redact::{RedactionAuditLog, RedactionPolicy};
 use crate::utils::path_guard::normalize_posix_path;
 use crate::variable::{VariableContext, VariableResolver};
 use crate::{Result, RupostError};
@@ -194,7 +194,7 @@ impl RequestPreparer {
 
         // 3. 解析并拼接最终 URL
         let default_scheme = context
-            .get("__default_scheme")
+            .default_scheme()
             .unwrap_or_else(|| "http".to_string());
 
         let final_url = resolve_final_url(
@@ -270,6 +270,23 @@ impl RequestPreparer {
                 builtin.with_request_metadata(&parsed.metadata)
             }
         };
+
+        // 审查批二 C-b：豁免审计——`@no-redact` 声明且基础策略本会命中的键，
+        // 值保留原样出站，但脚注如实记录"谁被豁免了"（杜绝静默免脱敏）
+        if redact_secrets
+            && let Some(log) = audit_log.as_deref_mut()
+            && !parsed.metadata.no_redact_keys.is_empty()
+        {
+            let base = match policy {
+                Some(p) => p,
+                None => &RedactionPolicy::builtin(),
+            };
+            for key in &parsed.metadata.no_redact_keys {
+                if base.is_sensitive(key) {
+                    log.record_exemption(key);
+                }
+            }
+        }
 
         let url_out = if redact_secrets {
             effective_policy.redact_url_audited(&final_url, audit_log.as_deref_mut())
@@ -500,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_prepare_file_with_policy_and_audit_log() {
-        use crate::exporter::redact::{RedactionAuditLog, RedactionPolicy, RedactionSource};
+        use crate::security::redact::{RedactionAuditLog, RedactionPolicy, RedactionSource};
 
         let mut file = ParsedFile::new();
         let mut req = ParsedRequest::new(1);

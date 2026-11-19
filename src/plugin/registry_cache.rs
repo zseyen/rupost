@@ -1,4 +1,4 @@
-//! 插件注册表磁盘缓存（~/.rupost/registry.json）的指纹校验与原子写回（03 §3.2 / §10.3）。
+//! 插件注册表磁盘缓存（~/.rupost/registry.json）的指纹校验与原子写回（03-plugin-spi-and-degradation.md §3.2 / §10.3）。
 
 use super::types::PluginManifest;
 use crate::Result;
@@ -9,7 +9,7 @@ use std::io::Read as _;
 use std::path::Path;
 
 /// 磁盘轻量注册表高速缓存结构 (位于 ~/.rupost/registry.json)。
-/// 定位 = 静态 manifest 的**可重建索引**（非权威数据源，03 §3.2）。
+/// 定位 = 静态 manifest 的**可重建索引**（非权威数据源，03-plugin-spi-and-degradation.md §3.2）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct RegistryCacheFile {
     pub version: String,
@@ -26,7 +26,7 @@ pub struct CachedPluginEntry {
     pub manifest: PluginManifest,
 }
 
-/// 全量指纹：纳秒级 mtime + 完整 manifest 文件 SHA-256 哈希（03 §10.3 防幽灵缓存命中）
+/// 全量指纹：纳秒级 mtime + 完整 manifest 文件 SHA-256 哈希（03-plugin-spi-and-degradation.md §10.3 防幽灵缓存命中）
 pub fn manifest_fingerprint(path: &Path) -> Option<(u64, String)> {
     let meta = std::fs::metadata(path).ok()?;
     let modified = meta

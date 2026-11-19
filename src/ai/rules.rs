@@ -25,12 +25,12 @@ pub fn context_from_json_test_report(r: &JsonTestReport) -> FailureContext {
     FailureContext {
         request_name: r.name.clone(),
         method: r.method.clone(),
-        url: crate::ai::redactor::redact_url(&r.url),
+        url: crate::security::redact::redact_url(&r.url),
         status_code: r.status,
         error: r
             .error
             .as_deref()
-            .map(crate::ai::redactor::redact_free_text),
+            .map(crate::security::redact::redact_free_text),
         failed_assertions,
         response_body_snippet: r.response_body_snippet.clone(),
         warnings: r.warnings.clone(),
@@ -70,12 +70,12 @@ pub fn context_from_replay_entry(e: &ReplayEntryResult) -> FailureContext {
         // replay 快照无 @name 语义；bucket label 已有 None 降级分支（METHOD url 形态）
         request_name: None,
         method: e.method.clone(),
-        url: crate::ai::redactor::redact_url(&e.url),
+        url: crate::security::redact::redact_url(&e.url),
         status_code: e.actual_status,
         error: e
             .error
             .as_deref()
-            .map(crate::ai::redactor::redact_free_text),
+            .map(crate::security::redact::redact_free_text),
         // 响应头 v1 不采集（R7 钩子管线不覆盖 replay）；snippet 由 T4-b 失败条目填充（已脱敏）
         failed_assertions,
         response_body_snippet: e.response_body_snippet.clone(),
@@ -187,7 +187,7 @@ pub fn failure_signature(ctx: &FailureContext) -> String {
         .error
         .as_ref()
         .and_then(|e| e.lines().next())
-        .map(crate::ai::redactor::mask_urls)
+        .map(crate::security::redact::mask_urls)
         .or_else(|| {
             ctx.failed_assertions
                 .first()
@@ -324,7 +324,7 @@ pub fn build_signature_buckets(reports: &[JsonFileReport]) -> Vec<SignatureBucke
                     r.request_number,
                     r.method,
                     // 外部报告不可信任：URL 可能携带 query token，进 LLM/报告前必须脱敏
-                    crate::ai::redactor::redact_url(&r.url)
+                    crate::security::redact::redact_url(&r.url)
                 ),
             };
             // sample_error 会作为 LLM 上下文与报告字段，必须先脱敏
@@ -332,11 +332,11 @@ pub fn build_signature_buckets(reports: &[JsonFileReport]) -> Vec<SignatureBucke
             let err_summary = r
                 .error
                 .as_deref()
-                .map(crate::ai::redactor::redact_free_text)
+                .map(crate::security::redact::redact_free_text)
                 .or_else(|| {
                     r.assertions.iter().find(|a| !a.passed).map(|a| {
                         let msg = a.message.as_deref().unwrap_or("assertion failed");
-                        crate::ai::redactor::redact_free_text(&format!("{}: {}", a.raw, msg))
+                        crate::security::redact::redact_free_text(&format!("{}: {}", a.raw, msg))
                     })
                 })
                 .unwrap_or_else(|| format!("HTTP {:?}", r.status));
@@ -348,9 +348,9 @@ pub fn build_signature_buckets(reports: &[JsonFileReport]) -> Vec<SignatureBucke
                 sample_error: err_summary,
                 // 幂等再脱敏：外部报告的 snippet 不经自产管线，防御性重处理
                 sample_snippet: r.response_body_snippet.as_ref().map(|s| {
-                    crate::ai::redactor::redact_and_truncate_body(
+                    crate::security::redact::redact_and_truncate_body(
                         s,
-                        crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                        crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
                     )
                 }),
                 default_root_cause: root_cause,

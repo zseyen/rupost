@@ -22,6 +22,7 @@ jobs:
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -35,12 +36,46 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Guard rupost_ai crate boundary (P1-9/B0)
         run: |
           if grep -rnE '\brupost_ai\b' src/ --exclude-dir=ai; then
             echo "::error::P1-9/B0 boundary violation: rupost_ai may only be referenced inside src/ai/"
+            exit 1
+          fi
+      - name: Guard eprintln channel boundary (batch3-7 / arch review #13, ratchet)
+        run: |
+          # 核心层禁止裸 eprintln——警告通道裁决见 src/diagnostics/warning_sink.rs 头注。
+          # 棘轮模式：基线 7（2026-11-19 批E 实测），只防净增长。
+          # 剩余 7 处均为裁决豁免：warning_sink.rs 2（实时通道实现本体 + 头注提及）、
+          # exporter/mod.rs 3（唯一调用方为 CLI stderr，Web 接入时随接入加 sink 参数）、
+          # generator/http.rs 1（body 凭据警告——随生成签名扩展再迁）、
+          # web/server.rs 1（--dev 安全姿态横幅，刻意醒目直出）。
+          # allowlist：表现层 cli/**、suite_presenter、main.rs。
+          COUNT=$(grep -rnE 'eprintln!' src/ \
+            --include='*.rs' \
+            --exclude-dir=cli \
+            --exclude=main.rs \
+            | grep -cvE 'suite_presenter' || true)
+          if [ "$COUNT" -gt 7 ]; then
+            echo "::error::eprintln count ($COUNT) exceeds ratchet baseline (7) — use tracing::warn! / WarningSink / TestResult.warnings (see src/diagnostics/warning_sink.rs header). New sites: "
+            grep -rnE 'eprintln!' src/ --include='*.rs' --exclude-dir=cli --exclude=main.rs | grep -vE 'suite_presenter'
+            exit 1
+          fi
+      - name: "Guard plan-doc citation anchors (batch4: 02/03 refs must carry file stem)"
+        run: |
+          # 02/03 契约裸短引用禁止：`02 §x`/`03 §x` 必须携带文档 stem（rg 可直达），
+          # 行号引用（§x:NNN）禁止（plan 文档演进即断链）。
+          # 映射：doc/plans/2026-11-10-cross-scenario-engine-and-plugins/ 下
+          # 02=artifact-contract-for-plugins.md、03=plugin-spi-and-degradation.md。
+          BAD=$( { grep -rnE '02 ?§' src/ tests/ --include='*.rs' | grep -v '02-artifact-contract-for-plugins' || true
+                   grep -rnE '03 ?§' src/ tests/ --include='*.rs' | grep -v '03-plugin-spi-and-degradation' || true
+                   grep -rnE '§[0-9]+:[0-9]+' src/ tests/ --include='*.rs' || true; } )
+          if [ -n "$BAD" ]; then
+            echo "::error::裸 02/03 契约引用或行号引用禁止——请携带文档 stem 锚点:"
+            echo "$BAD"
             exit 1
           fi
       - name: Install Rust
@@ -57,6 +92,7 @@ jobs:
   test:
     name: Test & Debug Artifact (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +129,7 @@ jobs:
   web-assets:
     name: Web Frontend Tests (node --test)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -107,6 +144,7 @@ jobs:
   smoke-bash:
     name: Feature Verification Smoke (bash)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -124,6 +162,7 @@ jobs:
   nextest-pilot:
     name: nextest pilot (optional)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +179,7 @@ jobs:
   e2e-pytest:
     name: E2E Blackbox (pytest)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
@@ -162,6 +202,7 @@ jobs:
   musl-static:
     name: musl Static Build & Size Budget
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust with musl target

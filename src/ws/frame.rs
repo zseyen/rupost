@@ -89,23 +89,16 @@ pub enum WsAction {
     Close,
 }
 
-/// 载荷转码器接口，用于处理二进制与特定格式帧的转码断言
-pub trait PayloadDecoder: Send + Sync {
-    /// 转码器名称 (如 "messagepack")
-    fn name(&self) -> &str;
-    /// 将原始字节转码为通用的 JSON 结构以供断言和 TUI 渲染
-    fn decode(&self, payload: &[u8]) -> Result<serde_json::Value, String>;
-}
-
-/// MessagePack 格式解码器实现
+/// MessagePack 格式解码器（审查批一：唯一实现，trait 塌缩为固有方法；
+/// 出现第二种解码器时再引入 trait）
 pub struct MsgPackDecoder;
 
-impl PayloadDecoder for MsgPackDecoder {
-    fn name(&self) -> &str {
+impl MsgPackDecoder {
+    pub fn name(&self) -> &'static str {
         "messagepack"
     }
 
-    fn decode(&self, payload: &[u8]) -> Result<serde_json::Value, String> {
+    pub fn decode(&self, payload: &[u8]) -> Result<serde_json::Value, String> {
         rmp_serde::from_slice(payload)
             .map_err(|e| format!("Failed to decode MessagePack payload: {}", e))
     }

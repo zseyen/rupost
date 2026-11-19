@@ -57,34 +57,34 @@ impl ConfigLoader {
 
     /// 从指定路径加载脱敏策略，区分“文件不存在”（静默回退）与“读取/解析失败”（返回告警并回退内置默认策略）。
     fn load_redaction_policy_from_path(path: &Path) -> (RedactionPolicy, Option<String>) {
-        if !path.exists() {
-            return (RedactionPolicy::builtin(), None);
-        }
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(e) => {
-                return (
-                    RedactionPolicy::builtin(),
-                    Some(format!(
-                        "[!] 读取 {} 失败: {e}，已回退到内置默认脱敏策略",
-                        path.display()
-                    )),
-                );
+        // 批三-6 #17 收口：读+解析委托 load_toml_document 单点（损坏告警文本保持
+        // "[!] " 前缀——load_redaction_policy_from_path_with_sink 有 strip_prefix 剥离逻辑）
+        match Self::load_toml_document(path) {
+            Ok(None) => (RedactionPolicy::builtin(), None),
+            Ok(Some((raw, _doc))) => {
+                let content = raw;
+                match RedactionPolicy::from_toml_str(&content) {
+                    Ok(policy) => (policy, None),
+                    Err(e) => (
+                        RedactionPolicy::builtin(),
+                        Some(format!(
+                            "[!] 解析 {} 脱敏策略失败: {e}，已回退到内置默认脱敏策略",
+                            path.display()
+                        )),
+                    ),
+                }
             }
-        };
-        match RedactionPolicy::from_toml_str(&content) {
-            Ok(policy) => (policy, None),
-            Err(e) => (
+            Err(root_cause) => (
                 RedactionPolicy::builtin(),
-                Some(format!(
-                    "[!] 解析 {} 脱敏策略失败: {e}，已回退到内置默认脱敏策略",
-                    path.display()
-                )),
+                Some(format!("[!] {root_cause}，已回退到内置默认脱敏策略")),
             ),
         }
     }
 
-    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）
+    /// 查找并加载脱敏策略配置 [export.redaction]（三级级联查找，未配置时回退到内置默认策略）。
+    /// ⚠️ 同一 rupost.toml 的三条加载路径之一，损坏策略各异（本路径静默回退内置；
+    /// `find_and_load` 携根因告警；`find_and_load_plugin_config` 回退 default）——
+    /// 修改解析行为时三处联动。
     pub fn find_and_load_redaction_policy() -> RedactionPolicy {
         Self::find_and_load_redaction_policy_with_sink(&StderrWarningSink)
     }
@@ -110,22 +110,41 @@ impl ConfigLoader {
         policy
     }
 
-    /// 单个 toml 路径的分类加载（走查缺口 #6c：存在但损坏必须区分于不存在——
-    /// 此前 `.ok()` 把解析失败与"没有配置"混为一谈，环境变量层被静默清空）。
-    /// 不存在 → Ok(None)（继续下一查找位）；损坏 → Err(根因)（调用方停止搜索，
-    /// 坏文件优先于静默回退，否则用户会误用更高层级目录的错误配置）。
-    fn try_load_config_file(path: &Path) -> Result<Option<VariableConfig>, String> {
+    /// 三路径共用的读 + 解析单点（批三-6 #17 收口：`find_and_load` /
+    /// `find_and_load_redaction_policy` / `find_and_load_plugin_config` 此前各自
+    /// 读盘解析——同一 run 磁盘 I/O ×3 且错误措辞三套）。
+    /// 返回：Ok(None) = 文件不存在（各消费者自行决定缺省）；
+    ///       Ok(Some((原文, 解析值))) = 有效（原文供 redaction 的 from_toml_str
+    ///       复用——toml::Value 重序列化会改变文档形态，喂原文保证逐字节一致）；
+    ///       Err(根因) = 存在但损坏（各消费者加语义后缀）。
+    fn load_toml_document(path: &Path) -> Result<Option<(String, toml::Value)>, String> {
         if !path.exists() {
             return Ok(None);
         }
         let content =
             fs::read_to_string(path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
-        toml::from_str(&content).map(Some).map_err(|e| {
-            format!(
-                "解析 {} 失败: {e} —— 环境变量配置未加载，请修复 rupost.toml 后重试",
-                path.display()
-            )
-        })
+        let value =
+            toml::from_str(&content).map_err(|e| format!("解析 {} 失败: {e}", path.display()))?;
+        Ok(Some((content, value)))
+    }
+
+    /// 单个 toml 路径的分类加载（走查缺口 #6c：存在但损坏必须区分于不存在——
+    /// 此前 `.ok()` 把解析失败与"没有配置"混为一谈，环境变量层被静默清空）。
+    /// 不存在 → Ok(None)（继续下一查找位）；损坏 → Err(根因)（调用方停止搜索，
+    /// 坏文件优先于静默回退，否则用户会误用更高层级目录的错误配置）。
+    fn try_load_config_file(path: &Path) -> Result<Option<VariableConfig>, String> {
+        match Self::load_toml_document(path) {
+            // 走查 #6c 完整契约：读取/解析失败与 schema 失配同口径——
+            // 根因（load_toml_document）之外必须说明后果并携带修复指引
+            Err(e) => Err(format!(
+                "{e} —— 环境变量配置未加载，请修复 rupost.toml 后重试"
+            )),
+            Ok(None) => Ok(None),
+            Ok(Some((_, doc))) => doc
+                .try_into()
+                .map(Some)
+                .map_err(|e| format!("{e} —— 环境变量配置未加载，请修复 rupost.toml 后重试")),
+        }
     }
 
     /// 查找并加载配置文件（路径发现复用 [`Self::find_config_path`]：
@@ -150,13 +169,23 @@ impl ConfigLoader {
     ) -> (PluginTomlConfig, Vec<String>) {
         let mut warnings = Vec::new();
         let path = path.as_ref();
-        match Self::load_from_path(path) {
-            Ok(config) => match config.plugins {
-                Some(cfg) => (cfg, warnings),
-                None => (PluginTomlConfig::default(), warnings),
+        // 批三-6 #17 收口：读+解析委托 load_toml_document 单点
+        match Self::load_toml_document(path) {
+            Ok(Some((_, doc))) => match doc.try_into::<VariableConfig>() {
+                Ok(config) => match config.plugins {
+                    Some(cfg) => (cfg, warnings),
+                    None => (PluginTomlConfig::default(), warnings),
+                },
+                Err(e) => {
+                    warnings.push(format!("rupost.toml [plugins] 段解析失败，已回退默认: {e}"));
+                    (PluginTomlConfig::default(), warnings)
+                }
             },
-            Err(e) => {
-                warnings.push(format!("rupost.toml [plugins] 段解析失败，已回退默认: {e}"));
+            Ok(None) => (PluginTomlConfig::default(), warnings),
+            Err(root_cause) => {
+                warnings.push(format!(
+                    "rupost.toml [plugins] 段解析失败，已回退默认: {root_cause}"
+                ));
                 (PluginTomlConfig::default(), warnings)
             }
         }
@@ -256,14 +285,6 @@ impl ConfigLoader {
         warnings.dedup();
         context.extend(vars);
         (context, warnings)
-    }
-
-    /// 解析 CLI 变量参数 "key=value"
-    pub fn parse_cli_var(s: &str) -> Option<(String, String)> {
-        match Self::parse_cli_var_outcome(s) {
-            CliVarOutcome::Parsed(k, v) => Some((k, v)),
-            CliVarOutcome::Warn(_) => None,
-        }
     }
 
     /// 解析 CLI 变量参数（走查缺口 #6 家族收尾：`--var no_equals` 此前经
@@ -639,6 +660,41 @@ base_url = "http://localhost:8080"
         );
     }
 
+    /// 批三-6 #17 收口一致性守护：同一坏 toml，三路径的告警必须携带同一根因
+    /// （"解析 ... 失败"）——杜绝"某路径静默、某路径告警"的漂移。
+    #[test]
+    fn test_corrupt_toml_warns_consistently_across_three_paths() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let corrupt = dir.path().join("rupost.toml");
+        std::fs::write(&corrupt, "not valid toml [[[").unwrap();
+
+        // 路径 1：variables（try_load_config_file → find_and_load 链）
+        let err = ConfigLoader::try_load_config_file(&corrupt).unwrap_err();
+        assert!(err.contains("解析"), "{err}");
+
+        // 路径 2：redaction（损坏 → 告警 + 回退 builtin，非静默）
+        let (policy, warnings) = ConfigLoader::load_redaction_policy_from_path(&corrupt);
+        assert!(
+            warnings.iter().any(|w| w.contains("解析")),
+            "redaction 路径损坏必须告警: {warnings:?}"
+        );
+        assert!(
+            policy.is_sensitive("Authorization"),
+            "回退后应为内置默认（硬键仍敏感）"
+        );
+
+        // 路径 3：plugins（损坏 → 告警 + 回退 default）
+        let (cfg, warnings) = ConfigLoader::load_plugin_config_from_path(&corrupt);
+        assert!(
+            warnings.iter().any(|w| w.contains("解析")),
+            "plugin 路径损坏必须告警: {warnings:?}"
+        );
+        assert!(cfg == Default::default(), "回退后应为默认配置");
+
+        // 三路径根因同源：都含 "解析 {} 失败" 的路径名
+        let _ = err; // 已断言
+    }
+
     #[test]
     fn test_try_load_config_file_classifies_missing_vs_corrupt() {
         // 走查缺口 #6c：不存在 → Ok(None)（继续查找位），损坏 → Err(根因)
@@ -676,18 +732,21 @@ base_url = "http://localhost:8080"
     }
 
     #[test]
-    fn test_parse_cli_var() {
+    fn test_parse_cli_var_outcome_parity() {
         assert_eq!(
-            ConfigLoader::parse_cli_var("key=value"),
-            Some(("key".to_string(), "value".to_string()))
+            ConfigLoader::parse_cli_var_outcome("key=value"),
+            CliVarOutcome::Parsed("key".to_string(), "value".to_string())
         );
 
         assert_eq!(
-            ConfigLoader::parse_cli_var("url=https://example.com"),
-            Some(("url".to_string(), "https://example.com".to_string()))
+            ConfigLoader::parse_cli_var_outcome("url=https://example.com"),
+            CliVarOutcome::Parsed("url".to_string(), "https://example.com".to_string())
         );
 
-        assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
+        assert!(matches!(
+            ConfigLoader::parse_cli_var_outcome("invalid"),
+            CliVarOutcome::Warn(_)
+        ));
     }
 
     /// `--var` 决策表（#6 家族收尾）：显式传参落空必须告警，三调用点共用
@@ -720,12 +779,6 @@ base_url = "http://localhost:8080"
                 (got, want) => panic!("input={input:?}: got {got:?}, want {want:?}"),
             }
         }
-        // 兼容入口委托同一决策（Option 语义不变）
-        assert_eq!(ConfigLoader::parse_cli_var("invalid"), None);
-        assert_eq!(
-            ConfigLoader::parse_cli_var("k=v"),
-            Some(("k".to_string(), "v".to_string()))
-        );
     }
 
     /// toml `${VAR}` 未设置告警 + 同变量多处引用去重

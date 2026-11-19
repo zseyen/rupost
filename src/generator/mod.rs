@@ -45,8 +45,8 @@ pub fn run_generate(opts: GenerateOptions) -> Result<()> {
             std::path::Path::new(&opts.output_file),
             content.as_bytes(),
         )?;
-        eprintln!(
-            "[!] {} 含明文凭据（--keep-credentials）——文件已 0600，严禁提交仓库或外传",
+        tracing::warn!(
+            "{} 含明文凭据（--keep-credentials）——文件已 0600，严禁提交仓库或外传",
             opts.output_file
         );
     } else {

@@ -1,3 +1,6 @@
+use super::plugins::curl::CurlExporter;
+use super::plugins::httpie::HttpieExporter;
+use super::plugins::wget::WgetExporter;
 use crate::Result;
 use crate::exporter::types::{ExportOptions, ExportableRequest};
 use std::sync::Arc;
@@ -30,9 +33,9 @@ impl ExporterRegistry {
         let mut registry = Self {
             plugins: Vec::new(),
         };
-        registry.register(Arc::new(super::plugins::curl::CurlExporter));
-        registry.register(Arc::new(super::plugins::httpie::HttpieExporter));
-        registry.register(Arc::new(super::plugins::wget::WgetExporter));
+        registry.register(Arc::new(CurlExporter));
+        registry.register(Arc::new(HttpieExporter));
+        registry.register(Arc::new(WgetExporter));
         registry
     }
 

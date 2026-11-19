@@ -1,6 +1,8 @@
 use crate::parser::http_file::HttpFileParser;
+use crate::parser::mock_variant::MockVariantParser;
 use crate::parser::types::{FileMetadata, ParseResult, ParsedFile, ParsedMockVariant};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use std::fs;
 use std::path::Path;
 
 /// Markdown 文件解析器
@@ -9,7 +11,7 @@ pub struct MarkdownFileParser;
 impl MarkdownFileParser {
     /// 从文件路径解析
     pub fn parse_file<P: AsRef<Path>>(path: P) -> ParseResult<ParsedFile> {
-        let content = std::fs::read_to_string(&path)?;
+        let content = fs::read_to_string(&path)?;
         let mut parsed = Self::parse_content(&content)?;
         parsed.source_path = Some(path.as_ref().to_path_buf());
         Ok(parsed)
@@ -153,12 +155,12 @@ impl MarkdownFileParser {
     /// 在代码块中识别首个独立的 `@mock-when` 或 `@mock-default` 指令行，
     /// 将代码块一刀切分为 `(request_part, variants_part)`。（委托 MockVariantParser 统一组件）
     pub fn split_mock_variants(block_content: &str) -> Option<(String, String)> {
-        crate::parser::mock_variant::MockVariantParser::split_mock_variants(block_content)
+        MockVariantParser::split_mock_variants(block_content)
     }
 
     /// 解析切分出的 Mock 变体部分（委托 MockVariantParser 统一组件）
     pub fn parse_mock_variants_part(variants_content: &str) -> Vec<ParsedMockVariant> {
-        crate::parser::mock_variant::MockVariantParser::parse_mock_variants_part(variants_content)
+        MockVariantParser::parse_mock_variants_part(variants_content)
     }
 
     /// 从 Markdown 文件内容中解析并提取该文件声明的全局拓扑依赖文件。

@@ -1,30 +1,45 @@
 use crate::mock::compiler::MockCompiler;
-use crate::mock::variant::{CompareOp, ConditionSource};
-use crate::parser::MarkdownFileParser;
-use crate::utils::jsonpath::JsonPathResolver;
+use crate::mock::matcher::TrieRouteMatcher;
+use crate::mock::variant::{CompareOp, ConditionSource, EvalContext};
+use crate::parser::{MarkdownFileParser, parse_document_by_path};
+use crate::variable::{VariableContext, VariableResolver};
 use crate::web::mock_manager::discover_workspace_mock_routes;
 use crate::web::server::AppState;
 use crate::web::types::{
-    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse, StartMockRequest,
-    StopMockRequest,
+    ApiResponse, ConditionEvaluation, MockSimulateRequest, MockSimulateResponse, ReloadMockRequest,
+    StartMockRequest, StopMockRequest,
 };
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use serde::Deserialize;
+use std::collections::HashMap;
 use tokio::task::spawn_blocking;
 
 pub async fn simulate_mock_handler(
     State(_state): State<AppState>,
     Json(req): Json<MockSimulateRequest>,
 ) -> impl IntoResponse {
-    let markdown_payload = if req.raw_block.contains("```") {
-        req.raw_block.clone()
+    // 契约（审查批二 C-f）：file_path 仅用于按扩展名选择解析器，**从不读盘**——
+    // 内容恒来自请求体。若未来把该字段升级为"服务端读取文档"，必须先接
+    // PathSandbox（与 start/reload 同源），否则即构成路径穿越面。
+    let parsed_res = if let Some(ref file_path) = req.file_path {
+        if req.raw_block.contains("```") {
+            MarkdownFileParser::parse_content(&req.raw_block)
+        } else {
+            parse_document_by_path(file_path, &req.raw_block)
+        }
     } else {
-        format!("```http\n{}\n```", req.raw_block.trim())
+        let markdown_payload = if req.raw_block.contains("```") {
+            req.raw_block.clone()
+        } else {
+            format!("```http\n{}\n```", req.raw_block.trim())
+        };
+        MarkdownFileParser::parse_content(&markdown_payload)
     };
 
-    let parsed_file = match MarkdownFileParser::parse_content(&markdown_payload) {
+    let parsed_file = match parsed_res {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -37,7 +52,15 @@ pub async fn simulate_mock_handler(
         }
     };
 
-    let routes = MockCompiler::compile(&parsed_file);
+    let routes = match MockCompiler::try_compile(&parsed_file) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::err(e.to_string())),
+            );
+        }
+    };
     if routes.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -47,59 +70,44 @@ pub async fn simulate_mock_handler(
         );
     }
 
-    // 优先匹配方法与路径，兜底取第一个
-    let route = routes
-        .iter()
-        .find(|r| {
-            r.method.eq_ignore_ascii_case(&req.method)
-                && (r.path == req.path
-                    || r.path.trim_start_matches('/') == req.path.trim_start_matches('/'))
-        })
-        .unwrap_or(&routes[0]);
+    let mut matcher = TrieRouteMatcher::new();
+    for r in routes {
+        matcher.add_route(&r.method, &r.path, r.variants);
+    }
+
+    let Some((pattern, variants, captured_params)) =
+        matcher.match_route_with_params(&req.method, &req.path)
+    else {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse::ok(MockSimulateResponse {
+                matched_variant_index: None,
+                matched_variant_name: "unmatched".to_string(),
+                expected_status: 404,
+                evaluations: Vec::new(),
+                matched_pattern: None,
+                captured_params: HashMap::new(),
+                response_headers: HashMap::new(),
+                response_body: None,
+            })),
+        );
+    };
 
     let body_str = req.body.as_deref().unwrap_or("");
+    let eval_ctx = EvalContext::new(&req.headers, &req.query, body_str);
     let mut evaluations = Vec::new();
     let mut matched_index = None;
-    let mut matched_name = "default".to_string();
-    let mut expected_status = 200;
+    let mut matched_name = "unmatched".to_string();
+    let mut expected_status = 404;
+    let mut matched_variant = None;
 
-    for (idx, variant) in route.variants.iter().enumerate() {
+    for (idx, variant) in variants.iter().enumerate() {
         if let Some(cond) = &variant.condition {
-            let passed = cond.evaluate(&req.headers, &req.query, body_str);
-
-            let (source_desc, actual_val) = match cond.source {
-                ConditionSource::Header => {
-                    let val = req
-                        .headers
-                        .get(&cond.key)
-                        .or_else(|| {
-                            req.headers
-                                .iter()
-                                .find(|(k, _)| k.eq_ignore_ascii_case(&cond.key))
-                                .map(|(_, v)| v)
-                        })
-                        .cloned();
-                    ("header", val)
-                }
-                ConditionSource::Query => {
-                    let val = req.query.get(&cond.key).cloned();
-                    ("query", val)
-                }
-                ConditionSource::Body => {
-                    let val = if cond.key.starts_with('$') {
-                        serde_json::from_str::<serde_json::Value>(body_str)
-                            .ok()
-                            .and_then(|json| {
-                                JsonPathResolver::resolve(&json, &cond.key).map(|v| match v {
-                                    serde_json::Value::String(s) => s.clone(),
-                                    other => other.to_string(),
-                                })
-                            })
-                    } else {
-                        Some(body_str.to_string())
-                    };
-                    ("body", val)
-                }
+            let detail = cond.evaluate_with_detail(&eval_ctx);
+            let source_desc = match cond.source {
+                ConditionSource::Header => "header",
+                ConditionSource::Query => "query",
+                ConditionSource::Body => "body",
             };
 
             let op_str = match cond.operator {
@@ -113,29 +121,49 @@ pub async fn simulate_mock_handler(
                     "[{}] {} {} {}",
                     source_desc, cond.key, op_str, cond.expected_value
                 ),
-                passed,
+                passed: detail.passed,
                 expected: cond.expected_value.clone(),
-                actual: actual_val,
+                actual: detail.actual,
             });
 
-            if passed && matched_index.is_none() {
+            if detail.passed && matched_index.is_none() {
                 matched_index = Some(idx);
                 matched_name = format!("variant_{}", idx + 1);
                 expected_status = variant.status;
+                matched_variant = Some(variant);
             }
         } else if matched_index.is_none() {
-            // 无条件变体作为兜底匹配
             matched_index = Some(idx);
             matched_name = "default".to_string();
             expected_status = variant.status;
+            matched_variant = Some(variant);
         }
     }
+
+    let (response_headers, response_body) = if let Some(var) = matched_variant {
+        let mut var_ctx = VariableContext::new();
+        for (k, v) in &captured_params {
+            var_ctx.insert(k, v);
+        }
+        let mut headers = HashMap::new();
+        for (k, v) in &var.headers {
+            headers.insert(k.clone(), VariableResolver::resolve(v, &var_ctx));
+        }
+        let body = VariableResolver::resolve(&var.response_body, &var_ctx);
+        (headers, Some(body))
+    } else {
+        (HashMap::new(), None)
+    };
 
     let response = MockSimulateResponse {
         matched_variant_index: matched_index,
         matched_variant_name: matched_name,
         expected_status,
         evaluations,
+        matched_pattern: Some(pattern.to_string()),
+        captured_params,
+        response_headers,
+        response_body,
     };
 
     (StatusCode::OK, Json(ApiResponse::ok(response)))
@@ -202,5 +230,134 @@ pub async fn stop_mock_server_handler(
     match state.mock_manager.stop_server(req.id.as_deref(), req.port) {
         Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
         Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
+}
+
+/// 原地热重载托管 Mock HTTP 服务（只读模式禁止，编译失败保留旧路由）
+pub async fn reload_mock_server_handler(
+    State(state): State<AppState>,
+    Json(req): Json<ReloadMockRequest>,
+) -> impl IntoResponse {
+    if state.readonly {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::err(
+                "Reloading mock servers is disabled in read-only mode",
+            )),
+        );
+    }
+
+    match state
+        .mock_manager
+        .reload_server(&state.working_dir, req.id.as_deref(), req.port)
+    {
+        Ok(info) => (StatusCode::OK, Json(ApiResponse::ok(info))),
+        Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MockTrafficQuery {
+    pub id: Option<String>,
+    pub port: Option<u16>,
+}
+
+/// 查询托管 Mock 服务的实时入站流量（只读模式可用）
+pub async fn mock_traffic_handler(
+    State(state): State<AppState>,
+    Query(query): Query<MockTrafficQuery>,
+) -> impl IntoResponse {
+    match state
+        .mock_manager
+        .get_traffic(query.id.as_deref(), query.port)
+    {
+        Ok(resp) => (StatusCode::OK, Json(ApiResponse::ok(resp))),
+        Err(err) => (err.status, Json(ApiResponse::err(err.message))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::web::server::{WebServerConfig, create_web_router};
+    use axum::body::{Body, to_bytes};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    async fn call_simulate(req: MockSimulateRequest) -> MockSimulateResponse {
+        let app = create_web_router(WebServerConfig::default());
+        let http_req = Request::builder()
+            .method("POST")
+            .uri("/api/v1/mock/simulate")
+            .header("host", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_string(&req).unwrap()))
+            .unwrap();
+        let resp = app.oneshot(http_req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let api: ApiResponse<MockSimulateResponse> = serde_json::from_slice(&bytes).unwrap();
+        assert!(api.success, "simulate failed: {:?}", api.error);
+        api.data.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_simulate_captures_params_and_renders_body_with_base_url() {
+        let res = call_simulate(MockSimulateRequest {
+            method: "GET".to_string(),
+            path: "/api/users/42".to_string(),
+            raw_block: "GET {{base_url}}/api/users/:id?debug=1\n\n@mock-default\nHTTP/1.1 200 OK\nX-User: {{id}}\n\n{\"id\":\"{{id}}\"}\n".to_string(),
+            file_path: Some("api.http".to_string()),
+            ..Default::default()
+        })
+        .await;
+
+        assert_eq!(res.matched_pattern.as_deref(), Some("/api/users/:id"));
+        assert_eq!(
+            res.captured_params.get("id").map(String::as_str),
+            Some("42")
+        );
+        assert_eq!(res.expected_status, 200);
+        assert_eq!(
+            res.response_headers.get("X-User").map(String::as_str),
+            Some("42")
+        );
+        assert_eq!(res.response_body.as_deref(), Some("{\"id\":\"42\"}"));
+    }
+
+    #[tokio::test]
+    async fn test_simulate_unmatched_path_returns_404_unmatched() {
+        let res = call_simulate(MockSimulateRequest {
+            method: "GET".to_string(),
+            path: "/api/not-exist".to_string(),
+            raw_block: "GET /api/users/:id\n\n@mock-default\nHTTP/1.1 200 OK\n\nok\n".to_string(),
+            ..Default::default()
+        })
+        .await;
+
+        assert!(res.matched_pattern.is_none());
+        assert!(res.matched_variant_index.is_none());
+        assert_eq!(res.matched_variant_name, "unmatched");
+        assert_eq!(res.expected_status, 404);
+        assert!(res.response_body.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_simulate_when_no_variant_matches_returns_404_unmatched() {
+        let res = call_simulate(MockSimulateRequest {
+            method: "GET".to_string(),
+            path: "/api/orders".to_string(),
+            headers: HashMap::new(),
+            raw_block:
+                "GET /api/orders\n\n@mock-when header.X-Role == admin\nHTTP/1.1 200 OK\n\nok\n"
+                    .to_string(),
+            ..Default::default()
+        })
+        .await;
+
+        assert_eq!(res.matched_pattern.as_deref(), Some("/api/orders"));
+        assert!(res.matched_variant_index.is_none());
+        assert_eq!(res.matched_variant_name, "unmatched");
+        assert_eq!(res.expected_status, 404);
     }
 }

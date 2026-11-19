@@ -36,7 +36,9 @@ pub fn save_current_snapshot(state: &mut AppState) {
         masking: None,
     };
     let dir = crate::tui::integrations::tui_snapshots_dir(&state.workspace_root);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    // 审查批二 C-f：快照目录走私有化防线（0700 + 拒绝符号链接），
+    // 替代默认 0755 的 create_dir_all——目录本身泄露文件名清单
+    if let Err(e) = crate::security::fs::ensure_private_dir(&dir) {
         state.last_error = Some(format!("snapshot dir: {e}"));
         return;
     }

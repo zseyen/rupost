@@ -326,6 +326,7 @@ Content-Type: application/json
         query: Default::default(),
         body: None,
         raw_block: mock_block.to_string(),
+        file_path: None,
     };
     let req = Request::builder()
         .header("host", "127.0.0.1")
@@ -355,6 +356,7 @@ Content-Type: application/json
         query: Default::default(),
         body: None,
         raw_block: mock_block.to_string(),
+        file_path: None,
     };
     let req = Request::builder()
         .header("host", "127.0.0.1")
@@ -750,9 +752,7 @@ GET {base}/never
 
     let payload = RunSuiteRequest {
         path: "suite.http".to_string(),
-        env: None,
-        incident: None,
-        plugin_overrides: None,
+        ..Default::default()
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -785,9 +785,7 @@ GET {base}/never
 async fn test_web_run_suite_error_shapes() {
     let payload = RunSuiteRequest {
         path: "whatever.http".to_string(),
-        env: None,
-        incident: None,
-        plugin_overrides: None,
+        ..Default::default()
     };
 
     // 1. 只读模式 -> 403（SSRF 防线与 run/block 一致）
@@ -828,9 +826,7 @@ async fn test_web_run_suite_error_shapes() {
     std::fs::write(tmp.path().join("empty.http"), "# only comments\n").unwrap();
     let no_req_payload = RunSuiteRequest {
         path: "empty.http".to_string(),
-        env: None,
-        incident: None,
-        plugin_overrides: None,
+        ..Default::default()
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")
@@ -850,9 +846,7 @@ async fn test_web_run_suite_error_shapes() {
     .unwrap();
     let empty_md_payload = RunSuiteRequest {
         path: "empty.md".to_string(),
-        env: None,
-        incident: None,
-        plugin_overrides: None,
+        ..Default::default()
     };
     let req = Request::builder()
         .uri("/api/v1/run/suite")

@@ -101,7 +101,7 @@ graph TD
 ### 3.2 顶层主模块文件 (`src/`)
 
 *   [main.rs](file:///Users/zsyzzx/project/rust/rupost/src/main.rs)：二进制程序的总入口。主要负责 CLI 命令行参数解析的分发以及对底层抛出的错误的统一格式化输出。**此文件内无业务逻辑。**
-*   [cli.rs](file:///Users/zsyzzx/project/rust/rupost/src/cli.rs)：基于 `clap` 定义的完整命令行参数接口（包含 `test`、`history`、`generate`、`diagnose`、`mock`、`init` 子命令与参数定义）。
+*   [cli/](file:///Users/zsyzzx/project/rust/rupost/src/cli)：基于 `clap` 定义的完整命令行参数接口（包含 `test`、`history`、`generate`、`diagnose`、`mock`、`init` 子命令与参数定义）。
 *   [lib.rs](file:///Users/zsyzzx/project/rust/rupost/src/lib.rs)：Crate 库的根入口，向外暴露核心的数据结构和方法。
 *   [error.rs](file:///Users/zsyzzx/project/rust/rupost/src/error.rs)：定义系统级的 `Error` 枚举（如 `ParserError`、`HttpError`、`AssertError`），使用 `thiserror` 进行统一包装。
 *   [logger.rs](file:///Users/zsyzzx/project/rust/rupost/src/logger.rs)：控制终端日志输出等级与样式的工具。
@@ -176,7 +176,7 @@ graph TD
    *   [importer/](file:///Users/zsyzzx/project/rust/rupost/src/importer)：外部格式导入器（通用模块，非 AI）——[curl.rs](file:///Users/zsyzzx/project/rust/rupost/src/importer/curl.rs) POSIX 子集分词 + curl flag 决策表解析，发射复用 `HttpGenerator`（与 `exporter/` 互逆）。`rupost import curl` 命令。
    *   [bootstrap.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/bootstrap.rs)：F8 历史语义提炼编排（采集 → 机械基线 → AI 增强 → lint 裁决 → 防覆盖落盘）。
    *   [resolve.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/resolve.rs)：F7 `@ai-assert` 指令原地展开控制器（双前缀识别 + 配额/熔断 + 原子写）。
-   *   [ai/](file:///Users/zsyzzx/project/rust/rupost/src/ai)：主库 AI 编排层（诊断/创作期，执行期引擎零 AI）——[config.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/config.rs) 环境变量配置中心（`AiRuntimeConfig`，密钥仅 env）；[redactor.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/redactor.rs) 统一脱敏截断器（复用 `exporter::redact` + JSON 敏感键掩码 + 512B UTF-8 安全截断）；[rules.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/rules.rs) 确定性规则基线（失败原因推导/URL 模式签名/签名分桶）；[explain.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/explain.rs) E2 归因控制器（签名去重 + Top-3 配额 + 连续错误熔断）；[triage.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/triage.rs) E5 分诊控制器（内存/文件双入口 + Markdown/JSON 渲染）。
+   *   [ai/](file:///Users/zsyzzx/project/rust/rupost/src/ai)：主库 AI 编排层（诊断/创作期，执行期引擎零 AI）——[config.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/config.rs) 环境变量配置中心（`AiRuntimeConfig`，密钥仅 env）；[rules.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/rules.rs) 确定性规则基线（失败原因推导/URL 模式签名/签名分桶）；[explain.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/explain.rs) E2 归因控制器（签名去重 + Top-3 配额 + 连续错误熔断）；[triage.rs](file:///Users/zsyzzx/project/rust/rupost/src/ai/triage.rs) E5 分诊控制器（内存/文件双入口 + Markdown/JSON 渲染）。
     *   [timing.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/timing.rs)：高精度耗时测量辅助结构。
     *   [url.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/url.rs)：URL 智能解析与分层拼接（绝对/相对判定、`:` 端口缩写、CLI 独立主机协议补全、base_url/base_path 拼接）。
     *   [types.rs](file:///Users/zsyzzx/project/rust/rupost/src/http/types.rs)：底层网络协议定义与大模型适配协议。
@@ -254,13 +254,30 @@ graph TD
     *   [handlers/run.rs](file:///Users/zsyzzx/project/rust/rupost/src/web/handlers/run.rs)：单块/套件执行 handler（复用核心执行器；失败可产出 incident 复现包）。
     *   定位：辅助执行 + 辅助创建的薄表现层——复杂业务一律下沉领域层；扩展缝见 `plugin_and_extensibility.md` §6（四条）。
 
+
+### 3.x 文件级覆盖补全（2026-11-18 批四机械化清单）
+
+> 以下为本轮审查发现、正文未覆盖的文件。`ls` 派生清单按目录聚合，手写描述仅覆盖有决策内容的文件。
+
+- `src/diagnostics/`：warning_sink.rs——WarningSink trait（Stderr/Buffered 双实现）+ 警告通道裁决头注（批三-7）。
+- `src/platform/`：process.rs——插件子进程进程组守护（ProcessGroupGuard）、exit 码透传。
+- `src/runner/`（正文未收 7 件）：app.rs（run_test_suite 编排）、executor_factory.rs（装配 5 builder）、executor_plugin.rs（插件桥）、interactive_session.rs、observer.rs、selector.rs、suite_setup.rs（装配+插件运行时）。
+- `src/history/`（正文未收 6 件）：gc.rs、printer.rs、selector.rs、serialization.rs、snapshot_legacy.rs（**命名倒挂**：活跃重放格式 SnapshotSuite 在此，改名登记批三）、storage.rs。
+- `src/security/`（正文未收 2 件）：path.rs（PathSandbox 247 行）、sanitize.rs（HTML 净化）。
+- `src/plugin/`（正文未收 4 件）：patch.rs、protocol.rs、registry_cache.rs、types.rs。
+- `src/ai/`（正文误挂 http/ 小节）：context.rs、snapshot_adapter.rs、mod.rs；`src/importer/`、`ai/bootstrap.rs`、`ai/resolve.rs` 同段错位——本小节为准。
+- `src/web/handlers/`（11 handler 正文只收 run.rs）：diagnose/export/files/history/import/markdown/mock/save/session/ws/mod。
+- `src/report/`（正文未收 2 件）：contract.rs（--contract-baseline 门禁）、junit.rs。
+- `src/generator/`：dynamic.rs、trace.rs；`src/importer/`：httpie.rs、raw.rs；`src/http/`：timing_connector.rs；`src/utils/`：path_guard.rs、text.rs；`src/variable/`：var_state.rs；`tests_e2e/`（顶层）。
+
+
 ## 4. 智能体二次开发与文件指引索引 (Developer Navigation Index)
 
 当需要新增功能或进行代码修改时，可通过下表快速定位需要工作的源文件：
 
 | 开发目标场景 | 核心工作文件与目录 | 开发职责描述 |
 | :--- | :--- | :--- |
-| **新增命令行功能子命令** | [cli.rs](file:///Users/zsyzzx/project/rust/rupost/src/cli.rs) <br> [main.rs](file:///Users/zsyzzx/project/rust/rupost/src/main.rs) | 1. 在 `cli.rs` 的 `Commands` 中新增枚举项与 Clap 属性定义。<br>2. 在 `main.rs` 中路由分发给新用例层。 |
+| **新增命令行功能子命令** | [cli/](file:///Users/zsyzzx/project/rust/rupost/src/cli) <br> [main.rs](file:///Users/zsyzzx/project/rust/rupost/src/main.rs) | 1. 在 `cli.rs` 的 `Commands` 中新增枚举项与 Clap 属性定义。<br>2. 在 `main.rs` 中路由分发给新用例层。 |
 | **修改或添加 HTTP 解析语法** | [parser/http_file.rs](file:///Users/zsyzzx/project/rust/rupost/src/parser/http_file.rs) <br> [parser/types.rs](file:///Users/zsyzzx/project/rust/rupost/src/parser/types.rs) | 在 `http_file` 的词法/行扫描中添加处理逻辑，若扩展了新元数据，同时在 `types.rs` 中修改 AST 实体。 |
 | **添加全新断言运算符 (如 matches)** | [assertion/types.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/types.rs) <br> [assertion/parser.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/parser.rs) <br> [assertion/evaluator.rs](file:///Users/zsyzzx/project/rust/rupost/src/assertion/evaluator.rs) | 1. 在 `types.rs` 的 `AssertOperator` 枚举中新增运算符。<br>2. 在 `parser.rs` 的断言行正则/字符串切分中添加识别。<br>3. 在 `evaluator.rs` 中编写具体运算规则。 |
 | **引入请求前置或后置处理拦截** | [middleware/](file:///Users/zsyzzx/project/rust/rupost/src/middleware) | 新增结构体并实现 `Middleware` Trait，然后在 `HttpClient` 的中间件加载链条中将其注册。 |
@@ -268,5 +285,5 @@ graph TD
 | **优化或新增变量提取规则** | [variable/capture.rs](file:///Users/zsyzzx/project/rust/rupost/src/variable/capture.rs) | 在变量提取逻辑中扩展源数据的提取手段（例如支持从响应 XML/HTML 或响应时延字段中提取变量）。 |
 | **修改 TUI 页面绘制布局与样式** | [tui/ui/](file:///Users/zsyzzx/project/rust/rupost/src/tui/ui) <br> [tui/app.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/app.rs) | 1. 修改 `ui/mod.rs` 调整总体面板切割比例和主框架。<br>2. 在对应的 `sidebar.rs`、`response.rs`、`editor.rs` 中微调对应面板的绘制边框、背景及文本状态。 |
 | **新增或扩展命令导出插件 (如导出到 fetch/powershell)** | [exporter/plugin.rs](file:///Users/zsyzzx/project/rust/rupost/src/exporter/plugin.rs) <br> [exporter/plugins/](file:///Users/zsyzzx/project/rust/rupost/src/exporter/plugins) | 1. 实现 `CommandExporter` Trait（`name`、`aliases`、`description` 与 `export_one`）。<br>2. 在 `plugins/mod.rs` 中引入，并在 `ExporterRegistry::new_builtin()` 中注册实例。 |
-| **更改 TUI 交互逻辑与按键动作** | [tui/handlers.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/handlers.rs) <br> [tui/state.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/state.rs) | 1. 在 `handlers.rs` 的键盘事件匹配中新增/修改动作路由。<br>2. 在 `state.rs` 中为 ViewModel (TuiState) 丰富状态字段和防写冲突保护。 |
+| **更改 TUI 交互逻辑与按键动作** | [tui/handlers.rs](file:///Users/zsyzzx/project/rust/rupost/src/tui/handlers.rs) <br> [tui/state/](file:///Users/zsyzzx/project/rust/rupost/src/tui/state) | 1. 在 `handlers.rs` 的键盘事件匹配中新增/修改动作路由。<br>2. 在 `state.rs` 中为 ViewModel (TuiState) 丰富状态字段和防写冲突保护。 |
 | **更改 WebSocket 请求指令与断言** | [ws/](file:///Users/zsyzzx/project/rust/rupost/src/ws) | 1. 修改 `action_parser.rs` 扩展 DSL 指令解析。<br>2. 修改 `session.rs` 实现连接握手及多帧会话的生命周期管理。<br>3. 修改 `matcher.rs` 来增强消息体断言模式。 |

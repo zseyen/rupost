@@ -1,7 +1,9 @@
 # RuPost 演进规划与方案总纲 (Evolution Plans & PRD Nexus)
 
-本目录承载 RuPost 从诞生至今的所有产品需求文档 (PRD)、技术实施方案、架构演进计划与版本路线图。
-为了消解历史迭代中 50+ 篇规划文档的重复表述与版本碎片，本项目建立了统一的**演进主线与交叉引用矩阵**，实现所有历史决策 100% 具备可追溯性，同时长青追踪唯一聚焦。
+本目录承载 RuPost 的现行规划事实源与演进追溯索引。
+
+> **2026-11-19 文档治理**：已完成执行的 PRD/实施计划/评估报告与历史归档（原 `archive/` 85 篇 + 根目录 12 篇 + dev/architecture 化石层 18 篇）已删除；其架构决策、需求要点、规范与未落地设想的**结论存档**见 [`doc/architecture/executed_plans_digest.md`](../architecture/executed_plans_digest.md)，原文一律以 git 历史为准（`git log --diff-filter=D --name-only` 可列出全部删除清单）。
+> §2 追溯矩阵中的历史文件名即 git 历史中的路径。`active/` 尚未逐份复审，按 2026-10-26 普查的"设想文档生命周期"制度，建议下次批次为其补挂状态横幅（已落地的标 Completed 并入存档）。
 
 ---
 
@@ -100,19 +102,8 @@
 doc/plans/
 ├── README.md                      # [本文档] 演进总纲与交叉引用索引枢纽
 ├── progress_summary.md            # [长青 SSOT] 项目唯一的进度事实来源
-├── future_backlog.md              # [长青待办] 统一需求与技术债务池
+├── future_backlog.md              # [长青待办] 统一需求与技术债务池（含 2026-11-19 回收登记 E/F 节）
 ├── rupost_product_strategy.md     # [长青战略] 产品战略与竞争定位
-├── 2026-11-10-redaction-extensibility-prd.md                  # [当前活跃] 凭据脱敏判定可扩展性与掩码可读性 PRD
-├── 2026-11-10-redaction-extensibility-implementation-plan.md  # [当前活跃] 脱敏扩展性技术实施方案与盲区攻坚
-├── active/                        # [当前活跃] 正在进行设计评审与实现的方案集
-│   ├── 2026-11-09-full-scenario-architecture-review-and-roadmap.md
-│   ├── 2026-11-09-implementation-plan-milestones-1-to-3.md
-│   ├── 2026-11-09-plugin-architecture-and-extensibility-plan.md
-│   ├── 2026-11-06-web-ui-md-editor-prd.md
-│   └── 2026-11-06-web-ui-technical-proposal.md
-└── archive/                       # [历史归档] 100% 保留全部历史 PRD 原文，按里程碑分层
-    ├── 2026-q2/                   # 2026 年 4-6 月份基础引擎早期设计 (11 篇)
-    ├── 2026-q3/                   # 2026 年 7-9 月份排障、重放与性能方案 (6 篇)
-    ├── 2026-q4/                   # 2026 年 10-11 月 AI、TUI 与质量加固战役方案 (32 篇)
-    └── legacy_research/           # 原离散目录 (cookie, folder, script, debug 等) 原始草案 (30+ 篇)
+├── active/                        # [未复审] 设计评审中的方案集（10 篇，建议下批补状态横幅）
+└── 2026-11-10-cross-scenario-engine-and-plugins/  # [规范] 插件/快照契约系列（代码引用锚点，见 ci.yml 守护）
 ```

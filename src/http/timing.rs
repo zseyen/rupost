@@ -5,7 +5,7 @@ use tokio::net::{TcpStream, lookup_host};
 use tokio::time::timeout;
 use url::Url;
 
-/// 时序采集来源（02 §2 黑匣子契约字段）
+/// 时序采集来源（02-artifact-contract-for-plugins.md §2 黑匣子契约字段）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimingSource {
@@ -18,7 +18,7 @@ pub enum TimingSource {
     None,
 }
 
-/// 时序归属精度（02 §2 黑匣子契约字段）
+/// 时序归属精度（02-artifact-contract-for-plugins.md §2 黑匣子契约字段）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TimingAttribution {

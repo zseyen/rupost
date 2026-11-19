@@ -8,8 +8,40 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Component, Path};
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// 收集扫描文件所属的唯一顶层子目录名（先去重再 `is_dir()`，避免 O(文件数) 次系统调用）
+fn collect_top_level_dirs(raw_files: &[String], root_canon: &Path) -> HashSet<String> {
+    let mut candidates = HashSet::new();
+    for f in raw_files {
+        let p = Path::new(f);
+        let mut fallback_canon = None;
+        let rel = match p.strip_prefix(root_canon) {
+            Ok(r) if !r.components().any(|c| matches!(c, Component::ParentDir)) => r,
+            _ => {
+                let Ok(c) = fs::canonicalize(p) else {
+                    continue;
+                };
+                let stored = fallback_canon.insert(c);
+                let Ok(r) = stored.strip_prefix(root_canon) else {
+                    continue;
+                };
+                r
+            }
+        };
+        if let Some(Component::Normal(name)) = rel.components().next() {
+            candidates.insert(name.to_string_lossy().into_owned());
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|name| root_canon.join(name).is_dir())
+        .collect()
+}
 
 /// 启动并运行 TUI 主事件循环
 pub async fn run(initial_file: Option<String>, options: super::TuiOptions) -> Result<()> {
@@ -94,22 +126,10 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
     }
     if let Ok(files) = crate::parser::scanner::DirectoryScanner::scan(&[".".to_string()]) {
         state.raw_file_list = filter_tui_test_files(files);
-        // 默认展开所有顶层目录
-        let root_canon = std::fs::canonicalize(&state.workspace_root)
+        // 默认展开所有顶层目录（先去重顶层候选名再 stat is_dir，并跳过冗余 canonicalize）
+        let root_canon = fs::canonicalize(&state.workspace_root)
             .unwrap_or_else(|_| state.workspace_root.clone());
-        for f in &state.raw_file_list {
-            if let Ok(canon) = std::path::Path::new(f).canonicalize()
-                && let Ok(rel) = canon.strip_prefix(&root_canon)
-                && let Some(first_comp) = rel.components().next()
-                && let std::path::Component::Normal(name) = first_comp
-            {
-                let name_str = name.to_string_lossy().into_owned();
-                let dir_path = root_canon.join(&name_str);
-                if dir_path.is_dir() {
-                    state.expanded_dirs.insert(name_str);
-                }
-            }
-        }
+        state.expanded_dirs = collect_top_level_dirs(&state.raw_file_list, &root_canon);
         state.rebuild_visible_tree_nodes();
     }
     // 载入工作区配置与历史记录（通过 BufferedWarningSink 防止 Raw Mode 撕裂，并将告警合入状态栏）
@@ -211,6 +231,14 @@ async fn run_async(initial_file: Option<String>, options: super::TuiOptions) -> 
                     state.log_file_path = Some(std::path::PathBuf::from(path));
                     state.total_log_lines = 0;
                     state.viewport_cache.clear();
+                }
+                TuiEvent::MockTraffic(ev) => {
+                    state.push_mock_traffic(ev);
+                }
+                TuiEvent::MockTrafficBatch(batch) => {
+                    for ev in batch {
+                        state.push_mock_traffic(ev);
+                    }
                 }
                 TuiEvent::Tick => {
                     state.check_and_reload_editor_file();
@@ -556,6 +584,32 @@ mod tests {
         // 2. 经过展开（模拟 canonicalize 后相同物理路径前缀），strip_prefix 能够完美剥离前缀并放行
         let relative_path = file_path.strip_prefix(canonical_cwd).unwrap();
         assert_eq!(relative_path, std::path::Path::new("examples/ok.http"));
+    }
+
+    #[test]
+    fn test_collect_top_level_dirs_deduplicates_and_excludes_root_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root_canon = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir(root_canon.join("api")).unwrap();
+        fs::create_dir(root_canon.join("auth")).unwrap();
+        fs::write(root_canon.join("root.http"), "GET http://x\n").unwrap();
+        fs::write(root_canon.join("api/a.http"), "GET http://x\n").unwrap();
+        fs::write(root_canon.join("api/b.http"), "GET http://x\n").unwrap();
+        fs::write(root_canon.join("auth/login.http"), "GET http://x\n").unwrap();
+
+        let files = vec![
+            root_canon.join("root.http").to_string_lossy().into_owned(),
+            root_canon.join("api/a.http").to_string_lossy().into_owned(),
+            root_canon.join("api/b.http").to_string_lossy().into_owned(),
+            // 包含未规范化 '..' 段，验证 canonicalize 回退分支
+            root_canon
+                .join("api/../auth/login.http")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+
+        let dirs = collect_top_level_dirs(&files, &root_canon);
+        assert_eq!(dirs, HashSet::from(["api".to_string(), "auth".to_string()]));
     }
 }
 

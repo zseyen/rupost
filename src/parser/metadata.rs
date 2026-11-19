@@ -123,7 +123,7 @@ fn parse_key_list(content: &str) -> ParseResult<Vec<String>> {
 
 /// 解析插件语义注解：@auth, @transform, @sign, @plugin
 ///
-/// 语法契约（03 §4.1 唯一权威）：
+/// 语法契约（03-plugin-spi-and-degradation.md §4.1 唯一权威）：
 /// - 阶段由注解本身决定（`@auth`=Prepare / `@transform`=Transform / `@sign`=Sign），
 ///   `stage=` / `priority=` 等底层调度魔数已彻底废除，出现即语法错误（05 ADR-D6）；
 /// - 可选声明唯一拼写为 `?optional` 后缀（P1-1 裁决，`optional=true` 废除）；
@@ -177,8 +177,14 @@ fn parse_plugin_directive(directive: &str, content: &str) -> ParseResult<Metadat
                     params.insert(k.to_string(), strip_surrounding_quotes(v).to_string());
                 }
             }
+        } else {
+            // 走查缺口 #6 家族收尾（审查漏项 2）：裸 token（漏写 '='）此前静默
+            // 忽略——与 stage=/optional= 的显式报错先例对齐，fail-fast
+            return Err(ParseError::InvalidMetadata {
+                line: 0,
+                message: format!("插件参数 '{token}' 缺少 '='（写法应为 key=value）"),
+            });
         }
-        // 不含 '=' 的裸 token 与旧解析行为一致：忽略
     }
 
     let dir_name = directive.strip_prefix('@').unwrap_or(directive).to_string();
@@ -619,6 +625,24 @@ mod tests {
         let mut plain = RequestMetadata::default();
         apply_metadata(&Metadata::Test, &mut plain);
         assert!(!plain.is_teardown);
+    }
+
+    /// 走查缺口 #6 家族收尾（审查漏项 2）：@plugin 系指令的裸 token（漏写 '='）
+    /// 此前静默忽略——现 fail-fast ParseError（与 stage=/optional= 先例对齐）
+    #[test]
+    fn test_plugin_directive_bare_token_is_parse_error() {
+        let err = parse_metadata("@sign hmac-sha256 key=abc bareword")
+            .expect_err("裸 token 必须 ParseError");
+        let msg = match &err {
+            ParseError::InvalidMetadata { message, .. } => message.clone(),
+            other => panic!("应为 InvalidMetadata: {other:?}"),
+        };
+        assert!(
+            msg.contains("bareword") && msg.contains("缺少 '='"),
+            "{msg}"
+        );
+        // 全 key=value 形态不受影响
+        assert!(parse_metadata("@sign hmac-sha256 key=abc").is_ok());
     }
 
     /// Step 4 Red 测试：@sensitive 与 @no-redact 元数据解析与应用

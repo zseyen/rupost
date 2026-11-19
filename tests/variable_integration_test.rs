@@ -280,15 +280,24 @@ fn test_cli_variable_parsing() {
     let cli_var2 = "key2=value with spaces";
     let cli_var3 = "key3=value=with=equals";
 
-    let (k1, v1) = ConfigLoader::parse_cli_var(cli_var1).unwrap();
+    let (k1, v1) = match ConfigLoader::parse_cli_var_outcome(cli_var1) {
+        rupost::variable::config::CliVarOutcome::Parsed(k, v) => (k, v),
+        other => panic!("unexpected: {other:?}"),
+    };
     assert_eq!(k1, "key1");
     assert_eq!(v1, "value1");
 
-    let (k2, v2) = ConfigLoader::parse_cli_var(cli_var2).unwrap();
+    let (k2, v2) = match ConfigLoader::parse_cli_var_outcome(cli_var2) {
+        rupost::variable::config::CliVarOutcome::Parsed(k, v) => (k, v),
+        other => panic!("unexpected: {other:?}"),
+    };
     assert_eq!(k2, "key2");
     assert_eq!(v2, "value with spaces");
 
-    let (k3, v3) = ConfigLoader::parse_cli_var(cli_var3).unwrap();
+    let (k3, v3) = match ConfigLoader::parse_cli_var_outcome(cli_var3) {
+        rupost::variable::config::CliVarOutcome::Parsed(k, v) => (k, v),
+        other => panic!("unexpected: {other:?}"),
+    };
     assert_eq!(k3, "key3");
     assert_eq!(v3, "value=with=equals");
 }

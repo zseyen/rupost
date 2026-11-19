@@ -1,3 +1,4 @@
+use crate::mock::server::axum_adapter::MockTrafficEvent;
 use crate::parser::ParsedRequest;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -32,6 +33,9 @@ pub enum TuiEvent {
         id: Uuid,
         path: String,
     },
+    MockTraffic(MockTrafficEvent),
+    /// 轨道 B1 合帧：一次排空积压后的批量流量事件（≤64/帧）
+    MockTrafficBatch(Vec<MockTrafficEvent>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

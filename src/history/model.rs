@@ -1,8 +1,14 @@
-use chrono::{DateTime, Utc};
-use reqwest::header::HeaderMap;
-use serde::{Deserialize, Serialize};
-
 use crate::history::serialization;
+use crate::http::diagnose::DiagnosticsReport;
+use crate::http::timing::{RequestTiming, TimingAttribution, TimingSource};
+use crate::http::timing_connector::ConnectSpan;
+use crate::parser::ParsedRequest;
+use chrono::{DateTime, Utc};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use url::Url;
+use uuid::Uuid;
 
 /// 历史记录条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,7 +46,7 @@ pub struct RequestSnapshot {
     /// `@timeout`（仅非流式请求设置）。`serde(default)` 兼容没有该字段的旧快照：
     /// 缺失时重放退回 client 级默认超时，而非报错。
     #[serde(default)]
-    pub timeout: Option<std::time::Duration>,
+    pub timeout: Option<Duration>,
 }
 
 /// 响应元数据 (TUI 模式下可选包含 Body，节省空间且向前兼容)
@@ -113,7 +119,7 @@ pub struct SnapshotSuite {
     pub source_file: Option<String>,
     pub entries: Vec<SnapshotEntry>,
     /// B-2：来源契约的 masking 标记透传（"secrets" → replay 警告"数据不完整"，
-    /// 02 §4：掩码模式验签/Diff 结论必须降级声明）
+    /// 02-artifact-contract-for-plugins.md §4：掩码模式验签/Diff 结论必须降级声明）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub masking: Option<String>,
 }
@@ -128,7 +134,7 @@ pub struct ResponseSnapshot {
     pub status: u16,
 
     #[serde(with = "serialization::header_map")]
-    pub headers: reqwest::header::HeaderMap,
+    pub headers: HeaderMap,
 
     pub body: String,
 
@@ -159,8 +165,7 @@ impl From<HistoryEntry> for SnapshotEntry {
 
 impl RequestSnapshot {
     /// 从解析实例化后的 `ParsedRequest` 构建请求历史记录快照
-    pub fn from_parsed(parsed: &crate::parser::ParsedRequest) -> Self {
-        use reqwest::header::{HeaderName, HeaderValue};
+    pub fn from_parsed(parsed: &ParsedRequest) -> Self {
         let mut headers = HeaderMap::new();
         for (k, v) in &parsed.headers {
             if let (Ok(n), Ok(v)) = (
@@ -183,16 +188,16 @@ impl RequestSnapshot {
 
 // =====================================================================
 // 离线数据黑匣子契约 (Execution Snapshot, Schema v1.0)
-// 唯一权威: doc/plans/2026-11-10-cross-scenario-engine-and-plugins/02 §2
-// 演进策略 (02 §2.6): 只允许追加字段、禁止改语义/删字段；消费者必须容忍
+// 唯一权威: doc/plans/2026-11-10-cross-scenario-engine-and-plugins/02-artifact-contract-for-plugins.md §2
+// 演进策略 (02-artifact-contract-for-plugins.md §2.6): 只允许追加字段、禁止改语义/删字段；消费者必须容忍
 // 未知字段；破坏性变更必须递增 schema_version。
-// 安全不变量 (02 §2.7): plugin_args 永不序列化进快照；文件落盘 0600。
+// 安全不变量 (02-artifact-contract-for-plugins.md §2.7): plugin_args 永不序列化进快照；文件落盘 0600。
 // =====================================================================
 
-/// 快照契约版本 (02 §2)
+/// 快照契约版本 (02-artifact-contract-for-plugins.md §2)
 pub const SNAPSHOT_SCHEMA_VERSION: &str = "1.0";
 
-/// 单响应体录入上限 (03 §10.6 防 OOM；可通过 `--max-snapshot-body-bytes` 覆盖，M3 接线)
+/// 单响应体录入上限 (03-plugin-spi-and-degradation.md §10.6 防 OOM；可通过 `--max-snapshot-body-bytes` 覆盖，M3 接线)
 pub const DEFAULT_MAX_SNAPSHOT_BODY_BYTES: usize = 256 * 1024;
 
 /// 文件级脱敏形态标记 (消费者据此判断产物敏感性；掩码模式下验签类
@@ -214,7 +219,7 @@ pub struct RunnerFingerprint {
     pub rupost_version: String,
 }
 
-/// 三态执行判定 (03 §10.5)：严禁把插件自愈降级混淆为纯粹成功
+/// 三态执行判定 (03-plugin-spi-and-degradation.md §10.5)：严禁把插件自愈降级混淆为纯粹成功
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionOutcome {
@@ -279,11 +284,11 @@ pub struct ExecutionSnapshotEntry {
 
     /// M7-A: 时序采集来源（connector / probe_degraded / none）
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timing_source: Option<crate::http::timing::TimingSource>,
+    pub timing_source: Option<TimingSource>,
 
     /// M7-A: 时序归属精度（exact / approximate）
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timing_attribution: Option<crate::http::timing::TimingAttribution>,
+    pub timing_attribution: Option<TimingAttribution>,
 
     /// 底层物理连接诊断指纹
     #[serde(default)]
@@ -312,7 +317,7 @@ pub struct SnapshotRequest {
 
 /// 黑匣子响应镜像（256KB 截断保护 + SHA-256 验真摘要）
 ///
-/// `body_sha256` 语义随 `masking` 分态（P1-1 review 裁决，02 §2）：
+/// `body_sha256` 语义随 `masking` 分态（P1-1 review 裁决，02-artifact-contract-for-plugins.md §2）：
 /// ① 未掩码：截断时对**截断前完整原始 body**，未截断为 None；
 /// ② 掩码模式（masking=secrets）：恒 Some，对**文件内掩码后形态**（离线可验真；
 ///    截断+掩码组合时原完整体摘要不可恢复——登记取舍）。
@@ -373,10 +378,7 @@ pub struct SocketDiagnostics {
 impl TimingWaterfallUs {
     /// 从 runner 采集的细粒度时序 + 深度诊断报告合成微秒级瀑布。
     /// TLS 阶段仅在 diagnose 报告可得时填充（reqwest 公开 API 不暴露握手时序）。
-    pub fn from_probes(
-        timing: &crate::http::timing::RequestTiming,
-        diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
-    ) -> Self {
+    pub fn from_probes(timing: &RequestTiming, diagnose: Option<&DiagnosticsReport>) -> Self {
         let dns_us = timing.dns_lookup.as_micros() as u64;
         let tcp_us = timing.tcp_connect.as_micros() as u64;
         let tls = diagnose.and_then(|d| d.tls_handshake_duration.map(|t| t.as_micros() as u64));
@@ -396,10 +398,10 @@ impl TimingWaterfallUs {
     /// 从 M7-A `ConnectSpan` + 请求自身 `ttfb`/`transfer` 合成微秒级瀑布。
     /// 连接复用时 `span` 为 `None`，`dns_lookup_us` 与 `tcp_connect_us` 均保持 `None`（JSON `null`）。
     pub fn from_connect_span(
-        span: Option<crate::http::timing_connector::ConnectSpan>,
-        ttfb: std::time::Duration,
-        transfer: std::time::Duration,
-        diagnose: Option<&crate::http::diagnose::DiagnosticsReport>,
+        span: Option<ConnectSpan>,
+        ttfb: Duration,
+        transfer: Duration,
+        diagnose: Option<&DiagnosticsReport>,
     ) -> Self {
         let dns_lookup_us = span.and_then(|s| s.dns_us);
         let tcp_connect_us = span.and_then(|s| s.tcp_us);
@@ -425,8 +427,8 @@ impl TimingWaterfallUs {
 
 impl SocketDiagnostics {
     /// 从深度诊断报告提取物理连接指纹；非 HTTPS 时 TLS/证书字段为 None
-    pub fn from_diagnose(diagnose: &crate::http::diagnose::DiagnosticsReport) -> Option<Self> {
-        let port = url::Url::parse(&diagnose.url)
+    pub fn from_diagnose(diagnose: &DiagnosticsReport) -> Option<Self> {
+        let port = Url::parse(&diagnose.url)
             .ok()
             .map(|u| u.port_or_known_default().unwrap_or(80))?;
         let cert = diagnose.cert_info.as_ref().filter(|_| diagnose.is_https);
@@ -445,8 +447,7 @@ impl SocketDiagnostics {
     }
 }
 
-fn header_pairs_to_map(pairs: &[(String, String)]) -> reqwest::header::HeaderMap {
-    use reqwest::header::{HeaderName, HeaderValue};
+fn header_pairs_to_map(pairs: &[(String, String)]) -> HeaderMap {
     let mut map = HeaderMap::new();
     for (name, value) in pairs {
         if let (Ok(n), Ok(v)) = (
@@ -467,14 +468,14 @@ impl SnapshotRequest {
             url: self.url.clone(),
             headers: header_pairs_to_map(&self.headers),
             body: self.body.clone(),
-            timeout: self.timeout_ms.map(std::time::Duration::from_millis),
+            timeout: self.timeout_ms.map(Duration::from_millis),
         }
     }
 }
 
 impl ExecutionSnapshotFile {
     /// 黑匣子契约快照 → 重放套件（`replay` 消费 `--save-snapshot` 产物的桥，
-    /// 02 §3.2：现场 dump 拷回开发机后可直接 `replay --explain`）
+    /// 02-artifact-contract-for-plugins.md §3.2：现场 dump 拷回开发机后可直接 `replay --explain`）
     pub fn to_replay_suite(&self) -> SnapshotSuite {
         SnapshotSuite {
             version: 2,
@@ -484,7 +485,7 @@ impl ExecutionSnapshotFile {
                 .entries
                 .iter()
                 .map(|e| SnapshotEntry {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: Uuid::new_v4().to_string(),
                     request: e.request.to_history_request(),
                     response: e.response.as_ref().map(|r| ResponseSnapshot {
                         status: r.status,
@@ -506,7 +507,6 @@ impl ExecutionSnapshotFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ParsedRequest;
 
     #[test]
     fn test_request_snapshot_from_parsed() {
@@ -535,17 +535,14 @@ mod tests {
     fn test_request_snapshot_timeout_roundtrip_and_old_format_compat() {
         // 回归：快照此前不记录 @timeout——重放带超时语义的请求会静默退回 30s 默认
         let mut parsed = ParsedRequest::new(1);
-        parsed.metadata.timeout = Some(std::time::Duration::from_millis(500));
+        parsed.metadata.timeout = Some(Duration::from_millis(500));
         let snapshot = RequestSnapshot::from_parsed(&parsed);
-        assert_eq!(
-            snapshot.timeout,
-            Some(std::time::Duration::from_millis(500))
-        );
+        assert_eq!(snapshot.timeout, Some(Duration::from_millis(500)));
 
         // 序列化往返保持 timeout
         let json = serde_json::to_string(&snapshot).unwrap();
         let back: RequestSnapshot = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.timeout, Some(std::time::Duration::from_millis(500)));
+        assert_eq!(back.timeout, Some(Duration::from_millis(500)));
 
         // 旧格式快照（无 timeout 字段）反序列化为 None，不报错
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();

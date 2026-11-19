@@ -1,4 +1,4 @@
-//! 黑匣子快照 → AI 分诊报告适配器（03 §7.2 脱敏先于 AI 红线守护）。
+//! 黑匣子快照 → AI 分诊报告适配器（03-plugin-spi-and-degradation.md §7.2 脱敏先于 AI 红线守护）。
 
 use crate::history::model::{ExecutionSnapshotEntry, ExecutionSnapshotFile, MaskingMode};
 use crate::report::json::{JsonAssertionReport, JsonFileReport, JsonTestReport};
@@ -33,9 +33,9 @@ fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
         e.response
             .as_ref()
             .map(|resp| {
-                crate::ai::redactor::redact_and_truncate_body(
+                crate::security::redact::redact_and_truncate_body(
                     &resp.body,
-                    crate::ai::redactor::DEFAULT_SNIPPET_MAX_BYTES,
+                    crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
                 )
             })
             .filter(|s| !s.is_empty())
@@ -60,7 +60,7 @@ fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
             let issuer = sock
                 .cert_issuer
                 .as_deref()
-                .map(crate::ai::redactor::redact_free_text)
+                .map(crate::security::redact::redact_free_text)
                 .unwrap_or_else(|| "unknown".to_string());
             warnings.push(format!(
                 "TLS 证书临近过期或已过期: 剩余 {days} 天 (issuer={issuer})"
@@ -69,9 +69,9 @@ fn adapt_entry_to_json_report(e: &ExecutionSnapshotEntry) -> JsonTestReport {
         if !e.success && !sock.remote_ip.is_empty() {
             warnings.push(format!(
                 "连接诊断: {}:{} ({})",
-                crate::ai::redactor::redact_free_text(&sock.remote_ip),
+                crate::security::redact::redact_free_text(&sock.remote_ip),
                 sock.remote_port,
-                crate::ai::redactor::redact_free_text(&sock.http_version)
+                crate::security::redact::redact_free_text(&sock.http_version)
             ));
         }
     }

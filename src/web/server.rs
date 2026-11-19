@@ -151,9 +151,14 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
             "/mock/servers",
             get(handlers::mock::list_mock_servers_handler),
         )
+        .route("/mock/traffic", get(handlers::mock::mock_traffic_handler))
         .route(
             "/mock/start",
             post(handlers::mock::start_mock_server_handler),
+        )
+        .route(
+            "/mock/reload",
+            post(handlers::mock::reload_mock_server_handler),
         )
         .route("/mock/stop", post(handlers::mock::stop_mock_server_handler))
         .route("/import", post(handlers::import::import_handler))
@@ -164,6 +169,10 @@ pub fn create_web_router(config: WebServerConfig) -> Router {
         )
         .route("/session", get(handlers::session::get_session_handler))
         .route("/history", get(handlers::history::list_history_handler))
+        .route(
+            "/history/{id}",
+            get(handlers::history::get_history_detail_handler),
+        )
         .route("/diagnose", post(handlers::diagnose::diagnose_handler))
         .route("/ws/bridge", get(handlers::ws::ws_bridge_handler));
 

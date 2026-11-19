@@ -13,6 +13,7 @@ use rupost::parser::HttpFileParser;
 use rupost::plugin::PluginRegistry;
 use rupost::plugin::pipeline::PluginRuntimeOptions;
 use rupost::plugin::types::{HookCapability, PluginCacheScope, PluginManifest, PluginStage};
+use rupost::runner::app::SuiteNotice;
 use rupost::runner::{
     BatchExecutor, BatchMode, BatchRunRequest, TestExecutor, TestSuiteOptions, run_test_suite,
 };
@@ -612,6 +613,84 @@ async fn test_run_test_suite_empty_dir_smoke() {
     .unwrap();
     assert!(!outcome.has_failure);
     assert!(outcome.batch_results.is_empty());
+}
+
+// 批A 迁移守护（P1-10 / M3 Finally 事实出口）：skip 标记与执行失败的 @teardown
+// 提示必须以 SuiteNotice::Stderr 结构化出口（随 outcome.notices），不得裸 eprintln。
+#[tokio::test]
+async fn test_suite_notices_carry_skip_marked_and_failed_teardown() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    // /teardown 故意不挂 mock → teardown 阶段连接失败
+
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("suite.http");
+    std::fs::write(
+        &doc,
+        format!(
+            "### main\nGET {}/ok\n\n### cleanup\n# @teardown\nGET {}/teardown\n\n### skipped_cleanup\n# @teardown\n# @skip\nGET {}/never\n",
+            server.uri(),
+            server.uri(),
+            server.uri()
+        ),
+    )
+    .unwrap();
+
+    let outcome = run_test_suite(TestSuiteOptions {
+        paths: vec![doc.to_string_lossy().to_string()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        outcome.notices.iter().any(|n| matches!(
+            n,
+            SuiteNotice::Stderr(m) if m.contains("@teardown 请求被跳过")
+        )),
+        "skip 标记 teardown 必须产出 Stderr 通知，实际 notices={:?}",
+        outcome.notices
+    );
+    assert!(
+        outcome.notices.iter().any(|n| matches!(
+            n,
+            SuiteNotice::Stderr(m) if m.contains("@teardown 清理请求执行失败")
+        )),
+        "teardown 失败必须产出 Stderr 通知，实际 notices={:?}",
+        outcome.notices
+    );
+    assert!(outcome.has_failure);
+}
+
+// #13 尾巴（批E）：--var-state 持久化提示走 SuiteNotice 结构化出口（自裸 eprintln 迁移，
+// 与批A teardown 通知同型——TUI/Web 可从 outcome.notices 消费）。
+#[tokio::test]
+async fn test_suite_notice_carries_var_state_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let doc = dir.path().join("s.http");
+    std::fs::write(&doc, "### a\nGET http://127.0.0.1:9/x\n").unwrap();
+    let state_path = dir.path().join("state.toml");
+
+    let outcome = run_test_suite(TestSuiteOptions {
+        paths: vec![doc.to_string_lossy().to_string()],
+        var_state: Some(state_path.to_string_lossy().to_string()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        outcome.notices.iter().any(|n| matches!(
+            n,
+            SuiteNotice::Stderr(m) if m.contains("捕获变量已持久化")
+        )),
+        "var_state 持久化提示必须进 notices, 实际 notices={:?}",
+        outcome.notices
+    );
 }
 
 #[tokio::test]

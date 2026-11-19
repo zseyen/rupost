@@ -111,7 +111,7 @@ flowchart TD
 
 1. **[P1] 消除重复实现与适配器收敛**：目前 `crates/rupost-ai/src/client.rs` 与主库 `src/http/llm_adapter.rs` 存在部分重叠，后续需彻底下沉收敛为单点实现。
 2. **[P2] 本地离线小模型适配 (Ollama / Llama.cpp)**：支持局域网或离线无外网环境下的零门槛推理，保护金融与内网接口敏感数据。
-3. **[P2] OpenAPI 自动生成与智能蒸馏**：基于 `doc/plans/2026-10-27-ai-openapi-gen-plan.md`，从 Swagger/OpenAPI 3.x 规格中一键生成覆盖全分支的 `.http` 测试用例集。
+3. **[P2] OpenAPI 自动生成与智能蒸馏**：基于 AI OpenAPI-gen 方案（2026-11-19 治理归 git 历史），从 Swagger/OpenAPI 3.x 规格中一键生成覆盖全分支的 `.http` 测试用例集。
 4. **[P3] TUI AI 侧边栏助手**：在 TUI 界面中增加即时聊天与断言辅助抽屉，支持对话式调整请求参数。
 
 ---

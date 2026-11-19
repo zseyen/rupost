@@ -84,7 +84,7 @@ impl From<crate::parser::ParsedPluginDirective> for PluginDirective {
     }
 }
 
-/// 插件跨语言运行时依赖声明（03 §3.1 v2.1.1：零额外探针，仅 PATH stat 预检）
+/// 插件跨语言运行时依赖声明（03-plugin-spi-and-degradation.md §3.1 v2.1.1：零额外探针，仅 PATH stat 预检）
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginRuntime {
     pub interpreter: Option<String>,
@@ -126,7 +126,7 @@ pub struct HookCapability {
     pub directive: String,
     pub alias: Option<String>,
     pub stage: PluginStage,
-    /// Hook 结果缓存作用域 (03 §3.1)：`none` = 每请求执行；`request` = 请求内复用；
+    /// Hook 结果缓存作用域 (03-plugin-spi-and-degradation.md §3.1)：`none` = 每请求执行；`request` = 请求内复用；
     /// `suite` = 全套件复用（OAuth2 取 Token 类插件声明，消除子进程风暴）。
     /// 缺省 `none`；`ttl` 为 P2 保留值，解析到即按 none + 告警处理。
     ///
@@ -137,7 +137,7 @@ pub struct HookCapability {
     /// （OAuth2 取 Token、STS 凭据等）。
     #[serde(default)]
     pub cache_scope: PluginCacheScope,
-    /// 环境变量白名单声明（03 §6.2）：子进程默认仅继承 PATH/HOME/LANG/TERM/TMPDIR +
+    /// 环境变量白名单声明（03-plugin-spi-and-degradation.md §6.2）：子进程默认仅继承 PATH/HOME/LANG/TERM/TMPDIR +
     /// RUPOST_*，声明外的变量需 manifest 声明或 --plugin-env 显式放行。
     #[serde(default)]
     pub requires_env: Vec<String>,
@@ -145,7 +145,7 @@ pub struct HookCapability {
     pub parameters_schema: serde_json::Value,
 }
 
-/// Hook 结果缓存作用域（03 §3.1 唯一权威；`ttl` 为 P2 保留）
+/// Hook 结果缓存作用域（03-plugin-spi-and-degradation.md §3.1 唯一权威；`ttl` 为 P2 保留）
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginCacheScope {
@@ -158,7 +158,7 @@ pub enum PluginCacheScope {
     Suite,
 }
 
-/// 插件执行时子进程的环境继承策略（03 §6.2 白名单裁决）
+/// 插件执行时子进程的环境继承策略（03-plugin-spi-and-degradation.md §6.2 白名单裁决）
 #[cfg(not(windows))]
 pub const PLUGIN_ENV_ALLOWLIST: [&str; 6] = ["PATH", "HOME", "LANG", "TERM", "TMPDIR", "TZ"];
 
@@ -180,7 +180,7 @@ pub const PLUGIN_ENV_ALLOWLIST: [&str; 13] = [
     "PATHEXT",
 ];
 
-/// 插件三态健康状态（03 §3.1.1：响应性重算，绝不持久化进 registry.json）
+/// 插件三态健康状态（03-plugin-spi-and-degradation.md §3.1.1：响应性重算，绝不持久化进 registry.json）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginHealthStatus {
     Ready,

@@ -1,11 +1,11 @@
 use crate::Result;
 use crate::RupostError;
+use crate::parser::scanner::DirectoryScanner;
 use crate::runner::on_failure;
 use crate::runner::selector;
 use crate::runner::suite_setup::{build_suite_executor, load_suite_context};
 use crate::runner::{
-    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, DirectoryScanner, TestResult,
-    WorkflowGraph,
+    BatchExecutor, BatchMode, BatchRunRequest, DependencyResolver, TestResult, WorkflowGraph,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -43,24 +43,24 @@ pub struct TestSuiteOptions {
     pub mask_snapshot: bool,
     /// S-3 按值掩码：--mask-secret-value <VAL>（可多次；独立于 --mask-secrets 生效）
     pub mask_secret_values: Vec<String>,
-    /// 单响应体录入上限字节（03 §10.6 防 OOM；`--max-snapshot-body-bytes` 覆盖，缺省 256KB）
+    /// 单响应体录入上限字节（03-plugin-spi-and-degradation.md §10.6 防 OOM；`--max-snapshot-body-bytes` 覆盖，缺省 256KB）
     pub max_snapshot_body_bytes: Option<usize>,
-    /// 关闭时序采集（`--timing off`，02 §2:135）：快照 timing_waterfall=null、timing_source=none
+    /// 关闭时序采集（`--timing off`，02-artifact-contract-for-plugins.md §2）：快照 timing_waterfall=null、timing_source=none
     pub timing_off: bool,
     /// 单请求选择器参数（`--only <n|@name>`；`path#n` 片段在 paths 内携带）
     pub only: Option<String>,
     /// 失败钩子命令（DX-Debug R7）：每个失败请求触发一次，
     /// 经 RUPOST_FAILED_URL/STATUS/TRACE_ID 环境变量暴露锚点
     pub on_failure: Option<String>,
-    /// 插件缺失/失败时降级为警告跳过（03 §2；现场排障即拷即走）
+    /// 插件缺失/失败时降级为警告跳过（03-plugin-spi-and-degradation.md §2；现场排障即拷即走）
     pub allow_missing_plugins: bool,
-    /// CI 严格门禁：发生任何插件降级 → 套件整体判失败（03 §10.5）
+    /// CI 严格门禁：发生任何插件降级 → 套件整体判失败（03-plugin-spi-and-degradation.md §10.5）
     pub strict_plugins: bool,
     /// 单次插件调用超时秒数（默认 5，`--plugin-timeout` 覆盖）
     pub plugin_timeout_secs: u64,
     /// `--plugin-env KEY=VALUE`：requires_env 声明外的显式放行
     pub plugin_env: Vec<String>,
-    /// 工作区本地插件放行（03 §3.2 沙箱警戒闸门）
+    /// 工作区本地插件放行（03-plugin-spi-and-degradation.md §3.2 沙箱警戒闸门）
     pub allow_project_plugins: bool,
     /// `--with-deps`（R-1 免重填）：`--only` 时按拓扑序先执行目标文件的
     /// `@depends-on` 依赖闭包（上游登录/取号自动先跑）
@@ -243,6 +243,24 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
         BatchMode::Serial
     };
 
+    // P1-10（自 batch.rs 上移，files_map 移动前派生）：skip 标记的 @teardown
+    // 一次性提示走 outcome.notices 结构化出口，核心层不再裸 eprintln
+    let skip_marked_teardowns: usize = files_map
+        .values()
+        .map(|f| {
+            f.requests
+                .iter()
+                .filter(|r| r.metadata.is_teardown && r.metadata.skip)
+                .count()
+        })
+        .sum();
+    if skip_marked_teardowns > 0 {
+        notices.push(SuiteNotice::Stderr(format!(
+            "[i] {} 个 @teardown 请求被跳过（--only 未选中或 @skip 标记）——清理阶段不执行",
+            skip_marked_teardowns
+        )));
+    }
+
     let batch_request = BatchRunRequest {
         execution_order,
         dependencies,
@@ -256,7 +274,18 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
     let mut batch_results = batch_executor.execute_batch(batch_request).await?;
     let duration = start_time.elapsed();
 
-    // M7-A 语义边界收敛（02 §2）：并行池竞争 → connector 观测 dns/tcp 标 approximate；
+    // M3 Finally 事实出口（自 batch.rs 上移，以结果为准派生）：teardown 失败
+    // 统计随 outcome.notices 结构化出口，表现层 suite_presenter 统一渲染
+    if batch_results
+        .iter()
+        .any(|(_, res_list)| res_list.iter().any(|r| r.is_teardown && !r.success))
+    {
+        notices.push(SuiteNotice::Stderr(
+            "[!] @teardown 清理请求执行失败——清理结果已计入失败统计".to_string(),
+        ));
+    }
+
+    // M7-A 语义边界收敛（02-artifact-contract-for-plugins.md §2）：并行池竞争 → connector 观测 dns/tcp 标 approximate；
     // `--timing off` → 时序字段整体归零（timing_source=none）。单点后置修正，
     // 快照（snapshot_io 直透字段）与报告/终端消费保持一致口径。
     reconcile_timing_metadata(&mut batch_results, &options.mode, options.timing_off);
@@ -279,14 +308,14 @@ pub async fn execute_test_suite(options: &TestSuiteOptions) -> Result<TestSuiteO
         let captured: std::collections::HashMap<String, String> = var_context
             .variables()
             .iter()
-            .filter(|(k, _)| k.as_str() != "__default_scheme")
+            .filter(|(k, _)| k.as_str() != crate::variable::types::DEFAULT_SCHEME_KEY)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         crate::variable::var_state::save_var_state(Path::new(state_path), &captured)?;
-        eprintln!(
+        notices.push(SuiteNotice::Stderr(format!(
             "[i] 捕获变量已持久化至 {state_path}（{} 项，0600）",
             captured.len()
-        );
+        )));
     }
 
     Ok(TestSuiteOutcome {
@@ -304,7 +333,7 @@ pub async fn run_test_suite(options: TestSuiteOptions) -> Result<TestSuiteOutcom
     execute_test_suite(&options).await
 }
 
-/// 批跑结束后的 timing 元数据收敛（02 §2 契约诚实性，M7-A 语义边界裁决）：
+/// 批跑结束后的 timing 元数据收敛（02-artifact-contract-for-plugins.md §2 契约诚实性，M7-A 语义边界裁决）：
 /// 1. `timing_off`：时序字段整体归零——`timing_waterfall=null`、`timing_source=none`
 ///    （显式记录"未采集"，与字段缺省 null 区分）、归属标记抹除、采集原语清空；
 /// 2. 并行模式：connector 观测的 dns/tcp 可能因连接池竞争跨请求错位 →
@@ -355,7 +384,7 @@ mod tests {
     use crate::runner::types::TestResult;
 
     /// P1-1/P1-2（审查收口）：timing 元数据后置收敛决策表。
-    /// `--timing off` → 时序字段整体归零（02 §2:135 `none` = 未采集）；
+    /// `--timing off` → 时序字段整体归零（02-artifact-contract-for-plugins.md §2 `none` = 未采集）；
     /// 并行模式 + connector 观测 + exact → approximate（dns/tcp 池竞争可能跨请求错位，
     /// ttfb/transfer 永远精确；probe 独立连接与代理已标 approximate 的形态不变）。
     #[test]

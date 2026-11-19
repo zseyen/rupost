@@ -6,6 +6,7 @@ use super::types::{
 };
 use crate::Result;
 use crate::platform;
+use crate::plugin::driver::PLUGIN_ENV_SECRET_DENYLIST;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -17,7 +18,7 @@ pub struct PluginRegistry {
     pub commands: HashMap<String, (PathBuf, CommandCapability)>,
     /// HTTP 钩子路由索引（兼容性扁平视图）: 指令/别名 -> (所属插件路径, 钩子能力描述)
     pub hooks: HashMap<String, (PathBuf, HookCapability)>,
-    /// HTTP 钩子复合键索引（03 §3.2 #1 SSOT）: (指令/别名, 阶段) -> (所属插件路径, 钩子能力描述)
+    /// HTTP 钩子复合键索引（03-plugin-spi-and-degradation.md §3.2 #1 SSOT）: (指令/别名, 阶段) -> (所属插件路径, 钩子能力描述)
     hooks_by_stage: HashMap<(String, PluginStage), (PathBuf, HookCapability)>,
     /// 已发现插件的可执行路径 -> (原始静态 manifest 路径, 已归一化 Manifest 实体)
     discovered_manifests: HashMap<PathBuf, (PathBuf, PluginManifest)>,
@@ -29,7 +30,7 @@ pub struct PluginRegistry {
     pub warnings: Vec<String>,
 }
 
-/// 插件根目录扫描配置（03 §3.0/§3.2 安全裁决）
+/// 插件根目录扫描配置（03-plugin-spi-and-degradation.md §3.0/§3.2 安全裁决）
 #[derive(Debug, Clone, Default)]
 pub struct DiscoverOptions {
     /// 工作区 `./.rupost/plugins` 放行旗标（默认隔离防恶意仓库 RCE）
@@ -38,7 +39,7 @@ pub struct DiscoverOptions {
     pub project_root: Option<PathBuf>,
 }
 
-/// 静态 manifest 文件命名契约：`rupost-plugin-<name>.json`（03 §3.0）
+/// 静态 manifest 文件命名契约：`rupost-plugin-<name>.json`（03-plugin-spi-and-degradation.md §3.0）
 pub fn is_manifest_file(file_name: &str) -> bool {
     file_name.starts_with("rupost-plugin-") && file_name.ends_with(".json")
 }
@@ -178,13 +179,13 @@ fn parse_and_validate_manifest(
             format!("不支持的 manifest_version: {}", manifest.manifest_version),
         ));
     }
-    // P2-9（review，03 §6.4）：description ≤80 字符——渲染净化上限，
+    // P2-9（review，03-plugin-spi-and-degradation.md §6.4）：description ≤80 字符——渲染净化上限，
     // schema（plugin schema manifestSchema）与注册校验对齐
     if manifest.description.chars().count() > 80 {
         return Err((
             Some(manifest.name),
             format!(
-                "manifest description 超长（{} > 80 字符，03 §6.4 渲染净化上限）",
+                "manifest description 超长（{} > 80 字符，03-plugin-spi-and-degradation.md §6.4 渲染净化上限）",
                 manifest.description.chars().count()
             ),
         ));
@@ -325,6 +326,22 @@ impl PluginRegistry {
                 self.hooks
                     .insert(alias.clone(), (executable_path.clone(), hook.clone()));
             }
+            // 批三-2（审查漏项 4）：裸 directive 跨插件同名同阶段——后注册者
+            // 静默覆盖会让"哪个插件生效"不可知；告警对齐 alias 分支先例。
+            // 同插件自撞（alias 与 directive 同名）跳过：语义等价覆盖，非冲突
+            if let Some((prev_exe, _)) = self
+                .hooks_by_stage
+                .get(&(hook.directive.clone(), hook.stage))
+                && prev_exe != &executable_path
+            {
+                self.warnings.push(format!(
+                    "插件钩子 '{}' (stage={:?}) 冲突：'{}' 覆盖 '{}' 的注册",
+                    hook.directive,
+                    hook.stage,
+                    plugin_name,
+                    prev_exe.display()
+                ));
+            }
             self.hooks_by_stage.insert(
                 (hook.directive.clone(), hook.stage),
                 (executable_path.clone(), hook.clone()),
@@ -366,7 +383,7 @@ impl PluginRegistry {
             .get(&(directive_or_alias.to_string(), stage))
     }
 
-    /// 静态 manifest 发现（03 §3.0 安全裁决：readdir + JSON 解析，**零子进程**）。
+    /// 静态 manifest 发现（03-plugin-spi-and-degradation.md §3.0 安全裁决：readdir + JSON 解析，**零子进程**）。
     pub fn discover(options: &DiscoverOptions) -> Result<Self> {
         Self::discover_with_roots(options, None)
     }
@@ -494,7 +511,7 @@ impl PluginRegistry {
         entries
     }
 
-    /// 收集已使用插件指令/命令的 `requires_env` 未放行告警（去重；放行 `RUPOST_*`、`PLUGIN_ENV_ALLOWLIST` 与 `--plugin-env`）。
+    /// 收集已使用插件指令/命令的 `requires_env` 未放行告警（去重；放行 `RUPOST_*`〔除密钥豁免清单 PLUGIN_ENV_SECRET_DENYLIST〕、`PLUGIN_ENV_ALLOWLIST` 与 `--plugin-env`）。
     pub fn collect_missing_env_warnings(
         &self,
         used_directives: &[String],
@@ -527,7 +544,12 @@ impl PluginRegistry {
                 if key.is_empty() {
                     continue;
                 }
-                if key.starts_with("RUPOST_")
+                // 审查盲扫 #1：DENYLIST 键必须经 `--plugin-env` 显式放行才放行——
+                // 此前 `starts_with("RUPOST_*")` 无豁免判定，声明即视为已放行
+                // （零告警）而 driver 透传层却剥掉它，两层语义漂移
+                let prefix_authorized =
+                    key.starts_with("RUPOST_") && !PLUGIN_ENV_SECRET_DENYLIST.contains(&key);
+                if prefix_authorized
                     || PLUGIN_ENV_ALLOWLIST.contains(&key)
                     || authorized_env_keys.contains(key)
                 {
@@ -804,7 +826,7 @@ pub fn resolve_interpreter_in_path(interp: &str, path_env: Option<&OsStr>) -> Op
     resolve_interpreter_with_count_impl(interp, path_env, cfg!(windows)).ok()
 }
 
-/// 零子进程运行时解释器预检（03 §3.1.1：仅对 PATH 目录做 stat + Unix `mode & 0o111 != 0` 校验，绝不 spawn `--version`）。
+/// 零子进程运行时解释器预检（03-plugin-spi-and-degradation.md §3.1.1：仅对 PATH 目录做 stat + Unix `mode & 0o111 != 0` 校验，绝不 spawn `--version`）。
 pub fn preflight_runtime(
     runtime: Option<&PluginRuntime>,
     path_env: Option<&OsStr>,
@@ -824,6 +846,98 @@ pub fn preflight_runtime(
 
 #[cfg(test)]
 mod tests {
+
+    /// 批三-2（审查漏项 4）：裸 directive 跨插件同名同阶段覆盖必须有告警
+    /// （此前静默 last-wins；alias 分支早有同款告警）。同插件自撞不告警。
+    #[test]
+    fn test_bare_directive_cross_plugin_collision_warns() {
+        let mut reg = PluginRegistry::new();
+        for (exe, plugin) in [
+            ("/tmp/a/rupost-plugin-a", "plugin-a"),
+            ("/tmp/b/rupost-plugin-b", "plugin-b"),
+        ] {
+            reg.register_manifest(
+                PathBuf::from(exe),
+                PluginManifest {
+                    manifest_version: "1.0".to_string(),
+                    name: plugin.to_string(),
+                    version: "0.1.0".to_string(),
+                    description: "t".to_string(),
+                    runtime: None,
+                    hooks: vec![HookCapability {
+                        directive: "auth".to_string(),
+                        alias: None,
+                        stage: PluginStage::Prepare,
+                        cache_scope: Default::default(),
+                        requires_env: vec![],
+                        parameters_schema: serde_json::json!({}),
+                    }],
+                    commands: vec![],
+                },
+            );
+        }
+        let collisions: Vec<_> = reg
+            .warnings
+            .iter()
+            .filter(|w| w.contains("'auth'") && w.contains("冲突"))
+            .collect();
+        assert_eq!(
+            collisions.len(),
+            1,
+            "跨插件同 directive 覆盖应恰好一条冲突告警: {:?}",
+            reg.warnings
+        );
+        assert!(
+            collisions[0].contains("plugin-b"),
+            "告警应指明覆盖者: {collisions:?}"
+        );
+    }
+    /// 审查盲扫 #1（本批 P1-1 修复的残留缺口）：registry 授权判定层漏掉
+    /// DENYLIST——requires_env 声明 `RUPOST_AI_API_KEY` 时 registry 认为已放行
+    /// （零告警），driver 透传层却剥掉它 → "没警告却拿不到值"。
+    /// 契约：DENYLIST 键未经 `--plugin-env` 显式放行必须告警；显式放行则不告警。
+    #[test]
+    fn test_missing_env_warnings_exclude_secret_denylist() {
+        let mut reg = PluginRegistry::new();
+        reg.register_manifest(
+            PathBuf::from("/tmp/vault/rupost-plugin-secret"),
+            PluginManifest {
+                manifest_version: "1.0".to_string(),
+                name: "secret-plugin".to_string(),
+                version: "0.1.0".to_string(),
+                description: "secret".to_string(),
+                runtime: None,
+                hooks: vec![HookCapability {
+                    directive: "sign".to_string(),
+                    alias: None,
+                    stage: PluginStage::Sign,
+                    cache_scope: Default::default(),
+                    requires_env: vec!["RUPOST_AI_API_KEY".to_string()],
+                    parameters_schema: serde_json::json!({}),
+                }],
+                commands: vec![],
+            },
+        );
+
+        let directives = vec!["sign".to_string()];
+        // 1. 无显式放行 → 必须告警（当前实现漏掉 → 红）
+        let warnings = reg.collect_missing_env_warnings(&directives, &HashSet::new());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("RUPOST_AI_API_KEY") && w.contains("未")),
+            "DENYLIST 键未经显式放行必须告警: {warnings:?}"
+        );
+
+        // 2. 显式 --plugin-env 放行 → 不告警（授权集优先于 DENYLIST）
+        let authorized: HashSet<String> = ["RUPOST_AI_API_KEY".to_string()].into();
+        let warnings = reg.collect_missing_env_warnings(&directives, &authorized);
+        assert!(
+            !warnings.iter().any(|w| w.contains("RUPOST_AI_API_KEY")),
+            "显式放行的密钥不得告警: {warnings:?}"
+        );
+    }
+
     use super::*;
 
     fn make_fake_exe(path: &Path) {

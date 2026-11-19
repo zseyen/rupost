@@ -45,6 +45,12 @@ const DEFAULT_IGNORE_FIELDS: [&str; 14] = [
 /// `duration_ms` 毫秒 u64（同 `HistoryEntry`）、`actual_status: Option<u16>`
 /// 传输层失败为 `None`（同 `FailureContext.status_code`）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// 消费点地图（批四，新字段必读）：①本文件三构造点（:306 传输错误早退 /
+/// :396 正常比对 / :511 占位）；②ai/rules.rs context_from_replay_entry（→
+/// FailureContext/LLM——新字段必须防御性脱敏，redact_url/redact_free_text 先例）；③
+/// cli/dispatch.rs 终端打印 + --explain；④tui/state/mod.rs last_replay（存而未渲染）；
+/// ⑤tests/snapshot_replay_test.rs 逐字段断言。schema 注释（ai/rules.rs:37/:79）
+/// 与守护测试须随字段同步。见 architecture_review_2026-11.md。
 pub struct ReplayEntryResult {
     /// 快照内 1-based 序号（对齐终端 `#N` 打印）
     pub request_number: usize,
@@ -122,7 +128,7 @@ impl ReplayExecutor {
             "[*]".bold().blue(),
             suite.entries.len()
         );
-        // B-2（02 §4）：masked 快照消费前必须声明"数据不完整"——验签/Diff 结论降级
+        // B-2（02-artifact-contract-for-plugins.md §4）：masked 快照消费前必须声明"数据不完整"——验签/Diff 结论降级
         if suite.masking.as_deref() == Some("secrets") {
             println!(
                 "{} 该快照为脱敏形态（masking=secrets）：敏感值已替换为 [REDACTED]，body 比对与验签类结论按数据不完整降级",
@@ -314,7 +320,12 @@ impl ReplayExecutor {
                 error: Some(mismatch_msg),
                 body_matched: Some(false),
                 body_diff: None,
-                response_body_snippet: Some(res.body.chars().take(200).collect()),
+                // 与正常失败路径同源脱敏（审查 P1-3：replay --explain 会把
+                // 该字段送进 FailureContext/LLM，明文凭据不得出站）
+                response_body_snippet: Some(crate::security::redact::redact_and_truncate_body(
+                    &res.body,
+                    crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
+                )),
             };
         };
 
@@ -372,21 +383,25 @@ impl ReplayExecutor {
             println!("  {} Body mismatch: {}", "[✗]".bold().red(), diff);
         }
 
+        // 盲扫 #7：verbose 打印与失败 snippet 共享同一次脱敏——单点计算，
+        // 防"未来调截断上限漏改一处"（P1-3 泄露即此形态的例证）
+        let redacted_body = || {
+            crate::security::redact::redact_and_truncate_body(
+                &res.body,
+                crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
+            )
+        };
+
         if self.verbose {
+            // 与失败条目 snippet 同源脱敏（接手成本审查 P1：verbose 打印面
+            // 曾直出明文响应体——同一函数内一个出口掩码、一个出口泄露）
             println!("  ┌─ Replayed Response Body ──────────────────────────");
-            println!("  │ {}", res.body);
+            println!("  │ {}", redacted_body());
             println!("  └──────────────────────────────────────────────────");
         }
 
         // 失败条目采集脱敏片段（Gap Review P3：直上 LLM 前必经脱敏截断）
-        let response_body_snippet = if matched {
-            None
-        } else {
-            Some(crate::security::redact::redact_and_truncate_body(
-                &res.body,
-                crate::security::redact::DEFAULT_SNIPPET_MAX_BYTES,
-            ))
-        };
+        let response_body_snippet = if matched { None } else { Some(redacted_body()) };
 
         ReplayEntryResult {
             request_number,

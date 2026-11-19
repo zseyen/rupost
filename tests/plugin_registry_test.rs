@@ -362,8 +362,13 @@ fn test_manifest_ttl_reserved_value_warns_and_falls_back_to_none() {
             "{name} 的 ttl 保留值必须按 cache_scope=none 处理"
         );
     }
+    // 批三-2 后：同 fixture 的两插件同 directive=auth 会触发冲突告警（其消息
+    // 含插件名 ttl-hook/ttl-nested）——断言按 ttl 告警的专属措辞过滤，不按子串
     assert_eq!(
-        reg.warnings.iter().filter(|w| w.contains("ttl")).count(),
+        reg.warnings
+            .iter()
+            .filter(|w| w.contains("P2 保留值 ttl"))
+            .count(),
         2,
         "两条 ttl 声明必须各产生一条告警: {:?}",
         reg.warnings
@@ -911,7 +916,7 @@ fn test_collect_missing_env_warnings_deduplicated_and_respects_allowlists() {
 }
 
 /// P2-9（review）：manifest description >80 字符必须拒绝注册（与 plugin schema
-/// manifestSchema 的 maxLength 对齐——03 §6.4 渲染净化上限）。
+/// manifestSchema 的 maxLength 对齐——03-plugin-spi-and-degradation.md §6.4 渲染净化上限）。
 #[test]
 fn test_manifest_description_over_80_rejected() {
     let dir = tempfile::tempdir().unwrap();

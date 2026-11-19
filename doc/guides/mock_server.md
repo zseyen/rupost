@@ -1,42 +1,71 @@
 # 本地 Mock 服务器 (Mock Server)
 
-RuPost 提供了一个独立且高可扩展的轻量级本地 Mock 服务器，让您能够依据接口定义或请求历史快照一键搭建本地 Mock 桩。
+RuPost 提供独立、可扩展的本地 Mock 引擎，支持通过 **CLI**、**TUI（`M` 键）** 与 **Web 工作台（Mock Studio）** 三种入口启动、热重载与实时观测。
 
 ---
 
 ## 1. 快速启动
 
-你可以读入一个定义好的 Mock JSON 配置文件，或者直接编译 Markdown API 设计文档：
+### CLI 启动
 ```bash
-# 启动基于 JSON 规则定义的 Mock 服务
-rupost mock examples/mock_config.json --port 9000
+# 启动基于 JSON 规则定义的 Mock 服务（默认端口 9000，默认开启智能 CORS）
+rupost mock examples/debug_demo/mock_backend.json --port 9000
 
-# 编译并加载 Markdown 设计文档中的 Mock 示例（启动时静态加载；运行中不支持热更新，修改后需重启 mock）
-rupost m doc/plans/2026-06-06-mock-server-design.md
+# 编译并加载 .http / .md 活文档中的 @mock 契约块（支持别名 m）
+rupost m examples/design_scenarios/abstract_base_url_api.md -p 9000
+
+# 关闭智能 CORS（当需要显式 Mock OPTIONS 预检请求时）
+rupost mock routes.json --no-cors
 ```
+
+### TUI 快捷启停与实时流量
+1. 在 TUI 编辑器中打开并**保存**包含 `@mock-when` / `@mock-default` 或 Mock JSON 的文件。
+2. 按 **`M`**（`Shift+M`）在随机空闲端口拉起/停止 Mock 服务；状态栏显示 `MOCK :<port>` 与最新命中状态，`Response Viewer` 实时展示入站流量。
+
+### Web 工作台（Mock Studio）
+启动 `rupost web` 后可使用以下 API：
+- `GET /api/v1/mock/routes`：扫描工作区全部 `@mock` 路由及变体数量（`variant_count`）。
+- `POST /api/v1/mock/simulate`：基于 `TrieRouteMatcher` 仿真匹配路径、捕获路径参数（`captured_params`）并预览渲染后的响应头与响应体。
+- `POST /api/v1/mock/start` / `POST /api/v1/mock/reload` / `POST /api/v1/mock/stop`：托管启动、**原地热重载（端口不变，编译失败保留旧路由）**与停止。
+- `GET /api/v1/mock/traffic?id=<id>`：查询托管 Mock 的实时入站流量与请求计数（`request_count`）。
 
 ---
 
-## 2. 核心特性与架构
+## 2. 活文档语法示例（`.http` / `.md`）
 
-### A. 双模数据输入自适应 (Untagged Deserialize)
-Mock 引擎支持以下两类定义格式：
-1. **条件匹配规则集 (Routes)**：显式定义 HTTP 方法、模糊路径、变体条件以及响应负载。
-2. **历史请求快照 (Snapshots)**：直接读入由 RuPost 执行测试后导出的历史快照 JSON 包，引擎会自适应将其转译为默认的 Mock 匹配桩，实现“测试即录制，录制即 Mock”。
+在请求块中以空行分隔请求与变体区后，使用 `@mock-when` 与 `@mock-default` 声明多路响应（兼容 `//` 与 `#` 注释前缀）：
 
-### B. Trie 树模糊路径匹配与路径参数捕获
-Mock 引擎在底层自主实现了 Trie 树路由解析算法：
-* 支持精确路径匹配（如 `/v1/users`）。
-* 支持带参数的动态路径匹配（如 `/v1/users/:id`），引擎会自动提取 `:id` 值并写入当前 Mock 上下文中，以供后续响应体渲染。
-* 支持通配符匹配（`*` 与 `**`）。
+```http
+GET {{base_url}}/api/users/:id?debug=1
+Accept: application/json
 
-### C. 多路分支条件匹配 (`MockVariant`)
-同一条路由（Route）可以挂载多个响应变体（Variant），引擎将按优先级依次匹配：
-* **Header 条件**：匹配请求头中的 Key-Value 关系。
-* **Query 条件**：匹配请求 URL 中的参数。
-* **Body 匹配**：利用统一的 JSONPath 评估引擎（如匹配 `$.user.role == "admin"`），支持 `Equals`、`Contains` 以及 `Exists` 节点存在性判定。
+@mock-when header.X-Role == admin
+HTTP/1.1 200 OK
+Content-Type: application/json
 
-每个匹配成功的变体支持自定义返回状态码（Status Code）、自定义响应头、以及对动态上下文变量的实时渲染替换（例如将捕获的路径参数 `:id` 自动渲染到响应的 JSON 体中）。
+{"id": "{{id}}", "role": "admin"}
 
-### D. 控制台高亮彩色访问日志
-Mock 服务启动后，会在控制台以高雅彩色的日志输出每一次入站请求的详细链路信息（匹配的路径、提取的参数、最终命中的 Mock 变体及返回的包体大小），便于联调。
+@mock-when header.Authorization == None
+HTTP/1.1 401 Unauthorized
+
+{"error": "missing auth"}
+
+@mock-default
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{"error": "forbidden"}
+```
+
+> **提示**：
+> - `@mock-when` 表达式语法支持 `header.<Key> == <Val>`、`query.<Key> == <Val>`、`body.<JSONPath> == <Val>`；右侧为 `None`（不区分大小写）时匹配字段缺失或 `null`。
+> - 当响应头包含 `Content-Type: text/event-stream` 时，Mock 服务自动按 SSE 空行事件帧（`\n\n`）逐帧流式推送。
+
+---
+
+## 3. 核心特性与架构
+
+1. **三模输入自适应**：支持活文档（`.http` / `.md` / `.markdown`）、Routes JSON 与历史快照 Snapshots JSON；历史快照自动按 `(Method, Path)` 聚合变体。
+2. **Trie 树路由与变体合并**：支持字面量、`:id` / `{id}` 参数捕获（自动渲染 `{{id}}`）、`*` 单段通配与 `**` 多段通配；同一 `(Method, Path)` 在多块/多文件重复声明时自动合并变体，且 `@mock-default` 永远沉底兜底。
+3. **单次 JSON 解析与严格编译**：请求体仅惰性反序列化一次（`EvalContext`）；非法 `@mock-when` 表达式在启动/重载/仿真时显式报错，绝不静默退化为兜底变体。
+4. **智能 CORS 中间件**：默认处理 `OPTIONS` 204 预检、动态回显 `Origin` + `Access-Control-Allow-Credentials: true` 及 `Access-Control-Request-Headers`。

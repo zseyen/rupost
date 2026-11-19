@@ -47,6 +47,40 @@ fn write_history_entries(dir: &std::path::Path, entries: &[HistoryEntry]) {
     }
 }
 
+/// 审查 P1-5：`--limit` 直通 tail() 的 Vec::with_capacity(n)——巨大值此前
+/// capacity overflow abort（性能优化引入的崩溃回归；旧实现收敛于实际条数）
+#[test]
+fn test_history_list_huge_limit_does_not_abort() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let dir_path = temp_dir.path();
+    let e = create_test_entry(
+        "22222222-aaaa-bbbb-cccc-222222222222",
+        "GET",
+        "http://example.com/huge-limit",
+        200,
+    );
+    write_history_entries(dir_path, &[e]);
+
+    let out = std::process::Command::new(rupost_bin())
+        .env("RUPOST_HISTORY_DIR", dir_path)
+        .args(["history", "list", "--limit", "18446744073709551615"])
+        .output()
+        .expect("run history list --limit usize::MAX");
+
+    assert!(
+        out.status.success(),
+        "巨大 --limit 不得 abort 进程: {:?}\nstdout: {}\nstderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("huge-limit"),
+        "巨大 --limit 应返回实际条数: {stdout}"
+    );
+}
+
 #[test]
 fn test_history_list_limit_and_reverse() {
     let temp_dir = tempdir().expect("create temp dir");

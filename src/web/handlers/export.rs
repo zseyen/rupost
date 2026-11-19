@@ -72,7 +72,7 @@ pub async fn export_block_handler(
 
     let target_env = req.env.as_deref().or(state.default_env.as_deref());
     let (mut var_context, mut warnings) = ConfigLoader::load_context(target_env, &cli_vars, None);
-    var_context.insert("__default_scheme", "http");
+    var_context.set_default_scheme("http");
 
     let redact_secrets = req.redact_secrets.unwrap_or(true);
     let captured_symbols = HashSet::new();

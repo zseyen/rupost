@@ -1,7 +1,7 @@
 use crate::tui::state::{AppState, InputMode};
 use crate::tui::theme::Theme;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -143,7 +143,7 @@ pub(crate) fn render_unsaved_confirm(frame: &mut Frame, screen_size: Rect, t: &T
 
     let paragraph = Paragraph::new(text)
         .block(block)
-        .alignment(ratatui::layout::Alignment::Center);
+        .alignment(Alignment::Center);
 
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);

@@ -259,7 +259,7 @@ pub async fn run_block_handler(
     for warning in &loader_warnings {
         tracing::warn!("web run: {warning}");
     }
-    var_context.insert("__default_scheme", "http");
+    var_context.set_default_scheme("http");
 
     // 4. 原位单块调试执行（无污染内存隔离会话；B-1：共享工厂装配本机插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌
@@ -361,7 +361,7 @@ pub async fn run_suite_handler(
     };
 
     // 2. 统一门面解析整篇活文档（.md / .http 按扩展名分发）。执行前失败：不创建会话
-    let parsed_file = match parse_document_by_path(&req.path, &content) {
+    let mut parsed_file = match parse_document_by_path(&req.path, &content) {
         Ok(f) => f,
         Err(e) => {
             return json_err_session_response(
@@ -381,13 +381,34 @@ pub async fn run_suite_handler(
         );
     }
 
+    if let Some(sel) = req
+        .selector
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let selector = crate::runner::selector::RequestSelector::Name(sel.to_string());
+        if let Err(e) = crate::runner::selector::apply_selector(&mut parsed_file, &selector) {
+            return json_err_session_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                e.to_string(),
+                None,
+            );
+        }
+    }
+
     // 3. 准备变量上下文（CLI 变量列表为空：环境级联与 .env 同 CLI 语义）
     let target_env = req.env.as_deref().or(state.default_env.as_deref());
     let (mut var_context, loader_warnings) = ConfigLoader::load_context(target_env, &[], None);
     for warning in &loader_warnings {
         tracing::warn!("web run: {warning}");
     }
-    var_context.insert("__default_scheme", "http");
+    var_context.set_default_scheme("http");
+    if let Some(extra) = &req.extra_variables {
+        for (k, v) in extra {
+            var_context.insert(k, v);
+        }
+    }
 
     // 4. 内存隔离会话执行整套测试（ephemeral cookies，不污染本机会话；B-1：共享工厂装配插件注册表）。
     // R-4（免重填）+ WP-1（按浏览器会话隔离）：cookie 桥导入 + 捕获变量回灌。
@@ -445,6 +466,7 @@ pub async fn run_suite_handler(
             success: r.success,
             skipped: r.skipped,
             error: r.error.clone(),
+            source_line: r.source_line,
         });
     }
 

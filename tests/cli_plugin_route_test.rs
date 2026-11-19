@@ -507,7 +507,9 @@ fn test_missing_env_warning_on_plugin_command_and_suite_startup() {
         "stderr: {stderr_warn}"
     );
 
-    // 2. 传入裸 `--plugin-env CMD_SECRET_KEY`（即使宿主机未设置）-> 不再告警
+    // 2. 传入裸 `--plugin-env CMD_SECRET_KEY`（宿主机未设置）-> 两层语义分化
+    //    （批三-6 后 parse 层 tracing WARN"env 未设置"是正确的静默失败告警——
+    //    插件确实拿不到值；而 registry 层不再误告"未放行"，因其已显式授权）
     let out_ok = Command::new(env!("CARGO_BIN_EXE_rupost"))
         .current_dir(dir.path())
         .env("HOME", &fake_home)
@@ -523,8 +525,12 @@ fn test_missing_env_warning_on_plugin_command_and_suite_startup() {
     assert!(out_ok.status.success());
     let stderr_ok = String::from_utf8_lossy(&out_ok.stderr);
     assert!(
-        !stderr_ok.contains("CMD_SECRET_KEY"),
-        "显式放行裸 KEY 后不应再告警: {stderr_ok}"
+        stderr_ok.contains("CMD_SECRET_KEY") && stderr_ok.contains("未设置"),
+        "parse 层应告警 env 未设置（静默失败事实）: {stderr_ok}"
+    );
+    assert!(
+        !stderr_ok.contains("未通过 --plugin-env"),
+        "registry 层不得误报未放行（已显式授权）: {stderr_ok}"
     );
 
     // 3. `test` 子命令启动时触发 HOOK_SECRET_KEY 告警
@@ -544,6 +550,32 @@ fn test_missing_env_warning_on_plugin_command_and_suite_startup() {
     assert!(
         test_stderr.contains("[WARN]") && test_stderr.contains("HOOK_SECRET_KEY"),
         "test 启动应输出 HOOK_SECRET_KEY 告警: {test_stderr}"
+    );
+}
+
+/// 审查批二 C-c（对抗审查漏项 5）：M4 提交信息宣称 "e2e: ... exit-7 passthrough"
+/// 但 tests/ 零断言——CI 依赖插件退出码作为唯一执行结果通道，此契约必须真实锁定。
+#[test]
+fn test_plugin_command_exit_code_passthrough_e2e() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake_home = dir.path().join("home");
+    std::fs::create_dir_all(&fake_home).unwrap();
+    let bin = install_cli_plugin(dir.path(), "exit7", "EXIT_CODE=7\n");
+    preseed_tofu(&fake_home, &bin);
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rupost"))
+        .current_dir(dir.path())
+        .env("HOME", &fake_home)
+        .args(["--allow-project-plugins", "exit7"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "插件 exit 7 必须原样透传，实际 {:?} stdout={} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

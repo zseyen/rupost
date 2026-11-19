@@ -66,6 +66,7 @@ pub fn parsed_request_to_card_dto(req: &ParsedRequest, raw_block: String) -> Htt
         body: req.body.clone(),
         directives,
         has_mock: !req.metadata.mock_variants.is_empty(),
+        mock_variant_count: req.metadata.mock_variants.len(),
         is_websocket: req.metadata.websocket,
         raw_block,
     }

@@ -1,6 +1,8 @@
 //! `rupost export`（别名 exp）：命令导出插件参数。
 
 use clap::Parser;
+use rupost::exporter::ExportRunOptions;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExportArgs {
@@ -63,8 +65,8 @@ impl ExportArgs {
         default_env: Option<String>,
         default_cookie_file: Option<String>,
         default_scheme: String,
-    ) -> rupost::exporter::ExportRunOptions {
-        rupost::exporter::ExportRunOptions {
+    ) -> ExportRunOptions {
+        ExportRunOptions {
             target: self.target,
             paths: self.paths,
             env: self.env.or(default_env),
@@ -75,7 +77,7 @@ impl ExportArgs {
             name: self.name,
             compact: self.compact,
             redact: self.redact,
-            output: self.output.map(std::path::PathBuf::from),
+            output: self.output.map(PathBuf::from),
             force: self.force,
             list: self.list,
             quiet: self.quiet,

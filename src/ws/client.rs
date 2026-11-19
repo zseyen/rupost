@@ -1,10 +1,16 @@
+use crate::ws::frame::{FrameDirection, WsFrame, WsFrameType};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::time::{Duration, Instant};
+use tokio::net::TcpStream;
 use tokio::sync::{broadcast, mpsc};
+use tokio::time::{interval, timeout};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::HeaderName;
 use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use tracing::{error, info, warn};
-
-use crate::ws::frame::{FrameDirection, WsFrame, WsFrameType};
 
 /// WsClient 的底层配置
 #[derive(Debug, Clone)]
@@ -27,7 +33,6 @@ pub struct WsClient {
 impl WsClient {
     /// 发起连接并初始化后台 Worker
     pub async fn connect(config: WsClientConfig) -> Result<Self, String> {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         let mut request = config
             .url
             .as_str()
@@ -37,21 +42,18 @@ impl WsClient {
         let headers_mut = request.headers_mut();
         for (k, v) in &config.headers {
             if let (Ok(name), Ok(val)) = (
-                tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(k.as_bytes()),
-                tokio_tungstenite::tungstenite::http::HeaderValue::from_str(v),
+                HeaderName::from_bytes(k.as_bytes()),
+                HeaderValue::from_str(v),
             ) {
                 headers_mut.insert(name, val);
             }
         }
 
         // 建立网络连接
-        let (ws_stream, response) = tokio::time::timeout(
-            config.handshake_timeout,
-            tokio_tungstenite::connect_async(request),
-        )
-        .await
-        .map_err(|_| "WebSocket handshake timed out".to_string())?
-        .map_err(|e| format!("WebSocket connection failed: {}", e))?;
+        let (ws_stream, response) = timeout(config.handshake_timeout, connect_async(request))
+            .await
+            .map_err(|_| "WebSocket handshake timed out".to_string())?
+            .map_err(|e| format!("WebSocket connection failed: {}", e))?;
 
         info!(
             "WebSocket connected. Handshake HTTP Status: {}",
@@ -106,22 +108,13 @@ impl WsClient {
 
     /// 后台 Worker 核心事件循环
     async fn run_worker(
-        mut ws_sink: futures_util::stream::SplitSink<
-            tokio_tungstenite::WebSocketStream<
-                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-            >,
-            Message,
-        >,
-        mut ws_source: futures_util::stream::SplitStream<
-            tokio_tungstenite::WebSocketStream<
-                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-            >,
-        >,
+        mut ws_sink: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+        mut ws_source: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
         mut write_rx: mpsc::Receiver<Message>,
         broadcast_tx: broadcast::Sender<WsFrame>,
         ping_interval: Duration,
     ) {
-        let mut ping_timer = tokio::time::interval(ping_interval);
+        let mut ping_timer = interval(ping_interval);
         // 首次立即触发的 tick 予以跳过以保证时间间隔准确
         ping_timer.tick().await;
 

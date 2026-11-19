@@ -1,4 +1,4 @@
-//! CLI 自定义命令双模动态路由与 `rupost plugin` 子命令处理（03 §6 唯一权威实现）。
+//! CLI 自定义命令双模动态路由与 `rupost plugin` 子命令处理（03-plugin-spi-and-degradation.md §6 唯一权威实现）。
 //!
 //! 裁决序：内置子命令 > 插件命令（精确匹配）> HTTP 方法/URL（内联请求）> 报错 exit 2。
 
@@ -75,7 +75,7 @@ pub fn is_url_token(token: &str) -> bool {
         || lower.starts_with("[::1]")
 }
 
-/// 路由裁决（03 §6.1）
+/// 路由裁决（03-plugin-spi-and-degradation.md §6.1）
 pub enum RoutingDecision {
     /// 插件命令命中：(可执行路径, 命令名, 剩余参数)
     PluginCommand(std::path::PathBuf, String, Vec<String>),
@@ -411,18 +411,25 @@ pub fn handle_plugin_command(
     Ok(())
 }
 
-/// 内置子命令名集合（与 `Commands` 枚举变体一一对应）
+/// 内置子命令名集合（审查批二 C-e：从 clap 定义派生，含全部 alias——
+/// 此前手写 14 个正名清单有两类漂移：①与 `Commands` 枚举同步靠人肉；
+/// ②alias（t/h/g/d/m/i/template/r/exp/w）不在清单内——插件注册同名会被
+/// clap alias 永久遮蔽，validate 放行、运行永不可达、零警告）
 pub fn builtin_subcommand_names() -> BTreeSet<String> {
-    [
-        "test", "history", "generate", "diagnose", "mock", "init", "replay", "export", "web", "ai",
-        "import", "plugin", "tui", "ast",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+    use clap::CommandFactory;
+    let cmd = super::Cli::command();
+    let mut names = BTreeSet::new();
+    for sc in cmd.get_subcommands() {
+        names.insert(sc.get_name().to_string());
+        for alias in sc.get_all_aliases() {
+            names.insert(alias.to_string());
+        }
+    }
+    names.insert("help".to_string());
+    names
 }
 
-/// EXTENSIONS 区块渲染（03 §6.3）：manifest 文本字段白名单净化后聚合展示
+/// EXTENSIONS 区块渲染（03-plugin-spi-and-degradation.md §6.3）：manifest 文本字段白名单净化后聚合展示
 pub fn render_extensions(registry: &PluginRegistry) -> Vec<String> {
     let mut lines = Vec::new();
     let mut names: Vec<_> = registry.commands.keys().collect();
@@ -440,7 +447,7 @@ pub fn render_extensions(registry: &PluginRegistry) -> Vec<String> {
     lines
 }
 
-/// manifest 文本白名单净化（03 §6.4 终端注入防线）：剥除 ANSI CSI/OSC 与控制字符并截断。
+/// manifest 文本白名单净化（03-plugin-spi-and-degradation.md §6.4 终端注入防线）：剥除 ANSI CSI/OSC 与控制字符并截断。
 pub fn sanitize_manifest_text(text: &str, max_len: usize) -> String {
     let mut cleaned = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -487,6 +494,15 @@ pub fn sanitize_manifest_text(text: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// 审查批二 C-e：派生集正名与 alias 双覆盖（防手写清单回归）
+    #[test]
+    fn test_builtin_subcommand_names_cover_aliases() {
+        let names = super::builtin_subcommand_names();
+        for name in ["test", "t", "export", "exp", "history", "h", "replay", "r"] {
+            assert!(names.contains(name), "内置集缺 '{name}'");
+        }
+    }
     use super::*;
     use rupost::plugin::{CommandCapability, PluginManifest};
 

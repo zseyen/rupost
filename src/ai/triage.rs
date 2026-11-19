@@ -1,13 +1,12 @@
 use crate::Result;
 use crate::ai::config as ai_config;
-use crate::ai::redactor::truncate_utf8_safe;
 use crate::ai::rules::build_signature_buckets;
 use crate::ai::snapshot_adapter::{snapshot_masking_notice, snapshot_to_json_reports};
 use crate::error::RupostError;
 use crate::history::read_execution_snapshot;
 use crate::report::json::{JsonFileReport, build_json_reports};
 use crate::runner::TestResult;
-use colored::Colorize;
+use crate::security::redact::truncate_utf8_safe;
 use rupost_ai::{AiClient, FailureClassifier, TriageReport, bucket_to_deterministic_cluster};
 use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
@@ -62,9 +61,8 @@ pub async fn build_triage_report_with_client(
         },
         Err(e) => {
             let safe_err = truncate_utf8_safe(&e.to_string(), 160);
-            eprintln!(
-                "{} AI triage failed ({}). Falling back to deterministic signature clustering:",
-                "⚠".yellow(),
+            tracing::warn!(
+                "AI triage failed ({}). Falling back to deterministic signature clustering:",
                 safe_err
             );
             let clusters: Vec<_> = buckets
@@ -83,7 +81,7 @@ pub async fn build_triage_report_with_client(
 }
 
 /// 从 B4 配置链（env > 用户级文件 > 本地探测）解析客户端并生成 `TriageReport`。
-/// 解析失败（GAP-3）时打印黄色指引并降级确定性分组，exit 0 语义由调用方保证。
+/// 解析失败（GAP-3）时经 tracing 警示并降级确定性分组，exit 0 语义由调用方保证。
 pub async fn build_triage_report(reports: &[JsonFileReport]) -> TriageReport {
     // 0 失败短路：无归因对象时跳过 B4 配置解析（含 Ollama 2s 探测窗口），
     // 避免全绿报告也触发"已输出确定性签名分组结果"的误导性降级提示
@@ -96,13 +94,13 @@ pub async fn build_triage_report(reports: &[JsonFileReport]) -> TriageReport {
     let client_arc = match ai_config::resolve().await {
         Ok(resolved) => {
             if let Some(notice) = &resolved.notice {
-                // notice 走 stderr：--json 的 stdout 是机器可读输出，不得混入
-                eprintln!("{} {}", "ℹ".cyan(), notice);
+                // notice 经 tracing（logger stderr writer）：--json 的 stdout 是机器可读输出，不得混入
+                tracing::info!("{notice}");
             }
             Some(resolved.client)
         }
         Err(msg) => {
-            eprintln!("{} {} 已输出确定性签名分组结果", "⚠".yellow(), msg);
+            tracing::warn!("{msg} 已输出确定性签名分组结果");
             None
         }
     };
@@ -179,12 +177,12 @@ pub async fn run_ai_triage_from_file(
     Ok(())
 }
 
-/// 离线黑匣子挖掘入口（02 §3.2 / 05 ADR-D9：首个内置 miner 消费者，M5）。
+/// 离线黑匣子挖掘入口（02-artifact-contract-for-plugins.md §3.2 / 05 ADR-D9：首个内置 miner 消费者，M5）。
 ///
 /// 读取现场拷回的 incident snapshot（ExecutionSnapshotFile Schema v1.0），适配为
 /// `JsonFileReport` 后复用失败聚类 SSOT（确定性机械归因为 B1 基线；配置 AI Key 时
 /// 五阶段管线的 C 阶段自动增强——与 `ai triage` 同一判定路径）。消费前执行
-/// 02 §3.3 不可信输入校验：体积上限 64MB。
+/// 02-artifact-contract-for-plugins.md §3.3 不可信输入校验：体积上限 64MB。
 pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool, format: &str) -> Result<()> {
     const MAX_CONSUME_BYTES: u64 = 64 * 1024 * 1024;
     let meta = std::fs::metadata(snapshot_path).map_err(|e| {
@@ -195,7 +193,7 @@ pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool, format: &
     })?;
     if meta.len() > MAX_CONSUME_BYTES {
         return Err(RupostError::ParseError(format!(
-            "snapshot 体积 {} 超过消费上限 64MB（02 §3.3 不可信输入防线）",
+            "snapshot 体积 {} 超过消费上限 64MB（02-artifact-contract-for-plugins.md §3.3 不可信输入防线）",
             meta.len()
         )));
     }
@@ -205,10 +203,10 @@ pub async fn run_snapshot_triage(snapshot_path: &str, json_flag: bool, format: &
     let reports = snapshot_to_json_reports(&snapshot);
 
     if let Some(note) = masking_note {
-        eprintln!("[!] {note}");
+        tracing::warn!("{note}");
     }
-    eprintln!(
-        "[i] 快照指纹: {} entries, schema {}, masking={:?}, runner {}/{} v{}",
+    tracing::info!(
+        "快照指纹: {} entries, schema {}, masking={:?}, runner {}/{} v{}",
         snapshot.entries.len(),
         snapshot.schema_version,
         snapshot.masking,

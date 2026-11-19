@@ -8,6 +8,32 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versioning foll
 
 ### Fixed
 
+- **on-failure 钩子异常事实报告可审计**（#13 尾巴·实证缺口）：钩子超时/非零退出此前仅裸 `eprintln!` 到 stderr——存活产物（`--report json`）零痕迹，CI 消费报告无法审计钩子健康度（同 run 对照：trace 头缺失走 warnings 有痕迹、钩子失败走 eprintln 无痕迹）；现两事实均进 `TestResult.warnings` 随报告/快照落盘（守护测试 `test_json_report_carries_on_failure_hook_warning`）。
+- **走查 #6c 契约补齐 + 死测试复活**：批三-6 提交将 `#[test]` 属性错位（`test_corrupt_toml_warns_consistently_across_three_paths` 重复悬挂、`test_try_load_config_file_classifies_missing_vs_corrupt` 丢失属性成死代码）——复活后暴露 `try_load_config_file` 解析失败臂只报根因不带后果；现与 schema 失配臂同口径补齐"环境变量配置未加载，请修复 rupost.toml 后重试"（clippy 双警告清零）。
+- **插件子进程密钥透传豁免**（P1-1）：`apply_plugin_env` 此前无条件转发全部 `RUPOST_*` 变量——含 `RUPOST_AI_API_KEY`（真实 AI 密钥）送进任意插件子进程；现 `PLUGIN_ENV_SECRET_DENYLIST` 豁免密钥命名空间（良性前缀透传契约保留，双面守护测试锁定）。
+- **replay 双出口脱敏**（P1-3 + verbose 补齐）：传输错误→重放恢复的 mismatch 分支 snippet 此前 `chars().take(200)` 明文；`--verbose` 的 Replayed Response Body 打印同函数内直出明文——两出口现均走 `redact_and_truncate_body` 同源脱敏（e2e 守护：凭据不出 stdout）。
+- **`history list --limit` 无界预分配崩溃回归**（P1-5）：O(N) tail 优化把用户可控 n 直通 `Vec::with_capacity`——`--limit usize::MAX` capacity overflow abort；预分配上限 4096 与收集语义解耦（bin 级守护）。
+- **插件 params 内核解析**（P1-2，03 §321 契约兑现）：IPC payload 此前原样透传 `directive.params`——照文档写 `secret=env.SECRET` 的插件收到字面量且零告警；现裸 `env.*` 与 `{{var}}` 经内核 SSOT 解析，未解析透传 + WarningSink 告警；缓存键随解析值变化（动态参数正确禁用请求级缓存）。
+- **generate OAuth implicit fragment 残口**（P1-4）：`variabilize_url` 仅处理 SPA 形态（`#path?k=v`）——`#access_token=SECRET`（无 `?`）明文落盘而 export 侧同形态已掩码；补齐裸键值 fragment 臂（场景 G 红线）。
+- **`--env`/`--plugin-env`/`@plugin` 参数静默失败告警化**（走查缺口 #6 收尾 + 审查扩展）：显式 `--env-file` 缺失/目录/损坏、`rupost.toml` 存在但损坏、SSE/WS 流式日志写失败（once 闸门）、`--var`/`--plugin-env` 非法格式、toml `${VAR}` 未设置、`--env` 两层同时落空——全部告警化（`EnvFileOutcome`/`CliVarOutcome` 决策表 SSOT 封装，四入口各自渲染）。
+
+- **插件域静默失败清偿 + 豁免审计**（批二审查收口）：①`--plugin-env` 空键/缺失 KEY 与 `@plugin` 裸 token（漏写 `=`）从静默丢弃改为告警/ParseError（决策表锁定，合法形态零告警）；②export 脚注新增豁免审计行——`@no-redact` 声明且基础策略本会命中的键，值保留原样但 footer 如实记录 `Exempted by @no-redact (N): k1, k2`（杜绝静默免脱敏；豁免按实际头名精确匹配）。
+- **ignore_keys 子串包含豁免**（doc-code 漂移裁决）：doc 承诺"豁免 SUBSTRINGS 模糊匹配"但实现仅精确匹配——现裁决为子串包含语义（精确相等或包含豁免键均豁免模糊层，`next_page_token_v2` 可被 `next_page_token` 豁免；硬键护栏前置不可豁免；`@no-redact` 与 toml 双入口同语义自动升级；粒度自负已在字段 doc 声明）。
+- **插件 exit code 透传 e2e + suite 降级自愈守护**：M4 提交信息宣称的 exit-7 透传补上真实 e2e（命令插件 `EXIT_CODE=7` → rupost 透传 7）；D6 自愈语义从注释升格为直接守护（`?optional` + suite 缓存：降级不写槽 → 依赖恢复后自愈成功写槽 → 第三请求命中缓存恰一次真实 spawn，`WAIT_FILE` 门控 + 计数器断言）。
+- **TUI 快照目录私有化**：`create_dir_all`（0755）→ `ensure_private_dir`（0700 + 拒绝符号链接）——目录泄露快照文件名清单，文件体此前已 0600。
+- **内置子命令集从 clap 派生**：手写 14 正名清单的 alias 盲区根除（t/h/g/d/m/i/template/r/exp/w 此前不在清单——插件注册同名被 clap alias 永久遮蔽：validate 放行、运行不可达、零警告）；现从 `Cli::command()` 派生含全部 alias，validate 对遮蔽点名警告（e2e 锁定）。
+- **web simulate 契约注释锁死**：`file_path` 仅作解析器分派从不读盘的边界写入源码——未来升级为服务端读文档必须先接 PathSandbox。
+
+### Refactoring
+
+- **#13 尾巴收口 + 契约引用锚定（批E）**：`runner/on_failure` 2 处、`runner/app` var-state 提示 1 处、`generator/mod` 与 `report/contract` 各 1 处迁移（on_failure 的 `Colorize` 孤儿 import 清理）——非表现层 eprintln 棘轮 12→7（剩余全部为裁决豁免并写入 ci.yml 注释：warning_sink 本体/exporter 待 Web 接入/generator 待签名扩展/--dev 横幅刻意直出）；02/03 契约引用 33 文件统一扩为文档 stem 锚点（`02 §2:135` 行号引用剥除）并新增 CI 守护（裸短引用 + 行号引用 src+tests 全扫，防回潮）。
+- **eprintln 四通道收敛主体（架构审查 #13 批A/B）**：`runner/engine/batch.rs` 两处 teardown 通知 → `TestSuiteOutcome.notices`（`SuiteNotice` 结构化出口，app.rs 装配侧派生、`files_map` 移动前计数，终端输出字节级不变，守护测试 `test_suite_notices_carry_skip_marked_and_failed_teardown` 锁定）；`src/ai/*` 20 处 → `tracing`（logger stderr writer 保 stdout 机器可读管道纯净，彩色 glyph 移除）；CI 棘轮基线 34→12（实测值，剩余 12 处存量逐条裁决）。
+- **redact SSOT 收口**：删除 `exporter/redact.rs`（2 行垫片）与 `ai/redactor.rs`（18 项 re-export + 15 项独有测试随迁入 `security/redact.rs`），12 个调用文件 import 收敛单一出口。
+- **死抽象清理**：`with_observer`（零调用 builder）、MockCompiler lenient `compile()`（生产不可达，17 处测试迁移 `try_compile`）、`ReportGenerator`/`PayloadDecoder` 单实现 trait 塌缩为固有方法；裁决保留：`AssertTarget`（双协议双实现）、`DocumentStore`（web 明示扩展点）。
+- **runner/mod.rs 跨模块桶装 re-export 删除**（history::gc / http::url / parser::scanner / reporter 四条边，5 调用点直呼其名）。
+
+### Fixed
+
 - **解析器选择边界修复（WP-P2c）**：`GET url --verbose` 等旗标混入形态此前误切 curl 解析器（方法 token 被当 URL 吞掉）——现按"方法前置"判定（首 token 为标准 HTTP 方法 → httpie 解析器，未知旗标容忍），旗标前置仍走根路由裁决 exit 2（`fix(parser,cli)` 5a290e05）。
 
 ### Added

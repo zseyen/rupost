@@ -5,9 +5,9 @@
 //! → E 原子落盘（防覆盖）。AI 缺失/故障时降级为机械基线 + 黄色警告，exit 0。
 
 use crate::ai::config;
-use crate::ai::redactor::{redact_and_truncate_body, redact_url};
 use crate::assertion::parse_assertion;
 use crate::history::storage::HistoryStorage;
+use crate::security::redact::{redact_and_truncate_body, redact_url};
 use crate::{Result, RupostError};
 use chrono::Utc;
 use colored::Colorize;
@@ -191,9 +191,8 @@ fn emit_blocks(
     out.push('\n');
 
     if lint_dropped > 0 {
-        eprintln!(
-            "{} {} 条 AI 建议未通过本地裁决（断言 parser / capture 语法），已丢弃",
-            "⚠".yellow(),
+        tracing::warn!(
+            "{} 条 AI 建议未通过本地裁决（断言 parser / capture 语法），已丢弃",
             lint_dropped
         );
     }
@@ -250,7 +249,7 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
 
     // ── C AI 语义增强（可跳过/可失败） ──
     let (mut content, enhanced, failed_chunks) = if params.no_ai {
-        eprintln!("{} --no-ai：已跳过 AI 增强，输出机械还原基线", "⚠".yellow());
+        tracing::warn!("--no-ai：已跳过 AI 增强，输出机械还原基线");
         (baseline, 0usize, 0usize)
     } else {
         let items: Vec<SynthesisItem> = entries
@@ -260,16 +259,15 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
             .collect();
         let resolved = config::resolve().await.map_err(RupostError::Other)?;
         if let Some(notice) = &resolved.notice {
-            // 同 triage：notice 走 stderr 保持 stdout 纯净
-            eprintln!("{} {}", "ℹ".cyan(), notice);
+            // 同 triage：notice 经 tracing（logger stderr writer）保持 stdout 纯净
+            tracing::info!("{notice}");
         }
         let synthesizer = TestSynthesizer::new(resolved.client.as_ref());
         match synthesizer.synthesize_batch(&items).await {
             Ok(outcome) => {
                 if outcome.failed_chunks > 0 {
-                    eprintln!(
-                        "{} {} 个分块合成失败，对应条目保留机械基线",
-                        "⚠".yellow(),
+                    tracing::warn!(
+                        "{} 个分块合成失败，对应条目保留机械基线",
                         outcome.failed_chunks
                     );
                 }
@@ -281,9 +279,8 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
                 )
             }
             Err(e) => {
-                eprintln!(
-                    "{} AI 合成失败（{}），已降级为机械还原基线",
-                    "⚠".yellow(),
+                tracing::warn!(
+                    "AI 合成失败（{}），已降级为机械还原基线",
                     crate::utils::text::truncate_chars(&e.to_string(), 120, "…")
                 );
                 emit_blocks(
@@ -316,8 +313,8 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
             std::path::Path::new(out_path),
             content.as_bytes(),
         )?;
-        eprintln!(
-            "[!] {} 含明文凭据（--keep-credentials）——文件已 0600，严禁提交仓库或外传",
+        tracing::warn!(
+            "{} 含明文凭据（--keep-credentials）——文件已 0600，严禁提交仓库或外传",
             out_path.display()
         );
     } else {
@@ -332,10 +329,7 @@ pub async fn run_bootstrap(params: &BootstrapParams) -> Result<()> {
         enhanced
     );
     if failed_chunks > 0 {
-        eprintln!(
-            "{} {failed_chunks} 个分块合成失败（对应条目为机械基线）",
-            "⚠".yellow()
-        );
+        tracing::warn!("{failed_chunks} 个分块合成失败（对应条目为机械基线）");
     }
     Ok(())
 }

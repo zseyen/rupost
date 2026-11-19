@@ -135,7 +135,7 @@ impl CliRunner {
 
         // Setup empty context for CLI run
         let mut context = VariableContext::new();
-        context.insert("__default_scheme", &self.default_scheme);
+        context.set_default_scheme(&self.default_scheme);
 
         debug!(url = %parsed_request.url, method = ?parsed_request.method_or_default(), "Executing HTTP request");
 

@@ -110,7 +110,7 @@ pub enum Commands {
     Tui(TuiArgs),
 }
 
-/// 插件管理子命令（03 §2.3 / 06 M5；`plugin sync` 已裁撤——静态 manifest 的
+/// 插件管理子命令（03-plugin-spi-and-degradation.md §2.3 / 06 M5；`plugin sync` 已裁撤——静态 manifest 的
 /// stat 新鲜度闭环使缓存自动重建，无需手动同步）
 #[derive(Debug, clap::Subcommand)]
 pub enum PluginCommands {

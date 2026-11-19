@@ -41,13 +41,27 @@ impl<T> TrieNode<T> {
     }
 
     pub fn insert(&mut self, path: &str, data: T) {
-        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        self.insert_segments(&segments, data);
+        self.upsert(path, data, |slot, new_data| *slot = new_data);
     }
 
-    fn insert_segments(&mut self, segments: &[&str], data: T) {
+    /// 插入或合并节点数据：若目标路径已存在数据，调用 merge(&mut existing, new_data)
+    pub fn upsert<F>(&mut self, path: &str, data: T, merge: F)
+    where
+        F: FnOnce(&mut T, T),
+    {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        self.upsert_segments(&segments, data, merge);
+    }
+
+    fn upsert_segments<F>(&mut self, segments: &[&str], data: T, merge: F)
+    where
+        F: FnOnce(&mut T, T),
+    {
         if segments.is_empty() {
-            self.data = Some(data);
+            match &mut self.data {
+                Some(existing) => merge(existing, data),
+                None => self.data = Some(data),
+            }
             return;
         }
 
@@ -62,7 +76,7 @@ impl<T> TrieNode<T> {
                 self.children.len() - 1
             };
 
-        self.children[child_idx].insert_segments(&segments[1..], data);
+        self.children[child_idx].upsert_segments(&segments[1..], data, merge);
     }
 
     pub fn match_path(&self, path: &str) -> Option<(&T, HashMap<String, String>)> {
@@ -229,5 +243,19 @@ mod tests {
             .expect("Should match param");
         assert_eq!(*data2, "param_handler");
         assert_eq!(params2.get("id"), Some(&"ord_123".to_string()));
+    }
+
+    #[test]
+    fn test_trie_upsert_merges_existing_path() {
+        let mut root = TrieNode::new(RouteSegment::Wildcard);
+        root.upsert("/api/users/:id", vec!["first"], |existing, new_items| {
+            existing.extend(new_items);
+        });
+        root.upsert("/api/users/{id}", vec!["second"], |existing, new_items| {
+            existing.extend(new_items);
+        });
+
+        let (data, _) = root.match_path("/api/users/42").unwrap();
+        assert_eq!(data, &vec!["first", "second"]);
     }
 }

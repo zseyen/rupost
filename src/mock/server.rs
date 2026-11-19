@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::error::RupostError;
 use crate::mock::matcher::MockMatcher;
 use std::sync::Arc;
 
@@ -33,7 +34,8 @@ use crate::history::model::SnapshotEntry;
 use crate::mock::MockCompiler;
 use crate::mock::matcher::{MockRouteConfig, TrieRouteMatcher};
 use crate::mock::variant::{CompareOp, ConditionSource, MockVariant, VariantCondition};
-use crate::runner::{DependencyResolver, DirectoryScanner, WorkflowGraph};
+use crate::parser::scanner::DirectoryScanner;
+use crate::runner::{DependencyResolver, WorkflowGraph};
 use crate::utils::path_guard::is_live_doc;
 use colored::Colorize;
 use std::collections::HashMap;
@@ -44,25 +46,6 @@ use std::fs;
 enum MockFileConfig {
     Routes(Vec<MockRouteConfig>),
     Snapshots(Vec<SnapshotEntry>),
-}
-
-fn extract_path(url_str: &str) -> String {
-    if let Ok(parsed) = url::Url::parse(url_str) {
-        parsed.path().to_string()
-    } else {
-        let path_with_query = if url_str.starts_with('/') {
-            url_str
-        } else if let Some(slash_pos) = url_str.find('/') {
-            &url_str[slash_pos..]
-        } else {
-            "/"
-        };
-        if let Some(q_pos) = path_with_query.find('?') {
-            path_with_query[..q_pos].to_string()
-        } else {
-            path_with_query.to_string()
-        }
-    }
 }
 
 /// 解析 mock 配置文件/文档，并启动 Mock 服务器
@@ -86,18 +69,15 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
         let mut all_routes = Vec::new();
         for p in execution_order {
             if let Some(parsed) = files_map.get(&p) {
-                let routes = MockCompiler::compile(parsed);
+                let routes = MockCompiler::try_compile(parsed)?;
                 all_routes.extend(routes);
             }
         }
         MockFileConfig::Routes(all_routes)
     } else {
-        let content = fs::read_to_string(file_path).map_err(crate::error::RupostError::IoError)?;
+        let content = fs::read_to_string(file_path).map_err(RupostError::IoError)?;
         serde_json::from_str(&content).map_err(|e| {
-            crate::error::RupostError::ParseError(format!(
-                "Failed to parse JSON configuration: {}",
-                e
-            ))
+            RupostError::ParseError(format!("Failed to parse JSON configuration: {}", e))
         })?
     };
 
@@ -118,7 +98,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
                     continue;
                 };
 
-                let path = extract_path(&s.request.url);
+                let path = MockCompiler::extract_route_path(&s.request.url);
                 let method = s.request.method.to_uppercase();
 
                 let condition = if let Ok(parsed) = url::Url::parse(&s.request.url) {
@@ -156,8 +136,7 @@ pub fn build_mock_matcher(file_path: &str) -> Result<(TrieRouteMatcher, usize)> 
 
             route_count = groups.len();
             for ((method, path), mut variants) in groups {
-                variants.sort_by_key(|v| v.condition.is_some());
-                variants.reverse(); // 有条件的在前，兜底的在后
+                variants.sort_by_key(|v| v.condition.is_none()); // 有条件的在前，兜底的在后
                 matcher.add_route(&method, &path, variants);
             }
         }
@@ -200,7 +179,7 @@ mod tests {
         let res = run_server_from_file("nonexistent_file.json", 9999, true).await;
         assert!(res.is_err());
         match res.unwrap_err() {
-            crate::error::RupostError::IoError(_) => {}
+            RupostError::IoError(_) => {}
             other => panic!("Expected IoError, got: {:?}", other),
         }
     }

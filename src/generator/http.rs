@@ -191,7 +191,9 @@ impl HttpGenerator {
                 block.push_str(&format!("{key_str}: {rendered}\n"));
                 continue;
             }
-            // 凭据模板化：生成的测试文件严禁落盘明文凭证
+            // 凭据模板化：生成的测试文件严禁落盘明文凭证。
+            // 豁免粒度锐边（批四）：@no-redact/toml ignore_keys 为子串包含语义——
+            // ignore=["token"] 豁免全部含 token 的键，粒度自负（security/redact.rs 字段 doc）
             // （E-3：--keep-credentials 显式豁免——保留字面值免手工回填）
             if is_key_sensitive(key_str, policy) && !keep_credentials {
                 let var = Self::var_name_from_key(key_str);
@@ -454,6 +456,17 @@ impl HttpGenerator {
                 } else {
                     ah.to_string()
                 }
+            } else if ah.contains('=') {
+                // OAuth implicit 形态：#access_token=SECRET（无 '?'）——与 redact 侧
+                // 双形态对齐（审查 P1-4），否则同一凭据 export 掩码、generate 明文
+                let (rebuilt, frag_changed) =
+                    Self::variabilize_query_pairs(ah, variables, traced, policy, keep_credentials);
+                if frag_changed {
+                    changed = true;
+                    rebuilt
+                } else {
+                    ah.to_string()
+                }
             } else {
                 ah.to_string()
             }
@@ -638,6 +651,19 @@ mod tests {
         );
         assert!(vars.contains("token"));
         assert!(vars.contains("access_token"));
+
+        // 场景 G（审查 P1-4）：OAuth implicit 形态 —— fragment 无 '?' 但含
+        // `key=value` 参数（#access_token=SECRET）。redact 侧已覆盖该形态
+        // （security/redact.rs `frag.contains('=')` 臂），生成器必须对齐，
+        // 否则同一凭据 export 侧掩码、generate 侧明文落盘。
+        let url_g = "https://api.com/callback#access_token=sec-implicit-999&state=xyz";
+        let out_g = HttpGenerator::variabilize_url(url_g, &mut vars, None, None, false);
+        assert_eq!(
+            out_g,
+            "https://api.com/callback#access_token={{access_token}}&state=xyz"
+        );
+        assert!(vars.contains("access_token"));
+        assert!(!out_g.contains("sec-implicit-999"));
         assert!(!out_f.contains("sec1"));
         assert!(!out_f.contains("sec2"));
     }

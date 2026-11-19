@@ -94,7 +94,7 @@ pub struct RunBlockResponse {
 pub use crate::importer::{ImportFormat, ImportRequest, ImportResponse, default_import_format};
 
 /// Mock 规则仿真探针入参
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MockSimulateRequest {
     pub method: String,
     pub path: String,
@@ -106,6 +106,8 @@ pub struct MockSimulateRequest {
     pub body: Option<String>,
     /// 待测试的 Markdown 代码块或变体规则描述
     pub raw_block: String,
+    #[serde(default)]
+    pub file_path: Option<String>,
 }
 
 /// 工作台元信息（前端只读态感知）
@@ -115,7 +117,7 @@ pub struct WorkbenchMeta {
 }
 
 /// 整篇文档套件批量执行入参
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunSuiteRequest {
     pub path: String,
     #[serde(default)]
@@ -127,6 +129,10 @@ pub struct RunSuiteRequest {
     /// B3：请求级插件/门禁覆盖（> toml [plugins] > 默认）
     #[serde(default)]
     pub plugin_overrides: Option<PluginOverrides>,
+    #[serde(default)]
+    pub extra_variables: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub selector: Option<String>,
 }
 
 /// 套件单条请求执行摘要
@@ -140,6 +146,8 @@ pub struct SuiteItemResult {
     pub success: bool,
     pub skipped: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub source_line: Option<usize>,
 }
 
 /// 整篇文档套件批量执行响应
@@ -173,6 +181,14 @@ pub struct MockSimulateResponse {
     pub matched_variant_name: String,
     pub expected_status: u16,
     pub evaluations: Vec<ConditionEvaluation>,
+    #[serde(default)]
+    pub matched_pattern: Option<String>,
+    #[serde(default)]
+    pub captured_params: HashMap<String, String>,
+    #[serde(default)]
+    pub response_headers: HashMap<String, String>,
+    #[serde(default)]
+    pub response_body: Option<String>,
 }
 
 /// Markdown 渲染请求
@@ -213,6 +229,8 @@ pub struct HttpCardDto {
     pub body: Option<String>,
     pub directives: Vec<String>,
     pub has_mock: bool,
+    #[serde(default)]
+    pub mock_variant_count: usize,
     pub is_websocket: bool,
     pub raw_block: String,
 }
@@ -232,6 +250,8 @@ pub struct MockRouteItemDto {
     pub method: String,
     pub path: String,
     pub raw_block: String,
+    #[serde(default)]
+    pub variant_count: usize,
 }
 
 /// 运行中的 Web 托管 Mock 实例信息
@@ -242,6 +262,27 @@ pub struct MockServerInfo {
     pub port: u16,
     pub url: String,
     pub route_count: usize,
+    #[serde(default)]
+    pub request_count: u64,
+}
+
+/// 托管 Mock 单条入站流量事件
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockTrafficItemDto {
+    pub method: String,
+    pub path: String,
+    pub status: u16,
+    pub matched_pattern: Option<String>,
+    pub elapsed_ms: u64,
+}
+
+/// 托管 Mock 流量查询响应
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MockTrafficResponse {
+    pub id: String,
+    pub port: u16,
+    pub total_requests: u64,
+    pub events: Vec<MockTrafficItemDto>,
 }
 
 /// 启动托管 Mock 服务请求
@@ -257,6 +298,15 @@ pub struct StartMockRequest {
 /// 停止托管 Mock 服务请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopMockRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
+/// 原地重载托管 Mock 服务请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReloadMockRequest {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -328,6 +378,22 @@ pub struct HistoryItemSummary {
     pub status: u16,
     pub duration_ms: u64,
     pub source: Option<String>,
+}
+
+/// 单条历史记录脱敏详情（供编辑器回填或转 Mock，绝不返回明文凭据）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryDetailDto {
+    pub id: String,
+    pub timestamp: String,
+    pub duration_ms: u64,
+    pub source: Option<String>,
+    pub method: String,
+    pub url: String,
+    pub request_headers: Vec<HttpHeaderDto>,
+    pub request_body: Option<String>,
+    pub status: Option<u16>,
+    pub response_headers: Vec<HttpHeaderDto>,
+    pub response_body: Option<String>,
 }
 
 /// 链路诊断请求

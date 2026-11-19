@@ -1,4 +1,4 @@
-//! 黑匣子契约快照 I/O 与批量提取（ExecutionSnapshotFile Schema v1.0，02 §2）。
+//! 黑匣子契约快照 I/O 与批量提取（ExecutionSnapshotFile Schema v1.0，02-artifact-contract-for-plugins.md §2）。
 
 use crate::Result;
 use crate::error::RupostError;
@@ -34,7 +34,7 @@ fn classify_error_kind(err_msg: &str) -> String {
 
 /// 从批处理测试结果中提取请求/响应快照并写入指定文件
 ///
-/// 写入格式 = 离线数据黑匣子契约 **ExecutionSnapshotFile (Schema v1.0)**（02 §2 唯一权威）。
+/// 写入格式 = 离线数据黑匣子契约 **ExecutionSnapshotFile (Schema v1.0)**（02-artifact-contract-for-plugins.md §2 唯一权威）。
 #[allow(clippy::too_many_arguments)]
 pub fn save_batch_snapshot<P: AsRef<Path>>(
     batch_results: &[(PathBuf, Vec<crate::runner::types::TestResult>)],
@@ -74,7 +74,7 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
             };
             let file_path_str = normalize_posix_path(file_path.to_string_lossy().as_ref());
 
-            // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03 §10.6）
+            // 响应镜像：256KB 防 OOM 截断 + 截断前完整 Body 的 SHA-256 验真（03-plugin-spi-and-degradation.md §10.6）
             let response = r.response.as_ref().map(|resp| {
                 let (body, truncated) = truncate_response_body(&resp.body, max_body_bytes);
                 let body_sha256 = truncated.then(|| {
@@ -155,14 +155,14 @@ pub fn save_batch_snapshot<P: AsRef<Path>>(
                 .as_ref()
                 .and_then(crate::history::model::SocketDiagnostics::from_diagnose);
 
-            // 口径不变量 (02 §2)：duration_us = 纯网络 total + 插件耗时；
+            // 口径不变量 (02-artifact-contract-for-plugins.md §2)：duration_us = 纯网络 total + 插件耗时；
             // 时序可得时取瀑布 total + plugin_duration_us，否则回退执行墙钟
             let duration_us = timing_waterfall
                 .as_ref()
                 .map(|t| t.total_us.saturating_add(r.plugin_duration_us.unwrap_or(0)))
                 .unwrap_or_else(|| r.duration.as_micros() as u64);
 
-            // 三态判定（03 §10.5）：降级形态的成功严禁混淆为纯粹 Pass
+            // 三态判定（03-plugin-spi-and-degradation.md §10.5）：降级形态的成功严禁混淆为纯粹 Pass
             let outcome = if !r.success {
                 ExecutionOutcome::Fail
             } else if r.degraded {

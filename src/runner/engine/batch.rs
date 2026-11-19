@@ -1,12 +1,15 @@
 use super::parallel::ParallelScheduler;
 use crate::Result;
 use crate::parser::ParsedFile;
+use crate::parser::ParsedRequest;
 use crate::runner::executor::TestExecutor;
 use crate::runner::path::display_path;
 use crate::runner::types::TestResult;
 use crate::variable::VariableContext;
+use crate::variable::resolver::VariableResolver;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// 批量执行运行模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,8 +60,7 @@ impl BatchExecutor {
         // scheduler，Finally 阶段拿不到数据——评审 P0 修订）。
         // teardowns: 每文件 (原始序号, 请求) 列表，按执行序排列；
         // 已被 skip 标记（@skip / --only 未选中）的 teardown 豁免抽取。
-        let mut teardowns_map: HashMap<PathBuf, Vec<(usize, crate::parser::ParsedRequest)>> =
-            HashMap::new();
+        let mut teardowns_map: HashMap<PathBuf, Vec<(usize, ParsedRequest)>> = HashMap::new();
         // 只记录不抽取：teardown 请求保留在 files_map 中，常规阶段由 executor 产出
         // 原序号占位 skipped（execute_all_streaming 的 is_teardown 跳过），
         // Finally 阶段原位替换——编号契约零破坏（P0-2）
@@ -73,24 +75,6 @@ impl BatchExecutor {
                 }
             }
         }
-        // 若有 teardown 被跳标（--only / @skip），一次性提示（P1-10：提示不可为死代码）
-        let skip_marked_teardowns: usize = request
-            .files_map
-            .values()
-            .map(|f| {
-                f.requests
-                    .iter()
-                    .filter(|r| r.metadata.is_teardown && r.metadata.skip)
-                    .count()
-            })
-            .sum();
-        if skip_marked_teardowns > 0 {
-            eprintln!(
-                "[i] {} 个 @teardown 请求被跳过（--only 未选中或 @skip 标记）——清理阶段不执行",
-                skip_marked_teardowns
-            );
-        }
-
         let mut parallel_cookie_state: Option<serde_json::Value> = None;
         let mut parallel_started_files: Option<Vec<PathBuf>> = None;
 
@@ -125,7 +109,7 @@ impl BatchExecutor {
                                 "BATCH".to_string(),
                                 display_path(file_path),
                                 e.to_string(),
-                                std::time::Duration::from_secs(0),
+                                Duration::from_secs(0),
                             )],
                         };
                         let has_failure = res.iter().any(|r| !r.success);
@@ -148,7 +132,6 @@ impl BatchExecutor {
         // serial 的 fail_fast break 已由 'outer 标签记录中断点。
         let started: Vec<PathBuf> = parallel_started_files
             .unwrap_or_else(|| results.iter().map(|(p, _)| p.clone()).collect());
-        let mut teardown_failure = false;
         // 并行分支若带有捕获的会话 Cookie，只装配临时 teardown 执行器消费，
         // 避免污染主执行器的持久化仓库（守护 cookie_persistence_test 契约 2a/2b）。
         let ephemeral_teardown_executor = if !teardowns_map.is_empty()
@@ -171,14 +154,8 @@ impl BatchExecutor {
                     // P1-9 变量防呆（单次渲染判定）：先渲染副本检残留，
                     // 命中则 skipped（杜绝脏请求外发）；宏双求值限制已在 PRD 声明
                     let mut rendered = req.clone();
-                    crate::variable::resolver::VariableResolver::resolve_parsed_request(
-                        &mut rendered,
-                        request.context,
-                    );
-                    let unresolved =
-                        crate::variable::resolver::VariableResolver::unresolved_placeholders(
-                            &rendered,
-                        );
+                    VariableResolver::resolve_parsed_request(&mut rendered, request.context);
+                    let unresolved = VariableResolver::unresolved_placeholders(&rendered);
                     let name = req.name().map(|s| s.to_string());
                     let method = req.method_or_default().to_string();
                     let url = req.url.clone();
@@ -201,9 +178,6 @@ impl BatchExecutor {
                             )
                             .await;
                         r.is_teardown = true;
-                        if !r.success {
-                            teardown_failure = true;
-                        }
                         r
                     };
                     result.is_teardown = true;
@@ -225,9 +199,6 @@ impl BatchExecutor {
                     }
                 }
             }
-        }
-        if teardown_failure {
-            eprintln!("[!] @teardown 清理请求执行失败——清理结果已计入失败统计");
         }
 
         // 最终按照原定的拓扑顺序排序，以保持稳定输出
